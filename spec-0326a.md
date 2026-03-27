@@ -529,6 +529,7 @@ Implemented so far in this spec:
   - duplicate successful `file.write` churn grouped by turn/path/byte-size
   - repeated package-install attempts grouped by turn
   - repeated readbacks of the same successfully written file grouped by turn/path/source
+  - repeated script execution grouped by turn/path
   - shell file-build / readback churn grouped by turn
   - completed turns grouped by `stop_reason`
   - `listening_eval` grouped by session scope/mode

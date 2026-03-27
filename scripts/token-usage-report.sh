@@ -530,6 +530,68 @@ ORDER BY readback_count DESC, write_count DESC, last_readback DESC
 LIMIT :'limit_rows'::int;
 
 \echo
+\echo '== Repeated Script Execution By Turn =='
+WITH params AS (
+  SELECT
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
+),
+cli_tool_calls AS (
+  SELECT
+    cm.turn_id,
+    cm.session_id,
+    cm.sequence_number,
+    call->'arguments'->>'command' AS command
+  FROM chat_message cm
+  JOIN chat_session cs ON cs.id = cm.session_id
+  CROSS JOIN params p
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(cm.metadata::jsonb->'tool_calls', '[]'::jsonb)) AS call
+  WHERE cm.created_at >= p.since_at
+    AND cm.turn_id IS NOT NULL
+    AND cm.role = 'assistant'
+    AND cm.status = 'final'
+    AND call->>'name' = 'cli_execute'
+    AND (p.org_id IS NULL OR cs.organization_id = p.org_id)
+    AND (p.session_id IS NULL OR cm.session_id = p.session_id)
+),
+script_runs AS (
+  SELECT
+    ctc.turn_id,
+    ctc.session_id,
+    ctc.sequence_number,
+    (regexp_match(
+      ctc.command,
+      $$ (?:^|[;&|[:space:]])(?:bash|sh|zsh|python3?|python)[[:space:]]+((?:scripts|results|config)/[^[:space:]"';&|]+) $$,
+      'x'
+    ))[1] AS script_path
+  FROM cli_tool_calls ctc
+),
+rollup AS (
+  SELECT
+    sr.turn_id,
+    sr.session_id,
+    sr.script_path,
+    COUNT(*) AS script_runs,
+    MIN(sr.sequence_number) AS first_seq,
+    MAX(sr.sequence_number) AS last_seq
+  FROM script_runs sr
+  WHERE sr.script_path IS NOT NULL
+  GROUP BY sr.turn_id, sr.session_id, sr.script_path
+)
+SELECT
+  turn_id,
+  session_id,
+  script_path,
+  script_runs,
+  first_seq,
+  last_seq
+FROM rollup
+WHERE script_runs >= 2
+ORDER BY script_runs DESC, last_seq DESC
+LIMIT :'limit_rows'::int;
+
+\echo
 \echo '== Shell File Build / Readback Churn By Turn =='
 WITH params AS (
   SELECT

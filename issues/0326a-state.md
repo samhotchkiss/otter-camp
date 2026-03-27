@@ -1750,3 +1750,34 @@ The improved backlog view now makes the queue state legible:
 - `3764d5d5-8c0e-45b4-87be-0b94c16e58e3` shows `backlog_state=stale_project_source`
 
 So the next restart can clear the truly stale project rows without confusing them with intentionally parked paused work.
+
+## Update 18:17 MDT
+
+I added one more operator-only slice so the next Anthropic window is easier to interpret without changing runtime behavior again.
+
+What changed:
+
+- [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh)
+  - now includes `Repeated Script Execution By Turn`
+  - it extracts `cli.execute` calls that invoke `bash` / `sh` / `zsh` / `python` against `scripts/`, `config/`, or `results/` targets
+  - it reports:
+    - `turn_id`
+    - `session_id`
+    - `script_path`
+    - execution count
+    - first/last sequence number in the turn
+
+Why this matters:
+
+- the hottest completed async task turns are still CLI-heavy
+- the remaining question is whether the burn is mostly legitimate edit-then-run loops or repeated execution of the same generated script in one hot turn
+- this section gives us that answer quickly once Claude quota opens again
+
+Smoke proof:
+
+- `bash -n scripts/token-usage-report.sh`
+- current six-hour sample only shows two repeated-script cases, both at exactly two runs:
+  - `bf2139fd-5b8a-46b8-93b9-5f1ab2709934` on `scripts/validate-stage-execution.sh`
+  - `7c489e92-6cec-4246-885a-a65500c91cc6` on `scripts/validate-metrics-alerting.sh`
+
+So this is a measurement slice, not a new runtime cutoff. The current data does not justify a safe hard stop on script reruns yet.
