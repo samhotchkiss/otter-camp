@@ -535,7 +535,15 @@ Implemented so far in this spec:
   - sessions with active summarization backoff metadata
   - fractional `--hours` windows for short live checks such as `--hours 0.25`
   - optional `--session <uuid>` filtering so the same report can isolate a single canary session end-to-end
-  - pending `agent_turn` backlog grouped by session with oldest/newest `run_after` and `created_at`
+  - pending `agent_turn` backlog grouped by session with:
+    - oldest/newest `run_after` and `created_at`
+    - `current_turn_id`
+    - `is_paused`
+    - `stale_project_source`
+    - derived `backlog_state`
+- claim-time worker cleanup now retires project dispatches that were already permanently unclaimable under existing claim SQL:
+  - inactive `project_bootstrap` dispatches
+  - settled `project_execution_continuation` / `project_continuation_resume` dispatches with no unfinished tasks
 - tool-result parsing and operator diagnostics now treat native validation failures stored in `output.error` as real tool errors instead of silently classifying them as successes
 - async `project_task` work lanes now have a session-level cutoff for cross-turn read-only discovery churn:
   - after `5` consecutive `max_tool_calls` turns

@@ -685,7 +685,8 @@ pending_jobs AS (
     jq.id,
     jq.created_at,
     jq.run_after,
-    (jq.payload->>'session_id')::uuid AS session_id
+    (jq.payload->>'session_id')::uuid AS session_id,
+    (jq.payload->>'message_id')::uuid AS message_id
   FROM job_queue jq
   CROSS JOIN params p
   WHERE jq.job_type = 'agent_turn'
@@ -698,6 +699,30 @@ rollup AS (
     COALESCE(cs.scope_type, '∅') AS scope_type,
     COALESCE(cs.mode, '∅') AS mode,
     COALESCE(cs.status, '∅') AS session_status,
+    cs.current_turn_id,
+    COALESCE(
+      p_direct.settings->'pause'->>'is_paused',
+      p_task.settings->'pause'->>'is_paused',
+      'false'
+    ) = 'true' AS is_paused,
+    BOOL_OR(
+      cs.scope_type = 'project'
+      AND (
+        (
+          COALESCE(cm.metadata->>'source', '') = 'project_bootstrap'
+          AND COALESCE(cs.metadata->'project_bootstrap'->>'status', '') <> 'active'
+        )
+        OR (
+          COALESCE(cm.metadata->>'source', '') IN ('project_execution_continuation', 'project_continuation_resume')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM project_task pt_open
+            WHERE pt_open.project_id = cs.scope_id
+              AND pt_open.work_status NOT IN ('done', 'cancelled')
+          )
+        )
+      )
+    ) AS stale_project_source,
     COUNT(*) AS pending_jobs,
     MIN(pj.run_after) AS oldest_run_after,
     MAX(pj.run_after) AS newest_run_after,
@@ -705,15 +730,43 @@ rollup AS (
     MAX(pj.created_at) AS newest_created_at
   FROM pending_jobs pj
   LEFT JOIN chat_session cs ON cs.id = pj.session_id
+  LEFT JOIN chat_message cm ON cm.id = pj.message_id
+  LEFT JOIN project p_direct
+    ON cs.scope_type = 'project'
+   AND p_direct.id = cs.scope_id
+  LEFT JOIN project_task pt
+    ON cs.scope_type = 'project_task'
+   AND pt.id = cs.scope_id
+  LEFT JOIN project p_task
+    ON p_task.id = pt.project_id
   CROSS JOIN params p
   WHERE p.org_id IS NULL OR cs.organization_id = p.org_id
-  GROUP BY pj.session_id, COALESCE(cs.scope_type, '∅'), COALESCE(cs.mode, '∅'), COALESCE(cs.status, '∅')
+  GROUP BY
+    pj.session_id,
+    COALESCE(cs.scope_type, '∅'),
+    COALESCE(cs.mode, '∅'),
+    COALESCE(cs.status, '∅'),
+    cs.current_turn_id,
+    COALESCE(
+      p_direct.settings->'pause'->>'is_paused',
+      p_task.settings->'pause'->>'is_paused',
+      'false'
+    ) = 'true'
 )
 SELECT
   session_id,
   scope_type,
   mode,
   session_status,
+  current_turn_id,
+  is_paused,
+  stale_project_source,
+  CASE
+    WHEN is_paused THEN 'paused'
+    WHEN stale_project_source THEN 'stale_project_source'
+    WHEN current_turn_id IS NOT NULL THEN 'current_turn_set'
+    ELSE 'ready'
+  END AS backlog_state,
   pending_jobs,
   oldest_run_after,
   newest_run_after,

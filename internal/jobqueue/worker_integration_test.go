@@ -5138,18 +5138,187 @@ func TestJobWorkerClaimPendingAgentTurnsSkipsOlderProjectBootstrapWhenNewerSameS
 		t.Fatalf("claimed second jobs = %d, want 0 while newer session job is already claimed", len(claimed))
 	}
 
-	var olderStatus, newerStatus string
-	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, olderJobID).Scan(&olderStatus); err != nil {
+	var olderStatus, olderError, newerStatus string
+	if err := pool.QueryRow(ctx, `SELECT status, COALESCE(last_error, '') FROM job_queue WHERE id = $1`, olderJobID).Scan(&olderStatus, &olderError); err != nil {
 		t.Fatalf("query older job: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, newerJobID).Scan(&newerStatus); err != nil {
 		t.Fatalf("query newer job: %v", err)
 	}
-	if olderStatus != "pending" {
-		t.Fatalf("older job status = %q, want pending", olderStatus)
+	if olderStatus != "dead_letter" {
+		t.Fatalf("older job status = %q, want dead_letter", olderStatus)
+	}
+	if olderError != "superseded by newer claimed same-session dispatch" {
+		t.Fatalf("older job last_error = %q, want superseded same-session dispatch", olderError)
 	}
 	if newerStatus != "claimed" {
 		t.Fatalf("newer job status = %q, want claimed", newerStatus)
+	}
+}
+
+func TestJobWorkerClaimPendingAgentTurnsDeadLettersInactiveProjectBootstrapDispatch(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "claim-dead-letter-inactive-project-bootstrap-dispatch",
+		DisplayName: "Claim Dead Letter Inactive Project Bootstrap Dispatch",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "claim-dead-letter-inactive-project-bootstrap-dispatch-" + uuid.NewString()[:8],
+		DisplayName:    "Inactive Project Bootstrap Dispatch",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue bootstrap",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_bootstrap","auto_continue":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create message: %v", err)
+	}
+
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0}`, session.ID, message.ID),
+		fmt.Sprintf("agent_turn:%s:%s", session.ID, message.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, message.ID, 0),
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert bootstrap job: %v", err)
+	}
+
+	claimed, err := worker.claimPendingAgentTurns(ctx, 10)
+	if err != nil {
+		t.Fatalf("claimPendingAgentTurns: %v", err)
+	}
+	if len(claimed) != 0 {
+		t.Fatalf("claimed jobs = %d, want 0", len(claimed))
+	}
+
+	var status, lastError string
+	if err := pool.QueryRow(ctx, `SELECT status, COALESCE(last_error, '') FROM job_queue WHERE id = $1`, jobID).Scan(&status, &lastError); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "dead_letter" {
+		t.Fatalf("job status = %q, want dead_letter", status)
+	}
+	if lastError != "purged stale inactive project bootstrap dispatch during claim" {
+		t.Fatalf("job last_error = %q, want bootstrap stale-dispatch purge", lastError)
+	}
+}
+
+func TestJobWorkerClaimPendingAgentTurnsDeadLettersSettledProjectContinuationDispatch(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "claim-dead-letter-settled-project-continuation-dispatch",
+		DisplayName: "Claim Dead Letter Settled Project Continuation Dispatch",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "claim-dead-letter-settled-project-continuation-dispatch-" + uuid.NewString()[:8],
+		DisplayName:    "Settled Project Continuation Dispatch",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue project execution",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","auto_continue":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create message: %v", err)
+	}
+
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0}`, session.ID, message.ID),
+		fmt.Sprintf("agent_turn:%s:%s", session.ID, message.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, message.ID, 0),
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert continuation job: %v", err)
+	}
+
+	claimed, err := worker.claimPendingAgentTurns(ctx, 10)
+	if err != nil {
+		t.Fatalf("claimPendingAgentTurns: %v", err)
+	}
+	if len(claimed) != 0 {
+		t.Fatalf("claimed jobs = %d, want 0", len(claimed))
+	}
+
+	var status, lastError string
+	if err := pool.QueryRow(ctx, `SELECT status, COALESCE(last_error, '') FROM job_queue WHERE id = $1`, jobID).Scan(&status, &lastError); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "dead_letter" {
+		t.Fatalf("job status = %q, want dead_letter", status)
+	}
+	if lastError != "purged stale settled project continuation dispatch during claim" {
+		t.Fatalf("job last_error = %q, want settled continuation stale-dispatch purge", lastError)
 	}
 }
 

@@ -1711,4 +1711,42 @@ That fresh report immediately surfaced an old pending backlog, for example:
 - `856ae42a-5ed8-4c53-bf70-53dc6a9e0c46` `project async active` with pending `run_after` on `2026-03-25 12:07:27 MDT`
 - `da3ba22a-5bf9-4467-8ec1-61caca1f0235` `project_task async active` with pending `run_after` on `2026-03-25 13:48:33 MDT`
 
-I have not changed queue cleanup logic from this signal yet.
+## Update 18:10 MDT
+
+I turned that backlog signal into a narrow cleanup plus a better reason breakdown.
+
+What changed:
+
+- [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - `claimPendingAgentTurns(...)` now dead-letters project dispatches that the existing claim SQL already knows are permanently stale:
+    - `project_bootstrap` when the session bootstrap state is no longer `active`
+    - `project_execution_continuation` / `project_continuation_resume` when the project has no unfinished tasks
+  - this is intentionally narrower than “old pending backlog cleanup”; paused task/project retries are still preserved
+- [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+  - added focused coverage for both stale-project dispatch classes
+  - corrected the older same-session bootstrap claim test to match the worker’s actual long-standing behavior: once the newer same-session dispatch is claimed, the older sibling is dead-lettered as superseded
+- [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh)
+  - `Pending Agent Turn Backlog` now also shows:
+    - `current_turn_id`
+    - `is_paused`
+    - `stale_project_source`
+    - derived `backlog_state`
+
+Why this matters:
+
+- the raw backlog count was misleading
+- the oldest pending rows are mostly paused sessions that should stay parked
+- a smaller slice was genuinely stale project bootstrap / continuation queue debt that could be retired safely instead of lingering forever
+
+Focused proof:
+
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerClaimPendingAgentTurns(DeadLettersInactiveProjectBootstrapDispatch|DeadLettersSettledProjectContinuationDispatch|SkipsOlderProjectBootstrapWhenNewerSameSessionAlreadyClaimed|IgnoresStalePendingTurnWithoutActiveExecution|IgnoresStalePendingCurrentTurnWithoutLiveOwnership)$' -count=1`
+- `bash -n scripts/token-usage-report.sh`
+- `scripts/token-usage-report.sh --hours 24 --limit 8`
+
+The improved backlog view now makes the queue state legible:
+
+- `856ae42a-5ed8-4c53-bf70-53dc6a9e0c46` shows `backlog_state=paused`
+- `3764d5d5-8c0e-45b4-87be-0b94c16e58e3` shows `backlog_state=stale_project_source`
+
+So the next restart can clear the truly stale project rows without confusing them with intentionally parked paused work.

@@ -3781,6 +3781,55 @@ func (w *Worker) claimPendingAgentTurns(ctx context.Context, limit int) ([]Job, 
 		SET status = 'dead_letter',
 		    claimed_by = NULL,
 		    claimed_at = NULL,
+		    last_error = 'purged stale inactive project bootstrap dispatch during claim',
+		    updated_at = now()
+		WHERE jq.status IN ('pending', 'claimed')
+		  AND jq.job_type = $1
+		  AND EXISTS (
+		    SELECT 1
+		    FROM chat_session cs
+		    JOIN chat_message cm
+		      ON cm.id = (jq.payload->>'message_id')::uuid
+		    WHERE cs.id = (jq.payload->>'session_id')::uuid
+		      AND cs.scope_type = 'project'
+		      AND COALESCE(cm.metadata->>'source', '') = 'project_bootstrap'
+		      AND COALESCE(cs.metadata->'project_bootstrap'->>'status', '') <> 'active'
+		  )
+	`, agentTurnJobType); err != nil {
+		return nil, fmt.Errorf("dead-letter stale inactive project bootstrap dispatches before claim: %w", err)
+	}
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    claimed_by = NULL,
+		    claimed_at = NULL,
+		    last_error = 'purged stale settled project continuation dispatch during claim',
+		    updated_at = now()
+		WHERE jq.status IN ('pending', 'claimed')
+		  AND jq.job_type = $1
+		  AND EXISTS (
+		    SELECT 1
+		    FROM chat_session cs
+		    JOIN chat_message cm
+		      ON cm.id = (jq.payload->>'message_id')::uuid
+		    WHERE cs.id = (jq.payload->>'session_id')::uuid
+		      AND cs.scope_type = 'project'
+		      AND COALESCE(cm.metadata->>'source', '') IN ('project_execution_continuation', 'project_continuation_resume')
+		      AND NOT EXISTS (
+		        SELECT 1
+		        FROM project_task pt
+		        WHERE pt.project_id = cs.scope_id
+		          AND pt.work_status NOT IN ('done', 'cancelled')
+		      )
+		  )
+	`, agentTurnJobType); err != nil {
+		return nil, fmt.Errorf("dead-letter stale settled project continuation dispatches before claim: %w", err)
+	}
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    claimed_by = NULL,
+		    claimed_at = NULL,
 		    last_error = 'purged stale terminal message-attempt dispatch during claim',
 		    updated_at = now()
 		WHERE jq.status IN ('pending', 'claimed')
