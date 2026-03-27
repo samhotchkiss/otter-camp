@@ -3098,6 +3098,45 @@ Deploy status:
 - tests green
 - runtime restart pending at the time of this note
 
+## Update 07:34 MDT
+
+I used the live one-hour report again and cut the next highest-signal async task seam.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - the existing validation-blocked continuation hook for async non-review task lanes now handles `recovery_target_focus_required` / `explicit_deliverable_focus_required` in addition to simple `file.read -> not_found`
+  - when the current turn already proved that recovery identified a concrete target like `pipeline/fixtures/README.md`, but the model kept reading sibling fixture paths instead, the next synthetic continuation now says to mutate the known target directly
+  - the narrowed continuation explicitly says:
+    - the runtime already identified the active deliverable target
+    - do not `file.read` / `file.list` sibling paths again
+    - continue directly with `file.write` / `file.edit` on the target or emit one short blocker
+  - the helper intentionally skips once the target already received a successful `file.write` or `file.edit` in the same turn
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for:
+    - recovery-target-focus narrowed continuation prompt
+    - skip behavior once the target was already written
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run "Test(TaskExecutionRetryPromptFor(MissingPreferredDeliverable|MissingPreferredDeliverableSkipsWhenTargetAlreadyReadable|RecoveryTargetFocus|RecoveryTargetFocusSkipsWhenTargetAlreadyWritten)|ReviewApprovalRetryPrompt(RejectsOrchestrationParentWithUnfinishedDirectChildren|RejectsOrchestrationParentWithUnfinishedDirectChildrenAcrossRetryTurns)|ShouldBlockOrchestrationParentReviewRejectDiscoveryToolForUnfinishedChildren)$" -count=1`
+
+Why this slice exists:
+
+- the live one-hour report shifted away from the orchestration-parent review loop and toward task work lane recovery drift
+- task-16 session `da709601-92be-490e-b074-0615f26fc1cf` showed the exact waste shape:
+  - repeated `file.read` on sibling fixture files
+  - tool results already saying recovery had identified `pipeline/fixtures/README.md` as the active target
+  - only on the next retry did the lane finally switch to direct workspace mutation
+- this patch uses that already-known target to tighten the very next continuation instead of letting the session rediscover the same focus rule again
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime restart pending at the time of this note
+
 ## Update 06:54 MDT
 
 I cut the next project-control guidance seam instead of waiting on another opaque `not_found`.

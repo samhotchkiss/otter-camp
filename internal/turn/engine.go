@@ -1549,6 +1549,19 @@ func buildTaskExecutionMissingDeliverableRetryPrompt(targetPath string) string {
 	return strings.Join(lines, " ")
 }
 
+func buildTaskExecutionRecoveryTargetFocusRetryPrompt(targetPath string) string {
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	lines := []string{
+		"Continue the active task now from the narrowed continuation below.",
+		fmt.Sprintf("Your last task turn already established that recovery identified `%s` as the current deliverable target for this task.", targetPath),
+		fmt.Sprintf("Do not call file.read or file.list on sibling path variants while `%s` is the active target.", targetPath),
+		"Do not inspect sibling fixture files, broad planning artifacts, or the repository root before taking a concrete mutation step on the target deliverable.",
+		fmt.Sprintf("Continue directly with `%s` using file.write or file.edit, or give one short blocker sentence explaining why that target still cannot be advanced from the current task context.", targetPath),
+		"Do not reply with a plan, explanation, or narration about what you will do next.",
+	}
+	return strings.Join(lines, " ")
+}
+
 func taskExecutionRetryPromptForMissingPreferredDeliverable(messages []repo.ChatMessage, latestCompleted *repo.ChatTurn, latestUser *repo.ChatMessage, targetPath string) (string, bool) {
 	if latestCompleted == nil || latestCompleted.ID == uuid.Nil || latestUser == nil {
 		return "", false
@@ -1601,6 +1614,62 @@ func taskExecutionRetryPromptForMissingPreferredDeliverable(messages []repo.Chat
 	return buildTaskExecutionMissingDeliverableRetryPrompt(normalizedTarget), true
 }
 
+func taskExecutionRetryPromptForRecoveryTargetFocus(messages []repo.ChatMessage, latestCompleted *repo.ChatTurn, latestUser *repo.ChatMessage, targetPath string) (string, bool) {
+	if latestCompleted == nil || latestCompleted.ID == uuid.Nil || latestUser == nil {
+		return "", false
+	}
+	if strings.TrimSpace(targetPath) == "" {
+		return "", false
+	}
+	if !taskExecutionKickoffMessage(*latestUser) && !taskContinuationResumeMessageRootsHistory(*latestUser) {
+		return "", false
+	}
+
+	normalizedTarget := normalizeWorkspaceRelativePath(targetPath)
+	turnMessages := messagesForTurn(messages, latestCompleted.ID)
+	if len(turnMessages) == 0 {
+		return "", false
+	}
+
+	sawFocusRedirect := false
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok {
+			continue
+		}
+		errorCode := normalizeValidationFailureCode(errText)
+		if errorCode == "" {
+			errorCode = normalizeValidationFailureCode(anyString(output["error"]))
+		}
+		path := normalizeWorkspaceRelativePath(anyString(output["path"]))
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "file.read", "file.list":
+			deliverablePath := normalizeWorkspaceRelativePath(anyString(output["deliverable_path"]))
+			if (errorCode == "recovery_target_focus_required" || errorCode == "explicit_deliverable_focus_required" || errorCode == "deliverable_path_required") &&
+				sameWorkspaceRelativePath(deliverablePath, normalizedTarget) &&
+				path != "" &&
+				!sameWorkspaceRelativePath(path, normalizedTarget) {
+				sawFocusRedirect = true
+				continue
+			}
+			if errorCode == "" && sameWorkspaceRelativePath(path, normalizedTarget) && intValue(output["byte_size"]) > 0 {
+				return "", false
+			}
+		case "file.write", "file.edit":
+			if errorCode == "" && sameWorkspaceRelativePath(path, normalizedTarget) {
+				return "", false
+			}
+		}
+	}
+	if !sawFocusRedirect {
+		return "", false
+	}
+	return buildTaskExecutionRecoveryTargetFocusRetryPrompt(normalizedTarget), true
+}
+
 func (e *TurnEngine) enqueueTaskValidationBlockedContinuationPrompt(
 	ctx context.Context,
 	session *chat.ChatSession,
@@ -1621,7 +1690,10 @@ func (e *TurnEngine) enqueueTaskValidationBlockedContinuationPrompt(
 	targetPath := strings.TrimSpace(e.sessionTaskDeliverablePath(ctx, session.ID, taskRecord))
 	retryPrompt, ok := taskExecutionRetryPromptForMissingPreferredDeliverable(messages, latestCompleted, latestUser, targetPath)
 	if !ok {
-		return false, nil
+		retryPrompt, ok = taskExecutionRetryPromptForRecoveryTargetFocus(messages, latestCompleted, latestUser, targetPath)
+		if !ok {
+			return false, nil
+		}
 	}
 	retryAttempt := e.taskContinuationResumeAttempt(ctx, latestUser.ID) + 1
 	actionMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{

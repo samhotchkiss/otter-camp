@@ -14078,6 +14078,79 @@ func TestTaskExecutionRetryPromptForMissingPreferredDeliverableSkipsWhenTargetAl
 	}
 }
 
+func TestTaskExecutionRetryPromptForRecoveryTargetFocus(t *testing.T) {
+	t.Parallel()
+
+	turnID := uuid.New()
+	latestCompleted := &repo.ChatTurn{ID: turnID}
+	latestUser := &repo.ChatMessage{
+		Role:    "user",
+		Content: "Continue the active task now from the continuation summary above.",
+		Metadata: mustRawJSON(t, map[string]any{
+			"source":                 "task_continuation_resume",
+			"flow_node_execution_id": uuid.NewString(),
+		}),
+	}
+	targetPath := "pipeline/fixtures/README.md"
+	messages := []repo.ChatMessage{
+		{
+			Role:    "tool_result",
+			TurnID:  &turnID,
+			Content: `{"tool_name":"file.read","output":{"path":"pipeline/fixtures/processing/input.json","deliverable_path":"pipeline/fixtures/README.md","error":"recovery_target_focus_required","message":"Recovery already identified \u0060pipeline/fixtures/README.md\u0060 as the target deliverable."}}`,
+		},
+		{
+			Role:    "tool_result",
+			TurnID:  &turnID,
+			Content: `{"tool_name":"file.list","output":{"path":"pipeline/fixtures","deliverable_path":"pipeline/fixtures/README.md","error":"recovery_target_focus_required","message":"Recovery already identified \u0060pipeline/fixtures/README.md\u0060 as the target deliverable."}}`,
+		},
+	}
+
+	prompt, ok := taskExecutionRetryPromptForRecoveryTargetFocus(messages, latestCompleted, latestUser, targetPath)
+	if !ok {
+		t.Fatal("expected recovery-target-focus retry prompt")
+	}
+	if !strings.Contains(prompt, "`pipeline/fixtures/README.md` as the current deliverable target") {
+		t.Fatalf("prompt = %q, want target guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not call file.read or file.list on sibling path variants") {
+		t.Fatalf("prompt = %q, want anti-reread guidance", prompt)
+	}
+	if !strings.Contains(prompt, "using file.write or file.edit") {
+		t.Fatalf("prompt = %q, want direct mutation guidance", prompt)
+	}
+}
+
+func TestTaskExecutionRetryPromptForRecoveryTargetFocusSkipsWhenTargetAlreadyWritten(t *testing.T) {
+	t.Parallel()
+
+	turnID := uuid.New()
+	latestCompleted := &repo.ChatTurn{ID: turnID}
+	latestUser := &repo.ChatMessage{
+		Role:    "user",
+		Content: "Continue the active task now from the continuation summary above.",
+		Metadata: mustRawJSON(t, map[string]any{
+			"source":                 "task_continuation_resume",
+			"flow_node_execution_id": uuid.NewString(),
+		}),
+	}
+	messages := []repo.ChatMessage{
+		{
+			Role:    "tool_result",
+			TurnID:  &turnID,
+			Content: `{"tool_name":"file.read","output":{"path":"pipeline/fixtures/processing/input.json","deliverable_path":"pipeline/fixtures/README.md","error":"recovery_target_focus_required","message":"Recovery already identified \u0060pipeline/fixtures/README.md\u0060 as the target deliverable."}}`,
+		},
+		{
+			Role:    "tool_result",
+			TurnID:  &turnID,
+			Content: `{"tool_name":"file.write","output":{"path":"pipeline/fixtures/README.md","byte_size":1024}}`,
+		},
+	}
+
+	if prompt, ok := taskExecutionRetryPromptForRecoveryTargetFocus(messages, latestCompleted, latestUser, "pipeline/fixtures/README.md"); ok {
+		t.Fatalf("unexpected prompt = %q", prompt)
+	}
+}
+
 func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	prompt := buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.")
 

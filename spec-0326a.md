@@ -1087,3 +1087,10 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
       - same-turn unfinished-child reject prompt
       - persisted unfinished-child reject prompt across retry turns
       - reject-only discovery blocking for unfinished-child evidence
+  - newest task work-lane continuation slice:
+    - async `project_task` validation-blocked continuations now narrow not only on `file.read -> not_found`, but also on `recovery_target_focus_required` / `explicit_deliverable_focus_required` when the runtime already knows the active deliverable target
+    - if a turn kept reading sibling files while the tool results already said `recovery identified README.md as the deliverable target`, the next synthetic continuation now instructs the model to mutate `README.md` directly instead of rereading sibling artifacts again
+    - the helper intentionally skips once the target already received a successful `file.write` / `file.edit` in the same turn
+    - focused turn-engine coverage is green for:
+      - recovery-target-focus narrowed continuation prompt
+      - skip behavior once the target was already written
