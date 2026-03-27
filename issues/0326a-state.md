@@ -2549,7 +2549,50 @@ Deployment status:
   - fresh post-`22:33 MDT` review prompts include, for example:
     - `Start with the preferred deliverable target \`src/pipeline_logger.py\`...`
     - `Do not inspect planning artifacts or list the full repository tree while \`src/pipeline_logger.py\` is present and readable...`
-  - live behavior on task-12 review turn `24d9f369-66e7-463b-9d7c-6bf391eff5ce` changed accordingly:
-    - assistant opened with `I'll start by inspecting the preferred deliverable target directly.`
-    - first inspection step went straight to `src/pipeline_logger.py`
+- live behavior on task-12 review turn `24d9f369-66e7-463b-9d7c-6bf391eff5ce` changed accordingly:
+  - assistant opened with `I'll start by inspecting the preferred deliverable target directly.`
+  - first inspection step went straight to `src/pipeline_logger.py`
   - the turn still drifted later into branch-history / diff probing, so this did not eliminate review churn, but it did tighten the opening path in production
+
+## Update 22:44 MDT
+
+I finished the native helper that makes those bounded review prompts pay off more consistently once the model actually opens the target file.
+
+What changed:
+
+- [`internal/tools/native/file_tools.go`](../internal/tools/native/file_tools.go)
+  - `latestRecoveryTargetPathForSession(...)` now falls back from system recovery messages to recent `tool_result` payloads in the same session
+  - it prefers explicit `output.deliverable_path`
+  - otherwise it accepts recent `file.read` / `file.write` `output.path` values when they still look like explicit deliverables
+- this feeds the existing native `file.read` guards:
+  - `placeholder_deliverable`
+  - `mismatched_deliverable_context`
+- net effect:
+  - when a hot review lane has already been steered to a concrete target like `src/pipeline_logger.py`
+  - and that file turns out to be placeholder/status narration
+  - the native read layer can now stop the reread immediately even if task metadata itself never recorded that path
+
+Verification:
+
+- added focused unit coverage in [`internal/tools/native/file_tools_test.go`](../internal/tools/native/file_tools_test.go):
+  - `TestParseRecentDeliverableTargetFromToolResultPrefersDeliverablePath`
+  - `TestLatestRecoveryTargetPathForSessionFallsBackToRecentToolResult`
+  - `TestLatestRecoveryTargetPathForSessionPrefersSystemRecoveryTarget`
+  - `TestFileReadRejectsPlaceholderRecentReadTargetWithoutExplicitDeliverable`
+- focused slice passed:
+  - `go test ./internal/tools/native -run 'Test(ParseRecentDeliverableTargetFromToolResultPrefersDeliverablePath|LatestRecoveryTargetPathForSession(FallsBackToRecentToolResult|PrefersSystemRecoveryTarget)|FileReadRejectsPlaceholderRecentReadTargetWithoutExplicitDeliverable)$' -count=1`
+
+Why I changed the proof shape:
+
+- I initially tried to prove this with another integration test on the existing placeholder harness
+- that harness is currently tripping earlier on a preexisting `git worktree prune ... fatal: not a git repository` bootstrap failure
+- so I switched the proof to native unit coverage rather than pretending the new behavior was unverified
+
+Deployment status:
+
+- runtime rebuilt and tmux `codex-e2e-20260324` restarted on the new binary
+- `./bin/ottercamp health --output json` returned `status=ok`
+
+Next proof target:
+
+- find a fresh review lane where a direct target read now returns `placeholder_deliverable` earlier instead of leaking back into broader repo discovery

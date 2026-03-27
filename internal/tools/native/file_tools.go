@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -344,6 +345,44 @@ func (e *NativeToolExecutor) latestRecoveryTargetPathForSession(ctx context.Cont
 		}
 		if target := parseRecoveryTargetPath(messages[i].Content); target != "" {
 			return target
+		}
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if !strings.EqualFold(strings.TrimSpace(messages[i].Role), "tool_result") {
+			continue
+		}
+		if target := parseRecentDeliverableTargetFromToolResult(messages[i].Content); target != "" {
+			return target
+		}
+	}
+	return ""
+}
+
+func parseRecentDeliverableTargetFromToolResult(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return ""
+	}
+	if payload == nil {
+		return ""
+	}
+	output, _ := payload["output"].(map[string]any)
+	if output != nil {
+		if target := normalizeWorkspacePath(readStringValue(output["deliverable_path"])); target != "" && looksLikeExplicitDeliverablePath(target, readStringValue(output["deliverable_path"])) {
+			return target
+		}
+	}
+	toolName := strings.ToLower(strings.TrimSpace(readStringValue(payload["tool_name"])))
+	switch toolName {
+	case "file.read", "file.write":
+		if output != nil {
+			if target := normalizeWorkspacePath(readStringValue(output["path"])); target != "" && looksLikeExplicitDeliverablePath(target, readStringValue(output["path"])) {
+				return target
+			}
 		}
 	}
 	return ""

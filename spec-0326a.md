@@ -616,6 +616,10 @@ Implemented so far in this spec:
   - that is aimed at the surviving review turns that still spend their early budget on root `file.list` / generic repo inspection before opening the one actual deliverable
   - when static task metadata does not expose a target path, the prompt now falls back to the most recent session-level `file.read` / `file.write` / `deliverable_path` evidence instead of remaining generic
   - when the task has no explicit companion-artifact contract and a concrete target is known, the prompt now explicitly forbids planning-artifact scans and full-tree listing while that target is present and readable
+- native deliverable-read guards now use that same recent session evidence when task metadata is missing a bound path:
+  - `latestRecoveryTargetPathForSession(...)` now falls back from system recovery messages to recent `tool_result` payloads
+  - it accepts explicit `output.deliverable_path` first, then recent `file.read` / `file.write` `output.path` values that still look like real deliverables
+  - that lets `file.read` reject placeholder or mismatched deliverables on hot review lanes even when the task record itself has no explicit deliverable metadata yet
 
 Still pending from this spec:
 
