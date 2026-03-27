@@ -24665,6 +24665,13 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:       "tool-recovery troubleshooting",
 		},
 		{
+			name: "rejects tool routing troubleshooting narration",
+			content: "The tool infrastructure is routing all tool calls — regardless of tool name — to `file.write` with no content payload. " +
+				"I cannot write the file in this session state; a system-level tool routing fix is required before this task can proceed.",
+			targetPath: "templates/layout-07-split-screen.html",
+			want:       "tool-recovery troubleshooting",
+		},
+		{
 			name: "rejects operator-choice status questionnaire",
 			content: "I'm standing by to validate the Speaker Pipeline Ops workflow. I've reviewed the context:\n\n" +
 				"**Current Task**: OC-13 (Synthesize Validation Findings & Report) - In progress, Work node active\n\n" +
@@ -27317,6 +27324,126 @@ func TestHandleTaskFileWriteWithoutContentAppendsCorrectionWhenNoDraftExists(t *
 	}
 	if !strings.Contains(last.Content, "Task execution correction") || !strings.Contains(last.Content, targetPath) {
 		t.Fatalf("last content = %q, want task correction message for %s", last.Content, targetPath)
+	}
+}
+
+func TestHandleTaskFileWriteWithoutContentAcceptsFileWriteAlias(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	priorTurnID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "templates/layout-07-split-screen.html"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content: strings.TrimSpace(`<!DOCTYPE html>
+<html>
+  <body>
+    <section class="split-screen">
+      <h1>Sam.blog</h1>
+    </section>
+  </body>
+</html>`),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file_write",
+		Arguments: map[string]any{
+			"path": targetPath,
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWithoutContent(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWithoutContent: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["content"]); !strings.Contains(got, "split-screen") {
+		t.Fatalf("content = %q, want hydrated prior draft", got)
+	}
+}
+
+func TestHandleTaskFileWriteWithoutContentRejectsToolRoutingArtifactDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "templates/layout-07-split-screen.html"
+	recoveryArtifact := strings.TrimSpace("# Recovery file.write artifact\n" +
+		"Target Path: templates/layout-07-split-screen.html\n" +
+		"Generated: 2026-03-27T22:20:00Z\n\n" +
+		"## Draft Content\n\n" +
+		"The tool infrastructure is routing all tool calls - regardless of tool name - to `file.write` with no content payload. I cannot write the file in this session state; a system-level tool routing fix is required before this task can proceed.")
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":    ".ottercamp/recovery/templates/layout-07-split-screen.html",
+				"content": recoveryArtifact,
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file_write",
+		Arguments: map[string]any{
+			"path": targetPath,
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWithoutContent(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWithoutContent: %v", err)
+	}
+	if !handled || abort {
+		t.Fatalf("handled=%v abort=%v, want true false", handled, abort)
+	}
+	if _, ok := call.Arguments["content"]; ok {
+		t.Fatalf("content = %q, want no hydrated troubleshooting draft", stringValue(call.Arguments["content"]))
+	}
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	last := messages[len(messages)-1]
+	if !strings.EqualFold(last.Role, "system") || !strings.Contains(last.Content, "Task execution correction") {
+		t.Fatalf("last message = %#v, want correction system message", last)
 	}
 }
 

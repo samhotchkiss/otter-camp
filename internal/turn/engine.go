@@ -13412,11 +13412,16 @@ func (e *TurnEngine) handleRecoveryRejectedFileWriteContent(ctx context.Context,
 	return e.haltRejectedRecoveryFileWrite(ctx, rt, targetPath, draft, rejectReason)
 }
 
+func isFileWriteToolName(name string) bool {
+	trimmed := strings.TrimSpace(name)
+	return strings.EqualFold(trimmed, "file.write") || strings.EqualFold(trimmed, "file_write")
+}
+
 func (e *TurnEngine) handleRecoveryFileWriteWithoutPath(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
 	if rt == nil || call == nil || !rt.recoveryTurn || rt.turn == nil || rt.session == nil {
 		return false, false, nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(call.Name), "file.write") {
+	if !isFileWriteToolName(call.Name) {
 		return false, false, nil
 	}
 
@@ -13638,7 +13643,7 @@ func (e *TurnEngine) handleTaskFileWriteWrongPath(ctx context.Context, rt *turnR
 	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
 		return false, false, nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(call.Name), "file.write") {
+	if !isFileWriteToolName(call.Name) {
 		return false, false, nil
 	}
 
@@ -14077,7 +14082,7 @@ func (e *TurnEngine) cancelRecoveryResumeDispatch(ctx context.Context, rt *turnR
 }
 
 func recoveryFileWriteMissingContent(call ToolCall) (map[string]any, string, bool) {
-	if !strings.EqualFold(strings.TrimSpace(call.Name), "file.write") {
+	if !isFileWriteToolName(call.Name) {
 		return nil, "", false
 	}
 	normalized := toolargs.Normalize("file.write", call.Arguments)
@@ -14092,7 +14097,7 @@ func recoveryFileWriteMissingContent(call ToolCall) (map[string]any, string, boo
 }
 
 func recoveryFileWriteWithContent(call ToolCall) (map[string]any, string, string, bool) {
-	if !strings.EqualFold(strings.TrimSpace(call.Name), "file.write") {
+	if !isFileWriteToolName(call.Name) {
 		return nil, "", "", false
 	}
 	normalized := toolargs.Normalize("file.write", call.Arguments)
@@ -14443,7 +14448,7 @@ func (e *TurnEngine) maybeSynthesizeTaskExecutionFileWriteToolCalls(ctx context.
 		return toolCalls, false, nil
 	}
 	if len(toolCalls) == 1 &&
-		strings.EqualFold(strings.TrimSpace(toolCalls[0].Name), "file.write") &&
+		isFileWriteToolName(toolCalls[0].Name) &&
 		sameWorkspaceRelativePath(normalizeWorkspaceRelativePath(stringValue(toolCalls[0].Arguments["path"])), targetPath) &&
 		strings.TrimSpace(recoveryFileWriteDraftRejectReason(stringValue(toolCalls[0].Arguments["content"]), targetPath)) == "" {
 		return toolCalls, false, nil
@@ -17848,6 +17853,10 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		"i can see the problem",
 		"i see the file_write calls are going through but not actually replacing the content",
 		"the file_write calls are going through but not actually replacing the content",
+		"the tool infrastructure is routing all tool calls",
+		"every tool call is being intercepted and rerouted",
+		"silently discarding its `content` parameter",
+		"silently discarding its content parameter",
 		"i'm not providing content",
 		"i am not providing content",
 		"i'm encountering a tool parameter validation issue",
@@ -17876,6 +17885,9 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		"path parameter",
 		"tool call",
 		"tool calls",
+		"tool routing",
+		"operator-level repair",
+		"operator-level tool infrastructure repair",
 		"invocation",
 		"invocations",
 		"fallback",
