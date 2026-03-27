@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/samhotchkiss/otter-camp/internal/controlplane"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
+	"github.com/samhotchkiss/otter-camp/internal/testutil"
 )
 
 func TestDBMigrateDryRunAndStatus(t *testing.T) {
@@ -136,10 +138,34 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
+	project := testutil.MakeProject(t, pool, org.ID)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{})
+	runRecord, err := controlplane.NewRunRepository(pool).Create(ctx, controlplane.Run{
+		OrganizationID: org.ID,
+		ProjectID:      &project.ID,
+		TaskID:         &task.ID,
+		PrincipalType:  "system",
+		PrincipalID:    uuid.Nil,
+		Status:         "in_progress",
+		TriggerType:    "api",
+		Metadata:       []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	step, err := controlplane.NewRunStepRepository(pool).Create(ctx, controlplane.RunStep{
+		RunID:      runRecord.ID,
+		StepNumber: 1,
+		Status:     "in_progress",
+		Metadata:   []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create run step: %v", err)
+	}
 	session, err := sessionRepo.Create(ctx, repo.ChatSession{
 		OrganizationID: org.ID,
 		ScopeType:      "project_task",
-		ScopeID:        uuid.New(),
+		ScopeID:        task.ID,
 		Mode:           "async",
 		Status:         "active",
 		CreatedByType:  "system",
@@ -196,6 +222,16 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 		) VALUES ('agent_turn', 50, $1::jsonb, 'pending', 0, 5, $2, $3, $3)
 	`, `{"session_id":"`+session.ID.String()+`"}`, createdAt.Add(5*time.Minute), createdAt); err != nil {
 		t.Fatalf("insert pending job: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO cli_execution (
+			run_id, run_step_id, task_id, project_id, agent_id, command, working_directory,
+			risk_level, policy_decision, env_vars_used, started_at, completed_at, duration_ms, metadata, created_at
+		) VALUES
+			($1, $2, $3, $4, $5, 'cat scripts/demo.sh', '/tmp/task-worktrees/demo/task-1', 'low', 'allowed', '{}'::jsonb, $6, $6, 10, '{}'::jsonb, $6),
+			($1, $2, $3, $4, $5, 'cat scripts/demo.sh', '/tmp/workspaces/demo', 'low', 'allowed', '{}'::jsonb, $7, $7, 10, '{}'::jsonb, $7)
+	`, runRecord.ID, step.ID, task.ID, project.ID, agent.ID, createdAt.Add(3*time.Minute), createdAt.Add(4*time.Minute)); err != nil {
+		t.Fatalf("insert cli executions: %v", err)
 	}
 	for idx, message := range []repo.ChatMessage{
 		{
@@ -279,6 +315,9 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	if !strings.Contains(stdout, `"shell_file_build_readback_churn"`) || !strings.Contains(stdout, `scripts/demo.sh`) {
 		t.Fatalf("db token-usage output missing shell build/readback section: %q", stdout)
 	}
+	if !strings.Contains(stdout, `"task_cli_working_directory_roots"`) || !strings.Contains(stdout, `task_worktree`) || !strings.Contains(stdout, `project_workspace`) {
+		t.Fatalf("db token-usage output missing cli working directory root section: %q", stdout)
+	}
 
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
@@ -305,5 +344,22 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	}
 	if got, _ := shellRow["path_hints"].(string); got != "scripts/demo.sh" {
 		t.Fatalf("path_hints = %q, want %q", got, "scripts/demo.sh")
+	}
+	cliRootRows, ok := payload["task_cli_working_directory_roots"].([]any)
+	if !ok || len(cliRootRows) < 2 {
+		t.Fatalf("unexpected task_cli_working_directory_roots payload: %#v", payload["task_cli_working_directory_roots"])
+	}
+	rootKinds := map[string]bool{}
+	for _, raw := range cliRootRows {
+		row, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected cli root row: %#v", raw)
+		}
+		if kind, _ := row["root_kind"].(string); kind != "" {
+			rootKinds[kind] = true
+		}
+	}
+	if !rootKinds["task_worktree"] || !rootKinds["project_workspace"] {
+		t.Fatalf("unexpected cli root kinds: %#v", rootKinds)
 	}
 }

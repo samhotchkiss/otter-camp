@@ -3061,3 +3061,57 @@ Deploy status:
 - code complete
 - tests green
 - runtime restart still pending at the time of this note
+
+## Update 00:33 MDT
+
+I closed the remaining uncertainty on the task-worktree fix and turned it into an operator-visible report.
+
+What I proved:
+
+- the shared resolver is not the problem
+- a direct probe through `cli.Executor.resolveExecutionRoot(...)` against the live project/task rows returned:
+  - task `13` -> `/Users/sam/otter-data/task-worktrees/speaker-pipeline-ops-validation-fresh-20260325-rerun-7-restart-9/task-13`
+  - task `16` -> `/Users/sam/otter-data/task-worktrees/speaker-pipeline-ops-validation-fresh-20260325-rerun-7-restart-9/task-16`
+- fresh production `cli_execution` rows then confirmed the live worker is now using that task root:
+  - `6de717c8-664a-4705-95b6-425c25b1da3e` at `2026-03-27 00:27:46 MDT`
+  - `3f944857-c17f-4f39-b445-826ba915b030` at `2026-03-27 00:27:53 MDT`
+  - both for task `16`, both with `working_directory=/Users/sam/otter-data/task-worktrees/.../task-16`
+
+What that means:
+
+- the earlier `project_workspace` rows were mixed pre-cutover traffic, not evidence that the new resolver path was still broken
+- the product bug is fixed live now
+- the remaining value is observability, not another runtime change on this seam
+
+What I changed:
+
+- [`cmd/ottercamp/main.go`](../cmd/ottercamp/main.go)
+  - `ottercamp db token-usage` now includes `task_cli_working_directory_roots`
+  - it groups recent `cli_execution.working_directory` values into:
+    - `task_worktree`
+    - `project_workspace`
+    - `other`
+- [`cmd/ottercamp/main_db_integration_test.go`](../cmd/ottercamp/main_db_integration_test.go)
+  - integration coverage now inserts both a task-worktree row and a project-workspace row and asserts both appear in the JSON report
+- [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh)
+  - now prints the same root-kind rollup in the shell report
+
+Verification:
+
+- `bash -n scripts/token-usage-report.sh`
+- `go test -tags=integration ./cmd/ottercamp -run 'TestDBTokenUsageJSONIncludesCacheReadsAndAttribution$' -count=1`
+- `scripts/token-usage-report.sh --hours 1 --limit 8`
+- `go run ./cmd/ottercamp db token-usage --hours 1 --limit 8 --output json`
+
+Live proof:
+
+- shell report now shows both roots in the last hour:
+  - `project_workspace | 152 | 3 | 2026-03-27 00:27:06 MDT`
+  - `task_worktree | 4 | 1 | 2026-03-27 00:33:25 MDT`
+- the JSON report shows the same split under `task_cli_working_directory_roots`
+
+Why this matters:
+
+- it converts a previously hand-debugged runtime seam into a first-class operator signal
+- it gives us an immediate canary for whether task-lane shell/file alignment stays healthy after future changes
+- it also prevents us from chasing old rows and mixed restart windows as if they were fresh regressions

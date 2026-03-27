@@ -723,6 +723,57 @@ ORDER BY (shell_file_builds + readback_checks) DESC, last_seen DESC
 LIMIT :'limit_rows'::int;
 
 \echo
+\echo '== Task CLI Working Directory Roots =='
+WITH params AS (
+  SELECT
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
+),
+session_filter AS (
+  SELECT
+    cs.scope_type,
+    cs.scope_id
+  FROM chat_session cs
+  CROSS JOIN params p
+  WHERE p.session_id IS NOT NULL
+    AND cs.id = p.session_id
+),
+root_rollup AS (
+  SELECT
+    CASE
+      WHEN ce.working_directory LIKE '%/task-worktrees/%' THEN 'task_worktree'
+      WHEN ce.working_directory LIKE '%/workspaces/%' THEN 'project_workspace'
+      ELSE 'other'
+    END AS root_kind,
+    COUNT(*) AS executions,
+    COUNT(DISTINCT ce.task_id) AS distinct_tasks,
+    MAX(ce.created_at) AS last_seen
+  FROM cli_execution ce
+  JOIN project p ON p.id = ce.project_id
+  CROSS JOIN params prm
+  WHERE ce.created_at >= prm.since_at
+    AND (prm.org_id IS NULL OR p.organization_id = prm.org_id)
+    AND (
+      prm.session_id IS NULL
+      OR EXISTS (
+        SELECT 1
+        FROM session_filter sf
+        WHERE (sf.scope_type = 'project_task' AND sf.scope_id = ce.task_id)
+           OR (sf.scope_type = 'project' AND sf.scope_id = ce.project_id)
+      )
+    )
+  GROUP BY 1
+)
+SELECT
+  root_kind,
+  executions,
+  distinct_tasks,
+  last_seen
+FROM root_rollup
+ORDER BY executions DESC, root_kind ASC;
+
+\echo
 \echo '== Completed Turns By Stop Reason =='
 WITH params AS (
   SELECT

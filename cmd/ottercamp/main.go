@@ -2596,6 +2596,13 @@ type dbTokenUsageShellChurnRow struct {
 	LastSeen        time.Time `json:"last_seen"`
 }
 
+type dbTokenUsageCLIRootRow struct {
+	RootKind      string    `json:"root_kind"`
+	Executions    int64     `json:"executions"`
+	DistinctTasks int64     `json:"distinct_tasks"`
+	LastSeen      time.Time `json:"last_seen"`
+}
+
 type dbTokenUsageStopReasonRow struct {
 	ScopeType            string    `json:"scope_type"`
 	Mode                 string    `json:"mode"`
@@ -2657,6 +2664,7 @@ type dbTokenUsageReport struct {
 	TopTurns                    []dbTokenUsageTurnRow           `json:"top_turns"`
 	RepeatedPackageInstalls     []dbTokenUsagePackageInstallRow `json:"repeated_package_installs"`
 	ShellFileBuildReadbackChurn []dbTokenUsageShellChurnRow     `json:"shell_file_build_readback_churn"`
+	CLIWorkingDirectoryRoots    []dbTokenUsageCLIRootRow        `json:"task_cli_working_directory_roots"`
 	CompletedByStopReason       []dbTokenUsageStopReasonRow     `json:"completed_by_stop_reason"`
 	Failures                    []dbTokenUsageFailureRow        `json:"failures"`
 	ProviderHealth              []dbTokenUsageProviderHealthRow `json:"provider_health"`
@@ -3416,6 +3424,43 @@ func loadDBTokenUsageReport(ctx context.Context, pool *pgxpool.Pool, windowHours
 		return nil, err
 	}
 
+	cliRootRows, err := pool.Query(ctx, `
+		SELECT
+			CASE
+				WHEN ce.working_directory LIKE '%/task-worktrees/%' THEN 'task_worktree'
+				WHEN ce.working_directory LIKE '%/workspaces/%' THEN 'project_workspace'
+				ELSE 'other'
+			END AS root_kind,
+			COUNT(*) AS executions,
+			COUNT(DISTINCT ce.task_id) AS distinct_tasks,
+			MAX(ce.created_at) AS last_seen
+		FROM cli_execution ce
+		JOIN project p ON p.id = ce.project_id
+		WHERE ce.created_at >= $1
+		  AND ($2::uuid IS NULL OR p.organization_id = $2)
+		GROUP BY 1
+		ORDER BY executions DESC, root_kind ASC
+	`, sinceAt, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer cliRootRows.Close()
+	for cliRootRows.Next() {
+		var row dbTokenUsageCLIRootRow
+		if scanErr := cliRootRows.Scan(
+			&row.RootKind,
+			&row.Executions,
+			&row.DistinctTasks,
+			&row.LastSeen,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		report.CLIWorkingDirectoryRoots = append(report.CLIWorkingDirectoryRoots, row)
+	}
+	if err := cliRootRows.Err(); err != nil {
+		return nil, err
+	}
+
 	return report, nil
 }
 
@@ -3526,6 +3571,19 @@ func printDBTokenUsageReportTable(w io.Writer, formatter clitools.OutputFormatte
 		})
 	}
 	_ = formatter.WriteTable([]string{"Turn", "Session", "Shell Builds", "Readback Checks", "Path Hints", "First Seen", "Last Seen"}, shellRows)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "== Task CLI Working Directory Roots ==")
+	cliRootRows := make([][]string, 0, len(report.CLIWorkingDirectoryRoots))
+	for _, row := range report.CLIWorkingDirectoryRoots {
+		cliRootRows = append(cliRootRows, []string{
+			row.RootKind,
+			strconv.FormatInt(row.Executions, 10),
+			strconv.FormatInt(row.DistinctTasks, 10),
+			row.LastSeen.UTC().Format(time.RFC3339),
+		})
+	}
+	_ = formatter.WriteTable([]string{"Root Kind", "Executions", "Distinct Tasks", "Last Seen"}, cliRootRows)
 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "== Completed Turns By Stop Reason ==")

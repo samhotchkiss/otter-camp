@@ -651,6 +651,13 @@ Implemented so far in this spec:
     - `internal/cli/executor_test.go`
     - `internal/cli/executor_integration_test.go`
     - `internal/tools/native/executor_test.go`
+- operator token-usage reporting now exposes task CLI working-directory roots directly:
+  - both `scripts/token-usage-report.sh` and `ottercamp db token-usage` now group recent `cli_execution.working_directory` values into `task_worktree`, `project_workspace`, and `other`
+  - the CLI JSON report exposes this as `task_cli_working_directory_roots`
+  - live proof now shows the cutover explicitly instead of relying on one-off SQL:
+    - older rows still show `project_workspace`
+    - fresh rows at `2026-03-27 00:27:46 MDT` and `00:27:53 MDT` are already landing as `task_worktree`
+  - that confirms the task-worktree fix is live and that the remaining mixed sample is historical overlap across the restart boundary, not a still-broken resolver
 - operator package-install churn diagnostics now normalize install specs instead of smearing whole shell commands:
   - both `scripts/token-usage-report.sh` and `ottercamp db token-usage` now extract package-install attempts from assistant `cli_execute` metadata using anchored `pip install` / `python -m pip install` matching
   - the report strips shell suffixes and ignores installer flags while retaining the actual package spec
