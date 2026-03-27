@@ -997,4 +997,26 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - this pairs with the new narrow `parent_task_id` auto-injection so a transiently interrupted task-9 review can resume directly on child-task evidence instead of paying another parent-summary reread
     - focused turn-engine coverage is green for the new retry prompt helper
     - runtime was rebuilt/restarted successfully at `2026-03-27 06:14 MDT`
-    - fresh live proof is still pending the next post-restart task-9 retry on the new binary
+    - fresh live proof now exists:
+      - task-9 session `729dd9e7-36c4-46a1-988b-8e35e5b96b88`
+      - the transient retry at `2026-03-27 06:17:14 MDT` appended a fresh user prompt that carried forward:
+        - the parent summary was already readable
+        - do not reread the parent summary
+        - continue directly with `task.list parent_task_id=<current task> status=all`
+  - missing preferred deliverable rejection is now live-proven end-to-end:
+    - task-10 session `f83171e8-0068-4f1f-8776-8186daff3a0e`
+    - retry turn at `2026-03-27 06:09 MDT`
+    - direct `file.read` on `Work/OC-10-WORKSTREAM-B-REVIEW-PATH-VALIDATION.md` returned `not_found`
+    - assistant then emitted `flow.review_decision reject` with the active `flow_node_execution_id`
+  - orchestration-parent `task.list` auto-injection is also live-proven now:
+    - task-9 session `729dd9e7-36c4-46a1-988b-8e35e5b96b88`
+    - turn segment at `2026-03-27 06:11:57 MDT`
+    - assistant tool call persisted the old raw shape:
+      - `task_list(status=all, project_id=<current task id>)`
+    - runtime auto-injected `parent_task_id` and the resulting `task.list` completed successfully instead of returning the old broad-scope boundary error
+    - that child lookup returned `0` direct child tasks, which exposed the next review seam
+  - the newest follow-on slice now turns that empty direct-child evidence into rejection guidance:
+    - orchestration-only parent review retries now reject when the parent summary is readable but a successful direct child-task lookup returns zero tasks
+    - focused turn-engine coverage is green
+    - runtime was rebuilt/restarted successfully at `2026-03-27 06:18 MDT`
+    - fresh live proof for this final empty-child rejection step is still pending

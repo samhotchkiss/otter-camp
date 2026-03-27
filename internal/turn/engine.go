@@ -1729,6 +1729,9 @@ func (e *TurnEngine) reviewApprovalRetryPrompt(ctx context.Context, session *cha
 		if retryPrompt, ok := reviewRetryPromptForMissingPreferredDeliverable(messages, latestCompleted, latestUser, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
 			return retryPrompt, true, nil
 		}
+		if retryPrompt, ok := reviewRetryPromptForOrchestrationParentMissingDirectChildren(messages, latestCompleted, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+			return retryPrompt, true, nil
+		}
 		if retryPrompt, ok := reviewRetryPromptForOrchestrationParentChildEvidence(messages, latestCompleted, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
 			return retryPrompt, true, nil
 		}
@@ -1875,6 +1878,62 @@ func reviewRetryPromptForOrchestrationParentChildEvidence(messages []repo.ChatMe
 		" Do not reread that summary or call task.get on the parent again." +
 		" Continue directly with direct child-task evidence by calling task.list with parent_task_id " + taskRecord.ID.String() + " and status=all, then inspect only the direct child outputs needed for the review decision." +
 		" Do not re-list the broader project task tree, do not inspect planning companion files, and do not restart from the parent summary."
+	return retryPrompt, true
+}
+
+func reviewRetryPromptForOrchestrationParentMissingDirectChildren(messages []repo.ChatMessage, latestCompleted *repo.ChatTurn, latestUser *repo.ChatMessage, taskRecord repo.ProjectTask, executionID uuid.UUID, basePrompt string) (string, bool) {
+	if latestCompleted == nil || latestCompleted.ID == uuid.Nil || latestUser == nil || executionID == uuid.Nil {
+		return "", false
+	}
+	if !taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+		return "", false
+	}
+	targetPath := parsePromptDeliverableTarget(latestUser.Content)
+	if targetPath == "" {
+		return "", false
+	}
+	turnMessages := messagesForTurn(messages, latestCompleted.ID)
+	if len(turnMessages) == 0 {
+		return "", false
+	}
+
+	parentSummaryReadable := false
+	childLookupObserved := false
+	childLookupCount := -1
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok {
+			continue
+		}
+		errorCode := normalizeValidationFailureCode(errText)
+		if errorCode == "" {
+			errorCode = normalizeValidationFailureCode(anyString(output["error"]))
+		}
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "file.read":
+			if errorCode == "" && normalizeWorkspaceRelativePath(anyString(output["path"])) == targetPath && intValue(output["byte_size"]) > 0 {
+				parentSummaryReadable = true
+			}
+		case "task.list":
+			if errorCode == "" {
+				childLookupObserved = true
+				childLookupCount = anySliceLen(output["tasks"])
+			}
+		}
+	}
+	if !parentSummaryReadable || !childLookupObserved || childLookupCount != 0 {
+		return "", false
+	}
+
+	retryPrompt := basePrompt +
+		"\nYour last review attempt already established that the parent orchestration summary `" + targetPath + "` is present and substantive." +
+		" It also established that task.list returned zero direct child tasks beneath this orchestration parent." +
+		" Call flow.review_decision immediately with decision=reject, flow_node_execution_id " + executionID.String() + ", and concise findings that the orchestration parent has no direct child-task evidence to validate against its summary." +
+		" Use the empty direct child-task lookup as the rejection evidence." +
+		" Do not reread the parent summary, do not re-list the broader project task tree, and do not search planning companion files."
 	return retryPrompt, true
 }
 
@@ -24474,6 +24533,17 @@ func anyStrings(raw any) []string {
 		return out
 	default:
 		return nil
+	}
+}
+
+func anySliceLen(raw any) int {
+	switch typed := raw.(type) {
+	case []any:
+		return len(typed)
+	case []map[string]any:
+		return len(typed)
+	default:
+		return 0
 	}
 }
 

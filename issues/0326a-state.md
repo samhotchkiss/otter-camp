@@ -3217,6 +3217,58 @@ Live status:
 - deployed and healthy on the new binary
 - fresh live proof is still pending the next post-restart task-9 retry on this runtime
 
+## Update 06:20 MDT
+
+I now have fresh live proof for two of the review hardening slices, and I landed the next task-9-specific follow-on on top of them.
+
+Fresh live proofs:
+
+- task-10 missing preferred deliverable rejection is end-to-end proven:
+  - session `f83171e8-0068-4f1f-8776-8186daff3a0e`
+  - turn at `2026-03-27 06:09:01 MDT`
+  - `file.read` on `Work/OC-10-WORKSTREAM-B-REVIEW-PATH-VALIDATION.md` returned `not_found`
+  - assistant then emitted `flow_review_decision` with:
+    - `decision=reject`
+    - `flow_node_execution_id=34a65519-ec31-485c-bed4-e53a91c031ed`
+- task-9 orchestration-parent `task.list` auto-injection is live-proven:
+  - session `729dd9e7-36c4-46a1-988b-8e35e5b96b88`
+  - turn at `2026-03-27 06:11:57 MDT`
+  - assistant persisted the old raw call shape:
+    - `task_list(status=all, project_id=a5cc62da-5ae4-4c0f-b299-d25fd6f743fb)`
+  - runtime no longer blocked it
+  - the resulting `task.list` succeeded and returned `tasks: []`
+- task-9 transient review narrowing is also live-proven:
+  - after the `06:17:10 MDT` transient provider failure, the runtime appended:
+    - `[Transient retry narrowed the next review prompt using evidence gathered before the provider failure.]`
+  - the fresh user message at `06:17:14 MDT` explicitly added:
+    - the parent summary was already established as present and substantive
+    - do not reread the parent summary
+    - continue directly with `task.list parent_task_id=<current task> status=all`
+
+What I changed next:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - review retries for orchestration-only parent tasks now reject when:
+    - the parent summary is readable
+    - the direct child-task lookup succeeds
+    - and that lookup returns zero direct child tasks
+  - this converts the newly observed live task-9 shape into a reject-oriented retry instead of another loop
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for the empty-direct-child reject branch
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(ReviewApprovalRetryPromptRejectsOrchestrationParentWithoutDirectChildren|ReviewApprovalRetryPromptCarriesForwardOrchestrationParentSummaryEvidence|MaybeInjectOrchestrationParentReviewTaskListParentID|HandleTransientModelTurnFailureUsesReviewRetryPromptFromFailedTurn)$' -count=1`
+- `go build -o ./bin/ottercamp ./cmd/ottercamp`
+- rebuilt/restarted tmux `codex-e2e-20260324`
+- `./bin/ottercamp health --output json`
+
+Current status:
+
+- the new empty-direct-child rejection slice is deployed and healthy on the newest binary
+- fresh live proof for that final step is still pending the next post-`06:18 MDT` task-9 retry
+
 ## Update 05:40 MDT
 
 The orchestration-parent review prompt fix is now live-proven, and the next concrete leak is narrower.
