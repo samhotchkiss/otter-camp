@@ -881,6 +881,19 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - the `flow.rejected` kickoff variant adds explicit rejection-recovery guidance for child-task repair
   - runtime is now rebuilt/restarted and healthy on the latest binary
   - fresh live proof is still pending because the only observed task-11 session on this path was created before the new kickoff wording was deployed
+- orchestration-parent review prompts are now specialized too:
+  - the next live hot family was task `9` review churn:
+    - preferred parent summary file `Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md` read successfully
+    - then the review lane immediately burned four `file.read not_found` calls on `planning/prd-spec/oc-9-*`
+  - `buildTaskReviewActionPrompt(...)` now overrides the normal companion-artifact guidance for orchestration-only parent tasks
+  - those reviews now stay on:
+    - the parent orchestration summary
+    - direct child-task outcomes / outputs
+  - and explicitly avoid:
+    - `planning/prd-spec/*`
+    - `planning/discovery-plan/*`
+    - other companion planning files for the parent task once the parent summary is already readable
+  - focused turn-engine coverage now proves the orchestration-parent review prompt carries that override and suppresses the normal companion-artifact-contract path
 - project-continuation read-only repair widened again:
   - `session.list` and `inbox.list` are now treated as read-only discovery tools in the same continuation auto-queue path
   - this closes the remaining observed browse-only project continuation gaps from live `max_tool_calls` turns like `e8556561-...` and `eae611d8-...`

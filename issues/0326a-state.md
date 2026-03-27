@@ -3167,6 +3167,56 @@ Deploy status:
 - runtime is now rebuilt/restarted on the latest binary and `./bin/ottercamp health --output json` is `ok`
 - fresh live proof of the new kickoff wording is still pending because the only observed `task 11` `flow.rejected` kickoff on this path predates the deploy
 
+## Update 05:26 MDT
+
+The next live family is now isolated to orchestration-parent review lanes, not kickoff/wakeup selection.
+
+Concrete live trace:
+
+- task `9` latest review turn `20d25c95-b9c2-4bbe-a247-71270c14d241`
+- session `a5cc62da-5ae4-4c0f-b299-d25fd6f743fb`
+- prompt was already the normal `Review only ... flow.review_decision` prompt
+- that turn did the following:
+  - read preferred deliverable target `Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md` successfully
+  - then immediately tried:
+    - `planning/prd-spec/oc-9-acceptance-criteria.md`
+    - `planning/prd-spec/oc-9-prd.md`
+    - `planning/prd-spec/oc-9-implementation-plan.md`
+    - `planning/prd-spec/oc-9-dependency-log.md`
+  - all four returned `file.read -> not_found`
+  - the turn then hit the existing repeated `file.read` cutoff and eventually the repeated-review block
+
+What this means:
+
+- the remaining waste on these parent tasks is no longer about wakeup selection
+- it is the review prompt still allowing orchestration-parent reviews to reconstruct the rubric from companion planning artifacts after the parent summary file is already present
+
+Code/test slice landed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `buildTaskReviewActionPrompt(...)` now special-cases orchestration-only parent tasks
+  - those review prompts now tell the model to review:
+    - the parent orchestration summary
+    - direct child-task outcomes / outputs
+  - and explicitly not to inspect:
+    - `planning/prd-spec/*`
+    - `planning/discovery-plan/*`
+    - other companion planning files for the parent task once the parent summary is readable
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused prompt coverage for this orchestration-parent review override
+  - reran the adjacent preferred-target / missing-tests review prompt slice
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(BuildTaskReviewActionPrompt(IncludesPreferredDeliverableTarget|SpecializesOrchestrationOnlyParentReview)|ReviewApprovalRetryPromptRejectsWhenRequiredTestsCannotBeVerified)$' -count=1`
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime restart/live proof still pending at the time of this note
+
 ## Update 04:55 MDT
 
 What changed:

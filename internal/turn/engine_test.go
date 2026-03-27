@@ -29512,6 +29512,51 @@ func TestBuildTaskReviewActionPromptIncludesPreferredDeliverableTarget(t *testin
 	}
 }
 
+func TestBuildTaskReviewActionPromptSpecializesOrchestrationOnlyParentReview(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Parent/orchestration task for pipeline scaffold setup. Validates that child tasks produce a coherent scaffold. Does not do execution work itself. Deliverable: Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md"
+	plan := taskplan.Plan{
+		Mode:     taskplan.ModeExecutionFirst,
+		Playbook: taskplan.PlaybookExecutionSpec,
+		Artifacts: []taskplan.PlannedArtifact{
+			{Slug: "prd", Title: "PRD", RepoPath: "planning/prd-spec/oc-9-prd.md"},
+			{Slug: "acceptance-criteria", Title: "Acceptance Criteria", RepoPath: "planning/prd-spec/oc-9-acceptance-criteria.md"},
+		},
+	}
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  9,
+				Title:       "Workstream A: Pipeline Scaffold Setup",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata:    taskplan.ApplyMetadata(nil, plan),
+			},
+		},
+	}
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "This task is an orchestration-only parent.") {
+		t.Fatalf("prompt = %q, want orchestration-only parent review guidance", prompt)
+	}
+	if !strings.Contains(prompt, "do not inspect planning/prd-spec, planning/discovery-plan, or other companion planning files") {
+		t.Fatalf("prompt = %q, want companion-planning suppression", prompt)
+	}
+	if !strings.Contains(prompt, "direct child-task outcomes") {
+		t.Fatalf("prompt = %q, want child-task evidence guidance", prompt)
+	}
+	if strings.Contains(prompt, "Companion artifacts are only required when explicitly named") {
+		t.Fatalf("prompt = %q, did not want normal companion-artifact review guidance", prompt)
+	}
+}
+
 func TestBuildTaskReviewActionPromptFallsBackToRecentSessionDeliverableTarget(t *testing.T) {
 	t.Parallel()
 

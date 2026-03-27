@@ -20196,7 +20196,13 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 			lines = append(lines, fmt.Sprintf("Start with the preferred deliverable target `%s`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `%s` is missing.", targetPath, targetPath))
 			lines = append(lines, fmt.Sprintf("If reading `%s` returns `placeholder_deliverable` or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.", targetPath))
 		}
-		if contracts := reviewPromptArtifactContracts(taskRecord); len(contracts) == 0 {
+		if taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+			lines = append(lines, "This task is an orchestration-only parent. Review the parent orchestration summary and the direct child-task outcomes, not missing companion planning artifacts.")
+			if targetPath != "" {
+				lines = append(lines, fmt.Sprintf("If `%s` is present and readable, do not inspect planning/prd-spec, planning/discovery-plan, or other companion planning files for this parent task. Base the review on `%s` plus direct child-task evidence only.", targetPath, targetPath))
+			}
+			lines = append(lines, "If more evidence is needed, inspect the direct child tasks beneath this parent or their concrete outputs. Missing planning companion files alone are not rejection evidence for this orchestration parent.")
+		} else if contracts := reviewPromptArtifactContracts(taskRecord); len(contracts) == 0 {
 			lines = append(lines, "Do not invent companion planning-artifact requirements from neighboring tasks, generic playbook assumptions, or filenames alone. If the current task metadata does not carry an explicit artifact contract, review the actual deliverable files against this task's title and description only.")
 			if targetPath != "" {
 				lines = append(lines, fmt.Sprintf("Do not inspect planning artifacts or list the full repository tree while `%s` is present and readable. Only expand beyond that target if bounded review cannot complete without a directly related adjacent file.", targetPath))
