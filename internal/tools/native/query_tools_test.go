@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,71 @@ func (s *stubMemoryQueryService) Query(_ context.Context, req memory.RetrievalRe
 			CreatedAt:  time.Unix(1700000000, 0).UTC(),
 		},
 	}}}, nil
+}
+
+type stubFlowNodeReader struct {
+	node repo.FlowNode
+	err  error
+}
+
+func (s stubFlowNodeReader) Create(_ context.Context, node repo.FlowNode) (repo.FlowNode, error) {
+	return node, nil
+}
+
+func (s stubFlowNodeReader) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNode, error) {
+	if s.err != nil {
+		return repo.FlowNode{}, s.err
+	}
+	if s.node.ID == id {
+		return s.node, nil
+	}
+	return repo.FlowNode{}, repo.ErrNotFound
+}
+
+func (s stubFlowNodeReader) GetByTemplateOrdered(_ context.Context, _ uuid.UUID) ([]repo.FlowNode, error) {
+	return nil, nil
+}
+
+func (s stubFlowNodeReader) Update(_ context.Context, node repo.FlowNode) (repo.FlowNode, error) {
+	return node, nil
+}
+
+type stubFlowExecutionReader struct{}
+
+func (stubFlowExecutionReader) Complete(_ context.Context, id uuid.UUID) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{ID: id}, nil
+}
+
+func (stubFlowExecutionReader) Create(_ context.Context, execution repo.FlowNodeExecution) (repo.FlowNodeExecution, error) {
+	return execution, nil
+}
+
+func (stubFlowExecutionReader) GetByID(_ context.Context, _ uuid.UUID) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, repo.ErrNotFound
+}
+
+func (stubFlowExecutionReader) ListByTask(_ context.Context, _ uuid.UUID) ([]repo.FlowNodeExecution, error) {
+	return nil, nil
+}
+
+func (stubFlowExecutionReader) RecordCommitSHA(_ context.Context, id uuid.UUID, _ string) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{ID: id}, nil
+}
+
+func (stubFlowExecutionReader) Reject(_ context.Context, id uuid.UUID) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{ID: id}, nil
+}
+
+func (stubFlowExecutionReader) UpdateMetadata(_ context.Context, id uuid.UUID, _ json.RawMessage) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{ID: id}, nil
+}
+
+func (stubFlowExecutionReader) UpdateRuntimeSubstate(_ context.Context, id uuid.UUID, _ *string) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{ID: id}, nil
+}
+
+func (stubFlowExecutionReader) Update(_ context.Context, execution repo.FlowNodeExecution) (repo.FlowNodeExecution, error) {
+	return execution, nil
 }
 
 func TestMemoryQueryDelegatesToService(t *testing.T) {
@@ -122,5 +188,26 @@ func TestSessionListBlockedInReviewTaskSession(t *testing.T) {
 	message, _ := out["message"].(string)
 	if !strings.Contains(message, "flow.review_decision") {
 		t.Fatalf("message = %q, want flow.review_decision guidance", message)
+	}
+}
+
+func TestFlowGetExecutionDistinguishesFlowNodeID(t *testing.T) {
+	nodeID := uuid.New()
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.flowExecs = stubFlowExecutionReader{}
+	executor.flowNodes = stubFlowNodeReader{node: repo.FlowNode{ID: nodeID}}
+
+	out, err := executor.handleFlowGetExecution(context.Background(), map[string]any{
+		"flow_node_execution_id": nodeID.String(),
+	})
+	if err != nil {
+		t.Fatalf("handleFlowGetExecution: %v", err)
+	}
+	if out["error"] != "flow_node_execution_id_required" {
+		t.Fatalf("error = %v, want flow_node_execution_id_required", out["error"])
+	}
+	message, _ := out["message"].(string)
+	if !strings.Contains(message, "task.current_flow_node_id") {
+		t.Fatalf("message = %q, want current_flow_node_id guidance", message)
 	}
 }

@@ -1062,3 +1062,10 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
       - the runtime blocked the attempted `file.read`, `file.list`, and `task.list` discovery calls under the reject-only orchestration-parent guards
       - the assistant then emitted `flow.review_decision` with `decision=reject`
       - task `9` moved from `review` back to `in_progress` on a new flow node, confirming the reject path advanced the flow instead of looping
+  - newest project-control guidance slice:
+    - `flow.get_execution` now distinguishes between a true missing `flow_node_execution_id` and the common project-lane mistake of passing a flow node id like `task.current_flow_node_id`
+    - when the supplied UUID exists in `flow_node` but not `flow_node_execution`, the tool now returns:
+      - `error=flow_node_execution_id_required`
+      - a specific message telling the model not to call `flow.get_execution` with `task.current_flow_node_id`
+    - focused native-tools coverage is green for this exact mistaken-id shape
+    - this targets live `project` continuation churn seen in session `db21265f-c37d-40e4-9ed5-13def09970f8`, where the assistant was spending turns on opaque `flow.get_execution -> not_found` results against task flow-node ids

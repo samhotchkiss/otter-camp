@@ -3062,6 +3062,36 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 06:54 MDT
+
+I cut the next project-control guidance seam instead of waiting on another opaque `not_found`.
+
+What changed:
+
+- [`internal/tools/native/query_tools.go`](../internal/tools/native/query_tools.go)
+  - `flow.get_execution` now checks whether a `repo.ErrNotFound` execution id is actually a real `flow_node` id
+  - when that happens, the tool returns:
+    - `error = flow_node_execution_id_required`
+    - a direct message saying not to call `flow.get_execution` with `task.current_flow_node_id`
+- [`internal/tools/native/query_tools_test.go`](../internal/tools/native/query_tools_test.go)
+  - added focused coverage for the mistaken flow-node-id case
+
+Verification:
+
+- `gofmt -w internal/tools/native/query_tools.go internal/tools/native/query_tools_test.go`
+- `go test ./internal/tools/native -run 'TestFlowGetExecutionDistinguishesFlowNodeID$' -count=1`
+
+Why this slice exists:
+
+- live `project` continuation session `db21265f-c37d-40e4-9ed5-13def09970f8` was still spending turns on opaque `flow.get_execution -> not_found`
+- the recent assistant message around `2026-03-27 06:44:48 MDT` called `flow.get_execution` on ids that matched task `current_flow_node_id` values rather than actual `flow_node_execution_id`s
+- the old plain `not_found` gave the model no correction signal, so the project lane could rediscover the same mistake
+
+Expected effect:
+
+- turn the project-lane error from opaque failure into actionable correction
+- reduce repeated `flow.get_execution` browse churn without widening or mutating any task-lane authority
+
 ## Update 05:55 MDT
 
 I landed the tiny compatibility slice that the first live task-9 proof exposed.

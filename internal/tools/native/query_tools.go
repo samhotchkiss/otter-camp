@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -880,6 +881,14 @@ func (e *NativeToolExecutor) handleFlowGetExecution(ctx context.Context, input m
 	execRow, err := e.flowExecs.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
+			if e.flowNodes != nil {
+				if node, nodeErr := e.flowNodes.GetByID(ctx, id); nodeErr == nil && node.ID != uuid.Nil {
+					return map[string]any{
+						"error":   "flow_node_execution_id_required",
+						"message": fmt.Sprintf("%s is a flow node id, not a flow_node_execution_id. Do not call flow.get_execution with task.current_flow_node_id; use an actual flow_node_execution_id instead.", id.String()),
+					}, nil
+				}
+			}
 			return map[string]any{"error": "not_found"}, nil
 		}
 		return nil, err
