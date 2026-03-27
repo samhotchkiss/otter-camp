@@ -643,6 +643,13 @@ Implemented so far in this spec:
   - both `scripts/token-usage-report.sh` and `ottercamp db token-usage` now extract package-install attempts from assistant `cli_execute` metadata using anchored `pip install` / `python -m pip install` matching
   - the report strips shell suffixes and ignores installer flags while retaining the actual package spec
   - live smoke now shows repeated install churn as `pyyaml` instead of polluted strings such as `pip install pyyaml | pip3 install pyyaml | python3 -c "import pytest`
+- late bootstrap recovery reread loops are now classified as recoverable bootstrap validation failures:
+  - when a `project` async bootstrap turn ends behind the native reread guard, the completed-turn handler now maps that outcome to a concrete recoverable runtime failure instead of treating it as “no validation failure”
+  - recoverable bootstrap continuation prompts now have a dedicated persist-first branch for that failure:
+    - start with `bootstrap.setup.persist`
+    - do not begin with `project.get`, `project.list`, `task.list`, `flow.list_templates`, `agent.list`, or scaffold file reads
+    - inspect only one specifically named blocker if the persist call surfaces one
+  - this closes the project-lane self-rearming loop where blocked reread turns kept requeueing the same generic bootstrap continuation instead of escalating into the stricter recovery prompt budget
 
 Still pending from this spec:
 
@@ -654,6 +661,10 @@ Still pending from this spec:
     - same-turn review cutoff on fresh review turns such as `52ffc07e-9b7f-49d8-a36c-3f4a932b75ff`, where the runtime emitted `Repeated same-turn read-only discovery churn (2/3)` before retrying review
   - so the remaining proof gap is narrower: we still need a fresh live example where the same-turn cutoff fires on a non-review work lane before the older cross-turn machinery
 - any additional recovery-specific fingerprints that remain after the current async task guardrails
+- full live proof that the bootstrap reread loop now transitions into the recoverable bootstrap-validation path on a fresh post-deploy continuation:
+  - the code and focused tests are in place
+  - the live canary session was still draining a pre-deploy generic bootstrap continuation when this slice landed, and that stale continuation failed on restart before the new recovery message could be generated
+  - the next proof target is a fresh continuation created entirely by the new build
 - live proof that the new task-16 recovery-draft matcher variant fires before dispatch on a fresh retry that actually reuses the bad narration:
   - focused unit coverage is green
   - the runtime is already deployed on this matcher

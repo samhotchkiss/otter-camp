@@ -5506,6 +5506,10 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 		nextActionHint = "Do not call bootstrap.setup.persist until every selected first-wave task has an assigned active project agent and the corrected first-wave set is ready to validate."
 	}
 	lowerReason := strings.ToLower(reason)
+	if projectBootstrapReasonRequiresPersistFirstAfterReread(reason) {
+		recoveryHint = "Bootstrap recovery already has the persisted staffed roster, task tree, flow templates, and first-wave state. Do not reread broad project state first. Reuse the persisted ids and counts already carried by the bootstrap resume state."
+		nextActionHint = "Your first assistant action should be a bootstrap.setup.persist tool call, not a narrative reply. Do not begin with project.get, project.list, task.list, flow.list_templates, agent.list, file.read, or scaffold file reads. If that bootstrap.setup.persist call returns one exact blocked task or template, inspect only that single target next; otherwise continue directly from the persisted first-wave state already in the resume message."
+	}
 	if projectBootstrapReasonRequiresExplicitFirstWaveSelection(reason) {
 		recoveryHint = "Bootstrap is already waiting on an explicit first-wave subset. Do not reread project state, task trees, templates, or scaffold artifacts first. Reuse the persisted staffed task tree and immediately call bootstrap.setup.persist with completed_step_slugs including select-first-wave plus first_wave_task_ids or first_wave_task_numbers for the exact runnable subset."
 		nextActionHint = "Your first assistant action should be a bootstrap.setup.persist tool call, not a narrative reply. Do not begin with project.get, project.list, task.list, flow.list_templates, agent.list, file.read, or staffing discovery. Persist the selected first-wave subset directly so later-wave tasks remain draft."
@@ -8536,6 +8540,10 @@ func projectBootstrapBlockedRecoveryFailure(messages []repo.ChatMessage, state p
 			}
 		}
 	}
+	if reason == "" && projectBootstrapRecoveryEndedByRereadGuard(messages) {
+		reason = buildProjectBootstrapBlockedRecoveryRereadFailureReason()
+		return reason, projectBootstrapFailureRuntime
+	}
 	if reason == "" {
 		return "", ""
 	}
@@ -8557,6 +8565,10 @@ func projectBootstrapRecoveryEndedByRereadGuard(messages []repo.ChatMessage) boo
 
 func buildProjectBootstrapExplicitFirstWaveSelectionFailureReason() string {
 	return "kickoff validation failed: bootstrap setup requires an explicit first-wave selection; call bootstrap.setup.persist with select-first-wave plus first_wave_task_ids or first_wave_task_numbers for the exact runnable subset so later-wave tasks remain draft"
+}
+
+func buildProjectBootstrapBlockedRecoveryRereadFailureReason() string {
+	return "kickoff validation failed: late bootstrap resume reread broad persisted project state instead of acting on bootstrap.setup.persist; resume must call bootstrap.setup.persist first or inspect only one specifically named blocker"
 }
 
 func buildProjectBootstrapInvalidFirstWaveSelectionFailureReason(message string) string {
@@ -8730,6 +8742,12 @@ func projectBootstrapReasonRequiresExplicitFirstWaveSelection(reason string) boo
 		strings.Contains(lower, "first_wave_task_selection_required") ||
 		(strings.Contains(lower, "select-first-wave") && strings.Contains(lower, "first_wave_task_")) ||
 		(strings.Contains(lower, "selected first-wave subset") && strings.Contains(lower, "remain draft"))
+}
+
+func projectBootstrapReasonRequiresPersistFirstAfterReread(reason string) bool {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	return strings.Contains(lower, "late bootstrap resume reread broad persisted project state") &&
+		strings.Contains(lower, "bootstrap.setup.persist first")
 }
 
 func projectBootstrapResumeNeedsExplicitFirstWaveSelection(state projectBootstrapState) bool {
@@ -10040,7 +10058,8 @@ func projectBootstrapRecoverableMaxToolCallFailure(progress projectBootstrapProg
 					strings.Contains(reason, "selected first-wave child tasks produced runnable agent_turn jobs") ||
 					strings.Contains(reason, "selected first-wave child tasks left draft or entered queued execution")))
 	case projectBootstrapFailureRuntime:
-		return projectBootstrapRestartScaffoldFailureReason(progress.ValidationFailureReason)
+		return projectBootstrapRestartScaffoldFailureReason(progress.ValidationFailureReason) ||
+			projectBootstrapReasonRequiresPersistFirstAfterReread(progress.ValidationFailureReason)
 	default:
 		return false
 	}

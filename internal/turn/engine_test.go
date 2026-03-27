@@ -10594,6 +10594,21 @@ func TestProjectBootstrapRecoveryEndedByRereadGuard(t *testing.T) {
 	}
 }
 
+func TestProjectBootstrapBlockedRecoveryFailureUsesRereadGuardReason(t *testing.T) {
+	messages := []repo.ChatMessage{
+		{Role: "assistant", Content: "I'll inspect the project state first."},
+		{Role: "system", Content: "[Bootstrap validation recovery reread blocked - ending this turn so the next continuation can repair the named blocker directly.]"},
+	}
+
+	reason, class := projectBootstrapBlockedRecoveryFailure(messages, projectBootstrapState{})
+	if reason != buildProjectBootstrapBlockedRecoveryRereadFailureReason() {
+		t.Fatalf("reason = %q, want %q", reason, buildProjectBootstrapBlockedRecoveryRereadFailureReason())
+	}
+	if class != projectBootstrapFailureRuntime {
+		t.Fatalf("class = %q, want %q", class, projectBootstrapFailureRuntime)
+	}
+}
+
 func TestProjectBootstrapRecoverableMaxToolCallFailure(t *testing.T) {
 	if !projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
 		ValidationFailureClass: projectBootstrapFailureCompoundParent,
@@ -10628,6 +10643,12 @@ func TestProjectBootstrapRecoverableMaxToolCallFailure(t *testing.T) {
 		ValidationFailureReason: buildProjectBootstrapRestartScaffoldFailureReason(),
 	}) {
 		t.Fatal("restart scaffold runtime failure should be recoverable")
+	}
+	if !projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureRuntime,
+		ValidationFailureReason: buildProjectBootstrapBlockedRecoveryRereadFailureReason(),
+	}) {
+		t.Fatal("bootstrap reread-guard runtime failure should be recoverable")
 	}
 	if projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
@@ -13922,6 +13943,22 @@ func TestBuildProjectBootstrapResumeActionPromptForExplicitFirstWaveSelection(t 
 	}
 	if !strings.Contains(prompt, "Use the selectable task ids already listed") {
 		t.Fatalf("prompt = %q, want selectable-task guidance", prompt)
+	}
+}
+
+func TestBuildProjectBootstrapValidationRecoveryPromptForBlockedRecoveryReread(t *testing.T) {
+	prompt := buildProjectBootstrapValidationRecoveryPrompt(2, projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureRuntime,
+		ValidationFailureReason: buildProjectBootstrapBlockedRecoveryRereadFailureReason(),
+	})
+	if !strings.Contains(prompt, "Your first assistant action should be a bootstrap.setup.persist tool call") {
+		t.Fatalf("prompt = %q, want persist-first recovery guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not begin with project.get, project.list, task.list, flow.list_templates, agent.list, file.read, or scaffold file reads") {
+		t.Fatalf("prompt = %q, want no-broad-reread guidance", prompt)
+	}
+	if !strings.Contains(prompt, "inspect only that single target next") {
+		t.Fatalf("prompt = %q, want single-target follow-up guidance", prompt)
 	}
 }
 
