@@ -605,6 +605,9 @@ Implemented so far in this spec:
   - empty review turns no longer bypass the normal retry ceiling
   - after `3` consecutive review turns in the same session return the empty-output retry path, the runtime blocks the lane instead of auto-retrying another blank/tool-only review pass
   - that specifically targets the hot Anthropic review family where repeated inspect-only turns kept appending `Review turn returned empty assistant output` without ever emitting `flow.review_decision`
+- review lanes at the retry ceiling no longer auto-continue on `max_tool_calls`:
+  - when an async `project_task` review turn is already at `maxGenericRecoveryReplyRetries`, `shouldContinueMaxToolCalls(...)` now returns false
+  - that prevents the runtime from creating a fresh `task_continuation_resume` moments before the review-completion handler blocks the lane for repeated non-decision output
 
 Still pending from this spec:
 

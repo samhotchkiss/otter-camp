@@ -9479,6 +9479,16 @@ func (e *TurnEngine) shouldContinueMaxToolCalls(ctx context.Context, rt *turnRun
 	if !strings.EqualFold(strings.TrimSpace(rt.stopReason), stopReasonMaxToolCalls) {
 		return false, nil
 	}
+	if strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		taskRecord, err := e.lookupSessionTask(ctx, rt.session)
+		if err != nil {
+			if !errors.Is(err, repo.ErrNotFound) {
+				return false, err
+			}
+		} else if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") && rt.turn != nil && rt.turn.RetryCount >= maxGenericRecoveryReplyRetries {
+			return false, nil
+		}
+	}
 	if strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") {
 		bootstrapState := projectBootstrapStateFromMetadata(rt.session.Metadata)
 		if projectBootstrapStateActive(bootstrapState) {

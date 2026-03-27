@@ -2387,3 +2387,71 @@ Deployment status:
 
 - code and focused tests are complete locally
 - next step is rebuild/restart and then live verification on fresh review traffic
+
+## Update 22:12 MDT
+
+I followed the live proof for the empty-review-output fix and found one more narrow leak immediately behind it.
+
+What happened live:
+
+- session `028bdacd-d478-4f7c-930b-80266a1f7a37` proved the new empty-output guard:
+  - turn `29711f2f-ece4-474c-b88c-1e965126a863`
+  - `retry_count=2`
+  - completed with:
+    - `Review turn halted: review turn completed without calling flow.review_decision after repeated retries...`
+  - task `13` moved to `blocked`
+- but the same turn had already emitted:
+  - `[Max tool calls reached - continuing in a new turn.]`
+  - then a synthetic `task_continuation_resume`
+  - so one extra continuation turn (`dc62605e-401c-4ee3-88d7-dce9f4f1350b`) still started after the block landed
+
+Root cause:
+
+- this was not a stale queued dispatch
+- the extra continuation was being created inside the `max_tool_calls` handoff path before the review completion handler got a chance to block the lane
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `shouldContinueMaxToolCalls(...)` now checks async `project_task` review lanes directly
+  - when the current review turn is already at `maxGenericRecoveryReplyRetries`, it now returns `false` instead of creating another `task_continuation_resume`
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added:
+    - `TestMaxToolCallsAsyncReviewAtRetryLimitDoesNotContinue`
+  - reran the adjacent review retry / empty-output / review-discovery slice
+
+Focused verification:
+
+- `go test ./internal/turn -run 'Test(MaxToolCallsAsyncReviewAtRetryLimitDoesNotContinue|HandleTurnCompletedEventBlocksEmptyReviewTurnWithoutDecisionAtRetryLimit|HandleTurnCompletedEventBlocksRepeatedEmptyReviewTurnsAcrossSession|HandleToolValidationResultsRetriesReviewAfterSameTurnReadOnlyDiscoveryChurn|MaybeBlockRepeatedReadOnlyDiscoveryCapTurnsRetriesReviewLane)$' -count=1`
+
+Deployment status:
+
+- code and focused tests are complete locally
+- next step is rebuild/restart and confirm that a review turn blocked at the retry ceiling no longer emits a fresh continuation summary first
+
+## Update 22:16 MDT
+
+The `max_tool_calls` review-handoff patch is now live-proven.
+
+Live proof:
+
+- runtime rebuilt and tmux `codex-e2e-20260324` restarted cleanly
+- `./bin/ottercamp health --output json` returned `status=ok`
+- fresh review session `f09bb3c9-cd94-4e0a-8fef-c4f591986b9a` then hit the same shape on:
+  - turn `ff584837-6921-47dc-a12e-063a1ab70da0`
+  - `retry_count=2`
+  - final system message at `22:16:13 MDT`:
+    - `Review turn halted: review turn completed without calling flow.review_decision after repeated retries...`
+
+Most important negative proof:
+
+- after that halted turn, the session did **not** emit:
+  - `[Max tool calls reached - continuing in a new turn.]`
+  - `[Continuation summary]`
+  - synthetic `task_continuation_resume`
+- querying the latest turns for session `f09bb3c9-cd94-4e0a-8fef-c4f591986b9a` showed `ff584837-...` as the newest turn, with no follow-on continuation turn after the halt
+
+Result:
+
+- the extra post-block review continuation leak is closed
+- remaining review churn is now the older discovery/retry families, not a same-turn `max_tool_calls` handoff escaping after the review lane is already at its retry ceiling

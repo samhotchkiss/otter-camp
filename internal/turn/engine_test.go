@@ -10407,6 +10407,78 @@ func TestMaxToolCallsAsyncContinuation(t *testing.T) {
 	}
 }
 
+func TestMaxToolCallsAsyncReviewAtRetryLimitDoesNotContinue(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.maxToolCalls = 3
+
+	taskID := uuid.New()
+	projectID := uuid.New()
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fakeTaskRepo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:              taskID,
+		ProjectID:       projectID,
+		TaskNumber:      21,
+		Title:           "Review pipeline metrics deliverable",
+		WorkStatus:      "review",
+		AssignedAgentID: &assignedAgentID,
+	}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	message.Content = fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	message.Metadata = mustRawJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"synthetic_user_message": true,
+	})
+	fixture.messages.upsert(message)
+
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"ok": true}}, nil
+	}
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		return ModelResponse{ToolCalls: []ModelToolCall{
+			{ID: "a", Name: "file.read", Tier: "tier1"},
+			{ID: "b", Name: "memory.query", Tier: "tier1"},
+			{ID: "c", Name: "chat.search", Tier: "tier1"},
+			{ID: "d", Name: "task.list", Tier: "tier1"},
+		}}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID, nil, maxGenericRecoveryReplyRetries, nil); err != nil {
+		t.Fatalf("handleUserMessage: %v", err)
+	}
+
+	if fixture.model.continuationSummaryCalls != 0 {
+		t.Fatalf("continuation summary calls = %d, want 0", fixture.model.continuationSummaryCalls)
+	}
+	if fixture.messages.containsContent("[Continuation summary]") {
+		t.Fatal("unexpected continuation summary message")
+	}
+	if len(fixture.chat.turnOrder) != 1 {
+		t.Fatalf("turn count = %d, want 1", len(fixture.chat.turnOrder))
+	}
+	firstTurn := fixture.chat.turnByID(fixture.chat.turnOrder[0])
+	if firstTurn == nil || firstTurn.StopReason == nil || *firstTurn.StopReason != stopReasonMaxToolCalls {
+		t.Fatalf("first turn stop_reason = %v, want %q", firstTurn.StopReason, stopReasonMaxToolCalls)
+	}
+	if !fixture.messages.containsContent("[Max tool calls reached. Turn ended.]") {
+		t.Fatal("missing max tool calls end system message")
+	}
+}
+
 func TestMaxToolCallsAsyncContinuationRecoversLeakedInProgressTurn(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	fixture.engine.maxToolCalls = 3
