@@ -229,6 +229,60 @@ func TestProjectTaskRepoUpdateMetadataPreservesWorkStatus(t *testing.T) {
 	}
 }
 
+func TestProjectTaskRepoUpdateAssignedAgentPreservesWorkStatus(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskRepoOrgProject(t, ctx, pool)
+	taskRepo := NewProjectTaskRepo(pool)
+	agentRepo := NewAgentRepo(pool)
+
+	created, err := taskRepo.Create(ctx, ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Assignment-only update",
+		WorkStatus:     "blocked",
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{"before":true}`),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	assignedAgent, err := agentRepo.Create(ctx, Agent{
+		OrganizationID:       org.ID,
+		DisplayName:          "Assigned worker",
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "worker prompt",
+		OperatorInstructions: "",
+		AgentType:            "worker",
+		IsStarterTrio:        false,
+		PrivateMemory:        false,
+		MemoryReadScopes:     []string{"org", "project", "agent"},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("Create agent: %v", err)
+	}
+
+	updated, err := taskRepo.UpdateAssignedAgent(ctx, created.ID, &assignedAgent.ID)
+	if err != nil {
+		t.Fatalf("UpdateAssignedAgent: %v", err)
+	}
+	if updated.WorkStatus != "blocked" {
+		t.Fatalf("work_status = %q, want blocked", updated.WorkStatus)
+	}
+	if updated.AssignedAgentID == nil || *updated.AssignedAgentID != assignedAgent.ID {
+		t.Fatalf("assigned_agent_id = %v, want %s", updated.AssignedAgentID, assignedAgent.ID)
+	}
+	if !updated.UpdatedAt.After(created.UpdatedAt) {
+		t.Fatalf("updated_at = %s, want after %s", updated.UpdatedAt, created.UpdatedAt)
+	}
+}
+
 func TestProjectTaskEventRepoRecordAndListByTaskOrder(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

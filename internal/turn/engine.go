@@ -382,6 +382,7 @@ type taskRepository interface {
 	GetByProjectAndNumber(ctx context.Context, projectID uuid.UUID, taskNumber int) (repo.ProjectTask, error)
 	ListByProject(ctx context.Context, projectID uuid.UUID, statuses ...string) ([]repo.ProjectTask, error)
 	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ProjectTask, error)
+	UpdateAssignedAgent(ctx context.Context, id uuid.UUID, assignedAgentID *uuid.UUID) (repo.ProjectTask, error)
 	Update(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
 }
 
@@ -12657,8 +12658,7 @@ func (e *TurnEngine) persistBootstrapFirstWaveSelection(ctx context.Context, tas
 		if err != nil {
 			return err
 		}
-		task.Metadata = updatedMetadata
-		if _, err := e.tasks.Update(ctx, task); err != nil {
+		if _, err := e.tasks.UpdateMetadata(ctx, task.ID, updatedMetadata); err != nil {
 			return err
 		}
 	}
@@ -24509,8 +24509,7 @@ func (e *TurnEngine) recoverMissingTaskAssigneeFromSession(ctx context.Context, 
 		return uuid.Nil, false, nil
 	}
 
-	taskRecord.AssignedAgentID = &candidateID
-	if _, err := e.tasks.Update(ctx, taskRecord); err != nil {
+	if _, err := e.tasks.UpdateAssignedAgent(ctx, taskRecord.ID, &candidateID); err != nil {
 		return uuid.Nil, false, err
 	}
 	if e.logger != nil {

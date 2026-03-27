@@ -406,6 +406,10 @@ func (r *ProjectTaskRepo) UpdateMetadata(ctx context.Context, id uuid.UUID, meta
 	return r.UpdateMetadataTx(ctx, nil, id, metadata)
 }
 
+func (r *ProjectTaskRepo) UpdateAssignedAgent(ctx context.Context, id uuid.UUID, assignedAgentID *uuid.UUID) (ProjectTask, error) {
+	return r.UpdateAssignedAgentTx(ctx, nil, id, assignedAgentID)
+}
+
 func (r *ProjectTaskRepo) UpdateMetadataTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, metadata json.RawMessage) (ProjectTask, error) {
 	row := projectTaskQueryRower(r.pool, tx).QueryRow(ctx, `
 		UPDATE project_task
@@ -434,6 +438,45 @@ func (r *ProjectTaskRepo) UpdateMetadataTx(ctx context.Context, tx pgx.Tx, id uu
 			updated_at,
 			completed_at
 	`, id, normalizeProjectTaskJSON(metadata, json.RawMessage(`{}`)))
+
+	updated, err := scanProjectTask(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ProjectTask{}, ErrNotFound
+	}
+	if err != nil {
+		return ProjectTask{}, mapDBError(err)
+	}
+	return updated, nil
+}
+
+func (r *ProjectTaskRepo) UpdateAssignedAgentTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, assignedAgentID *uuid.UUID) (ProjectTask, error) {
+	row := projectTaskQueryRower(r.pool, tx).QueryRow(ctx, `
+		UPDATE project_task
+		SET assigned_agent_id = $2
+		WHERE id = $1
+		RETURNING
+			id,
+			organization_id,
+			project_id,
+			task_number,
+			title,
+			description,
+			work_status,
+			blocks_scope,
+			current_flow_node_id,
+			flow_template_id,
+			schedule_id,
+			branch_name,
+			requires_human_review,
+			priority,
+			created_by_type,
+			created_by_id,
+			assigned_agent_id,
+			metadata,
+			created_at,
+			updated_at,
+			completed_at
+	`, id, assignedAgentID)
 
 	updated, err := scanProjectTask(row)
 	if errors.Is(err, pgx.ErrNoRows) {

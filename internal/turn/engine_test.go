@@ -6563,6 +6563,12 @@ func TestResolveSessionAgentForSessionRecoversMissingTaskAssigneeFromSessionPart
 	if updatedTask.AssignedAgentID == nil || *updatedTask.AssignedAgentID != workerID {
 		t.Fatalf("assigned_agent_id = %v, want %s", updatedTask.AssignedAgentID, workerID)
 	}
+	if taskRepo.updateAssignedAgentCalls != 1 {
+		t.Fatalf("updateAssignedAgentCalls = %d, want 1", taskRepo.updateAssignedAgentCalls)
+	}
+	if taskRepo.updateCalls != 0 {
+		t.Fatalf("updateCalls = %d, want 0", taskRepo.updateCalls)
+	}
 }
 
 func TestResolveSessionAgentForSessionRoutesReviewTaskToDistinctReviewer(t *testing.T) {
@@ -6600,6 +6606,64 @@ func TestResolveSessionAgentForSessionRoutesReviewTaskToDistinctReviewer(t *test
 	}
 	if agentID != reviewerID {
 		t.Fatalf("agent_id = %s, want reviewer %s", agentID, reviewerID)
+	}
+}
+
+func TestPersistBootstrapFirstWaveSelectionUsesMetadataUpdatesOnly(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	selectedTaskID := uuid.New()
+	unselectedTaskID := uuid.New()
+	gateTaskID := uuid.New()
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			selectedTaskID: {
+				ID:        selectedTaskID,
+				ProjectID: projectID,
+				Title:     "Selected",
+				Metadata:  mustRawJSON(t, map[string]any{"existing": true}),
+			},
+			unselectedTaskID: {
+				ID:        unselectedTaskID,
+				ProjectID: projectID,
+				Title:     "Unselected",
+				Metadata:  mustRawJSON(t, map[string]any{"existing": true}),
+			},
+			gateTaskID: {
+				ID:        gateTaskID,
+				ProjectID: projectID,
+				Title:     "Gate",
+				Metadata:  mustRawJSON(t, map[string]any{"bootstrap_gate": true}),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+
+	err := fixture.engine.persistBootstrapFirstWaveSelection(context.Background(), []repo.ProjectTask{
+		taskRepo.items[selectedTaskID],
+		taskRepo.items[unselectedTaskID],
+		taskRepo.items[gateTaskID],
+	}, map[uuid.UUID]struct{}{
+		selectedTaskID: {},
+	})
+	if err != nil {
+		t.Fatalf("persistBootstrapFirstWaveSelection: %v", err)
+	}
+	if taskRepo.updateMetadataCalls != 2 {
+		t.Fatalf("updateMetadataCalls = %d, want 2", taskRepo.updateMetadataCalls)
+	}
+	if taskRepo.updateCalls != 0 {
+		t.Fatalf("updateCalls = %d, want 0", taskRepo.updateCalls)
+	}
+
+	selectedMetadata := messageMetadataMap(taskRepo.items[selectedTaskID].Metadata)
+	if selectedMetadata == nil || selectedMetadata["bootstrap_first_wave_selected"] != true {
+		t.Fatalf("selected metadata = %s, want bootstrap_first_wave_selected=true", string(taskRepo.items[selectedTaskID].Metadata))
+	}
+	unselectedMetadata := messageMetadataMap(taskRepo.items[unselectedTaskID].Metadata)
+	if unselectedMetadata == nil || unselectedMetadata["bootstrap_first_wave_selected"] != false {
+		t.Fatalf("unselected metadata = %s, want bootstrap_first_wave_selected=false", string(taskRepo.items[unselectedTaskID].Metadata))
 	}
 }
 
@@ -26346,8 +26410,11 @@ func (f *fakeAgentRepo) GetStarterTrio(context.Context, uuid.UUID) ([]repo.Agent
 }
 
 type fakeTaskRepo struct {
-	items map[uuid.UUID]repo.ProjectTask
-	err   error
+	items                    map[uuid.UUID]repo.ProjectTask
+	err                      error
+	updateCalls              int
+	updateMetadataCalls      int
+	updateAssignedAgentCalls int
 }
 
 func (f *fakeTaskRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ProjectTask, error) {
@@ -26398,6 +26465,7 @@ func (f *fakeTaskRepo) Update(_ context.Context, task repo.ProjectTask) (repo.Pr
 	if f.items == nil {
 		f.items = map[uuid.UUID]repo.ProjectTask{}
 	}
+	f.updateCalls++
 	f.items[task.ID] = task
 	return task, nil
 }
@@ -26410,7 +26478,27 @@ func (f *fakeTaskRepo) UpdateMetadata(_ context.Context, id uuid.UUID, metadata 
 	if !ok {
 		return repo.ProjectTask{}, repo.ErrNotFound
 	}
+	f.updateMetadataCalls++
 	item.Metadata = append(json.RawMessage(nil), metadata...)
+	f.items[id] = item
+	return item, nil
+}
+
+func (f *fakeTaskRepo) UpdateAssignedAgent(_ context.Context, id uuid.UUID, assignedAgentID *uuid.UUID) (repo.ProjectTask, error) {
+	if f.err != nil {
+		return repo.ProjectTask{}, f.err
+	}
+	item, ok := f.items[id]
+	if !ok {
+		return repo.ProjectTask{}, repo.ErrNotFound
+	}
+	f.updateAssignedAgentCalls++
+	if assignedAgentID != nil {
+		copyID := *assignedAgentID
+		item.AssignedAgentID = &copyID
+	} else {
+		item.AssignedAgentID = nil
+	}
 	f.items[id] = item
 	return item, nil
 }

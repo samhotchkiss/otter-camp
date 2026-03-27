@@ -1300,3 +1300,17 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
       - immediate post-mutation `git.commit` handoff stops
     - runtime was rebuilt/restarted successfully on the new binary and health remained green
     - live proof of the exact new stop messages is still pending a fresh post-deploy hit, but the motivating live turns are from the same hour and are the direct target of this slice
+  - newest live-tree task-repo write narrowing slice:
+    - the turn engine no longer uses generic `tasks.Update(...)` in two helper paths that were not meant to own status-bearing task mutations:
+      - bootstrap first-wave selection persistence now uses metadata-only updates
+      - missing-assignee recovery now uses assigned-agent-only updates
+    - the repo now exposes `UpdateAssignedAgent(...)`, alongside the existing `UpdateMetadata(...)`, so these helpers can persist narrow fields without reopening a generic live-task update surface
+    - this fixes the current `internal/task` guard failure:
+      - `TestNoUnexpectedDirectLiveTaskStatusCreationInNonTestCode`
+      - which was flagging `internal/turn/engine.go:generic-task-update`
+    - focused verification is green for:
+      - the live-task-status guard in `internal/task`
+      - turn-engine unit coverage proving the assignee recovery path now uses the narrow repo method
+      - turn-engine unit coverage proving bootstrap first-wave persistence uses metadata-only updates
+      - repo integration coverage proving both `UpdateMetadata(...)` and `UpdateAssignedAgent(...)` preserve `work_status`
+    - this is a live-tree hygiene and safety slice, not a new user-visible runtime behavior change

@@ -3062,6 +3062,60 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 10:12 MDT
+
+Before moving on to the next hardening slice, I did a live-tree sweep for uncommitted runtime fixes and ran a broader test pass.
+
+What I found:
+
+- there were no additional uncommitted runtime fixes from the earlier hardening work
+- the only code-looking untracked files in the tree were scratch/live-test artifacts:
+  - [`internal/turn/bootstrap_refresh_codex_test.go`](../internal/turn/bootstrap_refresh_codex_test.go)
+  - [`tmp_recovery_resume.go`](../tmp_recovery_resume.go)
+- the broad `go test ./...` sweep exposed one real regression in the committed live tree:
+  - [`internal/task/queued_transition_guard_test.go`](../internal/task/queued_transition_guard_test.go)
+  - failure:
+    - `unexpected direct live task status creation sites: internal/turn/engine.go:generic-task-update`
+
+What changed:
+
+- [`internal/repo/project_task.go`](../internal/repo/project_task.go)
+  - added `UpdateAssignedAgent(...)` / `UpdateAssignedAgentTx(...)`
+  - these update only `assigned_agent_id` and return the full task row, preserving the same narrow-update pattern as `UpdateMetadata(...)`
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `persistBootstrapFirstWaveSelection(...)` now uses `UpdateMetadata(...)` instead of generic `Update(...)`
+  - `resolveTaskScopeReviewAgent(...)` now uses `UpdateAssignedAgent(...)` instead of generic `Update(...)`
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - `fakeTaskRepo` now tracks:
+    - generic update calls
+    - metadata-only update calls
+    - assigned-agent-only update calls
+  - added focused coverage proving:
+    - missing-assignee recovery uses `UpdateAssignedAgent(...)`
+    - bootstrap first-wave persistence uses metadata-only updates
+- [`internal/repo/project_task_integration_test.go`](../internal/repo/project_task_integration_test.go)
+  - added `TestProjectTaskRepoUpdateAssignedAgentPreservesWorkStatus`
+  - seeded a real agent record so the test respects the `assigned_agent_id` foreign key
+
+Verification:
+
+- `go test ./internal/task -run 'TestNoUnexpectedDirectLiveTaskStatusCreationInNonTestCode$' -count=1`
+- `go test ./internal/turn -run 'Test(ResolveSessionAgentForSessionRecoversMissingTaskAssigneeFromSessionParticipant|PersistBootstrapFirstWaveSelectionUsesMetadataUpdatesOnly)$' -count=1`
+- `go test -tags=integration ./internal/repo -run 'TestProjectTaskRepo(UpdateMetadataPreservesWorkStatus|UpdateAssignedAgentPreservesWorkStatus)$' -count=1`
+
+Important caveat from the broader sweep:
+
+- the focused regression above is fixed
+- the full `go test ./internal/turn` package is **not** globally green right now, but the remaining reds are outside this repo-write narrowing slice
+- examples from that broader package run include:
+  - watchdog timing tests
+  - continuation-summary expectation tests
+  - recovery draft-target tests
+  - settled-session continuation cleanup tests
+- so the right interpretation is:
+  - this live-tree regression is repaired and covered
+  - there is still broader preexisting `internal/turn` test debt to address separately
+
 ## Update 09:55 MDT
 
 I finalized the current task-lane spillover slice and deployed it.
