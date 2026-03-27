@@ -1043,6 +1043,14 @@ func (w *Worker) RequeueStrandedUserMessageTurns(ctx context.Context) (int64, er
 		if err := rows.Scan(&sessionID, &messageID); err != nil {
 			return repaired, fmt.Errorf("scan stranded user message turn: %w", err)
 		}
+		retired, err := w.retireSettledProjectContinuationMessage(ctx, sessionID, messageID)
+		if err != nil {
+			return repaired, fmt.Errorf("retire settled project continuation user message for session %s: %w", sessionID, err)
+		}
+		if retired {
+			repaired++
+			continue
+		}
 		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
 			SessionID:  sessionID,
 			MessageID:  messageID,
@@ -1146,6 +1154,69 @@ func (w *Worker) RequeuePendingTurnsWithoutJobs(ctx context.Context) (int64, err
 		return repaired, fmt.Errorf("iterate pending turns without jobs: %w", err)
 	}
 	return repaired, nil
+}
+
+func (w *Worker) retireSettledProjectContinuationMessage(ctx context.Context, sessionID, messageID uuid.UUID) (bool, error) {
+	if sessionID == uuid.Nil || messageID == uuid.Nil {
+		return false, nil
+	}
+
+	var (
+		scopeType     string
+		source        string
+		openTaskCount int
+	)
+	if err := w.pool.QueryRow(ctx, `
+		SELECT cs.scope_type,
+		       COALESCE(cm.metadata->>'source', ''),
+		       COUNT(*) FILTER (WHERE pt.work_status NOT IN ('done', 'cancelled'))
+		FROM chat_session cs
+		JOIN chat_message cm
+		  ON cm.id = $2
+		LEFT JOIN project_task pt
+		  ON cs.scope_type = 'project'
+		 AND pt.project_id = cs.scope_id
+		WHERE cs.id = $1
+		GROUP BY cs.scope_type, cm.metadata
+	`, sessionID, messageID).Scan(&scopeType, &source, &openTaskCount); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(scopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(source), "project_execution_continuation") ||
+		openTaskCount > 0 {
+		return false, nil
+	}
+
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    claimed_by = NULL,
+		    claimed_at = NULL,
+		    last_error = 'project continuation no longer needed; all project tasks settled',
+		    updated_at = now()
+		WHERE jq.job_type = $1
+		  AND jq.status IN ('pending', 'claimed')
+		  AND (jq.payload->>'session_id')::uuid = $2
+		  AND (jq.payload->>'message_id')::uuid = $3
+	`, agentTurnJobType, sessionID, messageID); err != nil {
+		return false, err
+	}
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE chat_message
+		SET status = 'failed',
+		    error_message = 'project continuation no longer needed; all project tasks settled'
+		WHERE id = $1
+		  AND session_id = $2
+		  AND role = 'user'
+		  AND status = 'pending'
+		  AND COALESCE(metadata->>'source', '') = 'project_execution_continuation'
+	`, messageID, sessionID); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context) (int64, error) {
@@ -1453,6 +1524,17 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 		var latestTurnCompletedAt time.Time
 		if err := rows.Scan(&sessionID, &messageID, &source, &openTaskCount, &retryCount, &latestTurnError, &latestTurnCompletedAt); err != nil {
 			return repaired, fmt.Errorf("scan active project session without turn: %w", err)
+		}
+		if strings.EqualFold(strings.TrimSpace(source), "project_execution_continuation") && openTaskCount == 0 {
+			retired, err := w.retireSettledProjectContinuationMessage(ctx, sessionID, messageID)
+			if err != nil {
+				return repaired, fmt.Errorf("retire settled project continuation message for session %s: %w", sessionID, err)
+			}
+			if !retired {
+				return repaired, fmt.Errorf("expected settled project continuation message %s for session %s to retire", messageID, sessionID)
+			}
+			repaired++
+			continue
 		}
 		shouldRefreshContinuation := strings.EqualFold(strings.TrimSpace(source), "project_execution_continuation") ||
 			(strings.EqualFold(strings.TrimSpace(source), "project_bootstrap") && openTaskCount > 0)

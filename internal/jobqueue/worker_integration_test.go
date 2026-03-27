@@ -7338,6 +7338,99 @@ func TestJobWorkerRequeueStrandedUserMessageTurnsIgnoresNewerFailedAssistantStub
 	}
 }
 
+func TestJobWorkerRequeueStrandedUserMessageTurnsRetiresSettledProjectContinuation(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-stranded-settled-project-continuation",
+		DisplayName: "Requeue Stranded Settled Project Continuation",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-stranded-settled-project-continuation-project",
+		DisplayName:    "Requeue Stranded Settled Project Continuation Project",
+		Description:    "Project with no unfinished tasks so continuation should retire.",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","auto_continue":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create pending continuation message: %v", err)
+	}
+
+	requeued, err := worker.RequeueStrandedUserMessageTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueStrandedUserMessageTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued turns = %d, want 1 retired continuation", requeued)
+	}
+
+	var (
+		status       string
+		errorMessage string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, message.ID).Scan(&status, &errorMessage); err != nil {
+		t.Fatalf("load continuation message: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("continuation message status = %q, want failed", status)
+	}
+	if errorMessage != "project continuation no longer needed; all project tasks settled" {
+		t.Fatalf("continuation message error = %q", errorMessage)
+	}
+
+	var pendingJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status = 'pending'
+		  AND (payload->>'session_id')::uuid = $1
+	`, session.ID).Scan(&pendingJobs); err != nil {
+		t.Fatalf("count pending agent_turn jobs: %v", err)
+	}
+	if pendingJobs != 0 {
+		t.Fatalf("pending agent_turn jobs = %d, want 0", pendingJobs)
+	}
+}
+
 func TestJobWorkerRequeuePendingTurnsWithoutJobs(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -9720,6 +9813,123 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSkipsFinalMessages(t *
 	}
 }
 
+func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsRetiresSettledContinuationProjects(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-project-session-retire-settled-continuation",
+		DisplayName: "Requeue Active Project Session Retire Settled Continuation",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue active projects.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-project-session-retire-settled-continuation-project",
+		DisplayName:    "Requeue Active Project Session Retire Settled Continuation Project",
+		Description:    "Project for settled continuation retirement coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","auto_continue":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create pending project continuation message: %v", err)
+	}
+	if _, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		TriggerMessageID: &message.ID,
+		RetryCount:       0,
+	}); err != nil {
+		t.Fatalf("create completed continuation turn: %v", err)
+	}
+
+	requeued, err := worker.RequeueActiveProjectSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveProjectSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1 settled continuation retired", requeued)
+	}
+
+	var (
+		messageStatus string
+		errorMessage  string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, message.ID).Scan(&messageStatus, &errorMessage); err != nil {
+		t.Fatalf("load continuation message: %v", err)
+	}
+	if messageStatus != "failed" {
+		t.Fatalf("continuation message status = %q, want failed", messageStatus)
+	}
+	if errorMessage != "project continuation no longer needed; all project tasks settled" {
+		t.Fatalf("continuation message error = %q", errorMessage)
+	}
+
+	var pendingJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status = 'pending'
+		  AND (payload->>'session_id')::uuid = $1
+	`, session.ID).Scan(&pendingJobs); err != nil {
+		t.Fatalf("count pending agent_turn jobs: %v", err)
+	}
+	if pendingJobs != 0 {
+		t.Fatalf("pending agent_turn jobs = %d, want 0", pendingJobs)
+	}
+}
+
 func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsIgnoresStalePendingDispatch(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -9761,6 +9971,20 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsIgnoresStalePendingDis
 	})
 	if err != nil {
 		t.Fatalf("create project: %v", err)
+	}
+	creatorID := uuid.Nil
+	taskDescription := "Keeps the project continuation eligible for a fresh requeue."
+	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Unfinished project task",
+		Description:    &taskDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		CreatedByType:  "system",
+		CreatedByID:    &creatorID,
+	}); err != nil {
+		t.Fatalf("create unfinished project task: %v", err)
 	}
 	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
 		OrganizationID: org.ID,

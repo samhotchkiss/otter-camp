@@ -555,6 +555,10 @@ Implemented so far in this spec:
 - claim-time worker cleanup now retires project dispatches that were already permanently unclaimable under existing claim SQL:
   - inactive `project_bootstrap` dispatches
   - settled `project_execution_continuation` / `project_continuation_resume` dispatches with no unfinished tasks
+- worker-side async project requeue paths now retire settled continuation messages before they become repeat queue churn:
+  - `RequeueActiveProjectSessionsWithoutTurns(...)` now fails a pending `project_execution_continuation` message in place when the project has zero unfinished tasks, instead of creating another minute-by-minute claim/dead-letter loop
+  - `RequeueStrandedUserMessageTurns(...)` applies the same retirement rule for pending continuation messages that have no turn history yet
+  - the retirement reason is explicit on the message row: `project continuation no longer needed; all project tasks settled`
 - claim-time worker cleanup now also retires orphaned stale `project_task` execution dispatches:
   - pending or claimed `agent_turn` rows older than the stale-claim threshold
   - active async `project_task` session

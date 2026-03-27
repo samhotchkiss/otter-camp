@@ -2207,3 +2207,41 @@ Deployment status:
 
 - code and focused tests are complete locally
 - the runtime has not been restarted on this newest slice yet
+
+## Update 21:00 MDT
+
+I found and fixed one more offline queue-churn seam that was still making settled async project sessions look runnable.
+
+What changed:
+
+- [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - added a shared retirement path for settled `project_execution_continuation` messages:
+    - `RequeueActiveProjectSessionsWithoutTurns(...)` now fails the pending continuation message in place when the project has zero unfinished tasks
+    - `RequeueStrandedUserMessageTurns(...)` now applies the same retirement rule for pending continuation messages that have no turn history yet
+  - retirement writes the explicit message error:
+    - `project continuation no longer needed; all project tasks settled`
+- [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+  - added `TestJobWorkerRequeueStrandedUserMessageTurnsRetiresSettledProjectContinuation`
+  - tightened `TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsIgnoresStalePendingDispatch` so it keeps one unfinished project task and still exercises the fresh-requeue path
+
+Focused verification:
+
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RequeueStrandedUserMessageTurns(RetiresSettledProjectContinuation|IgnoresNewerFailedAssistantStub)?|RequeueActiveProjectSessionsWithoutTurns(RetiresSettledContinuationProjects|SkipsFinalMessages|IgnoresStalePendingDispatch|PreservesRateLimitBackoff))$' -count=1`
+
+Live proof after rebuild and tmux restart:
+
+- runtime health stayed green: `./bin/ottercamp health --output json` returned `status=ok`
+- after the next scheduler tick, there were `0` fresh `agent_turn` rows in the last `90s` for the two settled async project sessions that had been churning:
+  - `1a9edb0a-a817-46b1-975d-4d96c8164bcb`
+  - `ec26eddb-66be-42a5-9859-64cb24c7c820`
+- their previously pending continuation messages are now failed in place:
+  - `ae5f0821-0135-4707-b571-f2ab017dcbcd`
+  - `8936834d-76a3-4e6b-9a5a-084c1b5eafab`
+- both now carry:
+  - `project continuation no longer needed; all project tasks settled`
+
+Why this matters:
+
+- the old claim-time purge was only trimming the symptom
+- the worker was still recreating the same stale continuation work from a second requeue path
+- with both requeue paths fixed, those settled project sessions are no longer polluting the runnable queue with dead-on-arrival continuation dispatches
