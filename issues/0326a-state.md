@@ -3109,7 +3109,14 @@ Deploy status:
 
 - code complete
 - tests green
-- runtime restart/live proof still pending at the time of this note
+- runtime is now rebuilt/restarted on the latest binary and `./bin/ottercamp health --output json` is `ok`
+- first tmux respawn attempt failed with `config error: OTTERCAMP_MODE is required` because `.env` was sourced without export in the non-interactive shell
+- second respawn used:
+  - `set -a`
+  - `source .env`
+  - `set +a`
+  - `export OTTERCAMP_MODE=development`
+- fresh live proof of the selector change is still pending the next project continuation retry on this build
 
 ## Update 04:55 MDT
 

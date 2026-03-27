@@ -864,7 +864,10 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
 - deploy state for this slice:
   - code complete
   - focused tests green
-  - runtime restart/live proof still pending at this checkpoint
+  - runtime is now rebuilt/restarted and healthy on the latest binary
+  - first respawn attempt failed because `.env` was sourced without export, so `OTTERCAMP_MODE` was missing in tmux
+  - second respawn used `set -a`, `source .env`, and `OTTERCAMP_MODE=development`; `./bin/ottercamp health --output json` is green again
+  - fresh live proof of the selector change is still pending the next project continuation retry on this build
 - project-continuation read-only repair widened again:
   - `session.list` and `inbox.list` are now treated as read-only discovery tools in the same continuation auto-queue path
   - this closes the remaining observed browse-only project continuation gaps from live `max_tool_calls` turns like `e8556561-...` and `eae611d8-...`
