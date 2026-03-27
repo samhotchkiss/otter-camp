@@ -17602,6 +17602,20 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 		}
 		if repeatedTurnStop {
 			rt.stopReason = stopReasonValidationBlocked
+			if repeatedFailure != nil &&
+				strings.EqualFold(strings.TrimSpace(updatedTask.WorkStatus), "review") &&
+				strings.EqualFold(strings.TrimSpace(repeatedFailure.FailureCode), duplicateReadOnlyDiscoveryRoundChurnCode) {
+				retried, retryErr := e.retryReviewValidationLoop(ctx, rt, updatedTask)
+				if retryErr != nil {
+					return false, retryErr
+				}
+				if retried {
+					if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildReviewDiscoveryRetrySystemMessage()); err != nil {
+						return false, err
+					}
+					return true, nil
+				}
+			}
 			if repeatedFailure != nil {
 				if targetPath := strings.TrimSpace(repeatedFailure.DeliverablePath); targetPath != "" {
 					if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, "", repeatedFailure.FailureReason, rt.initialMessageID); checkpointErr != nil {
@@ -18113,9 +18127,6 @@ func writtenFileReadbackChurnAttemptFingerprint(path string) string {
 
 func classifyRepeatedReadOnlyDiscoveryRoundChurn(rt *turnRuntime, taskRecord repo.ProjectTask, turnMessages []repo.ChatMessage, calls []ToolCall) (toolValidationFailure, bool) {
 	if rt == nil || rt.session == nil || rt.turn == nil {
-		return toolValidationFailure{}, false
-	}
-	if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
 		return toolValidationFailure{}, false
 	}
 	_, currentHasBroadContext, currentReadOnly := summarizeReadOnlyDiscoveryCallBatch(calls)
@@ -19146,6 +19157,10 @@ func buildValidationLoopSystemMessage(state taskValidationGuardState) string {
 		return fmt.Sprintf("[Deterministic same-turn read-only discovery churn blocked after %d repeated discovery-only rounds: %s]", state.Count, reason)
 	}
 	return fmt.Sprintf("[Deterministic tool validation loop blocked after %d identical failures: %s (%s)]", state.Count, toolName, reason)
+}
+
+func buildReviewDiscoveryRetrySystemMessage() string {
+	return "[Review retry required after repeated same-turn read-only discovery churn. Start a fresh review turn and use flow.review_decision once inspection has enough evidence instead of burning more discovery-only passes.]"
 }
 
 func (e *TurnEngine) loadProjectIdentityForMessage(ctx context.Context, sessionID, messageID uuid.UUID) *projectIdentity {

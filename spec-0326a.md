@@ -596,19 +596,21 @@ Implemented so far in this spec:
   - the engine still canonicalizes obviously equivalent or generic wrong paths to the intended task deliverable
   - but it no longer silently rewrites across strong artifact-family boundaries such as `tests/` or `results/` into a code deliverable under `src/`
   - that keeps auxiliary test/result artifacts from clobbering the primary deliverable path and pushes those attempts back through normal deliverable-bound validation instead
-- async `project_task` work lanes now also stop early on repeated same-turn read-only discovery rounds:
-  - the new classifier only applies to non-review async task work lanes
+- async `project_task` lanes now also stop early on repeated same-turn read-only discovery rounds:
   - it fingerprints pure discovery-only rounds using persisted assistant `tool_calls` metadata
   - it allows an initial discovery pass plus one repeat, then stops on the third discovery-only round in the same turn instead of paying for another `max_tool_calls` continuation
   - it only engages when the turn has no mutation tools anywhere in its assistant tool-call history, so mixed inspect-then-edit turns do not fall into this cutoff
+  - when the lane is a review lane, the same cutoff now routes into the review retry path with fresh `task_review_action` guidance instead of generic “take a concrete mutation step” messaging
 
 Still pending from this spec:
 
-- stronger live proof that the new work-lane same-turn read-only discovery cutoff is catching fresh Anthropic task churn:
-  - after the latest deploy, the dominant live family was still a review-lane cross-turn discovery loop rather than the new work-lane same-turn family
-  - that review lane is now live-proven again on session `b93b49f3-ca00-472f-9531-2adf6198f374`, where turn `2656120e-b223-4aec-9305-6f0e9a4837ed` completed `validation_loop_blocked` with:
+- stronger live proof that the same-turn read-only discovery cutoff is catching fresh non-review work-lane Anthropic churn before the older cross-turn machinery takes over:
+  - after the latest deploy, the dominant live family was still review-lane discovery churn rather than a clear non-review work-lane sample
+  - the review side is now live-proven in two ways on fresh traffic:
+    - cross-turn review cap on session `b93b49f3-ca00-472f-9531-2adf6198f374`, where turn `2656120e-b223-4aec-9305-6f0e9a4837ed` completed `validation_loop_blocked` with:
     - `Repeated read-only discovery churn across 3 consecutive max-tool-call turns using file.list, file.read, git.diff, git.log, task.get with recurring not_found, path_traversal`
-  - so the remaining proof gap is narrower: we still need a fresh live example where the new same-turn work-lane cutoff fires before the older cross-turn machinery
+    - same-turn review cutoff on fresh review turns such as `52ffc07e-9b7f-49d8-a36c-3f4a932b75ff`, where the runtime emitted `Repeated same-turn read-only discovery churn (2/3)` before retrying review
+  - so the remaining proof gap is narrower: we still need a fresh live example where the same-turn cutoff fires on a non-review work lane before the older cross-turn machinery
 - any additional recovery-specific fingerprints that remain after the current async task guardrails
 
 ## Deferred Follow-Up, Not In This Spec

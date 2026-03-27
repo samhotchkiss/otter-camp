@@ -20291,6 +20291,160 @@ func TestHandleToolValidationResultsIgnoresReadOnlyDiscoveryRoundChurnAfterMutat
 	}
 }
 
+func TestHandleToolValidationResultsRetriesReviewAfterSameTurnReadOnlyDiscoveryChurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	executionID := uuid.New()
+	reason := "repeated discovery-only task rounds in the same turn using `file.list`, `file.read`, `git.diff`, `git.log`, `task.get` and no mutation tools"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.session.Metadata = mustMarshalJSON(t, map[string]any{"flow_node_execution_id": executionID.String()})
+
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{"existing":"value"}`), taskValidationGuardState{
+		InitialMessageID: fixture.userMessageID.String(),
+		Fingerprint:      readOnlyDiscoveryRoundChurnFingerprint(turnID),
+		ToolName:         "task.discovery",
+		FailureClass:     "tool_validation",
+		FailureCode:      duplicateReadOnlyDiscoveryRoundChurnCode,
+		FailureReason:    reason,
+		Count:            1,
+		BlockThreshold:   validationLoopBlockThreshold,
+		Blocked:          false,
+		FirstSeenAt:      time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:       time.Now().UTC().Format(time.RFC3339Nano),
+		LastTurnID:       turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Validate pipeline error handling and retry logic",
+				WorkStatus:     "review",
+				Metadata:       metadata,
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	for idx, round := range []struct {
+		toolCalls []map[string]any
+		results   []map[string]any
+	}{
+		{
+			toolCalls: []map[string]any{
+				{"id": "r1-task", "name": "task_get", "arguments": map[string]any{"task_id": taskID.String()}},
+				{"id": "r1-list", "name": "file_list", "arguments": map[string]any{"path": "scripts"}},
+				{"id": "r1-log", "name": "git_log", "arguments": map[string]any{"limit": 10}},
+			},
+			results: []map[string]any{
+				{"tool_name": "task.get", "output": map[string]any{"task_number": 16}},
+				{"tool_name": "file.list", "output": map[string]any{"path": "scripts"}},
+				{"tool_name": "git.log", "output": map[string]any{"stdout": "abc123"}},
+			},
+		},
+		{
+			toolCalls: []map[string]any{
+				{"id": "r2-read", "name": "file_read", "arguments": map[string]any{"path": "scripts/validate-error-handling.sh"}},
+				{"id": "r2-diff", "name": "git_diff", "arguments": map[string]any{"pathspec": "scripts/validate-error-handling.sh"}},
+			},
+			results: []map[string]any{
+				{"tool_name": "file.read", "output": map[string]any{"path": "scripts/validate-error-handling.sh", "content": "echo ok\n"}},
+				{"tool_name": "git.diff", "output": map[string]any{"stdout": ""}},
+			},
+		},
+	} {
+		fixture.messages.create(repo.ChatMessage{
+			SessionID: fixture.session.ID,
+			TurnID:    &turnID,
+			Role:      "assistant",
+			Status:    "final",
+			Content:   fmt.Sprintf("review discovery round %d", idx+1),
+			Metadata: mustMarshalJSON(t, map[string]any{
+				"tool_calls": round.toolCalls,
+			}),
+		})
+		for resultIdx, payload := range round.results {
+			toolCallID := round.toolCalls[resultIdx]["id"].(string)
+			fixture.messages.create(repo.ChatMessage{
+				SessionID:  fixture.session.ID,
+				TurnID:     &turnID,
+				Role:       "tool_result",
+				Status:     "final",
+				ToolCallID: &toolCallID,
+				Content:    string(mustRawJSON(t, payload)),
+			})
+		}
+	}
+
+	currentToolCalls := []map[string]any{
+		{"id": "r3-read", "name": "file_read", "arguments": map[string]any{"path": "scripts/validate-error-handling.sh"}},
+		{"id": "r3-diff", "name": "git_diff", "arguments": map[string]any{"pathspec": "scripts/validate-error-handling.sh"}},
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "review discovery round 3",
+		Metadata: mustMarshalJSON(t, map[string]any{
+			"tool_calls": currentToolCalls,
+		}),
+	})
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:         turnID,
+			SessionID:  fixture.session.ID,
+			TurnNumber: 1,
+			Status:     "in_progress",
+		},
+	}
+	fixture.chat.turns[turnID] = rt.turn
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turnID)
+	calls := []ToolCall{
+		{ID: "r3-read", Name: "file.read", Arguments: map[string]any{"path": "scripts/validate-error-handling.sh"}},
+		{ID: "r3-diff", Name: "git.diff", Arguments: map[string]any{"pathspec": "scripts/validate-error-handling.sh"}},
+	}
+	results := []ToolResult{
+		{ToolCallID: "r3-read", Name: "file.read", Output: map[string]any{"path": "scripts/validate-error-handling.sh", "content": "echo ok\n"}},
+		{ToolCallID: "r3-diff", Name: "git.diff", Output: map[string]any{"stdout": ""}},
+	}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	if !fixture.messages.containsContentSubstring("Review retry required after repeated same-turn read-only discovery churn") {
+		t.Fatal("expected review-specific same-turn discovery retry message")
+	}
+	if !fixture.messages.containsContentSubstring("Review only. Inspect the current deliverables and use flow.review_decision") {
+		t.Fatal("expected fresh review-action prompt after same-turn discovery churn")
+	}
+}
+
 func TestHandleToolValidationResultsIgnoresPackageInstallChurnWhenPackageChanges(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

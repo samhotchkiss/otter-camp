@@ -2288,14 +2288,15 @@ I shipped one narrow runtime slice aimed at the new post-`21:18` async task burn
 What changed:
 
 - [`internal/turn/engine.go`](../internal/turn/engine.go)
-  - async `project_task` work lanes now classify pure same-turn read-only discovery rounds as deterministic churn
+  - async `project_task` lanes now classify pure same-turn read-only discovery rounds as deterministic churn
   - the classifier only applies when the current turn has no mutation tools anywhere in its assistant tool-call history
   - it fingerprints the round family from persisted assistant `tool_calls` metadata and stops on the third discovery-only round in the same turn instead of paying for another continuation
-  - review lanes are intentionally excluded from this new cutoff; they were already supposed to be handled by the older cross-turn review discovery cap
+  - review lanes now route that same-turn stop through the review retry path with a fresh `task_review_action` prompt instead of generic “take a concrete mutation step” messaging
 - [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
   - added:
     - `TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdReadOnlyDiscoveryRoundInSameTurn`
     - `TestHandleToolValidationResultsIgnoresReadOnlyDiscoveryRoundChurnAfterMutationInSameTurn`
+    - `TestHandleToolValidationResultsRetriesReviewAfterSameTurnReadOnlyDiscoveryChurn`
   - reran the adjacent same-turn churn slice plus the existing multi-turn read-only discovery cap slice
 
 Focused verification:
@@ -2346,6 +2347,11 @@ Follow-up live read a few minutes later:
 What this means now:
 
 - the older review-lane cross-turn read-only discovery cap is live-proven again on fresh Anthropic traffic
-- the new same-turn work-lane cutoff remains deployed and unit-tested, but it has not been the dominant live family in the first post-restart window
+- the newer same-turn read-only discovery cutoff is also already showing up live on review traffic, for example:
+  - `52ffc07e-9b7f-49d8-a36c-3f4a932b75ff`
+  - `2eeb3d95-b3a5-4fbc-8514-d81c933c9b95`
+  - `ce443718-970d-4f12-85d7-4c0d5934ea76`
+  - `dcfe98ee-c248-4043-9d6f-d01c28d175f7`
+  - each emitted `Repeated same-turn read-only discovery churn (2/3)` on review-lane traffic
 - the remaining proof gap is narrower:
-  - we still need a fresh live example where the new work-lane same-turn cutoff fires before the older cross-turn machinery would have taken over
+  - we still need a fresh live example where the same-turn cutoff fires on a non-review work lane before the older cross-turn machinery would have taken over
