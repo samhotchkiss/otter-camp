@@ -23,6 +23,55 @@ import (
 	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 )
 
+var tuiRateLimitBackoffSchedule = []time.Duration{
+	100 * time.Millisecond,
+	250 * time.Millisecond,
+	500 * time.Millisecond,
+	1 * time.Second,
+}
+
+func isTUIRateLimitError(err error) bool {
+	var apiErr *cliAPIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusTooManyRequests
+}
+
+func sleepTUIBackoff(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func withTUIRateLimitRetryErr(ctx context.Context, fn func() error) error {
+	_, err := withTUIRateLimitRetryValue(ctx, func() (struct{}, error) {
+		return struct{}{}, fn()
+	})
+	return err
+}
+
+func withTUIRateLimitRetryValue[T any](ctx context.Context, fn func() (T, error)) (T, error) {
+	var zero T
+	for attempt := 0; ; attempt++ {
+		value, err := fn()
+		if err == nil {
+			return value, nil
+		}
+		if !isTUIRateLimitError(err) || attempt >= len(tuiRateLimitBackoffSchedule) {
+			return zero, err
+		}
+		if waitErr := sleepTUIBackoff(ctx, tuiRateLimitBackoffSchedule[attempt]); waitErr != nil {
+			return zero, waitErr
+		}
+	}
+}
+
 func runTUICommand(args []string) int {
 	flags := flag.NewFlagSet("tui", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -172,8 +221,10 @@ func runTUICommand(args []string) int {
 				return strings.TrimSpace(resp.Data.ID), nil
 			}
 			runtimeHints.ArchiveProject = func(ctx context.Context, projectID string) error {
-				var resp struct{}
-				return apiClient.request(ctx, "POST", "/v1/projects/"+url.PathEscape(projectID)+"/archive", map[string]any{}, &resp)
+				return withTUIRateLimitRetryErr(ctx, func() error {
+					var resp struct{}
+					return apiClient.request(ctx, "POST", "/v1/projects/"+url.PathEscape(projectID)+"/archive", map[string]any{}, &resp)
+				})
 			}
 			runtimeHints.LoadRecentChats = func(ctx context.Context) ([]tuiapp.SidebarChatItem, error) {
 				return loadTUIRecentChats(ctx, apiClient)
@@ -258,18 +309,24 @@ func runTUICommand(args []string) int {
 			}
 			runtimeHints.ResetOrgSession = func(ctx context.Context, currentSessionID string) (string, error) {
 				// Archive the current active sync session (not just whatever the TUI is displaying).
-				sessions, err := apiClient.ListChatSessions(ctx, chatListSessionsFilter{Status: "active", ScopeType: "organization", Limit: 20})
+				sessions, err := withTUIRateLimitRetryValue(ctx, func() (chatSessionListEnvelope, error) {
+					return apiClient.ListChatSessions(ctx, chatListSessionsFilter{Status: "active", ScopeType: "organization", Limit: 20})
+				})
 				if err != nil {
 					return "", fmt.Errorf("list sessions: %w", err)
 				}
 				for _, s := range sessions.Data {
 					if strings.EqualFold(s.Mode, "sync") {
-						_ = apiClient.ArchiveChatSession(ctx, s.ID)
+						_ = withTUIRateLimitRetryErr(ctx, func() error {
+							return apiClient.ArchiveChatSession(ctx, s.ID)
+						})
 					}
 				}
 				// Also archive the displayed session if it's different.
 				if currentID, err := uuid.Parse(strings.TrimSpace(currentSessionID)); err == nil {
-					_ = apiClient.ArchiveChatSession(ctx, currentID)
+					_ = withTUIRateLimitRetryErr(ctx, func() error {
+						return apiClient.ArchiveChatSession(ctx, currentID)
+					})
 				}
 				// Resolve org ID and create a fresh sync session.
 				var orgResp struct {
@@ -277,13 +334,17 @@ func runTUICommand(args []string) int {
 						ID string `json:"id"`
 					} `json:"data"`
 				}
-				if err := apiClient.request(ctx, "GET", "/v1/orgs/current", nil, &orgResp); err != nil {
+				if err := withTUIRateLimitRetryErr(ctx, func() error {
+					return apiClient.request(ctx, "GET", "/v1/orgs/current", nil, &orgResp)
+				}); err != nil {
 					return "", fmt.Errorf("resolve org: %w", err)
 				}
-				created, err := apiClient.CreateChatSession(ctx, chatCreateSessionRequest{
-					ScopeType: "organization",
-					ScopeID:   orgResp.Data.ID,
-					Mode:      "sync",
+				created, err := withTUIRateLimitRetryValue(ctx, func() (chatSessionEnvelope, error) {
+					return apiClient.CreateChatSession(ctx, chatCreateSessionRequest{
+						ScopeType: "organization",
+						ScopeID:   orgResp.Data.ID,
+						Mode:      "sync",
+					})
 				})
 				if err != nil {
 					return "", err
