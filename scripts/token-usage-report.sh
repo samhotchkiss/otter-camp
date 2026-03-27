@@ -769,6 +769,33 @@ ORDER BY mp.slug, pc.failover_priority, pc.display_name
 LIMIT :'limit_rows'::int;
 
 \echo
+\echo '== Rate-Limit Failure Routing Split =='
+WITH params AS (
+  SELECT
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
+)
+SELECT
+  CASE
+    WHEN mi.provider_connection_id IS NULL THEN 'pre_routing'
+    ELSE 'post_routing'
+  END AS routing_phase,
+  COUNT(*) AS failed_invocations,
+  COUNT(*) FILTER (WHERE mi.provider_connection_id IS NOT NULL) AS with_connection_id,
+  COUNT(*) FILTER (WHERE mi.provider_connection_id IS NULL) AS without_connection_id
+FROM model_invocation mi
+LEFT JOIN chat_session cs ON cs.id = mi.session_id
+CROSS JOIN params p
+WHERE mi.created_at >= p.since_at
+  AND mi.status = 'failed'
+  AND mi.error_code = 'provider_rate_limited'
+  AND (p.org_id IS NULL OR mi.organization_id = p.org_id)
+  AND (p.session_id IS NULL OR mi.session_id = p.session_id)
+GROUP BY 1
+ORDER BY failed_invocations DESC, routing_phase ASC;
+
+\echo
 \echo '== Pending Agent Turn Backlog =='
 WITH params AS (
   SELECT

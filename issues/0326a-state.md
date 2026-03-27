@@ -1813,3 +1813,27 @@ Current live signal from the DB:
 - `Anthropic Primary` is currently `unavailable`
 
 This is still an operator-observability slice only. No runtime behavior changed here.
+
+## Update 18:21 MDT
+
+I added one more measurement slice to tell us whether the remaining rate-limit churn is happening before or after connection routing.
+
+What changed:
+
+- [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh)
+  - now includes `Rate-Limit Failure Routing Split`
+  - it groups `provider_rate_limited` failed invocations into:
+    - `pre_routing` when `provider_connection_id` is null
+    - `post_routing` when a specific provider connection had already been selected
+
+Why this matters:
+
+- if almost all current cooldown churn is `pre_routing`, the next runtime optimization is a router-aware defer path before more turn work happens
+- if the failures are mostly `post_routing`, then the remaining work belongs deeper in gateway/connection reservation behavior instead
+
+Current signal:
+
+- the last 30 minutes were entirely `pre_routing`
+- that means the router is already telling us “all connections cooling down” before a specific connection is chosen
+
+So the next possible runtime slice, if we decide it is worth it, is a preflight defer for async turns when routing returns an all-connections-cooling-down backoff.
