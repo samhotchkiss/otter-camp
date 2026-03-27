@@ -1228,3 +1228,18 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - focused turn-engine coverage is green for:
       - blocking the node-id misuse case
       - preserving pass-through for unknown execution ids
+  - newest project continuation artifact-browse guard slice:
+    - once the rooted/snapshotted async `project` continuation prompt already names actionable draft tasks, the project lane now also blocks:
+      - `flow.get_execution` rediscovery from that lane before a concrete execution record is named
+      - recursive `file.list(path=results)` and `file.list(path=pipeline/fixtures)` artifact-root browsing
+    - this is deliberately narrow and evidence-backed:
+      - it only activates in async `project` continuations whose prompt already carries named actionable draft tasks
+      - it only blocks the exact broad artifact roots observed in the hot lane so far
+      - parent-scoped task inspection still remains available
+    - this targets the next live seam from session `db21265f-c37d-40e4-9ed5-13def09970f8`, where after the `task.list` rediscovery guard fired, the model still emitted:
+      - three `flow.get_execution(task.current_flow_node_id)` calls
+      - recursive `file.list(path=results)` browsing
+    - focused turn-engine coverage is green for:
+      - blocking project-lane `flow.get_execution` under the snapshot prompt
+      - blocking recursive `file.list(path=results)` under the snapshot prompt
+      - preserving parent-scoped `task.list`

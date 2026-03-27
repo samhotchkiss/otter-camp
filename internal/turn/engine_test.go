@@ -9181,6 +9181,63 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksNamedTaskGet
 	}
 }
 
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksFlowGetExecution(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	draftTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:   "Active project id: " + projectID.String(),
+			DraftTaskLine: "Actionable draft tasks already in the tree: task 22 (Produce final project close-out report) id=" + draftTaskID.String() + " title=\"Produce final project close-out report\" work_status=draft",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "flow.get_execution", map[string]any{
+		"flow_node_execution_id": uuid.New().String(),
+	})
+	if !blocked {
+		t.Fatal("expected project-lane flow.get_execution to be blocked once the continuation prompt already names actionable draft tasks")
+	}
+	if !strings.Contains(reason, "Do not probe flow.get_execution") {
+		t.Fatalf("reason = %q, want flow.get_execution guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadResultsList(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	draftTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:   "Active project id: " + projectID.String(),
+			DraftTaskLine: "Actionable draft tasks already in the tree: task 22 (Produce final project close-out report) id=" + draftTaskID.String() + " title=\"Produce final project close-out report\" work_status=draft",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "file.list", map[string]any{
+		"path":      "results",
+		"recursive": true,
+	})
+	if !blocked {
+		t.Fatal("expected broad recursive results browse to be blocked once the continuation prompt already names actionable draft tasks")
+	}
+	if !strings.Contains(reason, "`results`") {
+		t.Fatalf("reason = %q, want results path guidance", reason)
+	}
+}
+
 func TestShouldNotBlockProjectContinuationSnapshotRediscoveryToolForParentScopedTaskList(t *testing.T) {
 	t.Parallel()
 

@@ -3062,6 +3062,48 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 09:31 MDT
+
+I immediately followed the previous slice with one more guard based on the exact persisted tool calls from the hot project lane.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - rooted/snapshotted async `project` continuations now block `flow.get_execution` before the project lane starts probing flow execution records again
+  - the same snapshot guard now blocks recursive broad artifact browsing for:
+    - `file.list(path="results")`
+    - `file.list(path="pipeline/fixtures")`
+  - this only applies when the project continuation prompt already names actionable draft tasks in the tree
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for:
+    - blocked project-lane `flow.get_execution` under the snapshot prompt
+    - blocked recursive `file.list(path=results)` under the snapshot prompt
+    - preserving the existing parent-scoped `task.list` allowance
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskList|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksNamedTaskGet|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksFlowGetExecution|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadResultsList|ShouldNotBlockProjectContinuationSnapshotRediscoveryToolForParentScopedTaskList|ShouldBlockProjectContinuationFlowExecutionLookupToolForTaskCurrentFlowNodeID|ShouldNotBlockProjectContinuationFlowExecutionLookupToolForUnknownExecutionID)$' -count=1`
+
+Why this slice exists:
+
+- the persisted assistant tool metadata for hot session `db21265f-c37d-40e4-9ed5-13def09970f8` showed the next exact fallback pattern after `task.list` was blocked:
+  - `flow.get_execution(flow_node_execution_id=34670c0a-833e-457b-bfb4-e39dd64d7843)`
+  - `flow.get_execution(flow_node_execution_id=5fb4f538-9e45-4173-a0b3-16ab8a3c452e)`
+  - `flow.get_execution(flow_node_execution_id=4dbe4e97-e438-431b-aa6e-80fc5eef1418)`
+  - `file.list(path="results", recursive=true)`
+- all three execution lookups paid for the same deterministic `flow_node_execution_id_required` failure, and the results browse was another broad project-lane workspace read
+
+Expected effect:
+
+- project continuations with a named actionable task snapshot should skip both of those fallback rediscovery steps and move straight to task mutation / queueing / narrower evidence
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime rebuild/restart still pending at the time of this note
+
 ## Update 09:20 MDT
 
 I cut the next project-continuation seam instead of waiting on another replay.

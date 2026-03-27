@@ -23457,6 +23457,14 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 			return false, ""
 		}
 		return true, buildProjectContinuationSnapshotRediscoveryGuardError(toolName, uuid.Nil)
+	case "flow.get_execution":
+		return true, buildProjectContinuationSnapshotFlowExecutionGuardError()
+	case "file.list":
+		path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+		if !shouldBlockProjectContinuationSnapshotArtifactBrowse(path, arguments) {
+			return false, ""
+		}
+		return true, buildProjectContinuationSnapshotArtifactBrowseGuardError(path)
 	case "task.get":
 		taskIDText := strings.TrimSpace(stringValue(arguments["task_id"]))
 		if taskIDText == "" {
@@ -23509,6 +23517,32 @@ func buildProjectContinuationSnapshotRediscoveryGuardError(toolName string, task
 	default:
 		return "project continuation already has the necessary project snapshot in the continuation prompt. Do not reread the broader project task tree first."
 	}
+}
+
+func shouldBlockProjectContinuationSnapshotArtifactBrowse(path string, arguments map[string]any) bool {
+	normalized := strings.ToLower(strings.TrimSpace(normalizeWorkspaceRelativePath(path)))
+	if normalized == "" {
+		return false
+	}
+	recursive, _ := boolValue(arguments["recursive"])
+	switch normalized {
+	case "results", "pipeline/fixtures":
+		return recursive
+	default:
+		return false
+	}
+}
+
+func buildProjectContinuationSnapshotArtifactBrowseGuardError(path string) string {
+	normalized := normalizeWorkspaceRelativePath(path)
+	if normalized == "" {
+		return "project continuation already has named actionable draft tasks in the continuation prompt. Do not browse broad workspace artifact roots first; act on one of the named tasks directly or inspect only the exact deliverable path required for that task."
+	}
+	return fmt.Sprintf("project continuation already has named actionable draft tasks in the continuation prompt. Do not browse broad workspace artifact root `%s` first; act on one of the named tasks directly or inspect only the exact deliverable path required for that task.", normalized)
+}
+
+func buildProjectContinuationSnapshotFlowExecutionGuardError() string {
+	return "project continuation already has named actionable draft tasks in the continuation prompt and no concrete flow_node_execution_id was named as the blocker. Do not probe flow.get_execution from the project lane first; act on the named task directly or advance the correct task execution lane."
 }
 
 func buildProjectContinuationFlowExecutionLookupGuardError(taskRecord repo.ProjectTask, flowNodeExecutionID uuid.UUID) string {
