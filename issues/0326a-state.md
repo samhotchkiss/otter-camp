@@ -1874,3 +1874,32 @@ What is still not live-proven yet:
   - delayed retry still enqueued
   - no prompt assembly for that turn
   - no new pre-routing `agent_turn` invocation row created for the deferred attempt
+
+## Update 18:40 MDT
+
+While the cooldown-preflight proof window was still pending, the live worker exposed another cheap waste family: blocked validation-loop task sessions were being requeued by worker repair and then immediately suppressed by the turn engine.
+
+What changed:
+
+- [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - `RequeueActiveExecutionSessionsWithoutTurns(...)` now skips async `project_task` sessions when the owning task is already:
+    - `work_status = blocked`
+    - and `metadata.agent_turn_validation_guard.blocked = true`
+  - this is deliberately narrow: it only suppresses worker recovery when the runtime has already persisted the same validation-loop block that `HandleUserMessage(...)` uses to skip dispatch
+- [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+  - added `TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsValidationLoopBlockedSession`
+  - kept the nearby recovery-halt exceptions covered so review recovery retries still work where intended
+
+Focused verification:
+
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRequeueActiveExecutionSessionsWithoutTurns(SkipsValidationLoopBlockedSession|SkipsRecoveryHaltLoop|AllowsReviewRecoveryHaltRetry|AllowsSyntheticReviewRecoveryRetry|AllowsTaskReviewActionRetry)$' -count=1`
+
+Live proof:
+
+- rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and `./bin/ottercamp health --output json` returned `status=ok`
+- hot blocked review session `3d360d34-382d-4847-837b-4b067036610c` had been minting fresh `agent_turn` jobs continuously before this slice
+- on the new worker, that session stopped at the single startup recovery pass:
+  - newest job timestamp stayed fixed at `2026-03-26 18:39:04.073 MDT`
+  - no newer `agent_turn` rows appeared for that session in the follow-up check
+
+So that worker-side queue churn is now cut off. The remaining pending proof item is still the async cooldown preflight on a fresh live retry after `18:45 MDT`.

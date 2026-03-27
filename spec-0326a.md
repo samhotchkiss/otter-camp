@@ -551,6 +551,9 @@ Implemented so far in this spec:
   - the engine asks the live gateway whether the routed profile is already in an all-connections-cooling-down window
   - on a real router-level cooldown, the turn now goes straight to the existing delayed `ErrRateLimited` retry path without assembling prompt context, appending an assistant placeholder, or creating a no-op `agent_turn` invocation row
   - non-rate-limit probe failures fall back to the normal model path so this slice only changes the known cooldown case
+- worker recovery now skips requeueing `project_task` async sessions that are already blocked by a persisted validation-loop guard:
+  - active flow-node executions with `work_status='blocked'` plus `agent_turn_validation_guard.blocked=true` no longer get revived by `RequeueActiveExecutionSessionsWithoutTurns(...)`
+  - that removes hot queue churn where the worker would enqueue another `agent_turn` only for the turn engine to immediately suppress it as `validation_loop_blocked`
 - tool-result parsing and operator diagnostics now treat native validation failures stored in `output.error` as real tool errors instead of silently classifying them as successes
 - async `project_task` work lanes now have a session-level cutoff for cross-turn read-only discovery churn:
   - after `5` consecutive `max_tool_calls` turns

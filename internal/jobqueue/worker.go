@@ -1246,6 +1246,13 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			  )
 			  AND NOT EXISTS (
 			    SELECT 1
+			    FROM project_task blocked_task
+			    WHERE blocked_task.id = cs.scope_id
+			      AND blocked_task.work_status = 'blocked'
+			      AND COALESCE(blocked_task.metadata->'agent_turn_validation_guard'->>'blocked', '') = 'true'
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
 			    FROM job_queue jq
 			    LEFT JOIN chat_message queued_message
 			      ON queued_message.id = (jq.payload->>'message_id')::uuid
