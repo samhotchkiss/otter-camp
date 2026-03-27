@@ -4920,6 +4920,163 @@ func (e *TurnEngine) refreshProjectBootstrapSessionState(ctx context.Context, se
 	return e.updateProjectBootstrapState(ctx, session, state)
 }
 
+func (e *TurnEngine) maybeRefreshBootstrapStateAfterExternalProjectMutations(ctx context.Context, rt *turnRuntime, calls []ToolCall, results []ToolResult) error {
+	if e == nil || e.pool == nil || e.projects == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return nil
+	}
+	scopeType := strings.ToLower(strings.TrimSpace(rt.session.ScopeType))
+	if scopeType == "project" || scopeType == "project_task" {
+		return nil
+	}
+
+	projectIDs, err := e.projectMutationProjectIDs(ctx, calls, results)
+	if err != nil {
+		return err
+	}
+	if len(projectIDs) == 0 {
+		return nil
+	}
+
+	sessionRepo := repo.NewChatSessionRepo(e.pool)
+	for projectID := range projectIDs {
+		if projectID == uuid.Nil {
+			continue
+		}
+
+		projectSession, err := sessionRepo.GetByScopeAndMode(ctx, "project", projectID, "async")
+		if errors.Is(err, repo.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !strings.EqualFold(strings.TrimSpace(projectSession.Status), "active") {
+			continue
+		}
+
+		progress, err := e.loadProjectBootstrapProgress(ctx, projectID)
+		if err != nil {
+			return err
+		}
+		if progress.BootstrapTaskID == uuid.Nil {
+			continue
+		}
+		if err := e.refreshProjectBootstrapSessionState(ctx, projectSession, progress); err != nil {
+			return err
+		}
+
+		projectRecord, err := e.projects.GetByID(ctx, projectID)
+		if errors.Is(err, repo.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		pauseState := projectpause.Parse(projectRecord.Settings)
+		if !pauseState.IsPaused {
+			continue
+		}
+		if _, err := e.clearStaleProjectBootstrapPause(ctx, projectRecord, pauseState); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (e *TurnEngine) projectMutationProjectIDs(ctx context.Context, calls []ToolCall, results []ToolResult) (map[uuid.UUID]struct{}, error) {
+	if e == nil || e.tasks == nil {
+		return nil, nil
+	}
+
+	callByID := make(map[string]ToolCall, len(calls))
+	for _, call := range calls {
+		callByID[call.ID] = call
+	}
+
+	projectIDs := make(map[uuid.UUID]struct{})
+	addProjectID := func(projectID uuid.UUID) {
+		if projectID != uuid.Nil {
+			projectIDs[projectID] = struct{}{}
+		}
+	}
+	addTaskProjectID := func(taskID uuid.UUID) error {
+		if taskID == uuid.Nil {
+			return nil
+		}
+		taskRecord, err := e.tasks.GetByID(ctx, taskID)
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		addProjectID(taskRecord.ProjectID)
+		return nil
+	}
+
+	for _, result := range results {
+		if strings.TrimSpace(result.Error) != "" {
+			continue
+		}
+		call, ok := callByID[result.ToolCallID]
+		if !ok {
+			continue
+		}
+
+		switch strings.TrimSpace(call.Name) {
+		case "agent.assign_project":
+			if projectID, ok := parseUUIDAny(call.Arguments["project_id"]); ok {
+				addProjectID(projectID)
+				continue
+			}
+			if assignment, ok := result.Output["assignment"].(map[string]any); ok {
+				if projectID, ok := parseUUIDAny(assignment["project_id"]); ok {
+					addProjectID(projectID)
+				}
+			}
+		case "task.create":
+			if projectID, ok := parseUUIDAny(call.Arguments["project_id"]); ok {
+				addProjectID(projectID)
+			}
+		case "task.update":
+			if taskID, ok := parseUUIDAny(call.Arguments["task_id"]); ok {
+				if err := addTaskProjectID(taskID); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			if taskPayload, ok := result.Output["task"].(map[string]any); ok {
+				if taskID, ok := parseUUIDAny(taskPayload["id"]); ok {
+					if err := addTaskProjectID(taskID); err != nil {
+						return nil, err
+					}
+				}
+			}
+		case "task.add_dependency":
+			sourceType := strings.ToLower(strings.TrimSpace(stringValue(call.Arguments["source_type"])))
+			if sourceType != "" && sourceType != "project_task" && sourceType != "task" {
+				continue
+			}
+			if taskID, ok := parseUUIDAny(call.Arguments["source_id"]); ok {
+				if err := addTaskProjectID(taskID); err != nil {
+					return nil, err
+				}
+			}
+		case "bootstrap.setup.persist":
+			if projectID, ok := parseUUIDAny(call.Arguments["project_id"]); ok {
+				addProjectID(projectID)
+				continue
+			}
+			if projectID, ok := parseUUIDAny(result.Output["project_id"]); ok {
+				addProjectID(projectID)
+			}
+		}
+	}
+
+	return projectIDs, nil
+}
+
 type projectBootstrapProgress struct {
 	BootstrapTaskID          uuid.UUID
 	BootstrapTaskOutstanding bool
@@ -5105,6 +5262,14 @@ func projectBootstrapPauseInvalidatedByCurrentProgress(state projectBootstrapSta
 	}
 	failureClass := strings.ToLower(strings.TrimSpace(state.FailureClass))
 	failurePhase := strings.ToLower(strings.TrimSpace(state.FailurePhase))
+	switch failureClass {
+	case projectBootstrapFailureMissingReviewer:
+		return progress.ReviewerCount > 0
+	case projectBootstrapFailureMissingPM:
+		return progress.ProjectManagerCount > 0
+	case projectBootstrapFailureMissingAssignments:
+		return projectBootstrapStaffingReady(progress)
+	}
 	if failureClass == "first_wave_execution_missing" || failurePhase == projectBootstrapCheckpointFirstWaveExecutions {
 		return progress.FirstWaveTaskCount > 0 && progress.FirstWavePromotedCount > 0
 	}
@@ -5114,6 +5279,14 @@ func projectBootstrapPauseInvalidatedByCurrentProgress(state projectBootstrapSta
 func projectBootstrapPauseMetadataInvalidatedByCurrentProgress(metadata json.RawMessage, progress projectBootstrapProgress) bool {
 	failureClass := strings.ToLower(strings.TrimSpace(stringValue(messageMetadataMap(metadata)["failure_class"])))
 	failurePhase := strings.ToLower(strings.TrimSpace(stringValue(messageMetadataMap(metadata)["failure_phase"])))
+	switch failureClass {
+	case projectBootstrapFailureMissingReviewer:
+		return progress.ReviewerCount > 0
+	case projectBootstrapFailureMissingPM:
+		return progress.ProjectManagerCount > 0
+	case projectBootstrapFailureMissingAssignments:
+		return projectBootstrapStaffingReady(progress)
+	}
 	if failureClass == "first_wave_execution_missing" || failurePhase == projectBootstrapCheckpointFirstWaveExecutions {
 		return progress.FirstWaveTaskCount > 0 && progress.FirstWavePromotedCount > 0
 	}
@@ -12042,6 +12215,9 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if err := e.appendToolResults(ctx, rt, results); err != nil {
 			return false, err
 		}
+		if err := e.maybeRefreshBootstrapStateAfterExternalProjectMutations(ctx, rt, runCalls, results); err != nil {
+			return false, err
+		}
 		if shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, results) {
 			return true, nil
 		}
@@ -12192,6 +12368,9 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			result = ToolResult{ToolCallID: call.ID, Name: call.Name, Error: fmt.Sprintf("%s failed: %s", call.Name, err.Error()), RunID: runID}
 		}
 		if err := e.appendToolResults(ctx, rt, []ToolResult{result}); err != nil {
+			return false, err
+		}
+		if err := e.maybeRefreshBootstrapStateAfterExternalProjectMutations(ctx, rt, []ToolCall{call}, []ToolResult{result}); err != nil {
 			return false, err
 		}
 		if shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, []ToolResult{result}) {

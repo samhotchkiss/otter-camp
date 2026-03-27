@@ -13775,6 +13775,336 @@ func TestTurnEngineIntegrationUpdateProjectBootstrapStateClearsBootstrapAutomati
 	}
 }
 
+func TestTurnEngineIntegrationRefreshesPausedBootstrapAfterOrgScopedReviewerRepair(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: repair reviewer staffing and continue bootstrap from the persisted state.")
+
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	workerAgent := mustCreateBootstrapWorkerAgent(t, ctx, fixture.pool, fixture.org.ID)
+	reviewerAgent := mustCreateBootstrapReviewerAgent(t, ctx, fixture.pool, fixture.org.ID)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+
+	assignments := repo.NewAgentProjectAssignmentRepo(fixture.pool)
+	if _, err := assignments.Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        pmAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "project_manager",
+		AssignedByType: "agent",
+		AssignedByID:   &lori.ID,
+	}); err != nil {
+		t.Fatalf("assign PM: %v", err)
+	}
+	if _, err := assignments.Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        workerAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &lori.ID,
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+
+	description := "Build the first bounded deliverable for the repaired bootstrap project."
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Create repaired bootstrap deliverable",
+		Description:     &description,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &workerAgent.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &lori.ID,
+	}); err != nil {
+		t.Fatalf("create first-wave task: %v", err)
+	}
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress before reviewer repair: %v", err)
+	}
+	if progress.ValidationFailureClass != projectBootstrapFailureMissingReviewer {
+		t.Fatalf("validation_failure_class = %q, want %q", progress.ValidationFailureClass, projectBootstrapFailureMissingReviewer)
+	}
+
+	sessionSnapshot, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession project session: %v", err)
+	}
+	now := fixture.engine.now().UTC()
+	state := projectBootstrapState{
+		Status:           projectBootstrapStatusFailed,
+		InitialMessageID: handoff.ID.String(),
+		StartedAt:        &now,
+		UpdatedAt:        &now,
+		FailedAt:         &now,
+		FailureCategory:  projectFailureCategoryBootstrap,
+		FailureClass:     progress.ValidationFailureClass,
+		FailurePhase:     projectBootstrapLastCheckpoint(progress),
+		FailureReason:    progress.ValidationFailureReason,
+	}
+	applyProjectBootstrapProgressState(&state, progress)
+	state.CurrentPhase = projectBootstrapLastCheckpoint(progress)
+	state.LastSuccessfulCheckpoint = projectBootstrapLastSuccessfulCheckpoint(progress)
+	if err := fixture.engine.updateProjectBootstrapState(ctx, sessionSnapshot, state); err != nil {
+		t.Fatalf("updateProjectBootstrapState failed bootstrap: %v", err)
+	}
+
+	projectRecord := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	recordedAt := fixture.engine.now().UTC()
+	projectRecord.Settings, err = projectpause.ApplyPause(projectRecord.Settings, progress.ValidationFailureReason, projectfailure.State{
+		Action:                   projectFailureActionPause,
+		Source:                   projectBootstrapSource,
+		FailureCategory:          projectFailureCategoryBootstrap,
+		FailureClass:             progress.ValidationFailureClass,
+		FailurePhase:             projectBootstrapLastCheckpoint(progress),
+		LastCheckpoint:           projectBootstrapLastCheckpoint(progress),
+		LastSuccessfulCheckpoint: projectBootstrapLastSuccessfulCheckpoint(progress),
+		FailureReason:            progress.ValidationFailureReason,
+		SetupPersisted:           true,
+		RecordedAt:               &recordedAt,
+	}.JSON(), recordedAt, "system", uuid.Nil)
+	if err != nil {
+		t.Fatalf("ApplyPause bootstrap failure: %v", err)
+	}
+	if _, err := repo.NewProjectRepo(fixture.pool).Update(ctx, projectRecord); err != nil {
+		t.Fatalf("Update paused project: %v", err)
+	}
+
+	if _, err := assignments.Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        reviewerAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "reviewer",
+		AssignedByType: "agent",
+		AssignedByID:   &lori.ID,
+	}); err != nil {
+		t.Fatalf("assign reviewer: %v", err)
+	}
+
+	call := ToolCall{
+		ID:   "assign-reviewer",
+		Name: "agent.assign_project",
+		Arguments: map[string]any{
+			"agent_id":   reviewerAgent.ID.String(),
+			"project_id": project.ID.String(),
+			"role":       "reviewer",
+		},
+	}
+	result := ToolResult{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Output: map[string]any{
+			"assignment": map[string]any{
+				"agent_id":   reviewerAgent.ID.String(),
+				"project_id": project.ID.String(),
+				"role":       "reviewer",
+			},
+		},
+	}
+	if err := fixture.engine.maybeRefreshBootstrapStateAfterExternalProjectMutations(ctx, &turnRuntime{session: (*chat.ChatSession)(&fixture.session)}, []ToolCall{call}, []ToolResult{result}); err != nil {
+		t.Fatalf("maybeRefreshBootstrapStateAfterExternalProjectMutations: %v", err)
+	}
+
+	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if pauseState := projectpause.Parse(storedProject.Settings); pauseState.IsPaused {
+		t.Fatalf("pause_state = %+v, want cleared after reviewer repair", pauseState)
+	}
+	projectState := mustProjectBootstrapProjectState(t, storedProject)
+	if projectState.Status != projectBootstrapStatusActive {
+		t.Fatalf("project bootstrap status = %q, want %q", projectState.Status, projectBootstrapStatusActive)
+	}
+	if strings.TrimSpace(projectState.FailureClass) != "" {
+		t.Fatalf("project bootstrap failure_class = %q, want cleared after reviewer repair", projectState.FailureClass)
+	}
+	if projectState.ReviewerCount != 1 {
+		t.Fatalf("project bootstrap reviewer_count = %d, want 1", projectState.ReviewerCount)
+	}
+
+	refreshedSession, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession refreshed project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(refreshedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusActive {
+		t.Fatalf("session bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusActive)
+	}
+	if strings.EqualFold(strings.TrimSpace(bootstrapState.ValidationStatus), projectBootstrapValidationFailed) {
+		t.Fatalf("session bootstrap validation_status = %q, want non-failed after reviewer repair", bootstrapState.ValidationStatus)
+	}
+	if bootstrapState.ReviewerCount != 1 {
+		t.Fatalf("session bootstrap reviewer_count = %d, want 1", bootstrapState.ReviewerCount)
+	}
+}
+
+func TestTurnEngineIntegrationRefreshesPausedBootstrapAfterOrgScopedBootstrapSetupPersist(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: persist repaired bootstrap state after reviewer staffing is fixed.")
+
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	workerAgent := mustCreateBootstrapWorkerAgent(t, ctx, fixture.pool, fixture.org.ID)
+	reviewerAgent := mustCreateBootstrapReviewerAgent(t, ctx, fixture.pool, fixture.org.ID)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+
+	assignments := repo.NewAgentProjectAssignmentRepo(fixture.pool)
+	if _, err := assignments.Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        pmAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "project_manager",
+		AssignedByType: "agent",
+		AssignedByID:   &lori.ID,
+	}); err != nil {
+		t.Fatalf("assign PM: %v", err)
+	}
+	if _, err := assignments.Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        workerAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &lori.ID,
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+
+	description := "Build the first bounded deliverable for the repaired bootstrap project."
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Create repaired bootstrap deliverable",
+		Description:     &description,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &workerAgent.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &lori.ID,
+	}); err != nil {
+		t.Fatalf("create first-wave task: %v", err)
+	}
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress before reviewer repair: %v", err)
+	}
+	if progress.ValidationFailureClass != projectBootstrapFailureMissingReviewer {
+		t.Fatalf("validation_failure_class = %q, want %q", progress.ValidationFailureClass, projectBootstrapFailureMissingReviewer)
+	}
+
+	sessionSnapshot, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession project session: %v", err)
+	}
+	now := fixture.engine.now().UTC()
+	state := projectBootstrapState{
+		Status:           projectBootstrapStatusFailed,
+		InitialMessageID: handoff.ID.String(),
+		StartedAt:        &now,
+		UpdatedAt:        &now,
+		FailedAt:         &now,
+		FailureCategory:  projectFailureCategoryBootstrap,
+		FailureClass:     progress.ValidationFailureClass,
+		FailurePhase:     projectBootstrapLastCheckpoint(progress),
+		FailureReason:    progress.ValidationFailureReason,
+	}
+	applyProjectBootstrapProgressState(&state, progress)
+	state.CurrentPhase = projectBootstrapLastCheckpoint(progress)
+	state.LastSuccessfulCheckpoint = projectBootstrapLastSuccessfulCheckpoint(progress)
+	if err := fixture.engine.updateProjectBootstrapState(ctx, sessionSnapshot, state); err != nil {
+		t.Fatalf("updateProjectBootstrapState failed bootstrap: %v", err)
+	}
+
+	projectRecord := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	recordedAt := fixture.engine.now().UTC()
+	projectRecord.Settings, err = projectpause.ApplyPause(projectRecord.Settings, progress.ValidationFailureReason, projectfailure.State{
+		Action:                   projectFailureActionPause,
+		Source:                   projectBootstrapSource,
+		FailureCategory:          projectFailureCategoryBootstrap,
+		FailureClass:             progress.ValidationFailureClass,
+		FailurePhase:             projectBootstrapLastCheckpoint(progress),
+		LastCheckpoint:           projectBootstrapLastCheckpoint(progress),
+		LastSuccessfulCheckpoint: projectBootstrapLastSuccessfulCheckpoint(progress),
+		FailureReason:            progress.ValidationFailureReason,
+		SetupPersisted:           true,
+		RecordedAt:               &recordedAt,
+	}.JSON(), recordedAt, "system", uuid.Nil)
+	if err != nil {
+		t.Fatalf("ApplyPause bootstrap failure: %v", err)
+	}
+	if _, err := repo.NewProjectRepo(fixture.pool).Update(ctx, projectRecord); err != nil {
+		t.Fatalf("Update paused project: %v", err)
+	}
+
+	if _, err := assignments.Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        reviewerAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "reviewer",
+		AssignedByType: "agent",
+		AssignedByID:   &lori.ID,
+	}); err != nil {
+		t.Fatalf("assign reviewer: %v", err)
+	}
+
+	call := ToolCall{
+		ID:   "persist-bootstrap",
+		Name: "bootstrap.setup.persist",
+		Arguments: map[string]any{
+			"project_id":              project.ID.String(),
+			"completed_step_slugs":    []any{"staff-project", "decompose-workstreams", "attach-validate-flow-templates"},
+			"first_wave_task_ids":     []any{},
+			"first_wave_task_numbers": []any{},
+		},
+	}
+	result := ToolResult{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Output: map[string]any{
+			"project_id": project.ID.String(),
+			"status":     "persisted",
+		},
+	}
+	if err := fixture.engine.maybeRefreshBootstrapStateAfterExternalProjectMutations(ctx, &turnRuntime{session: (*chat.ChatSession)(&fixture.session)}, []ToolCall{call}, []ToolResult{result}); err != nil {
+		t.Fatalf("maybeRefreshBootstrapStateAfterExternalProjectMutations: %v", err)
+	}
+
+	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if pauseState := projectpause.Parse(storedProject.Settings); pauseState.IsPaused {
+		t.Fatalf("pause_state = %+v, want cleared after bootstrap persist", pauseState)
+	}
+	projectState := mustProjectBootstrapProjectState(t, storedProject)
+	if projectState.Status != projectBootstrapStatusActive {
+		t.Fatalf("project bootstrap status = %q, want %q", projectState.Status, projectBootstrapStatusActive)
+	}
+	if strings.TrimSpace(projectState.FailureClass) != "" {
+		t.Fatalf("project bootstrap failure_class = %q, want cleared after bootstrap persist", projectState.FailureClass)
+	}
+	if projectState.ReviewerCount != 1 {
+		t.Fatalf("project bootstrap reviewer_count = %d, want 1", projectState.ReviewerCount)
+	}
+
+	refreshedSession, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession refreshed project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(refreshedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusActive {
+		t.Fatalf("session bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusActive)
+	}
+	if strings.EqualFold(strings.TrimSpace(bootstrapState.ValidationStatus), projectBootstrapValidationFailed) {
+		t.Fatalf("session bootstrap validation_status = %q, want non-failed after bootstrap persist", bootstrapState.ValidationStatus)
+	}
+	if bootstrapState.ReviewerCount != 1 {
+		t.Fatalf("session bootstrap reviewer_count = %d, want 1", bootstrapState.ReviewerCount)
+	}
+}
+
 func TestTurnEngineIntegrationHandleTurnJobRecoveredBootstrapRetryEnqueuesFollowOn(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
