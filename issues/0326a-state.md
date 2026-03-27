@@ -3269,6 +3269,61 @@ Current status:
 - the new empty-direct-child rejection slice is deployed and healthy on the newest binary
 - fresh live proof for that final step is still pending the next post-`06:18 MDT` task-9 retry
 
+## Update 06:42 MDT
+
+The next task-9 review retries exposed a narrower gap in the empty-direct-child reject path.
+
+What happened live:
+
+- task-9 session `729dd9e7-36c4-46a1-988b-8e35e5b96b88`
+- the retry at `06:23:10 MDT` still used the correct orchestration-parent review prompt and reread the parent summary
+- the transient-narrowed retry prompt at `06:23:15 MDT` correctly carried forward:
+  - the parent summary was already established as readable
+  - do not reread the parent summary
+  - continue with `task.list parent_task_id=<current task> status=all`
+- but it did **not** yet carry forward the earlier successful direct-child lookup result from `06:11:57 MDT`, where `task.list` had already returned `tasks: []`
+
+That showed the bug clearly:
+
+- orchestration-parent empty-child rejection was only using evidence from the immediately failed turn
+- it was not reusing already-proven `task.list(parent_task_id=...) -> []` evidence from an earlier retry turn in the same review session
+
+What I changed next:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - added a session-level fallback for orchestration-parent review retries:
+    - if prior review evidence in the same session already proved the preferred parent summary is readable
+    - and the latest scoped child-task lookup already established `0` direct child tasks
+    - the next retry prompt now goes straight to `flow.review_decision reject`
+  - the fallback keys off persisted assistant `tool_calls` metadata so it only treats scoped `task.list(parent_task_id=...)` or injected `task.list(project_id=<current task id>)` calls as direct-child evidence
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for:
+    - empty direct-child rejection within a single turn
+    - empty direct-child rejection carried across a later summary-only retry turn
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(ReviewApprovalRetryPromptRejectsOrchestrationParentWithoutDirectChildren|ReviewApprovalRetryPromptRejectsOrchestrationParentWithoutDirectChildrenAcrossRetryTurns|ReviewApprovalRetryPromptCarriesForwardOrchestrationParentSummaryEvidence|HandleTransientModelTurnFailureUsesReviewRetryPromptFromFailedTurn)$' -count=1`
+
+Current status:
+
+- the session-level empty-child carry-forward fix is coded and test-green
+- runtime restart is complete and healthy
+- fresh prompt-level live proof now exists:
+  - task-9 session `729dd9e7-36c4-46a1-988b-8e35e5b96b88`
+  - retry `16` started at `06:28:59 MDT` on the new binary
+  - the transient failure happened before any tool call, which forced the narrowed retry-prompt path to run immediately
+  - the new synthesized user message at `06:29:00 MDT` now explicitly carries forward:
+    - the parent summary is already established as substantive
+    - `task.list` already returned zero direct child tasks beneath the orchestration parent
+    - call `flow.review_decision` immediately with `decision=reject`
+
+That is the proof we needed for this slice:
+
+- session-level direct-child-empty evidence is now surviving across retry turns
+- the runtime no longer falls back to another “inspect child tasks” loop once that empty-child evidence is already known
+
 ## Update 05:40 MDT
 
 The orchestration-parent review prompt fix is now live-proven, and the next concrete leak is narrower.

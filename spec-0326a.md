@@ -1019,4 +1019,17 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - orchestration-only parent review retries now reject when the parent summary is readable but a successful direct child-task lookup returns zero tasks
     - focused turn-engine coverage is green
     - runtime was rebuilt/restarted successfully at `2026-03-27 06:18 MDT`
-    - fresh live proof for this final empty-child rejection step is still pending
+    - fresh live proof for this final empty-child rejection step exposed one more seam:
+      - after a later transient retry reread the parent summary, the narrowed retry prompt still carried only the summary-readable evidence
+      - it was not yet carrying the earlier `task.list(parent_task_id=...) -> []` result across turns
+  - newest patch slice:
+    - orchestration-parent review retries now reuse session-level direct-child-empty evidence across retry turns, not just within the immediately failed turn
+    - if an earlier scoped child lookup already established `0` direct child tasks and a later transient retry only rereads the parent summary, the next retry prompt now goes straight to reject guidance instead of asking for another child lookup
+    - focused turn-engine coverage is green
+    - prompt-level live proof now exists:
+      - task-9 session `729dd9e7-36c4-46a1-988b-8e35e5b96b88`
+      - after restart, retry `16` at `2026-03-27 06:28:59 MDT` transient-failed before any tool call
+      - the synthesized retry prompt at `06:29:00 MDT` now explicitly says:
+        - the parent summary is already established as substantive
+        - `task.list` already returned zero direct child tasks
+        - call `flow.review_decision` immediately with `decision=reject`

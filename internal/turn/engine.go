@@ -1732,6 +1732,9 @@ func (e *TurnEngine) reviewApprovalRetryPrompt(ctx context.Context, session *cha
 		if retryPrompt, ok := reviewRetryPromptForOrchestrationParentMissingDirectChildren(messages, latestCompleted, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
 			return retryPrompt, true, nil
 		}
+		if retryPrompt, ok := reviewRetryPromptForPersistedOrchestrationParentMissingDirectChildren(messages, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+			return retryPrompt, true, nil
+		}
 		if retryPrompt, ok := reviewRetryPromptForOrchestrationParentChildEvidence(messages, latestCompleted, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
 			return retryPrompt, true, nil
 		}
@@ -1935,6 +1938,89 @@ func reviewRetryPromptForOrchestrationParentMissingDirectChildren(messages []rep
 		" Use the empty direct child-task lookup as the rejection evidence." +
 		" Do not reread the parent summary, do not re-list the broader project task tree, and do not search planning companion files."
 	return retryPrompt, true
+}
+
+func reviewRetryPromptForPersistedOrchestrationParentMissingDirectChildren(messages []repo.ChatMessage, latestUser *repo.ChatMessage, taskRecord repo.ProjectTask, executionID uuid.UUID, basePrompt string) (string, bool) {
+	if latestUser == nil || executionID == uuid.Nil {
+		return "", false
+	}
+	if !taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+		return "", false
+	}
+	targetPath := parsePromptDeliverableTarget(latestUser.Content)
+	if targetPath == "" {
+		return "", false
+	}
+
+	parentSummaryReadable := false
+	latestDirectChildCount := -1
+	expectDirectChildTaskListResult := false
+	for _, message := range messages {
+		switch strings.ToLower(strings.TrimSpace(message.Role)) {
+		case "assistant":
+			expectDirectChildTaskListResult = assistantCarriesDirectChildTaskListCall(message, taskRecord.ID)
+		case "tool_result":
+			toolName, output, errText, ok := parseToolResultMessage(message.Content)
+			if !ok {
+				expectDirectChildTaskListResult = false
+				continue
+			}
+			errorCode := normalizeValidationFailureCode(errText)
+			if errorCode == "" {
+				errorCode = normalizeValidationFailureCode(anyString(output["error"]))
+			}
+			switch strings.ToLower(strings.TrimSpace(toolName)) {
+			case "file.read":
+				if errorCode == "" && normalizeWorkspaceRelativePath(anyString(output["path"])) == targetPath && intValue(output["byte_size"]) > 0 {
+					parentSummaryReadable = true
+				}
+			case "task.list":
+				if errorCode == "" && expectDirectChildTaskListResult {
+					latestDirectChildCount = anySliceLen(output["tasks"])
+				}
+				expectDirectChildTaskListResult = false
+			default:
+				expectDirectChildTaskListResult = false
+			}
+		default:
+			expectDirectChildTaskListResult = false
+		}
+	}
+	if !parentSummaryReadable || latestDirectChildCount != 0 {
+		return "", false
+	}
+
+	retryPrompt := basePrompt +
+		"\nYour prior review evidence already established that the parent orchestration summary `" + targetPath + "` is present and substantive." +
+		" It also established that task.list returned zero direct child tasks beneath this orchestration parent." +
+		" Call flow.review_decision immediately with decision=reject, flow_node_execution_id " + executionID.String() + ", and concise findings that the orchestration parent has no direct child-task evidence to validate against its summary." +
+		" Use the empty direct child-task lookup as the rejection evidence." +
+		" Do not reread the parent summary, do not re-list the broader project task tree, and do not search planning companion files."
+	return retryPrompt, true
+}
+
+func assistantCarriesDirectChildTaskListCall(message repo.ChatMessage, taskID uuid.UUID) bool {
+	if taskID == uuid.Nil || len(message.Metadata) == 0 {
+		return false
+	}
+	var meta struct {
+		ToolCalls []storedAssistantToolCall `json:"tool_calls"`
+	}
+	if err := json.Unmarshal(message.Metadata, &meta); err != nil {
+		return false
+	}
+	for _, call := range meta.ToolCalls {
+		switch strings.ToLower(strings.TrimSpace(call.Name)) {
+		case "task.list", "task_list":
+			if parentID, ok := parseUUIDAny(call.Arguments["parent_task_id"]); ok && parentID == taskID {
+				return true
+			}
+			if projectID, ok := parseUUIDAny(call.Arguments["project_id"]); ok && projectID == taskID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func reviewRetryPromptForMissingPreferredDeliverable(messages []repo.ChatMessage, latestCompleted *repo.ChatTurn, latestUser *repo.ChatMessage, executionID uuid.UUID, basePrompt string) (string, bool) {
