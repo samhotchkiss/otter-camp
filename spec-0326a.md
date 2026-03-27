@@ -837,7 +837,7 @@ Still pending from this spec:
   - the existing auto-repair path already auto-queued the next runnable draft task when a project continuation produced only narrative with no successful tool results
   - live churn showed a more expensive variant: the continuation spent a full turn on successful read-only tools (`project.list`, `task.list`, `file.read`, `flow.list_templates`, `task.get`) and then still ended in narrative summary plus `max_tool_calls`
   - `handleCompletedProjectExecutionContinuationTurn(...)` now suppresses only successful mutating tool-result turns; successful read-only discovery results are still eligible for the existing draft-task auto-queue repair
-  - read-only tool classification was widened to include project-continuation browse tools like `project.list`, `task.list`, `flow.list_templates`, `agent.list`, and memory reads, while still distinguishing mutating `cli.execute` from read-only shell inspection
+  - read-only tool classification was widened to include project-continuation browse tools like `project.list`, `project.get`, `task.list`, `task.get`, `flow.list_templates`, `flow.get_template`, `flow.get_execution`, `session.list`, `agent.list`, and memory reads, while still distinguishing mutating `cli.execute` from read-only shell inspection
   - the same repair path now accepts both project continuation message roots:
     - `project_execution_continuation`
     - `project_continuation_resume`

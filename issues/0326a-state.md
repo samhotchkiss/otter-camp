@@ -3140,8 +3140,13 @@ What changed:
   - added `turnHasSuccessfulMutatingToolResult(...)`
   - widened read-only discovery classification to include the actual project-continuation browse tools showing up live:
     - `project.list`
+    - `project.get`
     - `task.list`
+    - `task.get`
     - `flow.list_templates`
+    - `flow.get_template`
+    - `flow.get_execution`
+    - `session.list`
     - `agent.list`
     - `memory.query`
     - `memory.list`

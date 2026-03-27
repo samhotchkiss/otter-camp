@@ -10154,7 +10154,7 @@ func summarizeReadOnlyDiscoveryTurn(messages []repo.ChatMessage, turnID uuid.UUI
 
 func isReadOnlyDiscoveryTool(toolName string) bool {
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "file.list", "file.read", "file.search", "git.log", "git.diff", "git.status", "task.get", "task.list", "project.get", "project.list", "flow.get_template", "flow.get_execution", "flow.list_templates", "agent.list", "memory.query", "memory.list":
+	case "file.list", "file.read", "file.search", "git.log", "git.diff", "git.status", "task.get", "task.list", "project.get", "project.list", "flow.get_template", "flow.get_execution", "flow.list_templates", "agent.list", "session.list", "memory.query", "memory.list":
 		return true
 	default:
 		return false
