@@ -1678,3 +1678,37 @@ That session-scoped run correctly narrowed the report to the one hot async task 
   - duplicate successful writes
   - written-file readback churn
   - shell file build / readback churn
+
+## Update 18:08 MDT
+
+I added one more operator-facing section to expose queue drift that could mask the next live token measurements.
+
+What changed:
+
+- [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh)
+  - now includes `Pending Agent Turn Backlog`
+  - it groups pending `agent_turn` jobs by session and reports:
+    - `scope_type`
+    - `mode`
+    - `session_status`
+    - pending job count
+    - oldest/newest `run_after`
+    - oldest/newest `created_at`
+
+Why this matters:
+
+- the short recent window is still all Anthropic rate limits
+- if the queue also carries a tail of stale pending async sessions, that can distort what “the next run” really means operationally
+- this does not change runtime behavior yet; it just makes the backlog visible in the same report we are already using for token burn
+
+Smoke proof:
+
+- `bash -n scripts/token-usage-report.sh`
+- `scripts/token-usage-report.sh --hours 0.25 --limit 8`
+
+That fresh report immediately surfaced an old pending backlog, for example:
+
+- `856ae42a-5ed8-4c53-bf70-53dc6a9e0c46` `project async active` with pending `run_after` on `2026-03-25 12:07:27 MDT`
+- `da3ba22a-5bf9-4467-8ec1-61caca1f0235` `project_task async active` with pending `run_after` on `2026-03-25 13:48:33 MDT`
+
+I have not changed queue cleanup logic from this signal yet.

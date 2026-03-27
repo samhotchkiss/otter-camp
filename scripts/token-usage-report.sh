@@ -674,6 +674,56 @@ ORDER BY next_allowed_at ASC, failure_count DESC
 LIMIT :'limit_rows'::int;
 
 \echo
+\echo '== Pending Agent Turn Backlog =='
+WITH params AS (
+  SELECT
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
+),
+pending_jobs AS (
+  SELECT
+    jq.id,
+    jq.created_at,
+    jq.run_after,
+    (jq.payload->>'session_id')::uuid AS session_id
+  FROM job_queue jq
+  CROSS JOIN params p
+  WHERE jq.job_type = 'agent_turn'
+    AND jq.status = 'pending'
+    AND (p.session_id IS NULL OR (jq.payload->>'session_id')::uuid = p.session_id)
+),
+rollup AS (
+  SELECT
+    pj.session_id,
+    COALESCE(cs.scope_type, '∅') AS scope_type,
+    COALESCE(cs.mode, '∅') AS mode,
+    COALESCE(cs.status, '∅') AS session_status,
+    COUNT(*) AS pending_jobs,
+    MIN(pj.run_after) AS oldest_run_after,
+    MAX(pj.run_after) AS newest_run_after,
+    MIN(pj.created_at) AS oldest_created_at,
+    MAX(pj.created_at) AS newest_created_at
+  FROM pending_jobs pj
+  LEFT JOIN chat_session cs ON cs.id = pj.session_id
+  CROSS JOIN params p
+  WHERE p.org_id IS NULL OR cs.organization_id = p.org_id
+  GROUP BY pj.session_id, COALESCE(cs.scope_type, '∅'), COALESCE(cs.mode, '∅'), COALESCE(cs.status, '∅')
+)
+SELECT
+  session_id,
+  scope_type,
+  mode,
+  session_status,
+  pending_jobs,
+  oldest_run_after,
+  newest_run_after,
+  oldest_created_at,
+  newest_created_at
+FROM rollup
+ORDER BY oldest_run_after ASC NULLS FIRST, oldest_created_at ASC
+LIMIT :'limit_rows'::int;
+
+\echo
 \echo '== Most Common Failures =='
 WITH params AS (
   SELECT
