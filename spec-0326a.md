@@ -1108,6 +1108,8 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - follow-on `task.get`, child `file.read`, `file.list`, `file.search`, and similar discovery calls are now blocked inside that same turn with immediate reject guidance
     - this closes the live gap where the model could say `OC-13 is in_progress` and still spend the rest of the turn opening child deliverables before any retry prompt got a chance to help
     - focused turn-engine coverage is green for the new same-turn unfinished-child discovery guard
+    - the guard now also falls back to the session deliverable target when the review prompt does not expose an explicit preferred-target line
+    - this closes the narrower live seam where the parent summary had already been read from the right deliverable, but the prompt text itself was too generic for the guard to recognize that read as authoritative
   - newest review missing-tests same-turn guard slice:
     - async review turns that already proved the main deliverable is substantive and then fail to verify required test artifacts in the same turn no longer get to keep browsing
     - once the turn has both:

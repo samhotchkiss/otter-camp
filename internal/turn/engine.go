@@ -22589,6 +22589,9 @@ func (e *TurnEngine) shouldBlockOrchestrationParentReviewRejectDiscoveryTool(ctx
 		return false, ""
 	}
 	targetPath := parsePromptDeliverableTarget(initialMessage)
+	if targetPath == "" {
+		targetPath = strings.TrimSpace(e.sessionTaskDeliverablePath(ctx, rt.session.ID, taskRecord))
+	}
 	if rejectMode == orchestrationParentRejectModeZeroDirectChildren &&
 		normalizedToolName == "file.read" &&
 		targetPath != "" &&
@@ -22628,6 +22631,9 @@ func (e *TurnEngine) shouldBlockOrchestrationParentReviewUnfinishedChildDiscover
 		return false, ""
 	}
 	targetPath := parsePromptDeliverableTarget(strings.TrimSpace(rt.initialMessageText))
+	if targetPath == "" {
+		targetPath = strings.TrimSpace(e.sessionTaskDeliverablePath(ctx, rt.session.ID, taskRecord))
+	}
 	parentSummaryReadable := false
 	childEvidence := orchestrationParentChildStatusEvidence{}
 	for _, message := range messagesForTurn(messages, rt.turn.ID) {

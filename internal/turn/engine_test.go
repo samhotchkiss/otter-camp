@@ -8880,6 +8880,73 @@ func TestShouldBlockOrchestrationParentReviewUnfinishedChildDiscoveryTool(t *tes
 	}
 }
 
+func TestShouldBlockOrchestrationParentReviewUnfinishedChildDiscoveryToolUsesSessionDeliverableFallback(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Parent/orchestration task for pipeline scaffold work. Validates direct child tasks. Does not do execution work itself. Deliverable: Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  9,
+				Title:       "Workstream A: Pipeline Scaffold Setup",
+				Description: &description,
+				WorkStatus:  "review",
+			},
+		},
+	}
+
+	turnID := uuid.New()
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustMarshalJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":      "Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md",
+				"byte_size": 3162,
+				"content":   "# OC-9 summary",
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustMarshalJSON(t, map[string]any{
+			"tool_name": "task.list",
+			"output": map[string]any{
+				"tasks": []any{
+					map[string]any{"id": uuid.NewString(), "task_number": 13, "title": "Wave activation", "work_status": "in_progress"},
+				},
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session:            fixture.session,
+		turn:               &repo.ChatTurn{ID: turnID},
+		initialMessageText: "Review only. Inspect the current deliverables and use flow.review_decision to approve or reject this review step.",
+	}
+
+	if blocked, reason := fixture.engine.shouldBlockOrchestrationParentReviewUnfinishedChildDiscoveryTool(context.Background(), rt, "file.read", map[string]any{
+		"path": "results/wave-gating-validation-summary.md",
+	}); !blocked {
+		t.Fatal("expected orchestration-parent review lane to block child deliverable reads even when the prompt omitted an explicit preferred-target line")
+	} else if !strings.Contains(reason, "unfinished direct child tasks") {
+		t.Fatalf("reason = %q, want unfinished-child guidance", reason)
+	}
+}
+
 func TestShouldBlockTaskExecutionTaskCreateToolBlocksNonOrchestrationTask(t *testing.T) {
 	t.Parallel()
 

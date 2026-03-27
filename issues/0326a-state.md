@@ -3062,6 +3062,50 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 08:24 MDT
+
+I tightened the orchestration-parent same-turn review guard to keep using the session deliverable target even when the prompt text itself is too generic.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - both orchestration-parent reject/discovery guard paths now fall back to `sessionTaskDeliverablePath(...)` when `parsePromptDeliverableTarget(...)` returns empty
+  - that means the guard still recognizes the already-read parent summary as authoritative even if the live review prompt only says `Review only...` and omits an explicit `Start with the preferred deliverable target ...` line
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage proving the unfinished-child same-turn guard still blocks child `file.read` drift when the prompt omits the preferred-target line and only the session deliverable path identifies the parent summary
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(ShouldBlockOrchestrationParentReviewUnfinishedChildDiscoveryTool|ShouldBlockOrchestrationParentReviewUnfinishedChildDiscoveryToolUsesSessionDeliverableFallback|ShouldBlockOrchestrationParentReviewCurrentTaskGetTool|ShouldBlockOrchestrationParentReviewTaskListToolRequiresParentScopedList)$' -count=1`
+
+Why this slice exists:
+
+- fresh task-11 session `3cb092fb-c55a-4cb0-99ff-c6675e07fdfd` still showed the remaining leak after the earlier same-turn guard landed:
+  - the turn had already read the parent summary
+  - `task.list(parent_task_id=...)` had already shown an unfinished direct child
+  - `task.get` was blocked correctly
+  - but a later child `file.read -> not_found` still slipped through because the prompt text did not expose a parseable preferred-target line
+- the product-safe fix is to trust the session deliverable target that the turn already used, not to require one exact prompt wording before the guard can fire
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime rebuilt and restarted on the new binary
+- health check green: `./bin/ottercamp health --output json`
+
+Live proof:
+
+- fresh task-11 review session `3cb092fb-c55a-4cb0-99ff-c6675e07fdfd` on the new runtime now shows the fallback working against the previously leaking generic prompt:
+  - user prompt was the generic `Review only. Inspect the current deliverables ...` form with no explicit preferred-target line
+  - the turn still recognized the already-read parent summary via the session deliverable target
+  - follow-on child drift was blocked directly in the same turn:
+    - child `file.read`
+    - extra `task.list`
+    - broader `git.status`
+- the turn then halted under the existing review retry ceiling instead of paying for another child-deliverable miss
+
 ## Update 08:12 MDT
 
 I traced the live task-14 review behavior after the new same-turn missing-tests guard fired and found the next seam precisely:
