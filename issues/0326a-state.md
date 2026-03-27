@@ -3147,6 +3147,7 @@ What changed:
     - `flow.get_template`
     - `flow.get_execution`
     - `session.list`
+    - `inbox.list`
     - `agent.list`
     - `memory.query`
     - `memory.list`

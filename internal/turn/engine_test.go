@@ -8598,6 +8598,15 @@ func TestHandleCompletedProjectExecutionContinuationTurnAutoQueuesAfterReadOnlyT
 			SequenceNumber: 15,
 			Content:        `{"tool_name":"session.list","output":{"sessions":[]}}`,
 		},
+		{
+			ID:             uuid.New(),
+			SessionID:      fixture.session.ID,
+			TurnID:         &turnID,
+			Role:           "tool_result",
+			Status:         "final",
+			SequenceNumber: 16,
+			Content:        `{"tool_name":"inbox.list","output":{"messages":[]}}`,
+		},
 	}
 	assistant := &repo.ChatMessage{
 		ID:             uuid.New(),
@@ -8606,7 +8615,7 @@ func TestHandleCompletedProjectExecutionContinuationTurnAutoQueuesAfterReadOnlyT
 		Role:           "assistant",
 		Status:         "final",
 		Content:        "I found the remaining draft task and reviewed the planning artifacts. The next draft task is still ready to proceed.",
-		SequenceNumber: 16,
+		SequenceNumber: 17,
 	}
 	messages := []repo.ChatMessage{*latestUser}
 	for _, msg := range toolResults {
