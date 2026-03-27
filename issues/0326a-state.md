@@ -2571,16 +2571,33 @@ What changed:
   - when a hot review lane has already been steered to a concrete target like `src/pipeline_logger.py`
   - and that file turns out to be placeholder/status narration
   - the native read layer can now stop the reread immediately even if task metadata itself never recorded that path
+- after live sampling I tightened that one step further:
+  - a brand-new review session may have the concrete target only in the review prompt itself, not yet in any prior `tool_result`
+  - so `latestRecoveryTargetPathForSession(...)` now also parses the exact prompt line we emit:
+    - `Start with the preferred deliverable target \`...\``
+  - that covers the first direct `file.read` in a fresh review lane, which was the live miss on task `12`
+- I then followed the task-12 replay one layer deeper and found the next miss:
+  - the target path was available, but the file body itself was a pasted review/request prompt that our placeholder detector still treated as normal content
+  - the live body started with:
+    - `Active task request: Start review on task: ...`
+    - and also included `Task description:`, `Review instruction:`, and `Flow node execution:`
+  - `looksLikeRejectedDeliverablePlaceholder(...)` now treats that exact persisted prompt-copy shape as a rejected placeholder deliverable too
+- the final live seam under that was task metadata:
+  - task `12` does **not** currently carry execution-first planning metadata; its metadata is just `{"bootstrap_first_wave_selected": true}`
+  - so `rejectPlaceholderDeliverableRead(...)` was still exiting before it considered the known review target
+  - the guard now also applies when `work_status='review'`, even if `taskplan.Parse(...)` does not resolve `ModeExecutionFirst`
 
 Verification:
 
 - added focused unit coverage in [`internal/tools/native/file_tools_test.go`](../internal/tools/native/file_tools_test.go):
   - `TestParseRecentDeliverableTargetFromToolResultPrefersDeliverablePath`
   - `TestLatestRecoveryTargetPathForSessionFallsBackToRecentToolResult`
+  - `TestLatestRecoveryTargetPathForSessionFallsBackToReviewPromptTarget`
   - `TestLatestRecoveryTargetPathForSessionPrefersSystemRecoveryTarget`
   - `TestFileReadRejectsPlaceholderRecentReadTargetWithoutExplicitDeliverable`
+  - `TestFileReadRejectsPlaceholderReviewPromptTargetWithoutExplicitDeliverable`
 - focused slice passed:
-  - `go test ./internal/tools/native -run 'Test(ParseRecentDeliverableTargetFromToolResultPrefersDeliverablePath|LatestRecoveryTargetPathForSession(FallsBackToRecentToolResult|PrefersSystemRecoveryTarget)|FileReadRejectsPlaceholderRecentReadTargetWithoutExplicitDeliverable)$' -count=1`
+  - `go test ./internal/tools/native -run 'Test(ParseRecentDeliverableTargetFromToolResultPrefersDeliverablePath|LatestRecoveryTargetPathForSession(FallsBackToRecentToolResult|FallsBackToReviewPromptTarget|PrefersSystemRecoveryTarget)|FileReadRejectsPlaceholder(RecentReadTargetWithoutExplicitDeliverable|ReviewPromptTargetWithoutExplicitDeliverable))$' -count=1`
 
 Why I changed the proof shape:
 
@@ -2588,11 +2605,23 @@ Why I changed the proof shape:
 - that harness is currently tripping earlier on a preexisting `git worktree prune ... fatal: not a git repository` bootstrap failure
 - so I switched the proof to native unit coverage rather than pretending the new behavior was unverified
 
-Deployment status:
+Current live gap before redeploy:
 
-- runtime rebuilt and tmux `codex-e2e-20260324` restarted on the new binary
+- the first deployed helper slice handled prior `tool_result` / recovery-message evidence correctly
+- but live task-12 review session `dfc15ded-5176-4dc5-b78d-91b9d87c11d2` showed the first fresh read still returning raw placeholder content because the target existed only in the review prompt
+- the prompt-target fallback above is the direct correction for that exact production miss
+- live task-12 replay `b2461d64-6971-482d-b7dc-dc49ac824fae` then exposed the last remaining piece:
+  - first direct `file.read` still returned raw content because the body itself was a pasted review prompt
+  - the new `Active task request:` placeholder detector is the direct correction for that exact file body
+
+Live proof after the final review-task gate change:
+
+- runtime rebuilt and tmux `codex-e2e-20260324` restarted cleanly again
 - `./bin/ottercamp health --output json` returned `status=ok`
-
-Next proof target:
-
-- find a fresh review lane where a direct target read now returns `placeholder_deliverable` earlier instead of leaking back into broader repo discovery
+- fresh task-12 review session `0120eeec-a720-439b-b908-fff743eb4275`
+  - turn `8a19ad7f-dc42-4f4b-a9e3-c18b1fa14cca`
+  - first direct target read at `22:54:45 MDT` now returned:
+    - `tool_name=file.read`
+    - `error=placeholder_deliverable`
+    - `deliverable_path=src/pipeline_logger.py`
+- this is the exact live seam that had been failing one restart earlier, when the same `src/pipeline_logger.py` read returned raw prompt-copy content instead of a native guard

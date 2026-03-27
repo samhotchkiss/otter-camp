@@ -618,8 +618,15 @@ Implemented so far in this spec:
   - when the task has no explicit companion-artifact contract and a concrete target is known, the prompt now explicitly forbids planning-artifact scans and full-tree listing while that target is present and readable
 - native deliverable-read guards now use that same recent session evidence when task metadata is missing a bound path:
   - `latestRecoveryTargetPathForSession(...)` now falls back from system recovery messages to recent `tool_result` payloads
+  - it also recognizes the exact review prompt line we emit for bounded review:
+    - `Start with the preferred deliverable target \`...\``
   - it accepts explicit `output.deliverable_path` first, then recent `file.read` / `file.write` `output.path` values that still look like real deliverables
   - that lets `file.read` reject placeholder or mismatched deliverables on hot review lanes even when the task record itself has no explicit deliverable metadata yet
+  - the placeholder detector now also catches pasted task/review prompt copies that start with:
+    - `Active task request:`
+    - plus the persisted `Task description:`, `Review instruction:`, and `Flow node execution:` sections
+  - the placeholder read guard now applies to review tasks even when they do not carry execution-first planning metadata:
+    - live validation tasks like task `12` currently have only bootstrap metadata, so the review-lane guard must not depend on `taskplan.ModeExecutionFirst`
 
 Still pending from this spec:
 

@@ -146,7 +146,8 @@ func (e *NativeToolExecutor) rejectPlaceholderDeliverableRead(ctx context.Contex
 		return nil, false, err
 	}
 	plan, ok := taskplan.Parse(taskRecord.Metadata)
-	if !ok || !strings.EqualFold(strings.TrimSpace(plan.Mode), taskplan.ModeExecutionFirst) {
+	if (!ok || !strings.EqualFold(strings.TrimSpace(plan.Mode), taskplan.ModeExecutionFirst)) &&
+		!strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
 		return nil, false, nil
 	}
 	deliverablePath := parseExplicitDeliverablePath(taskRecord)
@@ -348,6 +349,15 @@ func (e *NativeToolExecutor) latestRecoveryTargetPathForSession(ctx context.Cont
 		}
 	}
 	for i := len(messages) - 1; i >= 0; i-- {
+		role := strings.ToLower(strings.TrimSpace(messages[i].Role))
+		if role != "user" && role != "system" {
+			continue
+		}
+		if target := parsePromptDeliverableTarget(messages[i].Content); target != "" {
+			return target
+		}
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
 		if !strings.EqualFold(strings.TrimSpace(messages[i].Role), "tool_result") {
 			continue
 		}
@@ -355,6 +365,31 @@ func (e *NativeToolExecutor) latestRecoveryTargetPathForSession(ctx context.Cont
 			return target
 		}
 	}
+	return ""
+}
+
+func parsePromptDeliverableTarget(content string) string {
+	const marker = "Start with the preferred deliverable target `"
+
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		idx := strings.Index(trimmed, marker)
+		if idx < 0 {
+			continue
+		}
+		remainder := trimmed[idx+len(marker):]
+		end := strings.Index(remainder, "`")
+		if end < 0 {
+			return ""
+		}
+		rawTarget := remainder[:end]
+		target := normalizeWorkspacePath(rawTarget)
+		if !looksLikeExplicitDeliverablePath(target, rawTarget) {
+			return ""
+		}
+		return target
+	}
+
 	return ""
 }
 
@@ -436,6 +471,12 @@ func looksLikeRejectedDeliverablePlaceholder(content string) bool {
 	if strings.Contains(lower, "**status**: task oc-") &&
 		strings.Contains(lower, "currently **in_progress**") &&
 		strings.Contains(lower, "target deliverable file is just a placeholder") {
+		return true
+	}
+	if strings.HasPrefix(lower, "active task request:") &&
+		strings.Contains(lower, "task description:") &&
+		strings.Contains(lower, "review instruction:") &&
+		strings.Contains(lower, "flow node execution:") {
 		return true
 	}
 	if strings.Contains(lower, "task execution is already underway. reuse the existing workspace files") {
