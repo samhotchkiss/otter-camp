@@ -1101,3 +1101,10 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - focused turn-engine coverage is green for:
       - same-turn recovery-focus missing-tests rejection
       - persisted missing-tests rejection across retry turns
+  - newest orchestration-parent same-turn guard slice:
+    - async orchestration-parent review turns no longer have to wait for the next retry prompt once the current turn already proved:
+      - the parent summary is readable
+      - `task.list(parent_task_id=...)` shows unfinished direct child tasks
+    - follow-on `task.get`, child `file.read`, `file.list`, `file.search`, and similar discovery calls are now blocked inside that same turn with immediate reject guidance
+    - this closes the live gap where the model could say `OC-13 is in_progress` and still spend the rest of the turn opening child deliverables before any retry prompt got a chance to help
+    - focused turn-engine coverage is green for the new same-turn unfinished-child discovery guard

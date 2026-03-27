@@ -3098,6 +3098,46 @@ Deploy status:
 - tests green
 - runtime restart pending at the time of this note
 
+## Update 07:49 MDT
+
+I cut the sharper orchestration-parent review seam that was still live in task-11 even after the retry-persistence work.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - async orchestration-parent review now has a same-turn discovery guard for unfinished direct child evidence
+  - if the current turn already proved:
+    - the parent orchestration summary is readable
+    - `task.list(parent_task_id=<current task>)` shows unfinished direct child tasks
+  - then follow-on discovery calls in that same turn are blocked immediately, including:
+    - child `file.read`
+    - `task.get`
+    - broader `task.list`
+    - other review discovery rereads
+  - the guard tells the model to call `flow.review_decision reject` immediately using the direct child-status evidence it already has
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for the same-turn unfinished-child discovery block
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run "Test(ShouldBlockOrchestrationParentReview(UnfinishedChildDiscoveryTool|RejectDiscoveryToolForUnfinishedChildren)|ReviewApprovalRetryPrompt(RejectsWhenRequiredTestsCannotBeVerified|RejectsWhenRequiredTestsCannotBeVerifiedViaRecoveryFocus|RejectsWhenRequiredTestsCannotBeVerifiedAcrossRetryTurns|RejectsOrchestrationParentWithUnfinishedDirectChildren|RejectsOrchestrationParentWithUnfinishedDirectChildrenAcrossRetryTurns)|TaskExecutionRetryPromptFor(RecoveryTargetFocus|RecoveryTargetFocusSkipsWhenTargetAlreadyWritten|MissingPreferredDeliverable|MissingPreferredDeliverableSkipsWhenTargetAlreadyReadable))$" -count=1`
+
+Why this slice exists:
+
+- fresh task-11 session `a84031f8-0c0c-4eb5-93e1-0f1fbee13391` exposed the same-turn gap directly:
+  - the turn had already read the parent summary
+  - `task.list(parent_task_id=...)` had already shown `OC-13` still `in_progress`
+  - the assistant then kept trying child `task.get` / `file.read` calls and the turn ended `validation_loop_blocked`
+- the retry-prompt work was not enough for this case because the waste happened before the turn ended
+- this new guard stops that drift inside the same turn where the evidence first appears
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime restart pending at the time of this note
+
 ## Update 07:42 MDT
 
 I cut the next review-specific persistence gap exposed by task-14.

@@ -11552,6 +11552,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := e.shouldBlockOrchestrationParentReviewUnfinishedChildDiscoveryTool(ctx, rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if blocked, reason := e.shouldBlockOrchestrationParentReviewRejectDiscoveryTool(ctx, rt, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -22436,6 +22444,70 @@ func (e *TurnEngine) shouldBlockOrchestrationParentReviewRejectDiscoveryTool(ctx
 	return true, buildOrchestrationParentReviewRejectDiscoveryGuardError(taskRecord, targetPath, normalizedToolName, rejectMode)
 }
 
+func (e *TurnEngine) shouldBlockOrchestrationParentReviewUnfinishedChildDiscoveryTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if e == nil || e.tasks == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, ""
+	}
+	normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
+	switch normalizedToolName {
+	case "file.read", "file.list", "file.search", "task.get", "task.list", "project.get", "project.list", "git.diff", "git.log", "git.status":
+	default:
+		return false, ""
+	}
+	currentTaskID := resolveTaskID(rt.session)
+	if currentTaskID == nil || *currentTaskID == uuid.Nil {
+		return false, ""
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *currentTaskID)
+	if err != nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") || !taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+		return false, ""
+	}
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return false, ""
+	}
+	targetPath := parsePromptDeliverableTarget(strings.TrimSpace(rt.initialMessageText))
+	parentSummaryReadable := false
+	childEvidence := orchestrationParentChildStatusEvidence{}
+	for _, message := range messagesForTurn(messages, rt.turn.ID) {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolResultName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok {
+			continue
+		}
+		errorCode := normalizeValidationFailureCode(errText)
+		if errorCode == "" {
+			errorCode = normalizeValidationFailureCode(anyString(output["error"]))
+		}
+		switch strings.ToLower(strings.TrimSpace(toolResultName)) {
+		case "file.read":
+			if errorCode == "" && targetPath != "" && sameWorkspaceRelativePath(normalizeWorkspaceRelativePath(anyString(output["path"])), normalizeWorkspaceRelativePath(targetPath)) && intValue(output["byte_size"]) > 0 {
+				parentSummaryReadable = true
+			}
+		case "task.list":
+			if errorCode == "" {
+				evidence := collectOrchestrationParentChildStatusEvidence(output["tasks"])
+				if evidence.hasUnfinished() {
+					childEvidence = evidence
+				}
+			}
+		}
+	}
+	if !parentSummaryReadable || !childEvidence.hasUnfinished() {
+		return false, ""
+	}
+	return true, buildOrchestrationParentReviewUnfinishedChildDiscoveryGuardError(taskRecord, normalizedToolName, childEvidence.summary())
+}
+
 func (e *TurnEngine) shouldBlockTaskExecutionTaskCreateTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
 	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
 		return false, ""
@@ -22990,6 +23062,20 @@ func buildOrchestrationParentReviewRejectDiscoveryGuardError(taskRecord repo.Pro
 		return fmt.Sprintf("task review already established that %s has zero direct child-task evidence and should reject. Do not reread `%s`; call flow.review_decision with decision=reject immediately using the existing evidence.", label, targetPath)
 	}
 	return fmt.Sprintf("task review already established that %s has zero direct child-task evidence and should reject. Do not inspect additional files, tasks, or project state with %s; call flow.review_decision with decision=reject immediately using the existing evidence.", label, toolName)
+}
+
+func buildOrchestrationParentReviewUnfinishedChildDiscoveryGuardError(taskRecord repo.ProjectTask, toolName, evidenceSummary string) string {
+	label := projectBootstrapTaskLabel(taskRecord)
+	if strings.TrimSpace(label) == "" {
+		label = "the current orchestration-only review task"
+	}
+	if strings.TrimSpace(evidenceSummary) == "" {
+		evidenceSummary = "one or more direct child tasks remain unfinished"
+	}
+	if strings.EqualFold(strings.TrimSpace(toolName), "file.read") {
+		return fmt.Sprintf("task review already established that %s has unfinished direct child tasks (%s). Do not inspect child deliverables or reread the parent summary; call flow.review_decision with decision=reject immediately using the existing child-status evidence.", label, evidenceSummary)
+	}
+	return fmt.Sprintf("task review already established that %s has unfinished direct child tasks (%s). Do not inspect additional files, tasks, or project state with %s; call flow.review_decision with decision=reject immediately using the existing child-status evidence.", label, evidenceSummary, toolName)
 }
 
 func buildTaskExecutionTaskCreateGuardError(taskRecord repo.ProjectTask, parentRequired bool, currentTaskID uuid.UUID) string {

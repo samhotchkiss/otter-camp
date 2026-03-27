@@ -8697,6 +8697,84 @@ func TestShouldBlockOrchestrationParentReviewRejectDiscoveryToolForUnfinishedChi
 	}
 }
 
+func TestShouldBlockOrchestrationParentReviewUnfinishedChildDiscoveryTool(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	childTaskID := uuid.New()
+	description := "Parent/orchestration task for pipeline scaffold work. Validates direct child tasks. Does not do execution work itself. Deliverable: Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  9,
+				Title:       "Workstream A: Pipeline Scaffold Setup",
+				Description: &description,
+				WorkStatus:  "review",
+			},
+		},
+	}
+
+	turnID := uuid.New()
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustMarshalJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":      "Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md",
+				"byte_size": 3162,
+				"content":   "# OC-9 summary",
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustMarshalJSON(t, map[string]any{
+			"tool_name": "task.list",
+			"output": map[string]any{
+				"tasks": []any{
+					map[string]any{"id": childTaskID.String(), "task_number": 13, "title": "Wave activation", "work_status": "in_progress"},
+					map[string]any{"id": uuid.NewString(), "task_number": 14, "title": "Validation", "work_status": "done"},
+				},
+				"meta": map[string]any{"cursor": ""},
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session:            fixture.session,
+		turn:               &repo.ChatTurn{ID: turnID},
+		initialMessageText: fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session),
+	}
+
+	if blocked, reason := fixture.engine.shouldBlockOrchestrationParentReviewUnfinishedChildDiscoveryTool(context.Background(), rt, "file.read", map[string]any{
+		"path": "Work/OC-13-child-output.md",
+	}); !blocked {
+		t.Fatal("expected orchestration-parent review lane to block child deliverable reads once unfinished child evidence exists in the same turn")
+	} else if !strings.Contains(reason, "unfinished direct child tasks") {
+		t.Fatalf("reason = %q, want unfinished-child guidance", reason)
+	}
+
+	if blocked, reason := fixture.engine.shouldBlockOrchestrationParentReviewUnfinishedChildDiscoveryTool(context.Background(), rt, "task.get", map[string]any{
+		"task_id": childTaskID.String(),
+	}); !blocked {
+		t.Fatal("expected orchestration-parent review lane to block child task inspection once unfinished child evidence exists in the same turn")
+	} else if !strings.Contains(reason, "decision=reject") {
+		t.Fatalf("reason = %q, want reject guidance", reason)
+	}
+}
+
 func TestShouldBlockTaskExecutionTaskCreateToolBlocksNonOrchestrationTask(t *testing.T) {
 	t.Parallel()
 
