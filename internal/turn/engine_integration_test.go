@@ -19775,6 +19775,12 @@ func TestTurnEngineIntegrationContentMigrationContinuationUsesWorkspaceCheckpoin
 	if !strings.Contains(secondPrompt, "artifacts/raw/post-1.html") {
 		t.Fatalf("continuation prompt missing persisted raw artifact path:\n%s", secondPrompt)
 	}
+	if !strings.Contains(secondPrompt, "Continue the active task now from the continuation summary above.") {
+		t.Fatalf("continuation prompt missing direct task action prompt:\n%s", secondPrompt)
+	}
+	if !strings.Contains(secondPrompt, "Do not say that you are ready") {
+		t.Fatalf("continuation prompt missing anti-generic-chat guard:\n%s", secondPrompt)
+	}
 
 	checkpointBody, err := os.ReadFile(filepath.Join(workspaceRoot, filepath.FromSlash(checkpointRel)))
 	if err != nil {

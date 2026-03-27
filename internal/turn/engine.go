@@ -9404,7 +9404,8 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	if checkpointed, err := e.appendContentMigrationCheckpoint(ctx, rt); err != nil {
 		return err
 	} else if checkpointed {
-		return nil
+		// Content-migration checkpoints should narrow the next turn, not replace the
+		// usual continuation action prompt.
 	}
 	if resumed, err := e.appendRecoveryResumeState(ctx, rt, false); err != nil {
 		return err
