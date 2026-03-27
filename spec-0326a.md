@@ -534,6 +534,7 @@ Implemented so far in this spec:
   - completed turns grouped by `stop_reason`
   - `listening_eval` grouped by session scope/mode
   - sessions with active summarization backoff metadata
+  - provider connection health plus `health_rate_limited_until`
   - fractional `--hours` windows for short live checks such as `--hours 0.25`
   - optional `--session <uuid>` filtering so the same report can isolate a single canary session end-to-end
   - pending `agent_turn` backlog grouped by session with:

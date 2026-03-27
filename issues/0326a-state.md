@@ -1781,3 +1781,35 @@ Smoke proof:
   - `7c489e92-6cec-4246-885a-a65500c91cc6` on `scripts/validate-metrics-alerting.sh`
 
 So this is a measurement slice, not a new runtime cutoff. The current data does not justify a safe hard stop on script reruns yet.
+
+## Update 18:19 MDT
+
+I added provider cooldown visibility to the same operator report so we stop guessing when Anthropic is actually available again.
+
+What changed:
+
+- [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh)
+  - now includes `Provider Connection Health`
+  - it reports:
+    - provider connection display name
+    - provider slug
+    - `health_status`
+    - `is_enabled`
+    - `failover_priority`
+    - `max_concurrent`
+    - `health_rate_limited_until`
+  - when `--session` is supplied, it scopes the provider-health view to that session’s organization
+
+Why this matters:
+
+- the last 30 minutes are still pure Anthropic 429s with no successful invocations
+- we already persist cooldown windows on `provider_connection.metadata`
+- exposing that directly in the report tells us when a fresh canary is worth launching instead of probing blindly
+
+Current live signal from the DB:
+
+- `pearl-swh-me` is `rate_limited` until `2026-03-27 11:00:00 MDT`
+- `claude-swh-me` is `rate_limited` until `2026-03-26 20:59:58 MDT`
+- `Anthropic Primary` is currently `unavailable`
+
+This is still an operator-observability slice only. No runtime behavior changed here.

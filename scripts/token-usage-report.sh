@@ -736,6 +736,39 @@ ORDER BY next_allowed_at ASC, failure_count DESC
 LIMIT :'limit_rows'::int;
 
 \echo
+\echo '== Provider Connection Health =='
+WITH params AS (
+  SELECT
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
+),
+effective_org AS (
+  SELECT COALESCE(
+           p.org_id,
+           (
+             SELECT cs.organization_id
+             FROM chat_session cs
+             WHERE cs.id = p.session_id
+           )
+         ) AS organization_id
+  FROM params p
+)
+SELECT
+  pc.display_name,
+  mp.slug AS provider_slug,
+  pc.health_status,
+  pc.is_enabled,
+  pc.failover_priority,
+  pc.max_concurrent,
+  NULLIF(pc.metadata->>'health_rate_limited_until', '')::timestamptz AS rate_limited_until
+FROM provider_connection pc
+JOIN model_provider mp ON mp.id = pc.provider_id
+CROSS JOIN effective_org eo
+WHERE eo.organization_id IS NULL OR pc.organization_id = eo.organization_id
+ORDER BY mp.slug, pc.failover_priority, pc.display_name
+LIMIT :'limit_rows'::int;
+
+\echo
 \echo '== Pending Agent Turn Backlog =='
 WITH params AS (
   SELECT
