@@ -691,6 +691,7 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 	satisfiedDraftAutoComplete := allowsSatisfiedDraftAutoComplete(taskRecord, from, target, actor)
 	childReopen := allowsCompletedChildReopen(taskRecord, from, target, actor)
 	orchestrationAutoComplete := allowsOrchestrationAutoComplete(taskRecord, from, target, actor)
+	flowRejectedOrchestrationReset := allowsFlowRejectedOrchestrationReset(taskRecord, from, target, actor, extraPayload)
 	if target == "done" && taskRecord.FlowTemplateID == nil &&
 		(orchestrationAutoComplete || bootstrapPlanningAutoComplete || satisfiedDraftAutoComplete || actor.AllowDoneBypass) {
 		resolvedFlowTemplateID, resolveErr := s.resolveCompletionFlowTemplateID(ctx, taskRecord)
@@ -699,7 +700,7 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 		}
 		taskRecord.FlowTemplateID = resolvedFlowTemplateID
 	}
-	if !isTransitionAllowed(from, target) && !bootstrapGateAutoComplete && !bootstrapSetupComplete && !bootstrapPlanningAutoComplete && !satisfiedDraftAutoComplete && !childReopen && !orchestrationAutoComplete {
+	if !isTransitionAllowed(from, target) && !bootstrapGateAutoComplete && !bootstrapSetupComplete && !bootstrapPlanningAutoComplete && !satisfiedDraftAutoComplete && !childReopen && !orchestrationAutoComplete && !flowRejectedOrchestrationReset {
 		return nil, ErrInvalidStatusTransition{From: from, To: target}
 	}
 	if target == "queued" && taskRecord.RequiresHumanReview && !approvalOverride {
@@ -1395,6 +1396,19 @@ func allowsOrchestrationAutoComplete(taskRecord repo.ProjectTask, from, target s
 	}
 }
 
+func allowsFlowRejectedOrchestrationReset(taskRecord repo.ProjectTask, from, target string, actor Actor, extraPayload map[string]any) bool {
+	if !actor.AllowFlowRuntimeBypass {
+		return false
+	}
+	if normalizeStatus(from) != "review" || normalizeStatus(target) != "draft" {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(extraPayloadString(extraPayload, "flow_event_type")), "flow.rejected") {
+		return false
+	}
+	return taskRequiresBoundedChildren(taskRecord)
+}
+
 func allowsBootstrapPlanningAutoComplete(taskRecord repo.ProjectTask, from, target string, actor Actor) bool {
 	if !actor.AllowBootstrapPlanningAutoComplete {
 		return false
@@ -1690,6 +1704,21 @@ func isOrchestrationOnlyParentTask(taskRecord repo.ProjectTask, children []repo.
 	decomp, _ := metadata["decomposition"].(map[string]any)
 	orchestrationOnly, _ := decomp["orchestration_only"].(bool)
 	return orchestrationOnly
+}
+
+func taskRequiresBoundedChildren(taskRecord repo.ProjectTask) bool {
+	metadata := taskMetadataMap(taskRecord.Metadata)
+	decomp, _ := metadata["decomposition"].(map[string]any)
+	orchestrationOnly, _ := decomp["orchestration_only"].(bool)
+	if orchestrationOnly {
+		return true
+	}
+	plan, ok := taskplan.Parse(taskRecord.Metadata)
+	if !ok {
+		return false
+	}
+	stopReason := strings.ToLower(strings.TrimSpace(plan.FollowOnStopReason))
+	return strings.Contains(stopReason, "parent task is orchestration-only")
 }
 
 func isBootstrapPlanningTask(taskRecord repo.ProjectTask) bool {

@@ -823,7 +823,7 @@ func (s *service) activateDraftOrchestrationParentAfterChildDone(ctx context.Con
 	activationActor := toTaskActor(Actor{Type: "system"})
 	activationActor.ExpectedFromStatus = "draft"
 	_, _ = s.taskService.TransitionStatusWithPayload(ctx, parentTask.ID, "queued", activationActor, map[string]any{
-		"transition_source":      "flow_child_completion",
+		"transition_source":       "flow_child_completion",
 		"completed_child_task_id": taskID.String(),
 	})
 }
@@ -862,7 +862,7 @@ func (s *service) activateDraftDependentsAfterTaskDone(ctx context.Context, task
 		activationActor := toTaskActor(Actor{Type: "system"})
 		activationActor.ExpectedFromStatus = "draft"
 		_, _ = s.taskService.TransitionStatusWithPayload(ctx, dependentTask.ID, "queued", activationActor, map[string]any{
-			"transition_source":           "flow_dependency_completion",
+			"transition_source":            "flow_dependency_completion",
 			"completed_dependency_task_id": taskID.String(),
 		})
 	}
@@ -955,6 +955,39 @@ func taskWorkStatusForNode(node repo.FlowNode) string {
 		return "review"
 	}
 	return "in_progress"
+}
+
+func rejectTaskWorkStatusForNode(taskRecord repo.ProjectTask, rejectNode repo.FlowNode) string {
+	targetStatus := taskWorkStatusForNode(rejectNode)
+	if targetStatus == "in_progress" && flowTaskRequiresBoundedChildren(taskRecord) {
+		return "draft"
+	}
+	return targetStatus
+}
+
+func flowTaskRequiresBoundedChildren(taskRecord repo.ProjectTask) bool {
+	if flowTaskMetadataMarksOrchestrationOnly(taskRecord.Metadata) {
+		return true
+	}
+	plan, ok := taskplan.Parse(taskRecord.Metadata)
+	if !ok {
+		return false
+	}
+	stopReason := strings.ToLower(strings.TrimSpace(plan.FollowOnStopReason))
+	return strings.Contains(stopReason, "parent task is orchestration-only")
+}
+
+func flowTaskMetadataMarksOrchestrationOnly(metadata json.RawMessage) bool {
+	if len(metadata) == 0 {
+		return false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return false
+	}
+	decomp, _ := payload["decomposition"].(map[string]any)
+	orchestrationOnly, _ := decomp["orchestration_only"].(bool)
+	return orchestrationOnly
 }
 
 func runtimeSubstateForNode(nodeType string, requiresHumanReview bool) *string {
@@ -1454,7 +1487,7 @@ func (s *service) rejectFlowNodeTx(ctx context.Context, taskRecord repo.ProjectT
 	if err != nil {
 		return nil, err
 	}
-	targetStatus := taskWorkStatusForNode(rejectNode)
+	targetStatus := rejectTaskWorkStatusForNode(taskRecord, rejectNode)
 	if targetStatus != "" && !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), targetStatus) {
 		statusPayload := map[string]any{
 			"transition_source":    "flow_transition",
@@ -1515,7 +1548,7 @@ func (s *service) rejectFlowNodeNonTx(ctx context.Context, taskRecord repo.Proje
 		return nil, err
 	}
 	s.ensureExecutionSessionBestEffort(ctx, &created)
-	targetStatus := taskWorkStatusForNode(rejectNode)
+	targetStatus := rejectTaskWorkStatusForNode(taskRecord, rejectNode)
 	if targetStatus != "" && !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), targetStatus) {
 		statusPayload := map[string]any{
 			"transition_source":    "flow_transition",

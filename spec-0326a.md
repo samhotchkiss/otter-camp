@@ -1110,6 +1110,11 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - focused turn-engine coverage is green for the new same-turn unfinished-child discovery guard
     - the guard now also falls back to the session deliverable target when the review prompt does not expose an explicit preferred-target line
     - this closes the narrower live seam where the parent summary had already been read from the right deliverable, but the prompt text itself was too generic for the guard to recognize that read as authoritative
+  - newest orchestration-parent reject-path slice:
+    - `flow.review_decision reject` now succeeds for orchestration-only parent tasks that still have executable child tasks
+    - on that reject path, the flow service sends the parent back to the work node but keeps task `work_status=draft` instead of forcing generic `in_progress`
+    - task runtime now allows that one flow-owned `review -> draft` transition only for `flow.rejected` on orchestration parents
+    - this closes the live bug where the review lane had already decided to reject correctly, but the reject transition itself failed with `task must remain orchestration-only while executable child tasks exist`
   - newest review missing-tests same-turn guard slice:
     - async review turns that already proved the main deliverable is substantive and then fail to verify required test artifacts in the same turn no longer get to keep browsing
     - once the turn has both:

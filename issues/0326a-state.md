@@ -3106,6 +3106,56 @@ Live proof:
     - broader `git.status`
 - the turn then halted under the existing review retry ceiling instead of paying for another child-deliverable miss
 
+## Update 08:36 MDT
+
+I fixed the next orchestration-parent review bug that showed up immediately after the same-turn discovery guards started working.
+
+What changed:
+
+- [`internal/flow/execution_service.go`](../internal/flow/execution_service.go)
+  - reject transitions now compute a special target status for orchestration-only parent tasks
+  - when `flow.review_decision reject` sends an orchestration parent from review back to its work node, the flow service now keeps the parent in `draft` instead of forcing generic `in_progress`
+- [`internal/task/service.go`](../internal/task/service.go)
+  - the task runtime now allows that one flow-owned `review -> draft` transition only when:
+    - the actor is flow-runtime bypass
+    - the transition is tagged `flow.rejected`
+    - the task is an orchestration-only / bounded-child parent
+- [`internal/flow/execution_service_integration_test.go`](../internal/flow/execution_service_integration_test.go)
+  - added focused coverage proving `RejectFlowNode(...)` returns the parent to the work node while preserving `work_status=draft`
+- [`internal/tools/native/native_integration_test.go`](../internal/tools/native/native_integration_test.go)
+  - added a `flow.review_decision reject` integration regression for the same orchestration-parent case
+
+Verification:
+
+- `gofmt -w internal/task/service.go internal/flow/execution_service.go internal/flow/execution_service_integration_test.go internal/tools/native/native_integration_test.go`
+- `go test ./internal/task -run 'Test(TransitionStatus|.*Orchestration.*)' -count=1`
+- `go test -tags=integration ./internal/flow -run 'TestFlowExecutionService(RejectFlowNodeKeepsOrchestrationParentDraft|RejectionLoopVisitIncrements|RejectFlowNodeFallsBackToPreviousOrderedNodeWhenReviewPathIsImplicit)$' -count=1`
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegrationFlowReviewDecision(RejectCreatesCanonicalRejectionCommit|RejectKeepsOrchestrationParentDraft)$' -count=1`
+
+Why this slice exists:
+
+- fresh live task-11 review session `cdd8bb9a-e420-441d-9b18-78721c57aa9f` showed the next failure clearly:
+  - the orchestration-parent review guard had already done the right thing
+  - the assistant then called `flow.review_decision reject` with correct evidence
+  - but the tool itself returned `task must remain orchestration-only while executable child tasks exist`
+- the issue was not the review reasoning anymore; it was the reject transition forcing the parent back to normal executable `in_progress`
+- the product-safe fix is to move the parent back to the work node while preserving draft/integration status, which already matches the existing orchestration-parent activation model
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime rebuilt and restarted on the new binary
+- health check green: `./bin/ottercamp health --output json`
+
+Initial live read:
+
+- the last observed `task must remain orchestration-only while executable child tasks exist` `flow.review_decision` tool-result rows were from the pre-restart wave:
+  - task-11 session `0184e000-73fc-4ef1-85d0-aac8b87b1965` at `08:37:18 MDT`
+  - task-10 session `20350145-584d-46a6-bfcc-f5bdc1fc6744` at `08:36:38 MDT`
+- in the short post-restart window immediately after the new binary came up, there were no newer copies of that exact reject-path failure
+- stronger live proof still depends on the next fresh orchestration-parent review rejection reaching `flow.review_decision` on this build
+
 ## Update 08:12 MDT
 
 I traced the live task-14 review behavior after the new same-turn missing-tests guard fired and found the next seam precisely:

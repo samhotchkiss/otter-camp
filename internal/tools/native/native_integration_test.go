@@ -10635,6 +10635,173 @@ func TestIntegrationFlowReviewDecisionRejectCreatesCanonicalRejectionCommit(t *t
 	}
 }
 
+func TestIntegrationFlowReviewDecisionRejectKeepsOrchestrationParentDraft(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &projectRecord.OrganizationID,
+		ProjectID:      &project.ID,
+		Slug:           "reject-orchestration-parent-" + strings.ToLower(uuid.NewString()[:8]),
+		DisplayName:    "Reject Orchestration Parent " + uuid.NewString()[:8],
+		Description:    "test flow template for orchestration-parent review rejection",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	workNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create review node: %v", err)
+	}
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
+		t.Fatalf("update work node: %v", err)
+	}
+	reviewNode.RejectNodeID = &workNode.ID
+	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
+		t.Fatalf("update review node: %v", err)
+	}
+	template.StartNodeID = &workNode.ID
+	if _, err := templateRepo.Update(ctx, template); err != nil {
+		t.Fatalf("update template: %v", err)
+	}
+
+	parentDescription := "Parent/orchestration task for wave gating validation. Validates direct child tasks. Does not do execution work itself. Deliverable: Work/OC-11-WORKSTREAM-C-WAVE-GATING-VALIDATION.md"
+	parent := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "review",
+		Description:    &parentDescription,
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(ctx, parent.ID, &reviewNode.ID); err != nil {
+		t.Fatalf("set parent current flow node: %v", err)
+	}
+	parentRecord, err := taskRepo.GetByID(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("load parent task: %v", err)
+	}
+
+	childDescription := "Produce wave gating validation summary"
+	child := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "in_progress",
+		Description:    &childDescription,
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	childRecord, err := taskRepo.GetByID(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("load child task: %v", err)
+	}
+	childRecord.Metadata = taskdecomp.ApplyChildMetadata(childRecord.Metadata, parent.ID, 2)
+	if _, err := taskRepo.Update(ctx, childRecord); err != nil {
+		t.Fatalf("update child metadata: %v", err)
+	}
+
+	parentRecord.Metadata = taskdecomp.ApplyMetadata(parentRecord.Metadata, taskdecomp.Plan{
+		RequiresDecomposition: true,
+		PrimaryDeliverable:    "Coordinate wave gating validation across direct child tasks.",
+		Deliverables:          []string{childDescription},
+	}, "Coordinate wave gating validation across direct child tasks.", []uuid.UUID{child.ID})
+	if _, err := taskRepo.Update(ctx, parentRecord); err != nil {
+		t.Fatalf("update parent metadata: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	if _, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      parent.ID,
+		FlowNodeID:  workNode.ID,
+		VisitNumber: 1,
+		Status:      "completed",
+	}); err != nil {
+		t.Fatalf("seed completed work visit: %v", err)
+	}
+	reviewExecution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      parent.ID,
+		FlowNodeID:  reviewNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create review execution: %v", err)
+	}
+
+	workspaceRoot := t.TempDir()
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: workspaceRoot})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "flow.review_decision", map[string]any{
+		"flow_node_execution_id": reviewExecution.ID.String(),
+		"decision":               "reject",
+		"reason":                 "child OC-13 still in progress",
+	})
+	if err != nil {
+		t.Fatalf("flow.review_decision reject orchestration parent: %v", err)
+	}
+	if out["next_node_id"] == nil {
+		t.Fatalf("next_node_id = %v, want work node id", out["next_node_id"])
+	}
+
+	updatedParent, err := taskRepo.GetByID(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("load updated parent: %v", err)
+	}
+	if updatedParent.WorkStatus != "draft" {
+		t.Fatalf("parent work_status = %q, want draft orchestration-only state", updatedParent.WorkStatus)
+	}
+	if updatedParent.CurrentFlowNodeID == nil || *updatedParent.CurrentFlowNodeID != workNode.ID {
+		t.Fatalf("parent current_flow_node_id = %v, want work node %s", updatedParent.CurrentFlowNodeID, workNode.ID)
+	}
+
+	updatedExecution, err := executionRepo.GetByID(ctx, reviewExecution.ID)
+	if err != nil {
+		t.Fatalf("load updated review execution: %v", err)
+	}
+	if updatedExecution.CommitSHA == nil || strings.TrimSpace(*updatedExecution.CommitSHA) == "" {
+		t.Fatalf("review rejection commit_sha = %v, want non-empty canonical commit", updatedExecution.CommitSHA)
+	}
+	decision, ok := repo.FlowExecutionReviewDecisionFromMetadata(updatedExecution.Metadata)
+	if !ok || decision == nil || decision.Decision != "reject" {
+		t.Fatalf("review decision metadata = %#v, want reject", decision)
+	}
+}
+
 func TestIntegrationFlowReviewDecisionCommitFailurePersistsCheckpointAndStallsExecution(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

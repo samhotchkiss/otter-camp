@@ -712,6 +712,87 @@ func TestFlowExecutionServiceRejectionLoopVisitIncrements(t *testing.T) {
 	}
 }
 
+func TestFlowExecutionServiceRejectFlowNodeKeepsOrchestrationParentDraft(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, nodes := seedLinearTemplate(t, ctx, fixture, true, 5)
+	parent := seedFlowTask(t, ctx, fixture, "OC-11: Workstream C: Wave Gating Validation", "review", &template.ID)
+	parentDescription := "Parent/orchestration task for wave gating validation. Validates direct child tasks. Does not do execution work itself. Deliverable: Work/OC-11-WORKSTREAM-C-WAVE-GATING-VALIDATION.md"
+	parent.Description = &parentDescription
+
+	childDescription := "Produce wave gating validation summary"
+	child := seedFlowTask(t, ctx, fixture, "OC-13: Produce wave gating validation summary", "in_progress", &template.ID)
+	child.Description = &childDescription
+	child.Metadata = taskdecomp.ApplyChildMetadata(child.Metadata, parent.ID, 2)
+	if _, err := fixture.taskRepo.Update(ctx, child); err != nil {
+		t.Fatalf("update child metadata: %v", err)
+	}
+
+	parent.Metadata = taskdecomp.ApplyMetadata(parent.Metadata, taskdecomp.Plan{
+		RequiresDecomposition: true,
+		PrimaryDeliverable:    "Coordinate wave gating validation across direct child tasks.",
+		Deliverables:          []string{childDescription},
+	}, "Coordinate wave gating validation across direct child tasks.", []uuid.UUID{child.ID})
+	if _, err := fixture.taskRepo.Update(ctx, parent); err != nil {
+		t.Fatalf("update parent metadata: %v", err)
+	}
+	if _, err := fixture.taskRepo.SetFlowNode(ctx, parent.ID, &nodes[1].ID); err != nil {
+		t.Fatalf("set parent current flow node: %v", err)
+	}
+
+	if _, err := fixture.executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      parent.ID,
+		FlowNodeID:  nodes[0].ID,
+		VisitNumber: 1,
+		Status:      "completed",
+	}); err != nil {
+		t.Fatalf("seed completed parent work execution: %v", err)
+	}
+	if _, err := fixture.executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      parent.ID,
+		FlowNodeID:  nodes[1].ID,
+		VisitNumber: 1,
+		Status:      "active",
+	}); err != nil {
+		t.Fatalf("seed active parent review execution: %v", err)
+	}
+
+	rejected, err := fixture.service.RejectFlowNode(ctx, parent.ID, Actor{Type: "human_user", ID: fixture.pmUser.ID})
+	if err != nil {
+		t.Fatalf("RejectFlowNode orchestration parent: %v", err)
+	}
+	if rejected.FlowNodeID != nodes[0].ID {
+		t.Fatalf("rejected flow_node_id = %s, want work node %s", rejected.FlowNodeID, nodes[0].ID)
+	}
+	if rejected.VisitNumber != 2 {
+		t.Fatalf("rejected visit_number = %d, want 2", rejected.VisitNumber)
+	}
+
+	updatedParent, err := fixture.taskRepo.GetByID(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("GetByID parent after rejection: %v", err)
+	}
+	if updatedParent.WorkStatus != "draft" {
+		t.Fatalf("parent work_status after rejection = %q, want draft orchestration-only state", updatedParent.WorkStatus)
+	}
+	if updatedParent.CurrentFlowNodeID == nil || *updatedParent.CurrentFlowNodeID != nodes[0].ID {
+		t.Fatalf("parent current_flow_node_id = %v, want work node %s", updatedParent.CurrentFlowNodeID, nodes[0].ID)
+	}
+
+	executions, err := fixture.executionRepo.ListByTask(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("ListByTask parent executions: %v", err)
+	}
+	if len(executions) != 3 {
+		t.Fatalf("execution row count = %d, want 3", len(executions))
+	}
+	if executions[2].FlowNodeID != nodes[0].ID || executions[2].Status != "active" {
+		t.Fatalf("execution[2] = %+v, want active work-node execution", executions[2])
+	}
+}
+
 func TestFlowExecutionServiceRejectFlowNodeMaxVisits(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
