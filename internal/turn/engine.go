@@ -7054,7 +7054,10 @@ func (e *TurnEngine) handlePreTurnRateLimitedAvailability(
 	routedAgentID *uuid.UUID,
 	retryCount int,
 ) (bool, bool, error) {
-	if session == nil || retryCount >= maxRateLimitRetries {
+	if session == nil {
+		return false, false, nil
+	}
+	if retryCount >= maxRateLimitRetries && !allowAsyncCooldownPreflightPastRetryCap(session) {
 		return false, false, nil
 	}
 	taskComplexity := e.isComplexAgentTurnTask(ctx, session)
@@ -7081,6 +7084,21 @@ func (e *TurnEngine) handlePreTurnRateLimitedAvailability(
 		return true, true, appendErr
 	}
 	return true, true, nil
+}
+
+func allowAsyncCooldownPreflightPastRetryCap(session *chat.ChatSession) bool {
+	if session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.Mode), "async") {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(session.ScopeType)) {
+	case "project", "project_task":
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *TurnEngine) handleTransientInfrastructureTurnFailure(

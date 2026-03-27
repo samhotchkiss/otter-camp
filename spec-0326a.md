@@ -562,6 +562,9 @@ Implemented so far in this spec:
   - when the routed provider is already cooling down, `handleUserMessage(...)` now reschedules the retry and appends a session-scoped system message without calling `CreateForMessageAttempt(...)`
   - that removes the last known throwaway `chat_turn` churn on cooldown retries
   - the dispatch attempt tracks whether availability was already probed so normal fallback execution does not pay a second probe on non-rate-limit errors
+  - async `project` and `project_task` cooldown preflight now continues to apply even after the old `maxRateLimitRetries` threshold:
+    - queued cooldown retries can legitimately exceed that counter because the worker keeps rolling them forward during provider backoff windows
+    - late-stage async retries now still defer before turn creation instead of minting throwaway failed turns with no invocation
 - worker recovery now skips requeueing `project_task` async sessions that are already blocked by a persisted validation-loop guard:
   - active flow-node executions with `work_status='blocked'` plus `agent_turn_validation_guard.blocked=true` no longer get revived by `RequeueActiveExecutionSessionsWithoutTurns(...)`
   - that removes hot queue churn where the worker would enqueue another `agent_turn` only for the turn engine to immediately suppress it as `validation_loop_blocked`

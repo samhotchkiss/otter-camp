@@ -2036,3 +2036,33 @@ Why this matters:
 - previously, claim SQL already refused paused work, but `RequeueActiveExecutionSessionsWithoutTurns(...)` could still recreate paused task-session recovery jobs
 - that meant paused projects accumulated misleading due backlog without ever becoming runnable
 - this slice closes that loop while keeping resume behavior intact: when a project is unpaused, the existing requeue passes can mint a fresh current-state dispatch instead of reviving the stale paused row
+
+## Update 19:56 MDT
+
+I found and fixed one remaining cooldown edge case in async task retries.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - pre-turn availability deferral no longer disables itself once `retry_count >= maxRateLimitRetries` for async `project` and `project_task` sessions
+  - that old gate was safe for synchronous in-turn retry exhaustion, but it was wrong for queued async cooldown retries because the worker legitimately keeps rolling those jobs forward beyond the original retry cap during provider backoff windows
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added `TestHandleTurnJobAsyncProjectTaskRateLimitedPreflightDefersPastRetryCapWithoutTurn`
+
+Focused verification:
+
+- `go test ./internal/turn -run 'Test(HandleTurnJobAsyncProjectTaskRateLimitedPreflightDefersBeforePromptAssembly|HandleTurnJobAsyncProjectTaskRateLimitedPreflightDefersPastRetryCapWithoutTurn|HandleTurnJobAsyncProjectTaskAvailabilityProbeFallsBackOnNonRateLimitError|HandleTurnJobRateLimitedEnqueuesRetryUsingProviderHint|HandleTurnJobRateLimitedDoesNotRetryInsideSingleTurn)$' -count=1`
+
+Live proof:
+
+- before the patch, task session `d602574b-392a-4aa5-9523-73830c77790d` hit the bad path:
+  - due retry at `19:47:55 MDT`
+  - fresh failed turn `28c59f89-0f93-4ceb-a3ca-a93a077d34a9` created at `19:47:59 MDT`
+  - no new `model_invocation` row
+  - job still rolled forward to retry `7`
+- after deploying the fix, task session `40bc5db0-bb71-4a26-a1ac-ac4b11fb6cd2` proved the corrected behavior:
+  - old due job `a4ce79aa-35a9-4745-b20b-e175234962e5` at `19:54:35 MDT`
+  - fresh retry job `2c0fb337-b15a-4d2a-8a4c-ba1db846f00b` created the same minute with `run_after=20:24:48 MDT` and `retry_count=6`
+  - last `chat_turn` stayed `4d7eae1c-8d71-4b6b-bd9c-712a35893839` from `18:54:02 MDT`
+  - last `agent_turn` invocation stayed `f9b92830-77ec-4335-b393-12a0ec528bb3` from `18:23:44 MDT`
+  - so the async task retry now rolls forward without creating either a new turn or a new invocation while Anthropic is still cooling down
