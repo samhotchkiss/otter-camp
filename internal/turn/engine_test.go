@@ -28061,6 +28061,9 @@ func TestBuildTaskReviewActionPromptIncludesPreferredDeliverableTarget(t *testin
 	if !strings.Contains(prompt, "do not begin by listing the repository root") {
 		t.Fatalf("prompt = %q, want direct-inspection guidance", prompt)
 	}
+	if !strings.Contains(prompt, "Do not inspect planning artifacts or list the full repository tree") {
+		t.Fatalf("prompt = %q, want bounded review guidance", prompt)
+	}
 }
 
 func TestBuildTaskReviewActionPromptFallsBackToRecentSessionDeliverableTarget(t *testing.T) {

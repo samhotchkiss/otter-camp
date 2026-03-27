@@ -2521,6 +2521,7 @@ What changed:
   - the preferred deliverable target path when `preferredTaskDeliverablePath(taskRecord)` resolves
   - otherwise, the most recent session-level `deliverable_path` / `file.read` / `file.write` target
   - an explicit instruction to inspect that target directly before broad workspace discovery
+  - when no explicit companion-artifact contract exists, an explicit instruction not to inspect planning artifacts or list the full repository tree while that target is present and readable
 - added focused regression:
   - `TestBuildTaskReviewActionPromptIncludesPreferredDeliverableTarget`
   - `TestBuildTaskReviewActionPromptFallsBackToRecentSessionDeliverableTarget`
@@ -2542,3 +2543,13 @@ Deployment status:
     - then direct `file.read` of `config/pipeline-config.yaml`
     - only later did it drift into broader repo inspection
 - so the review prompt is now successfully steering the first inspection step toward the concrete known deliverable instead of opening with root-level discovery
+- follow-up local hardening is also complete:
+  - the same prompt now tells the model not to inspect planning artifacts or list the full repository tree while that concrete target is present and readable
+  - this is now live too
+  - fresh post-`22:33 MDT` review prompts include, for example:
+    - `Start with the preferred deliverable target \`src/pipeline_logger.py\`...`
+    - `Do not inspect planning artifacts or list the full repository tree while \`src/pipeline_logger.py\` is present and readable...`
+  - live behavior on task-12 review turn `24d9f369-66e7-463b-9d7c-6bf391eff5ce` changed accordingly:
+    - assistant opened with `I'll start by inspecting the preferred deliverable target directly.`
+    - first inspection step went straight to `src/pipeline_logger.py`
+  - the turn still drifted later into branch-history / diff probing, so this did not eliminate review churn, but it did tighten the opening path in production

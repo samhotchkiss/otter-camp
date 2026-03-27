@@ -615,6 +615,7 @@ Implemented so far in this spec:
   - `buildTaskReviewActionPrompt(...)` tells the model to inspect the concrete target path directly before broad workspace discovery
   - that is aimed at the surviving review turns that still spend their early budget on root `file.list` / generic repo inspection before opening the one actual deliverable
   - when static task metadata does not expose a target path, the prompt now falls back to the most recent session-level `file.read` / `file.write` / `deliverable_path` evidence instead of remaining generic
+  - when the task has no explicit companion-artifact contract and a concrete target is known, the prompt now explicitly forbids planning-artifact scans and full-tree listing while that target is present and readable
 
 Still pending from this spec:
 

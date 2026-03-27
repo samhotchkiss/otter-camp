@@ -19607,11 +19607,15 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 		"Do not continue implementation, do not write deliverable files, and do not summarize what you plan to review.",
 	}
 	if taskRecord, ok := e.reviewPromptTaskRecord(ctx, session); ok {
-		if targetPath := strings.TrimSpace(e.reviewPromptDeliverableTarget(ctx, session, taskRecord)); targetPath != "" {
+		targetPath := strings.TrimSpace(e.reviewPromptDeliverableTarget(ctx, session, taskRecord))
+		if targetPath != "" {
 			lines = append(lines, fmt.Sprintf("Start with the preferred deliverable target `%s`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `%s` is missing.", targetPath, targetPath))
 		}
 		if contracts := reviewPromptArtifactContracts(taskRecord); len(contracts) == 0 {
 			lines = append(lines, "Do not invent companion planning-artifact requirements from neighboring tasks, generic playbook assumptions, or filenames alone. If the current task metadata does not carry an explicit artifact contract, review the actual deliverable files against this task's title and description only.")
+			if targetPath != "" {
+				lines = append(lines, fmt.Sprintf("Do not inspect planning artifacts or list the full repository tree while `%s` is present and readable. Only expand beyond that target if bounded review cannot complete without a directly related adjacent file.", targetPath))
+			}
 		} else {
 			lines = append(lines, "Companion artifacts are only required when explicitly named by this task's metadata contract: "+strings.Join(contracts, ", ")+". Do not reject for any other missing sibling files.")
 		}
