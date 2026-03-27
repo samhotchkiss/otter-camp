@@ -2630,3 +2630,82 @@ Live proof after the final review-task gate change:
   - I added the next prompt hardening for that exact shape:
     - when the preferred target returns `placeholder_deliverable` or `mismatched_deliverable_context`, stop broad inspection and call `flow.review_decision reject` using that tool result as evidence
   - focused turn-engine coverage for that prompt contract is green; live proof is the next step
+
+## Update 23:03 MDT
+
+The review placeholder seam is now resolved all the way through the decision tool, and the remaining hot family moved back to a task work lane.
+
+Live proof:
+
+- fresh task-12 review retry on session `0120eeec-a720-439b-b908-fff743eb4275`
+  - assistant explicitly recognized `placeholder_deliverable` on `src/pipeline_logger.py`
+  - then called `flow.review_decision reject` instead of drifting back into repo inspection
+  - tool result at `22:59:08 MDT` recorded:
+    - `blocked=true`
+    - `review rejection recorded, but the reject path has exhausted its allowed visits and the task is now blocked`
+- so the prompt hardening is now live-proven:
+  - bounded review target read
+  - native placeholder detection
+  - direct `flow.review_decision reject`
+
+The next hot seam is task `16`, not task `12`.
+
+What I found in the new seam:
+
+- session `f2eb9489-24f9-4cdb-9fa8-ae615dd8a232`
+- target deliverable `scripts/validate-error-handling.sh`
+- the assistant started narrating tool troubleshooting instead of emitting the file body:
+  - `I see the file_write calls are going through but not actually replacing the content because I'm not providing content. Let me fix that:`
+- persisted assistant `tool_calls` metadata on that turn showed `file_write` with only:
+  - `{\"path\":\"scripts/validate-error-handling.sh\"}`
+- no `content` argument was present in the call metadata
+
+Why that matters:
+
+- this is the same recovery-draft family we already guard elsewhere
+- but the exact live wording above was not yet in the `recoveryFileWriteDraftRejectReason(...)` matcher
+- so task `16` exposed a narrow wording gap, not a new architectural class
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - expanded the existing recovery-draft rejection matcher to classify:
+    - `i see the file_write calls are going through but not actually replacing the content`
+    - `the file_write calls are going through but not actually replacing the content`
+    - `i'm not providing content`
+    - `i am not providing content`
+  - as `tool-recovery troubleshooting instead of the file body`
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused case:
+    - `rejects file write not replacing content narration`
+  - content:
+    - `I see the file_write calls are going through but not actually replacing the content because I'm not providing content. Let me fix that:`
+  - target:
+    - `scripts/validate-error-handling.sh`
+  - expected reason:
+    - `tool-recovery troubleshooting`
+
+Verification:
+
+- `go test ./internal/turn -run 'TestRecoveryFileWriteDraftRejectReason$' -count=1`
+
+Post-deploy live status:
+
+- runtime was rebuilt and restarted cleanly on top of this matcher expansion
+- the first post-deploy retry on session `f2eb9489-24f9-4cdb-9fa8-ae615dd8a232` did **not** re-emit the bad narration
+- instead, the lane took the older synthetic draft-rewrite path and moved forward:
+  - synthetic `file.write` for `scripts/validate-error-handling.sh`
+  - direct script verification and execution
+  - results readback from `results/error-handling-results.md`
+  - then a separate `git_commit` boundary on the completed deliverables
+
+So the current state of this fix is:
+
+- deployed
+- unit-proven
+- still preventive rather than freshly exercised on the exact narration string
+
+The remaining proof gap is narrower:
+
+- we still want one fresh production example where that exact `file_write`-without-content narration is rejected before dispatch
+- but task `16` is no longer actively stuck on that family right now

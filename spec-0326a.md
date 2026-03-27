@@ -629,6 +629,11 @@ Implemented so far in this spec:
     - plus the persisted `Task description:`, `Review instruction:`, and `Flow node execution:` sections
   - the placeholder read guard now applies to review tasks even when they do not carry execution-first planning metadata:
     - live validation tasks like task `12` currently have only bootstrap metadata, so the review-lane guard must not depend on `taskplan.ModeExecutionFirst`
+- recovery draft rejection now catches the live `file_write` no-content troubleshooting wording from task work lanes:
+  - `recoveryFileWriteDraftRejectReason(...)` now classifies drafts such as:
+    - `I see the file_write calls are going through but not actually replacing the content because I'm not providing content. Let me fix that:`
+  - as `tool-recovery troubleshooting instead of the file body`
+  - that closes the surviving task-16 family where the model narrated why `file_write` was not replacing content instead of emitting the actual script body for `scripts/validate-error-handling.sh`
 
 Still pending from this spec:
 
@@ -640,6 +645,10 @@ Still pending from this spec:
     - same-turn review cutoff on fresh review turns such as `52ffc07e-9b7f-49d8-a36c-3f4a932b75ff`, where the runtime emitted `Repeated same-turn read-only discovery churn (2/3)` before retrying review
   - so the remaining proof gap is narrower: we still need a fresh live example where the same-turn cutoff fires on a non-review work lane before the older cross-turn machinery
 - any additional recovery-specific fingerprints that remain after the current async task guardrails
+- live proof that the new task-16 recovery-draft matcher variant fires before dispatch on a fresh retry that actually reuses the bad narration:
+  - focused unit coverage is green
+  - the runtime is already deployed on this matcher
+  - the first post-deploy task-16 retry instead took the preexisting synthetic `file.write` rewrite path and settled without re-emitting the bad narration, so this matcher remains preventive rather than freshly exercised in production
 
 ## Deferred Follow-Up, Not In This Spec
 

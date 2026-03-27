@@ -21795,6 +21795,12 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:       "tool-recovery troubleshooting",
 		},
 		{
+			name:       "rejects file write not replacing content narration",
+			content:    "I see the file_write calls are going through but not actually replacing the content because I'm not providing content. Let me fix that:",
+			targetPath: "scripts/validate-error-handling.sh",
+			want:       "tool-recovery troubleshooting",
+		},
+		{
 			name: "rejects operator-choice status questionnaire",
 			content: "I'm standing by to validate the Speaker Pipeline Ops workflow. I've reviewed the context:\n\n" +
 				"**Current Task**: OC-13 (Synthesize Validation Findings & Report) - In progress, Work node active\n\n" +
