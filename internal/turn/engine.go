@@ -1991,6 +1991,11 @@ func reviewRetryPromptForMissingRequiredTests(messages []repo.ChatMessage, lates
 			if !ok {
 				continue
 			}
+			if _, matched := reviewMissingTestsRejectEvidenceFromGuardError(errText); matched {
+				mentionedTests = true
+				missingRequiredTests = true
+				recoveryFocusedOnTests = true
+			}
 			errorCode := normalizeValidationFailureCode(errText)
 			if errorCode == "" {
 				errorCode = normalizeValidationFailureCode(anyString(output["error"]))
@@ -2054,6 +2059,11 @@ func reviewRetryPromptForPersistedMissingRequiredTests(messages []repo.ChatMessa
 			toolName, output, errText, ok := parseToolResultMessage(message.Content)
 			if !ok {
 				continue
+			}
+			if _, matched := reviewMissingTestsRejectEvidenceFromGuardError(errText); matched {
+				mentionedTests = true
+				missingRequiredTests = true
+				recoveryFocusedOnTests = true
 			}
 			errorCode := normalizeValidationFailureCode(errText)
 			if errorCode == "" {
@@ -2482,6 +2492,29 @@ type reviewMissingTestsEvidence struct {
 	Summary string
 }
 
+func reviewMissingTestsRejectEvidenceFromGuardError(errText string) (string, bool) {
+	trimmed := strings.TrimSpace(errText)
+	if trimmed == "" {
+		return "", false
+	}
+	lower := strings.ToLower(trimmed)
+	if !strings.Contains(lower, "required test artifacts under") || !strings.Contains(lower, "call flow.review_decision with decision=reject immediately") {
+		return "", false
+	}
+	const marker = "cannot be approved because "
+	if idx := strings.Index(lower, marker); idx >= 0 {
+		summary := strings.TrimSpace(trimmed[idx+len(marker):])
+		if stop := strings.Index(strings.ToLower(summary), ". do not "); stop >= 0 {
+			summary = strings.TrimSpace(summary[:stop])
+		}
+		summary = strings.TrimSpace(strings.TrimSuffix(summary, "."))
+		if summary != "" {
+			return summary, true
+		}
+	}
+	return "required test artifacts could not be verified from the current workspace state", true
+}
+
 func currentTurnReviewMissingTestsEvidence(turnMessages []repo.ChatMessage, targetPath string) (reviewMissingTestsEvidence, bool) {
 	targetPath = normalizeWorkspaceRelativePath(targetPath)
 	primaryDeliverableReadable := false
@@ -2493,6 +2526,9 @@ func currentTurnReviewMissingTestsEvidence(turnMessages []repo.ChatMessage, targ
 		toolName, output, errText, ok := parseToolResultMessage(message.Content)
 		if !ok {
 			continue
+		}
+		if guardSummary, matched := reviewMissingTestsRejectEvidenceFromGuardError(errText); matched {
+			summary = guardSummary
 		}
 		errorCode := normalizeValidationFailureCode(errText)
 		if errorCode == "" {
@@ -9109,18 +9145,18 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 
 	messages, _ := e.messages.ListBySession(ctx, rt.session.ID)
 	if shouldAppendTaskContinuationActionPrompt(rt.session) && sessionHasSupervisorRecoveryPrompt(messages) {
-		return e.appendContinuationSummaryAndAction(ctx, rt, taskExecutionContinuationFallbackSummary())
+		return e.appendContinuationSummaryAndAction(ctx, rt, currentTurn, taskExecutionContinuationFallbackSummary())
 	}
 	if shouldAppendTaskContinuationActionPrompt(rt.session) {
 		if summary, ok := e.taskActiveRequestContinuationSummary(ctx, rt); ok {
-			return e.appendContinuationSummaryAndAction(ctx, rt, summary)
+			return e.appendContinuationSummaryAndAction(ctx, rt, currentTurn, summary)
 		}
 		if summary, ok := e.taskExecutionContinuationSummary(ctx, rt); ok {
-			return e.appendContinuationSummaryAndAction(ctx, rt, summary)
+			return e.appendContinuationSummaryAndAction(ctx, rt, currentTurn, summary)
 		}
 	}
 	if summary, ok := e.organizationActiveRequestContinuationSummary(ctx, rt); ok {
-		return e.appendContinuationSummaryAndAction(ctx, rt, summary)
+		return e.appendContinuationSummaryAndAction(ctx, rt, currentTurn, summary)
 	}
 	profile, err := e.resolveModelProfile(ctx, rt.session, rt.agent, "continuation_summary", 0, false)
 	if err != nil {
@@ -9154,7 +9190,7 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	if shouldAppendProjectContinuationActionPrompt(rt.session) && continuationSummaryLooksUnavailable(summary) {
 		summary = projectExecutionContinuationFallbackSummary()
 	}
-	return e.appendContinuationSummaryAndAction(ctx, rt, summary)
+	return e.appendContinuationSummaryAndAction(ctx, rt, currentTurn, summary)
 }
 
 func (e *TurnEngine) organizationActiveRequestContinuationSummary(ctx context.Context, rt *turnRuntime) (string, bool) {
@@ -9278,7 +9314,7 @@ func (e *TurnEngine) taskExecutionContinuationSummary(ctx context.Context, rt *t
 	return "", false
 }
 
-func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt *turnRuntime, summary string) error {
+func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt *turnRuntime, previousTurn *repo.ChatTurn, summary string) error {
 	if e == nil || rt == nil || rt.turn == nil || rt.session == nil {
 		return nil
 	}
@@ -9287,6 +9323,26 @@ func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt 
 		return err
 	}
 	if shouldAppendTaskContinuationActionPrompt(rt.session) {
+		if reviewPrompt, reviewMetadata, ok, promptErr := e.taskReviewContinuationActionPrompt(ctx, rt, previousTurn); promptErr != nil {
+			return promptErr
+		} else if ok {
+			shouldAppend, appendErr := e.shouldAppendSyntheticUserPrompt(ctx, rt.session.ID, "task_review_action")
+			if appendErr != nil {
+				return appendErr
+			}
+			if shouldAppend {
+				if _, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+					SessionID: rt.session.ID,
+					TurnID:    &rt.turn.ID,
+					Role:      "user",
+					Content:   reviewPrompt,
+					Metadata:  reviewMetadata,
+				}); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		shouldAppend, appendErr := e.shouldAppendSyntheticUserPrompt(ctx, rt.session.ID, taskContinuationResumeMessageSource)
 		if appendErr != nil {
 			return appendErr
@@ -9342,6 +9398,42 @@ func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt 
 		return err
 	}
 	return nil
+}
+
+func (e *TurnEngine) taskReviewContinuationActionPrompt(ctx context.Context, rt *turnRuntime, previousTurn *repo.ChatTurn) (string, json.RawMessage, bool, error) {
+	if e == nil || e.tasks == nil || e.messages == nil || rt == nil || rt.session == nil {
+		return "", nil, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return "", nil, false, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, rt.session.ScopeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return "", nil, false, nil
+		}
+		return "", nil, false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		return "", nil, false, nil
+	}
+
+	prompt := e.buildTaskReviewActionPrompt(ctx, rt.session)
+	metadataSource := reviewActionMetadataSource(ctx, e.messages, rt)
+	if previousTurn != nil && previousTurn.TriggerMessageID != nil && *previousTurn.TriggerMessageID != uuid.Nil {
+		latestUser, getErr := e.messages.GetByID(ctx, *previousTurn.TriggerMessageID)
+		if getErr == nil && strings.EqualFold(strings.TrimSpace(latestUser.Role), "user") {
+			metadataSource = latestUser.Metadata
+			if resolvedPrompt, ok, promptErr := e.reviewApprovalRetryPrompt(ctx, rt.session, taskRecord, &latestUser, previousTurn); promptErr != nil {
+				return "", nil, false, promptErr
+			} else if ok {
+				prompt = resolvedPrompt
+			}
+		}
+	}
+
+	return prompt, e.syntheticContinuationActionMessageMetadataWithCarryForward(ctx, rt.session, "task_review_action", metadataSource), true, nil
 }
 
 func sessionHasSupervisorRecoveryPrompt(messages []repo.ChatMessage) bool {

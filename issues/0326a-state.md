@@ -3062,6 +3062,100 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 08:12 MDT
+
+I traced the live task-14 review behavior after the new same-turn missing-tests guard fired and found the next seam precisely:
+
+- the guard was already blocking follow-on discovery inside the turn with text like:
+  - `cannot be approved because required test artifacts under tests could not be verified...`
+  - `call flow.review_decision with decision=reject immediately`
+- but when that same turn then ended empty, the follow-on retry prompt was still too generic
+- so the problem was no longer the guard itself; it was the retry-prompt evidence parser
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - added `reviewMissingTestsRejectEvidenceFromGuardError(...)`
+  - same-turn `reviewRetryPromptForMissingRequiredTests(...)` now treats the guard's blocked-tool reject payload as valid missing-tests evidence
+  - persisted `reviewRetryPromptForPersistedMissingRequiredTests(...)` now does the same across later retry turns
+  - `currentTurnReviewMissingTestsEvidence(...)` also recognizes that guard payload shape directly, so the same summary can be reused consistently by both blocking and retry logic
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for:
+    - same-turn guard evidence converting the next retry into a reject-only review prompt
+    - persisted guard evidence across retry turns converting the next retry into a reject-only review prompt
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(ReviewApprovalRetryPromptRejectsWhenRequiredTestsCannotBeVerified|ReviewApprovalRetryPromptRejectsWhenRequiredTestsCannotBeVerifiedViaRecoveryFocus|ReviewApprovalRetryPromptRejectsWhenRequiredTestsCannotBeVerifiedAcrossRetryTurns|ReviewApprovalRetryPromptRejectsWhenMissingTestsGuardAlreadyFiredThisTurn|ReviewApprovalRetryPromptRejectsWhenMissingTestsGuardFiredAcrossRetryTurns|ShouldBlockReviewMissingTestsDiscoveryTool|ShouldBlockReviewMissingTestsDiscoveryToolRequiresSameTurnEvidence)$' -count=1`
+
+Why this matters:
+
+- the live same-turn guard was already doing the expensive part correctly: it stopped more browsing
+- without this slice, the empty-output retry could still burn another loop before the model finally rejected
+- with this patch, the next retry prompt should now go straight to `flow.review_decision reject` using the guard's own evidence instead of regenerating a base review pass
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime restarted on the new binary
+
+Live proof:
+
+- after the `2026-03-27 08:12:50 MDT` restart, there are `0` async review-session user messages using the generic:
+  - `Continue the active task now from the continuation summary above.`
+- direct DB proof:
+  - query filtered to `chat_message.role='user'`
+  - `created_at >= '2026-03-27 08:12:50-06'`
+  - `session.scope_type='project_task'`
+  - `project_task.work_status='review'`
+  - `content like 'Continue the active task now from the continuation summary above.%'`
+  - returned zero rows
+- that is the concrete confirmation that review continuations are no longer being handed off through the generic task-continuation prompt on the new build
+
+## Update 08:20 MDT
+
+The next live seam showed up immediately after the prior fix:
+
+- task `14`'s same-turn missing-tests guard was firing correctly
+- but when that guarded review turn hit `max_tool_calls`, `continueTurn(...)` still appended:
+  - `[Continuation summary] Active task request: Review only...`
+  - followed by the generic user prompt:
+    - `Continue the active task now from the continuation summary above.`
+- that dropped the lane back into generic task-execution language before the reject-oriented review retry logic could take over
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `continueTurn(...)` now passes the just-completed turn into continuation handoff
+  - `appendContinuationSummaryAndAction(...)` now detects async review lanes and skips the generic task continuation prompt for them
+  - added `taskReviewContinuationActionPrompt(...)`
+    - it reuses `reviewApprovalRetryPrompt(...)` against the just-completed turn when reject evidence already exists
+    - otherwise it still falls back to the normal `buildTaskReviewActionPrompt(...)`
+    - it carries forward review-scoped synthetic metadata as `source=task_review_action`
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage proving:
+    - review continuation handoff uses reject retry guidance when the previous turn already established missing-tests reject evidence
+    - the existing generic async task continuation path still stays green
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(ContinuationTurnAppendsDirectActionPromptForAsyncProjectTask|TaskReviewContinuationActionPromptUsesRejectRetryGuidance|ReviewApprovalRetryPromptRejectsWhenRequiredTestsCannotBeVerified|ReviewApprovalRetryPromptRejectsWhenRequiredTestsCannotBeVerifiedViaRecoveryFocus|ReviewApprovalRetryPromptRejectsWhenRequiredTestsCannotBeVerifiedAcrossRetryTurns|ReviewApprovalRetryPromptRejectsWhenMissingTestsGuardAlreadyFiredThisTurn|ReviewApprovalRetryPromptRejectsWhenMissingTestsGuardFiredAcrossRetryTurns|ShouldBlockReviewMissingTestsDiscoveryTool|ShouldBlockReviewMissingTestsDiscoveryToolRequiresSameTurnEvidence)$' -count=1`
+
+Why this matters:
+
+- the previous patch fixed the empty-output retry path
+- this patch fixes the earlier `max_tool_calls` continuation handoff that was bypassing that retry path entirely
+- together they close both ways the runtime could lose same-turn missing-tests reject evidence and reopen extra browsing
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime restart pending at the time of this note
+
 ## Update 07:27 MDT
 
 I cut the next orchestration-parent review seam that showed up in fresh live task-11 traffic.

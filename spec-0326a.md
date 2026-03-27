@@ -1118,3 +1118,21 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - focused turn-engine coverage is green for:
       - same-turn missing-tests discovery block
       - no-op behavior when the same-turn test verification failure has not happened yet
+  - newest review missing-tests retry conversion slice:
+    - review retry prompts now recognize the blocked-tool reject message emitted by the same-turn missing-tests discovery guard as durable rejection evidence
+    - this closes the live gap where the guard already said:
+      - `cannot be approved because required test artifacts under tests could not be verified...`
+      - `call flow.review_decision with decision=reject immediately`
+      - but the next empty-output retry still regenerated a generic review prompt
+    - both same-turn and persisted retry helpers now treat that guard payload as sufficient missing-tests evidence and convert the next retry into a reject-only `flow.review_decision` prompt
+    - focused turn-engine coverage is green for:
+      - same-turn guard evidence -> reject retry prompt
+      - persisted guard evidence across retry turns -> reject retry prompt
+  - newest review continuation handoff slice:
+    - async `project_task` review turns no longer fall back to the generic `Continue the active task now from the continuation summary above.` prompt after `max_tool_calls` / compression handoffs
+    - continuation handoff now detects review lanes and appends a `task_review_action` prompt instead
+    - when the just-completed review turn already contains durable reject evidence, that continuation prompt now reuses `reviewApprovalRetryPrompt(...)` so the next turn starts with reject-oriented review guidance rather than dropping back into execution language
+    - this specifically targets the live task-14 seam where same-turn missing-tests reject evidence existed, but the post-`max_tool_calls` handoff still appended a generic task continuation and reopened more workspace browsing
+    - focused turn-engine coverage is green for:
+      - review continuation handoff using reject retry guidance
+      - existing async task continuation prompt behavior remaining intact for non-review task lanes

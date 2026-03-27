@@ -14024,6 +14024,91 @@ func TestContinuationTurnAppendsDirectActionPromptForAsyncProjectTask(t *testing
 	}
 }
 
+func TestTaskReviewContinuationActionPromptUsesRejectRetryGuidance(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+	description := "Verify pipeline config loads from file correctly, environment variable overrides apply properly, and invalid configs are rejected with clear errors. Write tests."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.chat.session.Mode = fixture.session.Mode
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  14,
+				Title:       "Validate config loading and environment overrides",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"preferred_deliverable_path": "config/pipeline-config-invalid.yaml",
+				}),
+			},
+		},
+	}
+
+	latestUser := repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session),
+		Metadata: mustRawJSON(t, map[string]any{
+			"source":                 "task_review_action",
+			"synthetic_user_message": true,
+			"flow_node_execution_id": executionID.String(),
+		}),
+	}
+	fixture.messages.upsert(latestUser)
+
+	previousTurnID := uuid.New()
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &previousTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"file.read","output":{"path":"config/pipeline-config-invalid.yaml","byte_size":803,"content":"invalid fixture"}}`,
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &previousTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"git.log","error":"task review already established that task 14 (Validate config loading and environment overrides) cannot be approved because required test artifacts under ` + "`tests`" + ` could not be verified because review was redirected back to ` + "`config/pipeline-config-invalid.yaml`" + `. Do not inspect more files now; call flow.review_decision with decision=reject immediately using that test-verification evidence.","output":{}}`,
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn:    &repo.ChatTurn{ID: uuid.New()},
+	}
+	previousTurn := &repo.ChatTurn{
+		ID:               previousTurnID,
+		SessionID:        fixture.session.ID,
+		TriggerMessageID: &latestUser.ID,
+	}
+
+	prompt, metadata, ok, err := fixture.engine.taskReviewContinuationActionPrompt(context.Background(), rt, previousTurn)
+	if err != nil {
+		t.Fatalf("taskReviewContinuationActionPrompt: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected review continuation prompt")
+	}
+	if !strings.Contains(prompt, "decision=reject") {
+		t.Fatalf("prompt = %q, want reject guidance", prompt)
+	}
+	metadataMap := messageMetadataMap(metadata)
+	if got := stringValue(metadataMap["source"]); got != "task_review_action" {
+		t.Fatalf("metadata source = %q, want task_review_action", got)
+	}
+}
+
 func TestContinuationTurnUsesPriorSubstantiveDraftForAsyncProjectTask(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -30779,6 +30864,80 @@ func TestReviewApprovalRetryPromptRejectsWhenRequiredTestsCannotBeVerified(t *te
 	}
 }
 
+func TestReviewApprovalRetryPromptRejectsWhenMissingTestsGuardAlreadyFiredThisTurn(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+	description := "Verify pipeline config loads from file correctly, environment variable overrides apply properly, and invalid configs are rejected with clear errors. Write tests."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  14,
+				Title:       "Validate config loading and environment overrides",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"preferred_deliverable_path": "config/pipeline-config-invalid.yaml",
+				}),
+			},
+		},
+	}
+
+	latestUser := repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session),
+	}
+	latestUser.Metadata = mustMarshalJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"synthetic_user_message": true,
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.messages.upsert(latestUser)
+
+	turnID := uuid.New()
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"file.read","output":{"path":"config/pipeline-config-invalid.yaml","byte_size":803,"content":"invalid fixture"}}`,
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"git.log","error":"task review already established that task 14 (Validate config loading and environment overrides) cannot be approved because required test artifacts under ` + "`tests`" + ` could not be verified because review was redirected back to ` + "`config/pipeline-config-invalid.yaml`" + `. Do not inspect additional files, tasks, or project state with git.log; call flow.review_decision with decision=reject immediately using that test-verification evidence.","output":{}}`,
+	})
+
+	taskRecord, err := fixture.engine.tasks.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	retryPrompt, ok, err := fixture.engine.reviewApprovalRetryPrompt(context.Background(), fixture.session, taskRecord, &latestUser, &repo.ChatTurn{ID: turnID})
+	if err != nil {
+		t.Fatalf("reviewApprovalRetryPrompt: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected reject-oriented missing-tests review prompt after same-turn guard evidence")
+	}
+	if !strings.Contains(retryPrompt, "decision=reject") {
+		t.Fatalf("retryPrompt = %q, want reject guidance", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "required test coverage") {
+		t.Fatalf("retryPrompt = %q, want test-verification guidance", retryPrompt)
+	}
+}
+
 func TestReviewApprovalRetryPromptRejectsWhenRequiredTestsCannotBeVerifiedAcrossRetryTurns(t *testing.T) {
 	t.Parallel()
 
@@ -30867,6 +31026,89 @@ func TestReviewApprovalRetryPromptRejectsWhenRequiredTestsCannotBeVerifiedAcross
 	}
 	if !ok {
 		t.Fatal("expected persisted missing-tests reject prompt")
+	}
+	if !strings.Contains(retryPrompt, "decision=reject") {
+		t.Fatalf("retryPrompt = %q, want reject guidance", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "required test coverage") {
+		t.Fatalf("retryPrompt = %q, want test-verification guidance", retryPrompt)
+	}
+}
+
+func TestReviewApprovalRetryPromptRejectsWhenMissingTestsGuardFiredAcrossRetryTurns(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+	description := "Verify pipeline config loads from file correctly, environment variable overrides apply properly, and invalid configs are rejected with clear errors. Write tests."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  14,
+				Title:       "Validate config loading and environment overrides",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"preferred_deliverable_path": "config/pipeline-config-invalid.yaml",
+				}),
+			},
+		},
+	}
+
+	latestUser := repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session),
+	}
+	latestUser.Metadata = mustMarshalJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"synthetic_user_message": true,
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.messages.upsert(latestUser)
+
+	priorTurnID := uuid.New()
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"file.read","output":{"path":"config/pipeline-config-invalid.yaml","byte_size":803,"content":"invalid fixture"}}`,
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"file.search","error":"task review already established that task 14 (Validate config loading and environment overrides) cannot be approved because required test artifacts under ` + "`tests`" + ` could not be verified because review was redirected back to ` + "`config/pipeline-config-invalid.yaml`" + `. Do not inspect additional files, tasks, or project state with file.search; call flow.review_decision with decision=reject immediately using that test-verification evidence.","output":{}}`,
+	})
+
+	retryTurnID := uuid.New()
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &retryTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"file.read","output":{"path":"config/pipeline-config-invalid.yaml","byte_size":803,"content":"invalid fixture"}}`,
+	})
+
+	taskRecord, err := fixture.engine.tasks.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	retryPrompt, ok, err := fixture.engine.reviewApprovalRetryPrompt(context.Background(), fixture.session, taskRecord, &latestUser, &repo.ChatTurn{ID: retryTurnID})
+	if err != nil {
+		t.Fatalf("reviewApprovalRetryPrompt: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected persisted missing-tests reject prompt after guard evidence")
 	}
 	if !strings.Contains(retryPrompt, "decision=reject") {
 		t.Fatalf("retryPrompt = %q, want reject guidance", retryPrompt)
