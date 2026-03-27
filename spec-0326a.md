@@ -673,6 +673,19 @@ Implemented so far in this spec:
     - `file.list -> recovery_target_focus_required`
     - `file.write -> non_substantive_content`
   - that makes the next runtime-hardening decision materially safer because we can now see the exact blocker wording the turn engine is emitting
+- review lanes now stop one retry earlier on the specific repeated side-artifact miss family that the new report exposed:
+  - if a review session hits the system message
+    - `Repeated identical file.read validation failure in this turn (2/3): not_found`
+  - across `3` consecutive review turns in the same session
+  - the third turn now blocks immediately instead of spending a fourth near-identical review retry first
+  - this is intentionally narrow:
+    - it applies only to `project_task` review lanes
+    - it keys off the exact repeated blocked-turn system message, not generic `file.read` failures
+    - it does not change non-review task execution or the existing empty-output review cap
+  - focused turn-engine coverage now proves:
+    - the new repeated `file.read -> not_found` review cap
+    - the preexisting repeated empty-output review cap
+    - the generic repeated-retries review block path
 - operator package-install churn diagnostics now normalize install specs instead of smearing whole shell commands:
   - both `scripts/token-usage-report.sh` and `ottercamp db token-usage` now extract package-install attempts from assistant `cli_execute` metadata using anchored `pip install` / `python -m pip install` matching
   - the report strips shell suffixes and ignores installer flags while retaining the actual package spec

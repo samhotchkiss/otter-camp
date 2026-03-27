@@ -79,6 +79,7 @@ const (
 	maxGenericRecoveryReplyRetries            = defaultModelRetryBudget - 1
 	maxProjectBootstrapAutoTurns              = 3
 	maxEmptyReviewOutputCapTurns              = 3
+	maxRepeatedReviewReadNotFoundCapTurns     = 3
 	defaultSummarizeLayerBudget               = 0
 	chunkPollSteerEveryNChunks                = 10
 	maxContinuationTurnDepth                  = 3
@@ -162,6 +163,8 @@ const (
 	bootstrapChildTaskBoundednessError        = "parent integration follow-on tasks must already be bounded before they are created"
 	taskContinuationResumeMessageSource       = "task_continuation_resume"
 )
+
+const reviewRepeatedFileReadNotFoundTurnStopSubstring = "[Repeated identical file.read validation failure in this turn (2/3): not_found."
 
 var errTurnBranchAttachedToMainWorktree = errors.New("branch attached to main worktree")
 
@@ -1548,6 +1551,20 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 	}
 
 	reason := "review turn completed without calling flow.review_decision"
+	if readNotFoundCount, readNotFoundCapReached, readNotFoundErr := e.repeatedReviewValidationLoopMessageTurnCapReached(ctx, session.ID, latestCompleted, reviewRepeatedFileReadNotFoundTurnStopSubstring, maxRepeatedReviewReadNotFoundCapTurns); readNotFoundErr != nil {
+		return true, readNotFoundErr
+	} else if readNotFoundCapReached {
+		return e.blockReviewTurnWithoutDecision(
+			ctx,
+			session,
+			taskRecord,
+			latestUser,
+			latestCompleted,
+			fmt.Sprintf("review turn repeatedly hit file.read not_found across %d consecutive turns", readNotFoundCount),
+			fmt.Sprintf("[Review turn halted after %d consecutive file.read not_found retries. The task is now blocked instead of re-reading missing secondary artifacts again. Inspect the current deliverables and call flow.review_decision with the active flow_node_execution_id to approve or reject the review step.]", readNotFoundCount),
+			assistantContent,
+		)
+	}
 	if assistantContent == "" {
 		if emptyCount, emptyCapReached, emptyCapErr := e.repeatedEmptyReviewOutputTurnCapReached(ctx, session.ID, latestCompleted); emptyCapErr != nil {
 			return true, emptyCapErr
@@ -1762,6 +1779,22 @@ func (e *TurnEngine) repeatedEmptyReviewOutputTurnCapReached(ctx context.Context
 	}
 	count := consecutiveRecentReviewEmptyOutputTurnCount(turns, messages, currentTurn, maxEmptyReviewOutputCapTurns)
 	return count, count >= maxEmptyReviewOutputCapTurns, nil
+}
+
+func (e *TurnEngine) repeatedReviewValidationLoopMessageTurnCapReached(ctx context.Context, sessionID uuid.UUID, currentTurn *repo.ChatTurn, substring string, threshold int) (int, bool, error) {
+	if e == nil || e.turns == nil || e.messages == nil || sessionID == uuid.Nil || currentTurn == nil || currentTurn.ID == uuid.Nil || strings.TrimSpace(substring) == "" || threshold <= 0 {
+		return 0, false, nil
+	}
+	turns, err := e.turns.ListBySession(ctx, sessionID)
+	if err != nil {
+		return 0, false, err
+	}
+	messages, err := e.messages.ListBySession(ctx, sessionID)
+	if err != nil {
+		return 0, false, err
+	}
+	count := consecutiveRecentReviewSystemMessageTurnCount(turns, messages, currentTurn, substring, threshold)
+	return count, count >= threshold, nil
 }
 
 func (e *TurnEngine) reviewApprovalWorkspaceClean(ctx context.Context, taskRecord repo.ProjectTask) (bool, error) {
@@ -9750,6 +9783,59 @@ func consecutiveRecentReviewEmptyOutputTurnCount(turns []repo.ChatTurn, messages
 			break
 		}
 		if !turnHasSystemMessageContaining(messages, turn.ID, "Review turn returned empty assistant output") {
+			break
+		}
+		count++
+		if count >= threshold {
+			return count
+		}
+	}
+	return count
+}
+
+func consecutiveRecentReviewSystemMessageTurnCount(turns []repo.ChatTurn, messages []repo.ChatMessage, currentTurn *repo.ChatTurn, substring string, threshold int) int {
+	if currentTurn == nil || currentTurn.ID == uuid.Nil || threshold <= 0 || strings.TrimSpace(substring) == "" {
+		return 0
+	}
+	ordered := make([]repo.ChatTurn, 0, len(turns))
+	for _, turn := range turns {
+		ordered = append(ordered, turn)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].TurnNumber == ordered[j].TurnNumber {
+			if ordered[i].RetryCount == ordered[j].RetryCount {
+				return ordered[i].CreatedAt.After(ordered[j].CreatedAt)
+			}
+			return ordered[i].RetryCount > ordered[j].RetryCount
+		}
+		return ordered[i].TurnNumber > ordered[j].TurnNumber
+	})
+
+	count := 0
+	started := false
+	for _, turn := range ordered {
+		if turn.ID == currentTurn.ID {
+			if !turnHasSystemMessageContaining(messages, turn.ID, substring) {
+				return 0
+			}
+			count++
+			started = true
+			if count >= threshold {
+				return count
+			}
+			continue
+		}
+		if !started {
+			continue
+		}
+		if turn.TurnNumber > currentTurn.TurnNumber ||
+			(turn.TurnNumber == currentTurn.TurnNumber && turn.RetryCount >= currentTurn.RetryCount) {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(turn.Status), "completed") {
+			break
+		}
+		if !turnHasSystemMessageContaining(messages, turn.ID, substring) {
 			break
 		}
 		count++

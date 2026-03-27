@@ -2894,6 +2894,107 @@ func TestHandleTurnCompletedEventBlocksRepeatedEmptyReviewTurnsAcrossSession(t *
 	}
 }
 
+func TestHandleTurnCompletedEventBlocksRepeatedReviewFileReadNotFoundTurnsAcrossSession(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	base := time.Unix(1700002060, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.chat.session.Mode = fixture.session.Mode
+	fixture.chat.session.Metadata = fixture.session.Metadata
+	fixture.engine.tasks = taskRepo
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "review"},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.taskTransitions = blocker
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	message.Content = fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	message.Metadata = mustRawJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"synthetic_user_message": true,
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.messages.upsert(message)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	for i := 0; i < maxRepeatedReviewReadNotFoundCapTurns-1; i++ {
+		priorTurnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "The deliverable is present. Let me inspect the acceptance criteria and planning artifacts.")
+		fixture.messages.create(repo.ChatMessage{
+			SessionID:     fixture.session.ID,
+			TurnID:        &priorTurnID,
+			Role:          "system",
+			Content:       "[Repeated identical file.read validation failure in this turn (2/3): not_found. Ending the turn early so the next continuation can take a narrower step.]",
+			ContentFormat: "text",
+			Status:        "final",
+		})
+	}
+
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "The deliverable is present. Let me inspect the acceptance criteria and planning artifacts.")
+	fixture.messages.create(repo.ChatMessage{
+		SessionID:     fixture.session.ID,
+		TurnID:        &turnID,
+		Role:          "system",
+		Content:       "[Repeated identical file.read validation failure in this turn (2/3): not_found. Ending the turn early so the next continuation can take a narrower step.]",
+		ContentFormat: "text",
+		Status:        "final",
+	})
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+	if len(blocker.calls) != 1 {
+		t.Fatalf("blocked calls = %d, want 1", len(blocker.calls))
+	}
+	if !strings.Contains(blocker.calls[0].reason, "file.read not_found across 3 consecutive turns") {
+		t.Fatalf("blocked reason = %q, want repeated file.read not_found churn", blocker.calls[0].reason)
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updated.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updated.WorkStatus)
+	}
+	if !fixture.messages.containsContentSubstring("Review turn halted after 3 consecutive file.read not_found retries") {
+		t.Fatal("expected repeated file.read not_found halt system message")
+	}
+}
+
 func TestHandleCompletedProjectBootstrapEmptyAssistantTurnRetriesWithFreshBootstrapPrompt(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	base := time.Unix(1700002100, 0).UTC()

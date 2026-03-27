@@ -3161,3 +3161,45 @@ Why this matters:
 - the top aggregate bucket is still `project_task async -> validation_loop_blocked`
 - before this slice, we could count those turns but still needed ad hoc SQL to know what they actually were
 - now the report itself tells us which blocker family is hot enough to justify the next runtime cut
+
+## Update 00:45 MDT
+
+I used the new blocker report immediately and cut the first follow-on runtime seam it exposed.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - review lanes now track consecutive turns that already ended with:
+    - `[Repeated identical file.read validation failure in this turn (2/3): not_found ...]`
+  - after `3` consecutive review turns with that exact blocker, the third turn now blocks immediately instead of queuing a fourth near-identical review retry
+  - this is review-only and exact-message-bound; it does not alter normal task work lanes or generic `file.read` handling
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage proving the new repeated `file.read -> not_found` review cap
+  - preserved the existing empty-review-output cap and generic repeated-retries review block behavior
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(HandleTurnCompletedEventBlocksRepeatedReviewFileReadNotFoundTurnsAcrossSession|HandleTurnCompletedEventBlocksRepeatedEmptyReviewTurnsAcrossSession|HandleTurnCompletedEventBlocksRepeatedRetriesWithoutReviewDecision)$' -count=1`
+
+Why this slice exists:
+
+- the new `Recent Validation-Loop Blocks` report showed session `3dbbeb30-3359-4e5b-b6a0-e15b419fccae` burning:
+  - turn `28a683c0-...`
+  - turn `ffe8b62e-...`
+  - turn `9f75e38b-...`
+  - all on the same review pattern:
+    - valid primary deliverable read
+    - then repeated secondary `file.read -> not_found`
+  - before turn `c137f202-...` finally hit the older repeated-retries block
+
+What this should save:
+
+- one full extra review retry turn for that exact family
+- without making the broader review path more brittle
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime restart still pending at the time of this note
