@@ -3062,6 +3062,53 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 04:05 MDT
+
+I fixed the worker-side transient-provider recovery gap that was still rearming idle async sessions immediately after a failed provider-transient turn.
+
+What changed:
+
+- [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - `RequeueActiveExecutionSessionsWithoutTurns(...)` now treats transient provider failures like delayed work, not immediately runnable backlog
+  - `RequeueActiveProjectSessionsWithoutTurns(...)` now does the same for async project continuations
+  - both paths now:
+    - detect transient provider failure text in `chat_turn.error_message`
+    - parse hinted `retry_after=` windows from `TransientModelError` text when present
+    - schedule the replacement `agent_turn` with transient backoff instead of `run_after = now`
+- [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+  - added focused integration coverage for:
+    - active execution sessions preserving generic transient-provider backoff
+    - active project sessions preserving hinted transient-provider backoff
+  - also corrected an older stale expectation in the active-execution rate-limit test: the worker has long requeued that path with `retry_count = 1`, not `0`
+
+Why this was necessary:
+
+- the previous turn-engine patches stopped same-turn transient retry burn
+- but idle-session worker recovery was still requeuing active async sessions immediately whenever the last failed turn left no pending replacement job
+- that meant review/work lanes could still climb as:
+  - `Retry attempt 6 started.`
+  - `Retry attempt 7 started.`
+  - `Retry attempt 8 started.`
+  - even though the underlying failures were still provider-transient and should have been delayed
+
+Verification:
+
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRequeueActive(ExecutionSessionsWithoutTurnsPreserves(TransientProvider|RateLimit)Backoff|ProjectSessionsWithoutTurnsPreserves(TransientProvider|RateLimit)Backoff)$' -count=1`
+- rebuilt `./bin/ottercamp`
+- recreated tmux session `codex-e2e-20260324` with `.env` sourced for both:
+  - `./bin/ottercamp serve`
+  - `./bin/ottercamp worker --concurrency 2`
+- `./bin/ottercamp health --output json` is now:
+  - `status = ok`
+
+Current live proof status:
+
+- the patch is deployed and the runtime is healthy
+- I queried for fresh pending async `agent_turn` rows whose latest failed turn looked transient-provider-related and matched the worker’s new delayed-requeue shape
+- that query returned no rows in the short post-restart window, which means:
+  - there was no fresh live transient-idle async session to recover yet
+  - so this slice is green in integration and live-deployed, but still waiting for the next real transient-worker-recovery event to prove itself in production
+
 ## Update 03:33 MDT
 
 I landed the next provider-churn hardening slice aimed at the remaining transient-failure bursts that were still creating fresh failed turns every few seconds.

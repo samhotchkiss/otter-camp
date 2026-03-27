@@ -51,6 +51,8 @@ const (
 	agentTurnRateLimitMinBackoff    = 30 * time.Second
 	agentTurnRateLimitBackoffCap    = 30 * time.Minute
 	agentTurnRateLimitMaxRetries    = 6
+	agentTurnTransientMinBackoff    = 15 * time.Second
+	agentTurnTransientBackoffCap    = 5 * time.Minute
 	legacyRateLimitJitterFloor      = 5 * time.Minute
 	legacyRateLimitJitterMax        = 30 * time.Second
 	maxInFlightProjectContinuations = 4
@@ -1422,6 +1424,14 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			}
 			runAfter = &scheduled
 			payload.RateLimitJitterApplied = true
+		} else if retryAfterHint, transient := parseTransientModelRetryAfterFromText(latestTurnError); transient || looksLikeTransientModelFailureText(latestTurnError) {
+			retryDelay := agentTurnTransientDelay(max(1, retryCount), retryAfterHint)
+			completedAt := latestTurnCompletedAt.UTC()
+			scheduled := completedAt.Add(retryDelay)
+			if scheduled.Before(w.clock.Now().UTC()) {
+				scheduled = w.clock.Now().UTC()
+			}
+			runAfter = &scheduled
 		}
 		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, payload, runAfter); err != nil {
 			return repaired, fmt.Errorf("requeue active execution session without turn for session %s: %w", sessionID, err)
@@ -1564,6 +1574,13 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 			}
 			runAfter = &scheduled
 			payload.RateLimitJitterApplied = true
+		} else if retryAfterHint, transient := parseTransientModelRetryAfterFromText(latestTurnError); transient || looksLikeTransientModelFailureText(latestTurnError) {
+			retryDelay := agentTurnTransientDelay(max(1, retryCount), retryAfterHint)
+			scheduled := latestTurnCompletedAt.UTC().Add(retryDelay)
+			if scheduled.Before(w.clock.Now().UTC()) {
+				scheduled = w.clock.Now().UTC()
+			}
+			runAfter = &scheduled
 		}
 		if _, err := w.pool.Exec(ctx, `
 			UPDATE job_queue jq
@@ -5120,6 +5137,61 @@ func parseRateLimitRetryAfterFromText(text string) (time.Duration, bool) {
 	return d, true
 }
 
+func parseTransientModelRetryAfterFromText(text string) (time.Duration, bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || !looksLikeTransientModelFailureText(trimmed) {
+		return 0, false
+	}
+	const marker = "retry_after="
+	idx := strings.Index(trimmed, marker)
+	if idx < 0 {
+		return 0, false
+	}
+	value := trimmed[idx+len(marker):]
+	if end := strings.IndexAny(value, "):, ]"); end >= 0 {
+		value = value[:end]
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, false
+	}
+	if d < 0 {
+		d = 0
+	}
+	return d, true
+}
+
+func looksLikeTransientModelFailureText(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "model provider rate limited") {
+		return false
+	}
+	if strings.Contains(lower, "transient model failure") {
+		return true
+	}
+	if strings.Contains(lower, "all provider connections are temporarily unavailable") {
+		return true
+	}
+	if strings.Contains(lower, "timeout") || strings.Contains(lower, "temporar") {
+		return true
+	}
+	if strings.Contains(lower, "stream error") && (strings.Contains(lower, "received from peer") || strings.Contains(lower, "internal_error") || strings.Contains(lower, "internal error")) {
+		return true
+	}
+	if strings.Contains(lower, "received from peer") && (strings.Contains(lower, "internal_error") || strings.Contains(lower, "internal error")) {
+		return true
+	}
+	return false
+}
+
 func retryAttemptLimit(job Job, rateLimited bool) int {
 	maxAttempts := job.MaxAttempts
 	if rateLimited && strings.EqualFold(strings.TrimSpace(job.JobType), agentTurnJobType) && maxAttempts < agentTurnRateLimitMaxRetries {
@@ -5145,6 +5217,29 @@ func agentTurnRateLimitDelay(attempts int, retryAfterHint time.Duration) time.Du
 	if retryAfterHint > delay {
 		if retryAfterHint > agentTurnRateLimitBackoffCap {
 			return agentTurnRateLimitBackoffCap
+		}
+		return retryAfterHint
+	}
+	return delay
+}
+
+func agentTurnTransientDelay(attempts int, retryAfterHint time.Duration) time.Duration {
+	if attempts <= 1 {
+		attempts = 1
+	}
+
+	delay := agentTurnTransientMinBackoff
+	for i := 1; i < attempts; i++ {
+		if delay >= (agentTurnTransientBackoffCap / 2) {
+			delay = agentTurnTransientBackoffCap
+			break
+		}
+		delay *= 2
+	}
+
+	if retryAfterHint > delay {
+		if retryAfterHint > agentTurnTransientBackoffCap {
+			return agentTurnTransientBackoffCap
 		}
 		return retryAfterHint
 	}

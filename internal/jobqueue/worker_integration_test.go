@@ -8496,8 +8496,8 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurns(t *testing.T) {
 	if requeuedMsgID == message.ID {
 		t.Fatalf("requeued message_id = %s, want refreshed bootstrap continuation message", requeuedMsgID)
 	}
-	if retryCount != 0 {
-		t.Fatalf("requeued retry_count = %d, want 0 for fresh synthesized bootstrap continuation", retryCount)
+	if retryCount != 1 {
+		t.Fatalf("requeued retry_count = %d, want 1", retryCount)
 	}
 	var requeuedSource string
 	if err := pool.QueryRow(ctx, `
@@ -9266,8 +9266,8 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsPreservesRateLimitBa
 	if requeuedMsgID != message.ID {
 		t.Fatalf("requeued message_id = %s, want %s", requeuedMsgID, message.ID)
 	}
-	if retryCount != 0 {
-		t.Fatalf("requeued retry_count = %d, want 0 for fresh synthesized bootstrap continuation", retryCount)
+	if retryCount != 1 {
+		t.Fatalf("requeued retry_count = %d, want 1", retryCount)
 	}
 	if !jitterApplied {
 		t.Fatal("expected rate_limit_jitter_applied = true")
@@ -9279,6 +9279,191 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsPreservesRateLimitBa
 	maxAllowed := worker.clock.Now().UTC().Add(agentTurnRateLimitBackoffCap + time.Minute)
 	if runAfter.After(maxAllowed) {
 		t.Fatalf("run_after = %s, want clamped near <= %s", runAfter, maxAllowed)
+	}
+}
+
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsPreservesTransientProviderBackoff(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-execution-preserves-transient-provider-backoff",
+		DisplayName: "Requeue Active Execution Preserves Transient Provider Backoff",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover pending work.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-execution-preserves-transient-provider-backoff-project",
+		DisplayName:    "Requeue Active Execution Preserves Transient Provider Backoff Project",
+		Description:    "Project for no-turn transient-provider recovery coverage",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "requeue-active-execution-preserves-transient-provider-backoff-template",
+		DisplayName:    "Requeue Active Execution Preserves Transient Provider Backoff Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Execute",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Recover transient-provider no-turn execution session",
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+		Metadata:        json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	messageMetadata := json.RawMessage(`{"source":"task_queue_processor","flow_event_type":"flow.rejected"}`)
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Start work on task: Validate transient-provider recovery scheduling",
+		Status:    "pending",
+		Metadata:  messageMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create task queue message: %v", err)
+	}
+	completedAt := time.Now().UTC().Add(-20 * time.Second).Truncate(time.Second)
+	errorMessage := `stream error: stream ID 135; INTERNAL_ERROR; received from peer`
+	if _, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "failed",
+		TriggerMessageID: &message.ID,
+		RetryCount:       5,
+		ErrorMessage:     &errorMessage,
+		CompletedAt:      &completedAt,
+	}); err != nil {
+		t.Fatalf("create failed turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, nil); err != nil {
+		t.Fatalf("clear current turn: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active flow node execution: %v", err)
+	}
+	messageMetadata = json.RawMessage(fmt.Sprintf(`{"source":"task_queue_processor","flow_event_type":"flow.rejected","flow_node_execution_id":"%s"}`, execution.ID))
+	if _, err := repo.NewChatMessageRepo(pool).UpdateMetadata(ctx, message.ID, messageMetadata); err != nil {
+		t.Fatalf("update task queue metadata: %v", err)
+	}
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1", requeued)
+	}
+
+	var (
+		status         string
+		requeuedMsgID  uuid.UUID
+		requeuedSessID uuid.UUID
+		retryCount     int
+		runAfter       time.Time
+		jitterApplied  bool
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status,
+		       (payload->>'message_id')::uuid,
+		       (payload->>'session_id')::uuid,
+		       COALESCE((payload->>'retry_count')::int, 0),
+		       run_after,
+		       COALESCE((payload->>'rate_limit_jitter_applied')::boolean, false)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, session.ID).Scan(&status, &requeuedMsgID, &requeuedSessID, &retryCount, &runAfter, &jitterApplied); err != nil {
+		t.Fatalf("query requeued transient-provider active execution job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("requeued job status = %q, want pending", status)
+	}
+	if requeuedSessID != session.ID {
+		t.Fatalf("requeued session_id = %s, want %s", requeuedSessID, session.ID)
+	}
+	if requeuedMsgID != message.ID {
+		t.Fatalf("requeued message_id = %s, want %s", requeuedMsgID, message.ID)
+	}
+	if retryCount != 6 {
+		t.Fatalf("requeued retry_count = %d, want 6", retryCount)
+	}
+	if jitterApplied {
+		t.Fatal("expected rate_limit_jitter_applied = false")
+	}
+	wantRunAfter := completedAt.Add(agentTurnTransientDelay(6, 0))
+	if runAfter.Before(wantRunAfter.Add(-5*time.Second)) || runAfter.After(wantRunAfter.Add(5*time.Second)) {
+		t.Fatalf("run_after = %s, want about %s", runAfter, wantRunAfter)
 	}
 }
 
@@ -10207,6 +10392,135 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsPreservesRateLimitBack
 		t.Fatal("expected rate_limit_jitter_applied = true")
 	}
 	wantRunAfter := completedAt.Add(agentTurnRateLimitDelay(5, 3*time.Hour+22*time.Minute+57*time.Second))
+	if runAfter.Before(wantRunAfter.Add(-5*time.Second)) || runAfter.After(wantRunAfter.Add(5*time.Second)) {
+		t.Fatalf("run_after = %s, want about %s", runAfter, wantRunAfter)
+	}
+}
+
+func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsPreservesTransientProviderBackoff(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-project-session-preserves-transient-provider-backoff",
+		DisplayName: "Requeue Active Project Session Preserves Transient Provider Backoff",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue active projects.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-project-session-preserves-transient-provider-backoff-project",
+		DisplayName:    "Requeue Active Project Session Preserves Transient Provider Backoff Project",
+		Description:    "Project for project-session transient-provider requeue coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project bootstrap from the persisted state above.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_bootstrap","auto_continue":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create project bootstrap message: %v", err)
+	}
+	completedAt := time.Now().UTC().Add(-15 * time.Second).Truncate(time.Second)
+	errorMessage := `transient model failure (retry_after=2m0s): all provider connections are temporarily unavailable`
+	if _, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "failed",
+		TriggerMessageID: &message.ID,
+		RetryCount:       1,
+		ErrorMessage:     &errorMessage,
+		CompletedAt:      &completedAt,
+	}); err != nil {
+		t.Fatalf("create failed project continuation turn: %v", err)
+	}
+
+	requeued, err := worker.RequeueActiveProjectSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveProjectSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1", requeued)
+	}
+
+	var (
+		status   string
+		jobMsgID uuid.UUID
+		retry    int
+		runAfter time.Time
+		jittered bool
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status,
+		       (payload->>'message_id')::uuid,
+		       COALESCE((payload->>'retry_count')::int, 0),
+		       run_after,
+		       COALESCE((payload->>'rate_limit_jitter_applied')::boolean, false)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status = 'pending'
+		  AND (payload->>'session_id')::uuid = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, session.ID).Scan(&status, &jobMsgID, &retry, &runAfter, &jittered); err != nil {
+		t.Fatalf("query requeued project transient retry job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("retry job status = %q, want pending", status)
+	}
+	if jobMsgID != message.ID {
+		t.Fatalf("retry message_id = %s, want %s", jobMsgID, message.ID)
+	}
+	if retry != 2 {
+		t.Fatalf("retry count = %d, want 2", retry)
+	}
+	if jittered {
+		t.Fatal("expected rate_limit_jitter_applied = false")
+	}
+	wantRunAfter := completedAt.Add(agentTurnTransientDelay(2, 2*time.Minute))
 	if runAfter.Before(wantRunAfter.Add(-5*time.Second)) || runAfter.After(wantRunAfter.Add(5*time.Second)) {
 		t.Fatalf("run_after = %s, want about %s", runAfter, wantRunAfter)
 	}

@@ -816,6 +816,14 @@ Still pending from this spec:
   - the completed-turn handler now schedules the next fresh retry after `maxTransientInfraBackoff` instead of using the normal near-immediate auto-continuation delay
   - this preserves eventual retry behavior while preventing the counter-reset loop that was minting a new turn within milliseconds after the prior one had already burned through its full in-turn retry budget
   - focused turn-engine coverage now proves the default auto-continuation path still works and the exhausted-provider variant is delayed instead
+- idle async-session worker recovery now preserves transient-provider backoff instead of recreating an immediately due `agent_turn` after a failed turn leaves the session without live turn ownership:
+  - `RequeueActiveExecutionSessionsWithoutTurns(...)` and `RequeueActiveProjectSessionsWithoutTurns(...)` previously only deferred on explicit rate-limit text
+  - they now also detect transient provider failure text, parse hinted `retry_after=` windows from `TransientModelError`, and schedule the replacement `agent_turn` with transient backoff instead of `run_after = now`
+  - this closes the worker-side gap that was still reviving async review/work lanes as `Retry attempt 6`, `7`, `8`, ... after the turn engine had already stopped same-turn transient retries
+  - focused jobqueue integration coverage now proves both:
+    - generic transient provider failures get delayed active-execution requeues
+    - hinted transient provider recovery windows are preserved for active project-session requeues
+  - runtime is rebuilt/restarted on this slice and healthy; fresh live proof is still pending because there were no matching transient-idle async sessions to recover in the short post-deploy window
 
 ## Deferred Follow-Up, Not In This Spec
 
