@@ -865,3 +865,16 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
   - but it no longer protects clearly stale live invocations forever
   - the exemption now only applies while the attached `in_flight` invocation is younger than the same scope/model-specific stale window already used elsewhere
   - once the invocation ages past that window, the dead claimed job can be released and the normal stale-invocation cleanup path can finish recovery on the same stale-scan pass
+- live proof now exists on the rebuilt runtime for the widened project-continuation repair:
+  - project session `db21265f-c37d-40e4-9ed5-13def09970f8`
+  - turn `89e07a94-39c5-4790-9618-43454c21e8f5`
+  - source `project_continuation_resume`
+  - read-only tool mix:
+    - `task.list`
+    - `project.get`
+    - `task.get`
+    - `flow.get_execution`
+    - `session.list`
+    - `agent.list`
+  - resulting system message:
+    - `[Project continuation auto-queued task 11 (Workstream C: Wave Gating Validation) after a non-mutating continuation left runnable draft work untouched.]`

@@ -3104,8 +3104,24 @@ Live proof:
 
 Deploy status:
 
-- `session.list` / `inbox.list` continuation repair, the new in-flight operator report, and the narrowed stale-claim exemption are code-complete and test-green
-- runtime restart had not happened yet at the moment of this note, because I was waiting for the live in-flight turn to settle first
+- `session.list` / `inbox.list` continuation repair, the new in-flight operator report, and the narrowed stale-claim exemption are now live on the rebuilt runtime
+
+Fresh live proof after deploy:
+
+- project session `db21265f-c37d-40e4-9ed5-13def09970f8`
+- turn `89e07a94-39c5-4790-9618-43454c21e8f5`
+- trigger source: `project_continuation_resume`
+- read-only tool mix on the max-tool-call turn:
+  - `task.list`
+  - `project.get`
+  - `task.get`
+  - `flow.get_execution`
+  - `session.list`
+  - `agent.list`
+- resulting system message:
+  - `[Project continuation auto-queued task 11 (Workstream C: Wave Gating Validation) after a non-mutating continuation left runnable draft work untouched.]`
+
+This is the direct live proof that the widened continuation repair is now firing on the resume-shaped browse turns that were previously burning full extra project continuations.
 
 ## Update 04:16 MDT
 
