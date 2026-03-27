@@ -14018,6 +14018,48 @@ func TestContinuationTurnNormalizesOperatorFacingClaudeCLICommandSummary(t *test
 	}
 }
 
+func TestContinuationTurnNormalizesFunctionCallPlanSummary(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
+	}
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			return ModelResponse{Content: "I'll begin execution on task 22 and gather current state.\n\n<function_calls>\n[\n  {\"tool\": \"task.update\", \"task_id\": \"123\", \"work_status\": \"in_progress\"},\n  {\"tool\": \"project.get\", \"project_id\": \"456\"}\n]\n</function_calls>\n\nNow I need to understand the project state."}, nil
+		}
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var summaryMessage *repo.ChatMessage
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "[Continuation summary]") {
+			msgCopy := msg
+			summaryMessage = &msgCopy
+		}
+	}
+	if summaryMessage == nil {
+		t.Fatal("continuation summary message missing")
+	}
+	if !strings.Contains(summaryMessage.Content, "Continuation summary unavailable.") {
+		t.Fatalf("continuation summary = %q, want normalized unavailable message", summaryMessage.Content)
+	}
+}
+
 func TestContinuationTurnUsesTaskFallbackSummaryForAsyncProjectTask(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

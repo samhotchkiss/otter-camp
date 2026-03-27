@@ -1191,3 +1191,19 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
       - runtime returned:
         - `project continuation already has named actionable draft tasks in the continuation prompt. Do not re-list the broader project task tree...`
       - this is the first direct project-lane same-turn rediscovery block in production for that family
+  - newest continuation-summary pseudo-tool-plan sanitization slice:
+    - continuation summaries that contain embedded pseudo-tool plans are now treated as unusable and collapsed to the standard fallback summary
+    - this covers summaries that include:
+      - `<function_calls> ...`
+      - serialized `task.update` / `project.get` tool plans
+    - this targets the live project-session seam where continuation summaries themselves were injecting control-plane chatter like:
+      - `I'll begin execution on task 22 ... <function_calls> ... project.get ...`
+    - focused turn-engine coverage is green for:
+      - function-call-plan summary normalization
+      - the earlier operator-facing command-request normalization
+    - live proof now exists on hot session `db21265f-c37d-40e4-9ed5-13def09970f8`:
+      - before deploy:
+        - `2026-03-27 09:00:59 MDT` and `09:01:19 MDT` summaries carried `<function_calls>` tool plans
+      - after deploy:
+        - `2026-03-27 09:03:09 MDT`, `09:03:32 MDT`, and `09:03:50 MDT` all fell back to:
+          - `Project execution is already underway. Reuse the existing project task tree...`

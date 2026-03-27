@@ -3152,6 +3152,47 @@ Why this matters:
   - same-turn rereads of named active tasks via `task.get`
   - other non-essential project-lane discovery like `agent.list`
 
+## Update 09:04 MDT
+
+I tightened the continuation-summary sanitizer again so project continuations stop inheriting pseudo-tool plans as if they were real summaries.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `continuationSummaryLooksUnavailable(...)` now also treats embedded pseudo-tool plans as unusable
+  - newly normalized patterns include:
+    - `<function_calls>`
+    - serialized `task.update`
+    - serialized `project.get`
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added `TestContinuationTurnNormalizesFunctionCallPlanSummary`
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(ContinuationTurnNormalizesFunctionCallPlanSummary|ContinuationTurnNormalizesOperatorFacingCommandRequestSummary|ContinuationTurnNormalizesOperatorFacingClaudeCLICommandSummary)$' -count=1`
+- `go build -o ./bin/ottercamp ./cmd/ottercamp`
+- runtime restarted on tmux `codex-e2e-20260324`
+- `./bin/ottercamp health --output json`
+
+Live proof:
+
+- hot session `db21265f-c37d-40e4-9ed5-13def09970f8`
+- before deploy:
+  - `2026-03-27 09:00:59 MDT` summary included `<function_calls>` with `task.update` + `task.get`
+  - `2026-03-27 09:01:19 MDT` summary included `<function_calls>` with `task.update` + `project.get`
+- after deploy:
+  - `2026-03-27 09:03:09 MDT`
+  - `2026-03-27 09:03:32 MDT`
+  - `2026-03-27 09:03:50 MDT`
+  - all three normalized straight to the fallback:
+    - `Project execution is already underway. Reuse the existing project task tree, workspace artifacts, planning files, and recent tool results from this session to keep the active work moving forward.`
+
+Why this matters:
+
+- it removes another prompt-chatter leak from the project continuation lane
+- it keeps the rooted continuation turn centered on the runtime-authored snapshot/guardrails instead of model-authored pseudo-tool plans
+
 ## Update 08:24 MDT
 
 I tightened the orchestration-parent same-turn review guard to keep using the session deliverable target even when the prompt text itself is too generic.

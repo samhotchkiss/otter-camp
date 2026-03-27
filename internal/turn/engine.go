@@ -9530,6 +9530,11 @@ func continuationSummaryLooksUnavailable(summary string) bool {
 		"run this command",
 		"```bash",
 		"```sh",
+		"<function_calls>",
+		"tool\": \"task.update\"",
+		"tool\": \"project.get\"",
+		"type\": \"task.update\"",
+		"type\": \"project.get\"",
 	}
 	for _, pattern := range patterns {
 		if strings.Contains(normalized, pattern) {
