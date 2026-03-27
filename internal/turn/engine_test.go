@@ -8646,6 +8646,111 @@ func TestShouldBlockOrchestrationParentReviewRejectDiscoveryTool(t *testing.T) {
 	}
 }
 
+func TestShouldBlockReviewMissingTestsDiscoveryTool(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Verify pipeline config loads from file correctly, environment variable overrides apply properly, and invalid configs are rejected with clear errors. Write tests."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  14,
+				Title:       "Validate config loading and environment overrides",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"preferred_deliverable_path": "config/pipeline-config-invalid.yaml",
+				}),
+			},
+		},
+	}
+
+	turnID := uuid.New()
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"file.read","output":{"path":"config/pipeline-config-invalid.yaml","byte_size":803,"content":"invalid fixture"}}`,
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"file.list","output":{"path":"tests","error":"recovery_target_focus_required","deliverable_path":"config/pipeline-config-invalid.yaml","message":"Recovery already identified \u0060config/pipeline-config-invalid.yaml\u0060 as the target deliverable."}}`,
+	})
+
+	rt := &turnRuntime{
+		session:            fixture.session,
+		turn:               &repo.ChatTurn{ID: turnID},
+		initialMessageText: fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session),
+	}
+	if blocked, reason := fixture.engine.shouldBlockReviewMissingTestsDiscoveryTool(context.Background(), rt, "git.log", map[string]any{}); !blocked {
+		t.Fatal("expected review lane to block follow-on discovery once required test verification already failed in this turn")
+	} else if !strings.Contains(reason, "decision=reject") {
+		t.Fatalf("reason = %q, want reject guidance", reason)
+	}
+
+	if blocked, reason := fixture.engine.shouldBlockReviewMissingTestsDiscoveryTool(context.Background(), rt, "file.read", map[string]any{
+		"path": "tests/test_config_loader.py",
+	}); !blocked {
+		t.Fatal("expected review lane to block further test-file inspection once reject evidence exists")
+	} else if !strings.Contains(reason, "cannot be approved") {
+		t.Fatalf("reason = %q, want missing-tests guidance", reason)
+	}
+}
+
+func TestShouldBlockReviewMissingTestsDiscoveryToolRequiresSameTurnEvidence(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Verify pipeline config loads from file correctly, environment variable overrides apply properly, and invalid configs are rejected with clear errors. Write tests."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  14,
+				Title:       "Validate config loading and environment overrides",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"preferred_deliverable_path": "config/pipeline-config-invalid.yaml",
+				}),
+			},
+		},
+	}
+
+	turnID := uuid.New()
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"file.read","output":{"path":"config/pipeline-config-invalid.yaml","byte_size":803,"content":"invalid fixture"}}`,
+	})
+
+	rt := &turnRuntime{
+		session:            fixture.session,
+		turn:               &repo.ChatTurn{ID: turnID},
+		initialMessageText: fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session),
+	}
+	if blocked, reason := fixture.engine.shouldBlockReviewMissingTestsDiscoveryTool(context.Background(), rt, "git.log", map[string]any{}); blocked {
+		t.Fatalf("expected no missing-tests block without same-turn test verification failure, got %q", reason)
+	}
+}
+
 func TestShouldBlockOrchestrationParentReviewRejectDiscoveryToolForUnfinishedChildren(t *testing.T) {
 	t.Parallel()
 

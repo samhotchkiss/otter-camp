@@ -2478,6 +2478,56 @@ func summarizeOrchestrationParentChildStatus(task map[string]any) (string, bool)
 	}
 }
 
+type reviewMissingTestsEvidence struct {
+	Summary string
+}
+
+func currentTurnReviewMissingTestsEvidence(turnMessages []repo.ChatMessage, targetPath string) (reviewMissingTestsEvidence, bool) {
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	primaryDeliverableReadable := false
+	var summary string
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok {
+			continue
+		}
+		errorCode := normalizeValidationFailureCode(errText)
+		if errorCode == "" {
+			errorCode = normalizeValidationFailureCode(anyString(output["error"]))
+		}
+		normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
+		path := normalizeWorkspaceRelativePath(anyString(output["path"]))
+		if normalizedToolName == "file.read" && errorCode == "" && intValue(output["byte_size"]) > 0 && (targetPath == "" || sameWorkspaceRelativePath(path, targetPath)) {
+			primaryDeliverableReadable = true
+			continue
+		}
+		if !textMentionsTests(path) {
+			continue
+		}
+		switch errorCode {
+		case "not_found":
+			summary = fmt.Sprintf("required test artifacts under `%s` were not found", path)
+		case "recovery_target_focus_required", "explicit_deliverable_focus_required":
+			deliverablePath := normalizeWorkspaceRelativePath(anyString(output["deliverable_path"]))
+			if deliverablePath == "" {
+				deliverablePath = targetPath
+			}
+			if deliverablePath != "" {
+				summary = fmt.Sprintf("required test artifacts under `%s` could not be verified because review was redirected back to `%s`", path, deliverablePath)
+			} else {
+				summary = fmt.Sprintf("required test artifacts under `%s` could not be verified from the current workspace state", path)
+			}
+		}
+	}
+	if !primaryDeliverableReadable || strings.TrimSpace(summary) == "" {
+		return reviewMissingTestsEvidence{}, false
+	}
+	return reviewMissingTestsEvidence{Summary: summary}, true
+}
+
 func reviewRetryPromptForMissingPreferredDeliverable(messages []repo.ChatMessage, latestCompleted *repo.ChatTurn, latestUser *repo.ChatMessage, executionID uuid.UUID, basePrompt string) (string, bool) {
 	if latestCompleted == nil || latestCompleted.ID == uuid.Nil || latestUser == nil || executionID == uuid.Nil {
 		return "", false
@@ -11545,6 +11595,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			continue
 		}
 		if blocked, reason := e.shouldBlockOrchestrationParentReviewCurrentTaskGetTool(ctx, rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
+		if blocked, reason := e.shouldBlockReviewMissingTestsDiscoveryTool(ctx, rt, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
 				Name:       name,
@@ -22508,6 +22566,43 @@ func (e *TurnEngine) shouldBlockOrchestrationParentReviewUnfinishedChildDiscover
 	return true, buildOrchestrationParentReviewUnfinishedChildDiscoveryGuardError(taskRecord, normalizedToolName, childEvidence.summary())
 }
 
+func (e *TurnEngine) shouldBlockReviewMissingTestsDiscoveryTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if e == nil || e.tasks == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, ""
+	}
+	normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
+	switch normalizedToolName {
+	case "file.read", "file.list", "file.search", "task.get", "task.list", "project.get", "project.list", "git.diff", "git.log", "git.status":
+	default:
+		return false, ""
+	}
+	currentTaskID := resolveTaskID(rt.session)
+	if currentTaskID == nil || *currentTaskID == uuid.Nil {
+		return false, ""
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *currentTaskID)
+	if err != nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") || !taskReviewRequiresTests(taskRecord) || taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+		return false, ""
+	}
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return false, ""
+	}
+	targetPath := parsePromptDeliverableTarget(strings.TrimSpace(rt.initialMessageText))
+	evidence, ok := currentTurnReviewMissingTestsEvidence(messagesForTurn(messages, rt.turn.ID), targetPath)
+	if !ok {
+		return false, ""
+	}
+	return true, buildReviewMissingTestsDiscoveryGuardError(taskRecord, normalizedToolName, evidence)
+}
+
 func (e *TurnEngine) shouldBlockTaskExecutionTaskCreateTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
 	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
 		return false, ""
@@ -23076,6 +23171,21 @@ func buildOrchestrationParentReviewUnfinishedChildDiscoveryGuardError(taskRecord
 		return fmt.Sprintf("task review already established that %s has unfinished direct child tasks (%s). Do not inspect child deliverables or reread the parent summary; call flow.review_decision with decision=reject immediately using the existing child-status evidence.", label, evidenceSummary)
 	}
 	return fmt.Sprintf("task review already established that %s has unfinished direct child tasks (%s). Do not inspect additional files, tasks, or project state with %s; call flow.review_decision with decision=reject immediately using the existing child-status evidence.", label, evidenceSummary, toolName)
+}
+
+func buildReviewMissingTestsDiscoveryGuardError(taskRecord repo.ProjectTask, toolName string, evidence reviewMissingTestsEvidence) string {
+	label := projectBootstrapTaskLabel(taskRecord)
+	if strings.TrimSpace(label) == "" {
+		label = "the current review task"
+	}
+	summary := strings.TrimSpace(evidence.Summary)
+	if summary == "" {
+		summary = "required test artifacts could not be verified from the current workspace state"
+	}
+	if strings.EqualFold(strings.TrimSpace(toolName), "file.read") {
+		return fmt.Sprintf("task review already established that %s cannot be approved because %s. Do not inspect more files now; call flow.review_decision with decision=reject immediately using that test-verification evidence.", label, summary)
+	}
+	return fmt.Sprintf("task review already established that %s cannot be approved because %s. Do not inspect additional files, tasks, or project state with %s; call flow.review_decision with decision=reject immediately using that test-verification evidence.", label, summary, toolName)
 }
 
 func buildTaskExecutionTaskCreateGuardError(taskRecord repo.ProjectTask, parentRequired bool, currentTaskID uuid.UUID) string {

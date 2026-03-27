@@ -3098,6 +3098,48 @@ Deploy status:
 - tests green
 - runtime restart pending at the time of this note
 
+## Update 07:58 MDT
+
+I cut the next same-turn review seam directly from fresh task-14 traffic.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - async review turns that already proved the preferred deliverable is substantive and then fail to verify required test artifacts now block further same-turn discovery immediately
+  - once the current turn has both:
+    - a successful primary deliverable read
+    - a `tests`-scoped verification failure (`not_found` or recovery-focus redirect)
+  - follow-on discovery calls are blocked with immediate reject guidance, including:
+    - `file.read`
+    - `file.list`
+    - `file.search`
+    - `task.get`
+    - `git.log`
+    - related review discovery rereads
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for:
+    - same-turn missing-tests discovery block
+    - negative case when the same-turn test-verification failure has not happened yet
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run "Test(ShouldBlockReviewMissingTestsDiscoveryTool(RequiresSameTurnEvidence)?|ShouldBlockOrchestrationParentReview(UnfinishedChildDiscoveryTool|RejectDiscoveryToolForUnfinishedChildren)|ReviewApprovalRetryPrompt(RejectsWhenRequiredTestsCannotBeVerified|RejectsWhenRequiredTestsCannotBeVerifiedViaRecoveryFocus|RejectsWhenRequiredTestsCannotBeVerifiedAcrossRetryTurns)|TaskExecutionRetryPromptFor(RecoveryTargetFocus|RecoveryTargetFocusSkipsWhenTargetAlreadyWritten))$" -count=1`
+
+Why this slice exists:
+
+- fresh task-14 session `834ee8c6-60d7-455d-a6a9-ba97918a4f83` showed the exact in-turn waste:
+  - `config/pipeline-config-invalid.yaml` was already readable
+  - a `tests` lookup had already been redirected by recovery focus
+  - the review still continued with `task.get`, `git.log`, and more discovery instead of rejecting
+- the retry-persistence work helps later turns, but this waste was happening inside the same turn before the retry prompt ever had a chance to help
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime restart pending at the time of this note
+
 ## Update 07:49 MDT
 
 I cut the sharper orchestration-parent review seam that was still live in task-11 even after the retry-persistence work.

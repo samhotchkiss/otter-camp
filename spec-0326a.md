@@ -1108,3 +1108,13 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - follow-on `task.get`, child `file.read`, `file.list`, `file.search`, and similar discovery calls are now blocked inside that same turn with immediate reject guidance
     - this closes the live gap where the model could say `OC-13 is in_progress` and still spend the rest of the turn opening child deliverables before any retry prompt got a chance to help
     - focused turn-engine coverage is green for the new same-turn unfinished-child discovery guard
+  - newest review missing-tests same-turn guard slice:
+    - async review turns that already proved the main deliverable is substantive and then fail to verify required test artifacts in the same turn no longer get to keep browsing
+    - once the turn has both:
+      - a successful primary deliverable read
+      - a `tests` inspection failure (`not_found` or recovery-focus redirect)
+    - follow-on `file.read`, `file.list`, `file.search`, `task.get`, `git.log`, and similar discovery calls are now blocked immediately with reject guidance
+    - this targets the live task-14 family where review kept rereading the invalid config file and browsing for tests instead of rejecting once test verification had already failed
+    - focused turn-engine coverage is green for:
+      - same-turn missing-tests discovery block
+      - no-op behavior when the same-turn test verification failure has not happened yet
