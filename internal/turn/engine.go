@@ -9512,6 +9512,10 @@ func continuationSummaryLooksUnavailable(summary string) bool {
 		"what were we working on",
 		"what task were we working on",
 		"what specific task was previously in progress",
+		"please provide the output",
+		"run this command",
+		"```bash",
+		"```sh",
 	}
 	for _, pattern := range patterns {
 		if strings.Contains(normalized, pattern) {

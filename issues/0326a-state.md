@@ -3114,6 +3114,50 @@ Live proof:
   - returned zero rows
 - that is the concrete confirmation that review continuations are no longer being handed off through the generic task-continuation prompt on the new build
 
+## Update 08:24 MDT
+
+The hottest remaining live session shifted back to async project orchestration, and the newest bad shape was visible directly in the continuation summary itself:
+
+- hot project session `db21265f-c37d-40e4-9ed5-13def09970f8`
+- latest continuation summary contained:
+  - `I'll inspect the current task tree to identify the next runnable work.`
+  - a fenced shell snippet
+  - `Please provide the output so I can immediately identify and advance the next bounded task.`
+- that summary was then being preserved into the next async project turn, which is the wrong behavior for autonomous runtime execution
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - widened `continuationSummaryLooksUnavailable(...)` so operator-facing command-request summaries are normalized away
+  - new unavailable patterns include:
+    - `please provide the output`
+    - `run this command`
+    - fenced shell snippets like ```` ```bash ```` and ```` ```sh ````
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for a continuation summary that includes a shell snippet plus `Please provide the output...`
+  - preserved the older no-context / missing-draft / missing-history normalization tests
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(ContinuationTurnNormalizesGenericNoContextSummary|ContinuationTurnNormalizesMissingDurableDraftSummary|ContinuationTurnNormalizesMissingTaskSessionHistorySummary|ContinuationTurnNormalizesOperatorFacingCommandRequestSummary|ContinuationTurnUsesTaskFallbackSummaryForAsyncProjectTask|BuildProjectContinuationActionPrompt)$' -count=1`
+
+Why this matters:
+
+- the runtime should never carry an operator-directed `please provide output` memo into an autonomous async continuation
+- normalizing that shape to `Continuation summary unavailable.` forces project/task continuations back onto the safer built-in fallback summaries instead of preserving a dead-end request for human help
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime restarted on the new binary
+
+Live proof status:
+
+- no post-restart project continuation summary rows had been emitted yet in the short verification window after `2026-03-27 08:18:13 MDT`
+- so this slice is deployed and test-green, but still waiting on the next real async project continuation to prove the operator-facing summary is now normalized away in production
+
 ## Update 08:20 MDT
 
 The next live seam showed up immediately after the prior fix:

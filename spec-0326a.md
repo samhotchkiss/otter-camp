@@ -1136,3 +1136,12 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - focused turn-engine coverage is green for:
       - review continuation handoff using reject retry guidance
       - existing async task continuation prompt behavior remaining intact for non-review task lanes
+  - newest project continuation summary sanitization slice:
+    - continuation summaries that ask the operator to run a command or provide output are now treated as unusable instead of being carried into the next async turn
+    - this catches command-request summaries like:
+      - `Please provide the output`
+      - `run this command`
+      - fenced shell snippets such as ```` ```bash ````
+    - once normalized as unavailable, async project continuations fall back to the built-in project continuation summary instead of preserving an operator-facing request
+    - this specifically targets the live project session churn where a continuation summary was telling the agent to run `claude-code task list --format json` and wait for output, which is nonsensical inside autonomous runtime execution
+    - focused turn-engine coverage is green for operator-facing command-request normalization, alongside the preexisting continuation-summary unavailability cases
