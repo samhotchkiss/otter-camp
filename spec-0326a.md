@@ -1057,3 +1057,8 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
       - that queued message still carries the reject-only markers:
         - `zero direct child tasks`
         - `decision=reject`
+    - end-to-end live proof now exists too:
+      - task-9 retry `25` at `2026-03-27 06:48:19 MDT`
+      - the runtime blocked the attempted `file.read`, `file.list`, and `task.list` discovery calls under the reject-only orchestration-parent guards
+      - the assistant then emitted `flow.review_decision` with `decision=reject`
+      - task `9` moved from `review` back to `in_progress` on a new flow node, confirming the reject path advanced the flow instead of looping
