@@ -2140,3 +2140,36 @@ Why this matters:
 
 - it closes the remaining “shell script only” visibility gap for the most important live rerun diagnostics
 - when Anthropic quota opens again, the next canary window can be measured directly from product CLI output instead of ad hoc SQL plus the shell wrapper
+
+## Update 20:44 MDT
+
+I tightened one more package-install churn edge that showed up during offline review of the hot turn family.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - repeated same-package `cli.execute` install churn now carries an observed attempt count from the same-turn message scan
+  - async task early-stop logic now uses that observed count before the persisted validation-guard counter, so the turn stops on the third install even if the model interleaves failed import-check probes between the install attempts
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added `TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdPackageInstallAttemptWithInterleavedChecks`
+  - the focused slice also reran the existing direct package-install churn stop, the package-change exemption, the shell-file-build stop, and the review retry path
+
+Focused verification:
+
+- `go test ./internal/turn -run 'Test(HandleToolValidationResultsStopsAsyncTaskTurnAfterThird(PackageInstallAttemptInSameTurn|PackageInstallAttemptWithInterleavedChecks|ShellFileBuildAttemptInSameTurn)|HandleToolValidationResultsIgnoresPackageInstallChurnWhenPackageChanges|HandleUserMessageRetriesRepeatedReviewActionRequiredFailures)$' -count=1`
+
+Why this matters:
+
+- the old cutoff only stopped quickly when the identical install attempts were consecutive at the validation-guard layer
+- a hot task turn could still burn multiple rounds on:
+  - `pip install pyyaml`
+  - `python3 -c "import yaml"`
+  - `pip3 install pyyaml`
+  - another import probe
+  - `/usr/bin/python3 -m pip install --user pyyaml`
+- with this slice, the turn now recognizes that as the same deterministic package-install churn family and stops on the third observed install instead of paying for another model cycle
+
+Deployment status:
+
+- code and focused tests are complete locally
+- the runtime has not been restarted on this newest slice yet

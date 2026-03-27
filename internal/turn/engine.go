@@ -572,6 +572,7 @@ type toolValidationFailure struct {
 	DeliverablePath    string
 	Fingerprint        string
 	AttemptFingerprint string
+	ObservedCount      int
 }
 
 type taskValidationGuardState = tasksvc.ValidationGuardState
@@ -17515,7 +17516,7 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 			repeatedRecoveryFailure = &failureCopy
 			break
 		}
-		if shouldStopTurnAfterRepeatedTaskValidationFailure(rt, previous, candidate) {
+		if shouldStopTurnAfterRepeatedTaskValidationFailure(rt, previous, candidate, failure) {
 			repeatedTurnStop = true
 			failureCopy := failure
 			repeatedFailure = &failureCopy
@@ -17852,13 +17853,15 @@ func classifyRepeatedPackageInstallChurn(turnMessages []repo.ChatMessage, assist
 	}
 
 	reason := fmt.Sprintf("repeated package-install attempts for `%s` in the same turn", packageSpec)
-	return buildToolValidationFailure(
+	failure := buildToolValidationFailure(
 		"cli.execute",
 		duplicatePackageInstallChurnCode,
 		reason,
 		packageInstallChurnAttemptFingerprint(packageSpec),
 		"",
-	), true
+	)
+	failure.ObservedCount = matchCount
+	return failure, true
 }
 
 func packageInstallChurnAttemptFingerprint(packageSpec string) string {
@@ -18680,7 +18683,7 @@ func nextTaskValidationGuardState(current taskValidationGuardState, initialMessa
 	return next, next.Blocked && !current.Blocked
 }
 
-func shouldStopTurnAfterRepeatedTaskValidationFailure(rt *turnRuntime, current, next taskValidationGuardState) bool {
+func shouldStopTurnAfterRepeatedTaskValidationFailure(rt *turnRuntime, current, next taskValidationGuardState, failure toolValidationFailure) bool {
 	if rt == nil || rt.session == nil || rt.turn == nil {
 		return false
 	}
@@ -18688,7 +18691,15 @@ func shouldStopTurnAfterRepeatedTaskValidationFailure(rt *turnRuntime, current, 
 		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
 		return false
 	}
-	if current.Blocked || next.Blocked || next.Count < validationLoopTurnStopThreshold {
+	if current.Blocked || next.Blocked {
+		return false
+	}
+	if current.Count == 0 &&
+		strings.EqualFold(strings.TrimSpace(failure.FailureCode), duplicatePackageInstallChurnCode) &&
+		failure.ObservedCount >= validationLoopBlockThreshold {
+		return true
+	}
+	if next.Count < validationLoopTurnStopThreshold {
 		return false
 	}
 	if strings.EqualFold(strings.TrimSpace(next.FailureCode), "review_action_required") {

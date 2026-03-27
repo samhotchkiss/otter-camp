@@ -19141,6 +19141,164 @@ func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdPackageInstallAt
 	}
 }
 
+func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdPackageInstallAttemptWithInterleavedChecks(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Validate config loader imports and metrics wiring",
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	type priorStep struct {
+		callID   string
+		command  string
+		exitCode int
+	}
+	steps := []priorStep{
+		{
+			callID:   "pkg-prev-1",
+			command:  "pip install pyyaml 2>&1 | tail -3",
+			exitCode: 0,
+		},
+		{
+			callID:   "check-prev-1",
+			command:  "python3 -c \"import yaml; print('yaml OK')\"",
+			exitCode: 1,
+		},
+		{
+			callID:   "pkg-prev-2",
+			command:  "pip3 install pyyaml 2>&1 | tail -3",
+			exitCode: 0,
+		},
+		{
+			callID:   "check-prev-2",
+			command:  "python3 -c \"import yaml; print('yaml OK at', yaml.__file__)\"",
+			exitCode: 1,
+		},
+	}
+	for _, step := range steps {
+		fixture.messages.create(repo.ChatMessage{
+			SessionID: fixture.session.ID,
+			TurnID:    &turnID,
+			Role:      "assistant",
+			Status:    "final",
+			Content:   "Trying another environment check.",
+			Metadata: mustMarshalJSON(t, map[string]any{
+				"tool_calls": []map[string]any{{
+					"id":   step.callID,
+					"name": "cli_execute",
+					"arguments": map[string]any{
+						"command": step.command,
+					},
+				}},
+			}),
+		})
+		fixture.messages.create(repo.ChatMessage{
+			SessionID:  fixture.session.ID,
+			TurnID:     &turnID,
+			Role:       "tool_result",
+			Status:     "final",
+			ToolCallID: &step.callID,
+			Content: string(mustRawJSON(t, map[string]any{
+				"tool_name": "cli.execute",
+				"output": map[string]any{
+					"duration_ms": 25,
+					"exit_code":   step.exitCode,
+				},
+			})),
+		})
+	}
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "Trying the install directly through python -m pip.",
+		Metadata: mustMarshalJSON(t, map[string]any{
+			"tool_calls": []map[string]any{{
+				"id":   "pkg-1",
+				"name": "cli_execute",
+				"arguments": map[string]any{
+					"command": "/usr/bin/python3 -m pip install --user pyyaml 2>&1 | tail -5",
+				},
+			}},
+		}),
+	})
+	calls := []ToolCall{{
+		ID:   "pkg-1",
+		Name: "cli.execute",
+		Arguments: map[string]any{
+			"command": "/usr/bin/python3 -m pip install --user pyyaml 2>&1 | tail -5",
+		},
+	}}
+	results := []ToolResult{{
+		ToolCallID: "pkg-1",
+		Name:       "cli.execute",
+		Output: map[string]any{
+			"duration_ms": 25,
+			"exit_code":   0,
+		},
+	}}
+	failures, err := fixture.engine.collectAsyncTaskToolResultChurnFailures(context.Background(), rt, results)
+	if err != nil {
+		t.Fatalf("collectAsyncTaskToolResultChurnFailures: %v", err)
+	}
+	if len(failures) != 1 {
+		t.Fatalf("churn failures = %d, want 1", len(failures))
+	}
+	if got := failures[0].FailureCode; got != duplicatePackageInstallChurnCode {
+		t.Fatalf("failure code = %q, want %q", got, duplicatePackageInstallChurnCode)
+	}
+	if got := failures[0].ObservedCount; got != validationLoopBlockThreshold {
+		t.Fatalf("observed count = %d, want %d", got, validationLoopBlockThreshold)
+	}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	if !fixture.messages.containsContentSubstring("Repeated identical cli.execute package-install churn in this turn") {
+		t.Fatal("expected repeated package-install early-stop validation message")
+	}
+}
+
 func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdShellFileBuildAttemptInSameTurn(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
