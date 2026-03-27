@@ -3062,6 +3062,42 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 07:27 MDT
+
+I cut the next orchestration-parent review seam that showed up in fresh live task-11 traffic.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - orchestration-only parent review retries now reject immediately when the current scoped `task.list(parent_task_id=...)` evidence already shows unfinished direct child tasks
+  - that reject prompt now carries the child-status evidence itself, for example `OC-13 (...) is in_progress`, so the model does not need to inspect child deliverables to justify rejection
+  - persisted retry prompts now reuse that unfinished-child evidence across later transient retries, not just within the immediately failed turn
+  - the existing orchestration-parent reject-only discovery guard now recognizes this unfinished-child mode and blocks follow-on child deliverable reads and extra task relisting once rejection evidence is already sufficient
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for:
+    - same-turn unfinished-child reject prompt
+    - persisted unfinished-child reject prompt across retry turns
+    - reject-only discovery blocking for unfinished-child evidence
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run "Test(ReviewApprovalRetryPrompt(RejectsOrchestrationParentWithUnfinishedDirectChildren|RejectsOrchestrationParentWithUnfinishedDirectChildrenAcrossRetryTurns|RejectsOrchestrationParentWithoutDirectChildren|RejectsOrchestrationParentWithoutDirectChildrenAcrossRetryTurns|CarriesForwardOrchestrationParentSummaryEvidence)|ShouldBlockOrchestrationParentReviewRejectDiscoveryTool(ForUnfinishedChildren)?)$" -count=1`
+
+Why this slice exists:
+
+- fresh task-11 review traffic had already proved the direct child statuses were enough to reject:
+  - one child was still `in_progress`
+  - another child was already `done`
+- but the next review step still drifted into child deliverable `file.read` calls and ended as another `validation_loop_blocked` turn on `file.read -> not_found`
+- the product-safe fix is to treat unfinished direct child status as sufficient reject evidence for the orchestration parent, not to keep exploring child artifacts
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime restart pending at the time of this note
+
 ## Update 06:54 MDT
 
 I cut the next project-control guidance seam instead of waiting on another opaque `not_found`.

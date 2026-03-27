@@ -1078,3 +1078,12 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - when an async `project_task` work turn already proved the current deliverable target is missing with `file.read -> not_found`, the next synthetic continuation now carries a narrowed prompt that says to create that file directly instead of rereading it
     - this reuses the session/task deliverable target that OtterCamp already knows from explicit deliverable paths, recovery checkpoints, or session-learned targets
     - focused turn-engine coverage is green for the missing-target retry prompt helper
+  - newest orchestration-parent review slice:
+    - orchestration-only parent review retries now reject immediately when a scoped `task.list(parent_task_id=...)` already proved one or more direct child tasks remain unfinished
+    - the retry prompt now carries forward the unfinished child-status evidence itself, for example `OC-13 ... is in_progress`, instead of inviting more child deliverable inspection
+    - persisted retry prompts now reuse that unfinished-child evidence across later transient retries, not just within the immediately failed turn
+    - the orchestration-parent reject-only discovery guard now recognizes this unfinished-child reject mode and blocks follow-on child deliverable reads / task relisting instead of letting review drift continue
+    - focused turn-engine coverage is green for:
+      - same-turn unfinished-child reject prompt
+      - persisted unfinished-child reject prompt across retry turns
+      - reject-only discovery blocking for unfinished-child evidence

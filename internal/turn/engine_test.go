@@ -8646,6 +8646,57 @@ func TestShouldBlockOrchestrationParentReviewRejectDiscoveryTool(t *testing.T) {
 	}
 }
 
+func TestShouldBlockOrchestrationParentReviewRejectDiscoveryToolForUnfinishedChildren(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Parent/orchestration task for pipeline scaffold work. Validates direct child tasks. Does not do execution work itself. Deliverable: Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  9,
+				Title:       "Workstream A: Pipeline Scaffold Setup",
+				Description: &description,
+				WorkStatus:  "review",
+			},
+		},
+	}
+
+	rejectPrompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session) +
+		"\nYour prior review evidence already established that the parent orchestration summary `Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md` is present and substantive." +
+		" It also established that one or more direct child tasks remain unfinished beneath this orchestration parent." +
+		" The current direct child-task evidence is: OC-13 (Wave activation) is in_progress." +
+		" Call flow.review_decision immediately with decision=reject, flow_node_execution_id " + uuid.NewString() + ", and concise findings that the orchestration parent cannot be approved while direct child tasks remain unfinished." +
+		" Use the unfinished direct child-task statuses as the rejection evidence." +
+		" Do not reread the parent summary, do not inspect child deliverable files, and do not re-list the broader project task tree."
+
+	rt := &turnRuntime{
+		session:            fixture.session,
+		initialMessageText: rejectPrompt,
+	}
+	if blocked, reason := fixture.engine.shouldBlockOrchestrationParentReviewRejectDiscoveryTool(context.Background(), rt, "file.read", map[string]any{
+		"path": "Work/OC-13-child-output.md",
+	}); !blocked {
+		t.Fatal("expected orchestration-parent review lane to block child deliverable reads once unfinished-child reject evidence exists")
+	} else if !strings.Contains(reason, "unfinished direct child tasks") {
+		t.Fatalf("reason = %q, want unfinished-child reject guidance", reason)
+	}
+
+	if blocked, reason := fixture.engine.shouldBlockOrchestrationParentReviewRejectDiscoveryTool(context.Background(), rt, "task.list", map[string]any{
+		"parent_task_id": taskID.String(),
+	}); !blocked {
+		t.Fatal("expected orchestration-parent review lane to block additional task listing once unfinished-child reject evidence exists")
+	} else if !strings.Contains(reason, "decision=reject") {
+		t.Fatalf("reason = %q, want reject guidance", reason)
+	}
+}
+
 func TestShouldBlockTaskExecutionTaskCreateToolBlocksNonOrchestrationTask(t *testing.T) {
 	t.Parallel()
 
@@ -30605,6 +30656,237 @@ func TestReviewApprovalRetryPromptRejectsOrchestrationParentWithoutDirectChildre
 	}
 	if !strings.Contains(retryPrompt, "zero direct child tasks") {
 		t.Fatalf("retryPrompt = %q, want empty-child evidence guidance", retryPrompt)
+	}
+}
+
+func TestReviewApprovalRetryPromptRejectsOrchestrationParentWithUnfinishedDirectChildren(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+	description := "Parent/orchestration task for pipeline scaffold work. Validates direct child tasks. Does not do execution work itself. Deliverable: Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  9,
+				Title:       "Workstream A: Pipeline Scaffold Setup",
+				Description: &description,
+				WorkStatus:  "review",
+			},
+		},
+	}
+
+	latestUser := repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session),
+	}
+	latestUser.Metadata = mustMarshalJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"synthetic_user_message": true,
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.messages.upsert(latestUser)
+
+	turnID := uuid.New()
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "I'll inspect the parent summary and child task statuses.",
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustMarshalJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":      "Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md",
+				"byte_size": 3162,
+				"content":   "# OC-9 summary",
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustMarshalJSON(t, map[string]any{
+			"tool_name": "task.list",
+			"output": map[string]any{
+				"tasks": []any{
+					map[string]any{"id": uuid.NewString(), "task_number": 13, "title": "Wave activation", "work_status": "in_progress"},
+					map[string]any{"id": uuid.NewString(), "task_number": 14, "title": "Validation", "work_status": "done"},
+				},
+				"meta": map[string]any{"cursor": ""},
+			},
+		})),
+	})
+
+	taskRecord, err := fixture.engine.tasks.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	retryPrompt, ok, err := fixture.engine.reviewApprovalRetryPrompt(context.Background(), fixture.session, taskRecord, &latestUser, &repo.ChatTurn{ID: turnID})
+	if err != nil {
+		t.Fatalf("reviewApprovalRetryPrompt: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected reject-oriented orchestration-parent retry prompt")
+	}
+	if !strings.Contains(retryPrompt, "decision=reject") {
+		t.Fatalf("retryPrompt = %q, want reject guidance", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "remain unfinished") {
+		t.Fatalf("retryPrompt = %q, want unfinished-child evidence guidance", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "OC-13 (Wave activation) is in_progress") {
+		t.Fatalf("retryPrompt = %q, want child status evidence", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "inspect child deliverable files") {
+		t.Fatalf("retryPrompt = %q, want bounded reject guidance", retryPrompt)
+	}
+}
+
+func TestReviewApprovalRetryPromptRejectsOrchestrationParentWithUnfinishedDirectChildrenAcrossRetryTurns(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+	description := "Parent/orchestration task for pipeline scaffold work. Validates direct child tasks. Does not do execution work itself. Deliverable: Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  9,
+				Title:       "Workstream A: Pipeline Scaffold Setup",
+				Description: &description,
+				WorkStatus:  "review",
+			},
+		},
+	}
+
+	latestUser := repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session),
+	}
+	latestUser.Metadata = mustMarshalJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"synthetic_user_message": true,
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.messages.upsert(latestUser)
+
+	priorTurnID := uuid.New()
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "The deliverable is present and readable. Now I need to inspect the child tasks.",
+		Metadata: mustMarshalJSON(t, map[string]any{
+			"tool_calls": []map[string]any{
+				{
+					"id":   "toolu_prior_task_list",
+					"name": "task_list",
+					"arguments": map[string]any{
+						"parent_task_id": taskID.String(),
+						"status":         "all",
+					},
+				},
+			},
+		}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustMarshalJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":      "Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md",
+				"byte_size": 3162,
+				"content":   "# OC-9 summary",
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustMarshalJSON(t, map[string]any{
+			"tool_name": "task.list",
+			"output": map[string]any{
+				"tasks": []any{
+					map[string]any{"id": uuid.NewString(), "task_number": 13, "title": "Wave activation", "work_status": "in_progress"},
+				},
+				"meta": map[string]any{"cursor": ""},
+			},
+		})),
+	})
+
+	retryTurnID := uuid.New()
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &retryTurnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "I'll start by inspecting the preferred deliverable target.",
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &retryTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustMarshalJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":      "Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md",
+				"byte_size": 3162,
+				"content":   "# OC-9 summary",
+			},
+		})),
+	})
+
+	taskRecord, err := fixture.engine.tasks.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	retryPrompt, ok, err := fixture.engine.reviewApprovalRetryPrompt(context.Background(), fixture.session, taskRecord, &latestUser, &repo.ChatTurn{ID: retryTurnID})
+	if err != nil {
+		t.Fatalf("reviewApprovalRetryPrompt: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected persisted unfinished-child reject prompt")
+	}
+	if !strings.Contains(retryPrompt, "decision=reject") {
+		t.Fatalf("retryPrompt = %q, want reject guidance", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "remain unfinished") {
+		t.Fatalf("retryPrompt = %q, want unfinished-child evidence guidance", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "OC-13 (Wave activation) is in_progress") {
+		t.Fatalf("retryPrompt = %q, want child status evidence", retryPrompt)
 	}
 }
 

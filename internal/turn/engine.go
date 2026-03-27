@@ -1854,6 +1854,12 @@ func (e *TurnEngine) reviewApprovalRetryPrompt(ctx context.Context, session *cha
 		if retryPrompt, ok := reviewRetryPromptForPersistedOrchestrationParentMissingDirectChildren(messages, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
 			return retryPrompt, true, nil
 		}
+		if retryPrompt, ok := reviewRetryPromptForOrchestrationParentIncompleteDirectChildren(messages, latestCompleted, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+			return retryPrompt, true, nil
+		}
+		if retryPrompt, ok := reviewRetryPromptForPersistedOrchestrationParentIncompleteDirectChildren(messages, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+			return retryPrompt, true, nil
+		}
 		if retryPrompt, ok := reviewRetryPromptForOrchestrationParentChildEvidence(messages, latestCompleted, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
 			return retryPrompt, true, nil
 		}
@@ -2118,6 +2124,121 @@ func reviewRetryPromptForPersistedOrchestrationParentMissingDirectChildren(messa
 	return retryPrompt, true
 }
 
+func reviewRetryPromptForOrchestrationParentIncompleteDirectChildren(messages []repo.ChatMessage, latestCompleted *repo.ChatTurn, latestUser *repo.ChatMessage, taskRecord repo.ProjectTask, executionID uuid.UUID, basePrompt string) (string, bool) {
+	if latestCompleted == nil || latestCompleted.ID == uuid.Nil || latestUser == nil || executionID == uuid.Nil {
+		return "", false
+	}
+	if !taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+		return "", false
+	}
+	targetPath := parsePromptDeliverableTarget(latestUser.Content)
+	if targetPath == "" {
+		return "", false
+	}
+	turnMessages := messagesForTurn(messages, latestCompleted.ID)
+	if len(turnMessages) == 0 {
+		return "", false
+	}
+
+	parentSummaryReadable := false
+	childEvidence := orchestrationParentChildStatusEvidence{}
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok {
+			continue
+		}
+		errorCode := normalizeValidationFailureCode(errText)
+		if errorCode == "" {
+			errorCode = normalizeValidationFailureCode(anyString(output["error"]))
+		}
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "file.read":
+			if errorCode == "" && normalizeWorkspaceRelativePath(anyString(output["path"])) == targetPath && intValue(output["byte_size"]) > 0 {
+				parentSummaryReadable = true
+			}
+		case "task.list":
+			if errorCode == "" {
+				childEvidence = collectOrchestrationParentChildStatusEvidence(output["tasks"])
+			}
+		}
+	}
+	if !parentSummaryReadable || !childEvidence.hasUnfinished() {
+		return "", false
+	}
+
+	retryPrompt := basePrompt +
+		"\nYour last review attempt already established that the parent orchestration summary `" + targetPath + "` is present and substantive." +
+		" It also established that one or more direct child tasks remain unfinished beneath this orchestration parent." +
+		" The current direct child-task evidence is: " + childEvidence.summary() + "." +
+		" Call flow.review_decision immediately with decision=reject, flow_node_execution_id " + executionID.String() + ", and concise findings that the orchestration parent cannot be approved while direct child tasks remain unfinished." +
+		" Use the unfinished direct child-task statuses as the rejection evidence." +
+		" Do not reread the parent summary, do not inspect child deliverable files, and do not re-list the broader project task tree."
+	return retryPrompt, true
+}
+
+func reviewRetryPromptForPersistedOrchestrationParentIncompleteDirectChildren(messages []repo.ChatMessage, latestUser *repo.ChatMessage, taskRecord repo.ProjectTask, executionID uuid.UUID, basePrompt string) (string, bool) {
+	if latestUser == nil || executionID == uuid.Nil {
+		return "", false
+	}
+	if !taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+		return "", false
+	}
+	targetPath := parsePromptDeliverableTarget(latestUser.Content)
+	if targetPath == "" {
+		return "", false
+	}
+
+	parentSummaryReadable := false
+	childEvidence := orchestrationParentChildStatusEvidence{}
+	expectDirectChildTaskListResult := false
+	for _, message := range messages {
+		switch strings.ToLower(strings.TrimSpace(message.Role)) {
+		case "assistant":
+			expectDirectChildTaskListResult = assistantCarriesDirectChildTaskListCall(message, taskRecord.ID)
+		case "tool_result":
+			toolName, output, errText, ok := parseToolResultMessage(message.Content)
+			if !ok {
+				expectDirectChildTaskListResult = false
+				continue
+			}
+			errorCode := normalizeValidationFailureCode(errText)
+			if errorCode == "" {
+				errorCode = normalizeValidationFailureCode(anyString(output["error"]))
+			}
+			switch strings.ToLower(strings.TrimSpace(toolName)) {
+			case "file.read":
+				if errorCode == "" && normalizeWorkspaceRelativePath(anyString(output["path"])) == targetPath && intValue(output["byte_size"]) > 0 {
+					parentSummaryReadable = true
+				}
+			case "task.list":
+				if errorCode == "" && expectDirectChildTaskListResult {
+					childEvidence = collectOrchestrationParentChildStatusEvidence(output["tasks"])
+				}
+				expectDirectChildTaskListResult = false
+			default:
+				expectDirectChildTaskListResult = false
+			}
+		default:
+			expectDirectChildTaskListResult = false
+		}
+	}
+	if !parentSummaryReadable || !childEvidence.hasUnfinished() {
+		return "", false
+	}
+
+	retryPrompt := basePrompt +
+		"\nYour prior review evidence already established that the parent orchestration summary `" + targetPath + "` is present and substantive." +
+		" It also established that one or more direct child tasks remain unfinished beneath this orchestration parent." +
+		" The current direct child-task evidence is: " + childEvidence.summary() + "." +
+		" Call flow.review_decision immediately with decision=reject, flow_node_execution_id " + executionID.String() + ", and concise findings that the orchestration parent cannot be approved while direct child tasks remain unfinished." +
+		" Use the unfinished direct child-task statuses as the rejection evidence." +
+		" Do not reread the parent summary, do not inspect child deliverable files, and do not re-list the broader project task tree."
+	return retryPrompt, true
+}
+
 func assistantCarriesDirectChildTaskListCall(message repo.ChatMessage, taskID uuid.UUID) bool {
 	if taskID == uuid.Nil || len(message.Metadata) == 0 {
 		return false
@@ -2140,6 +2261,72 @@ func assistantCarriesDirectChildTaskListCall(message repo.ChatMessage, taskID uu
 		}
 	}
 	return false
+}
+
+type orchestrationParentChildStatusEvidence struct {
+	unfinished []string
+}
+
+func (e orchestrationParentChildStatusEvidence) hasUnfinished() bool {
+	return len(e.unfinished) > 0
+}
+
+func (e orchestrationParentChildStatusEvidence) summary() string {
+	if len(e.unfinished) == 0 {
+		return "no unfinished direct child tasks"
+	}
+	if len(e.unfinished) == 1 {
+		return e.unfinished[0]
+	}
+	if len(e.unfinished) == 2 {
+		return e.unfinished[0] + "; " + e.unfinished[1]
+	}
+	return e.unfinished[0] + "; " + e.unfinished[1] + fmt.Sprintf("; and %d more unfinished direct child tasks", len(e.unfinished)-2)
+}
+
+func collectOrchestrationParentChildStatusEvidence(raw any) orchestrationParentChildStatusEvidence {
+	evidence := orchestrationParentChildStatusEvidence{}
+	switch typed := raw.(type) {
+	case []any:
+		for _, item := range typed {
+			task, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if summary, ok := summarizeOrchestrationParentChildStatus(task); ok {
+				evidence.unfinished = append(evidence.unfinished, summary)
+			}
+		}
+	case []map[string]any:
+		for _, task := range typed {
+			if summary, ok := summarizeOrchestrationParentChildStatus(task); ok {
+				evidence.unfinished = append(evidence.unfinished, summary)
+			}
+		}
+	}
+	return evidence
+}
+
+func summarizeOrchestrationParentChildStatus(task map[string]any) (string, bool) {
+	status := strings.ToLower(strings.TrimSpace(anyString(task["work_status"])))
+	if status == "" || projectBootstrapTaskStatusTerminal(status) {
+		return "", false
+	}
+	taskLabel := ""
+	if taskNumber := anyInt(task["task_number"]); taskNumber > 0 {
+		taskLabel = fmt.Sprintf("OC-%d", taskNumber)
+	}
+	title := strings.TrimSpace(anyString(task["title"]))
+	switch {
+	case taskLabel != "" && title != "":
+		return fmt.Sprintf("%s (%s) is %s", taskLabel, title, status), true
+	case taskLabel != "":
+		return fmt.Sprintf("%s is %s", taskLabel, status), true
+	case title != "":
+		return fmt.Sprintf("%s is %s", title, status), true
+	default:
+		return fmt.Sprintf("a direct child task is %s", status), true
+	}
 }
 
 func reviewRetryPromptForMissingPreferredDeliverable(messages []repo.ChatMessage, latestCompleted *repo.ChatTurn, latestUser *repo.ChatMessage, executionID uuid.UUID, basePrompt string) (string, bool) {
@@ -22068,7 +22255,8 @@ func (e *TurnEngine) shouldBlockOrchestrationParentReviewRejectDiscoveryTool(ctx
 		return false, ""
 	}
 	initialMessage := strings.TrimSpace(rt.initialMessageText)
-	if !strings.Contains(initialMessage, "task.list returned zero direct child tasks beneath this orchestration parent") ||
+	rejectMode := orchestrationParentReviewRejectDiscoveryMode(initialMessage)
+	if rejectMode == "" ||
 		!strings.Contains(initialMessage, "Call flow.review_decision immediately with decision=reject") {
 		return false, ""
 	}
@@ -22090,10 +22278,13 @@ func (e *TurnEngine) shouldBlockOrchestrationParentReviewRejectDiscoveryTool(ctx
 		return false, ""
 	}
 	targetPath := parsePromptDeliverableTarget(initialMessage)
-	if normalizedToolName == "file.read" && targetPath != "" && normalizeWorkspaceRelativePath(anyString(arguments["path"])) != targetPath {
+	if rejectMode == orchestrationParentRejectModeZeroDirectChildren &&
+		normalizedToolName == "file.read" &&
+		targetPath != "" &&
+		normalizeWorkspaceRelativePath(anyString(arguments["path"])) != targetPath {
 		return false, ""
 	}
-	return true, buildOrchestrationParentReviewRejectDiscoveryGuardError(taskRecord, targetPath, normalizedToolName)
+	return true, buildOrchestrationParentReviewRejectDiscoveryGuardError(taskRecord, targetPath, normalizedToolName, rejectMode)
 }
 
 func (e *TurnEngine) shouldBlockTaskExecutionTaskCreateTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
@@ -22616,10 +22807,32 @@ func buildOrchestrationParentReviewCurrentTaskGetGuardError(taskRecord repo.Proj
 	return fmt.Sprintf("task review should not reread the current orchestration-only parent task record for %s. The prompt and parent deliverable already carry that context. If you need task evidence, call task.list with parent_task_id=%s to inspect that parent's direct child tasks only.", label, taskRecord.ID)
 }
 
-func buildOrchestrationParentReviewRejectDiscoveryGuardError(taskRecord repo.ProjectTask, targetPath, toolName string) string {
+const (
+	orchestrationParentRejectModeZeroDirectChildren   = "zero_direct_children"
+	orchestrationParentRejectModeUnfinishedDirectWork = "unfinished_direct_children"
+)
+
+func orchestrationParentReviewRejectDiscoveryMode(initialMessage string) string {
+	switch {
+	case strings.Contains(initialMessage, "task.list returned zero direct child tasks beneath this orchestration parent"):
+		return orchestrationParentRejectModeZeroDirectChildren
+	case strings.Contains(initialMessage, "one or more direct child tasks remain unfinished beneath this orchestration parent"):
+		return orchestrationParentRejectModeUnfinishedDirectWork
+	default:
+		return ""
+	}
+}
+
+func buildOrchestrationParentReviewRejectDiscoveryGuardError(taskRecord repo.ProjectTask, targetPath, toolName, rejectMode string) string {
 	label := projectBootstrapTaskLabel(taskRecord)
 	if strings.TrimSpace(label) == "" {
 		label = "the current orchestration-only review task"
+	}
+	if rejectMode == orchestrationParentRejectModeUnfinishedDirectWork {
+		if strings.EqualFold(strings.TrimSpace(toolName), "file.read") {
+			return fmt.Sprintf("task review already established that %s has unfinished direct child tasks and should reject. Do not inspect child deliverables or reread the parent summary; call flow.review_decision with decision=reject immediately using the existing child-status evidence.", label)
+		}
+		return fmt.Sprintf("task review already established that %s has unfinished direct child tasks and should reject. Do not inspect additional files, tasks, or project state with %s; call flow.review_decision with decision=reject immediately using the existing child-status evidence.", label, toolName)
 	}
 	if strings.EqualFold(strings.TrimSpace(toolName), "file.read") {
 		if strings.TrimSpace(targetPath) == "" {
