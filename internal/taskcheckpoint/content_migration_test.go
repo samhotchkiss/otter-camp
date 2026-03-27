@@ -282,6 +282,39 @@ func TestContentMigrationCheckpointGuidancePrioritizesFirstOutput(t *testing.T) 
 	}
 }
 
+func TestContentMigrationCheckpointGuidanceHandlesEmptyWorkspace(t *testing.T) {
+	checkpoint := ContentMigrationCheckpoint{
+		CheckpointPath: ".ottercamp/checkpoints/oc-310-content-migration.md",
+	}
+
+	promptLines := strings.Join(PromptStrategyLines(&checkpoint), "\n")
+	if !strings.Contains(promptLines, "does not yet contain persisted migration inputs") {
+		t.Fatalf("prompt guidance missing empty-workspace directive:\n%s", promptLines)
+	}
+	if !strings.Contains(promptLines, "do not spend the next turn re-listing the empty workspace") {
+		t.Fatalf("prompt guidance missing anti-rediscovery directive:\n%s", promptLines)
+	}
+	if !strings.Contains(promptLines, "read the upstream manifest, index, or source files") {
+		t.Fatalf("prompt guidance missing upstream-deliverable directive:\n%s", promptLines)
+	}
+
+	systemMessage := BuildSystemMessage(checkpoint)
+	if !strings.Contains(systemMessage, "does not yet contain persisted migration inputs") {
+		t.Fatalf("system message missing empty-workspace directive:\n%s", systemMessage)
+	}
+	if !strings.Contains(systemMessage, "upstream manifest, index, or source files") {
+		t.Fatalf("system message missing upstream-deliverable directive:\n%s", systemMessage)
+	}
+
+	document := BuildCheckpointDocument("Task #310", checkpoint)
+	if !strings.Contains(document, "## Immediate Next Action") {
+		t.Fatalf("checkpoint doc missing immediate next action section:\n%s", document)
+	}
+	if !strings.Contains(document, "first concrete migration artifact or output file") {
+		t.Fatalf("checkpoint doc missing first-output directive:\n%s", document)
+	}
+}
+
 func mustParseMergedCheckpoint(t *testing.T, merged json.RawMessage) ContentMigrationCheckpoint {
 	t.Helper()
 

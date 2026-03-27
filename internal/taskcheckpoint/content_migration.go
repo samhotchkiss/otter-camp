@@ -304,7 +304,12 @@ func immediateNextActionLines(checkpoint *ContentMigrationCheckpoint) []string {
 		return nil
 	}
 	if len(checkpoint.Artifacts) == 0 && len(checkpoint.Scripts) == 0 {
-		return nil
+		return []string{
+			"Checkpoint status: this task workspace does not yet contain persisted migration inputs, helper scripts, or migrated output files",
+			"Immediate next step: do not spend the next turn re-listing the empty workspace or re-checking git status and history",
+			"Use the task description and dependency deliverables to read the upstream manifest, index, or source files this task is supposed to consume",
+			"Write the first concrete migration artifact or output file before expanding the plan or repeating repository discovery",
+		}
 	}
 
 	lines := []string{
