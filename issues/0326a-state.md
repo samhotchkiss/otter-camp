@@ -2709,3 +2709,57 @@ The remaining proof gap is narrower:
 
 - we still want one fresh production example where that exact `file_write`-without-content narration is rejected before dispatch
 - but task `16` is no longer actively stuck on that family right now
+
+## Update 23:18 MDT
+
+The next hot lane after task `16` was a stale-target rewrite bug in task `14`, not another provider or review problem.
+
+Live evidence:
+
+- session `5c52a192-98e7-4b9d-9a41-fa5cc21811d4`
+- turn `837c5a56-ec91-4c90-80b7-9de40e7e0f46`
+- the lane had already written `config/pipeline-config-invalid.yaml`
+- then the assistant said:
+  - `Now write the comprehensive test file:`
+- but the next empty `cli.execute` call was auto-rewritten into another `file.write` for:
+  - `config/pipeline-config-invalid.yaml`
+- that repeated three times and the existing duplicate-write churn guard eventually stopped the turn with:
+  - `Repeated identical successful file.write churn in this turn`
+
+Why this was happening:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `handleTaskCLIExecuteWithoutCommand(...)` used `recoveryFileOutputContext(...)` plus `taskContinuationDraftContent(...)`
+  - that allowed an empty task-lane `cli.execute` to hydrate from broad historical draft sources even when the current assistant step had not emitted a substantive draft for that file
+- in this live lane, that meant a stale config-fixture target kept winning over the assistant’s current intent to move on to the test file
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - empty task-lane `cli.execute` rewrites now use `taskContinuationHighConfidenceDraftContent(...)`
+  - the rewrite still works for:
+    - substantive current-turn assistant drafts
+    - current-turn recovery artifact drafts
+    - prior substantive assistant drafts
+    - continuation-summary drafts
+  - but it no longer rewrites from looser historical fallback alone
+  - if there is no high-confidence draft for the inferred target, the runtime now appends:
+    - `Task execution correction: cli.execute was emitted without command ...`
+    - and does **not** silently rewrite to a stale prior target path
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - existing rewrite coverage remains:
+    - `TestHandleTaskCLIExecuteWithoutCommandRewritesToFileWriteFromDraft`
+  - new focused regression covers the live failure shape:
+    - `TestHandleTaskCLIExecuteWithoutCommandAppendsCorrectionWithoutHighConfidenceDraft`
+
+Verification:
+
+- `go test ./internal/turn -run 'TestHandleTaskCLIExecuteWithoutCommand(RewritesToFileWriteFromDraft|AppendsCorrectionWithoutHighConfidenceDraft)$' -count=1`
+
+Current remaining proof step:
+
+- deploy this guard on the live runtime
+- then wait for the next empty task-lane `cli.execute` in a multi-deliverable lane
+- desired behavior:
+  - no stale rewrite to an unrelated prior target
+  - one bounded task correction instead of duplicate successful writes to the wrong file

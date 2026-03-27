@@ -24491,6 +24491,82 @@ func TestHandleTaskCLIExecuteWithoutCommandRewritesToFileWriteFromDraft(t *testi
 	}
 }
 
+func TestHandleTaskCLIExecuteWithoutCommandAppendsCorrectionWithoutHighConfidenceDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	priorTurnID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "config/pipeline-config-invalid.yaml"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.write",
+			"output": map[string]any{
+				"path":      targetPath,
+				"byte_size": 408,
+				"created":   false,
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "Now write the comprehensive test file:",
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "cli-1",
+		Name: "cli.execute",
+		Arguments: map[string]any{
+			"command": "",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskCLIExecuteWithoutCommand(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskCLIExecuteWithoutCommand: %v", err)
+	}
+	if !handled || abort {
+		t.Fatalf("handled=%v abort=%v, want true false", handled, abort)
+	}
+	if call.Name != "cli.execute" {
+		t.Fatalf("call.Name = %q, want cli.execute", call.Name)
+	}
+	if rt.taskFileFixes != 1 {
+		t.Fatalf("taskFileFixes = %d, want 1", rt.taskFileFixes)
+	}
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	last := messages[len(messages)-1]
+	if !strings.EqualFold(last.Role, "system") {
+		t.Fatalf("last role = %q, want system", last.Role)
+	}
+	if !strings.Contains(last.Content, "cli.execute was emitted without `command`") {
+		t.Fatalf("last content = %q, want empty cli.execute correction", last.Content)
+	}
+}
+
 func TestHandleTaskRejectedFileWriteContentRewritesPlaceholderFromPriorDraft(t *testing.T) {
 	t.Parallel()
 

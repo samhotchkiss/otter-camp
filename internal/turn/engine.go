@@ -12032,6 +12032,10 @@ func buildTaskFileWriteRetryMessage(targetPath string) string {
 	return fmt.Sprintf("[Task execution correction: file.write for `%s` was emitted without `content`. Before retrying file mutation tools, draft the full file body in the assistant response or resend `file.write` with both `path` and `content` populated. The first non-whitespace character of your next assistant message must be the first character of the deliverable itself, not a sentence like 'I will write' or 'Let me provide'.]", path)
 }
 
+func buildTaskCLIExecuteWithoutCommandRetryMessage() string {
+	return "[Task execution correction: cli.execute was emitted without `command`. Before retrying shell mutation tools, provide one concrete non-empty `cli.execute.command` string or use `file.write` with both `path` and `content` populated. Do not rely on a stale prior target path when the current assistant step has not emitted a substantive draft for that file.]"
+}
+
 func normalizeTurnWorkspacePath(value string) string {
 	trimmed := strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
 	if trimmed == "" {
@@ -12116,9 +12120,16 @@ func (e *TurnEngine) handleTaskCLIExecuteWithoutCommand(ctx context.Context, rt 
 	if !ok || strings.TrimSpace(targetPath) == "" {
 		return false, false, nil
 	}
-	draft, ok := e.taskContinuationDraftContent(ctx, rt, targetPath)
+	draft, ok := e.taskContinuationHighConfidenceDraftContent(ctx, rt, targetPath)
 	if !ok || strings.TrimSpace(draft) == "" {
-		return false, false, nil
+		if rt.taskFileFixes >= taskFileWriteRepairBudget {
+			return false, false, nil
+		}
+		rt.taskFileFixes++
+		if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskCLIExecuteWithoutCommandRetryMessage()); err != nil {
+			return true, false, err
+		}
+		return true, false, nil
 	}
 
 	call.Name = "file.write"
@@ -12231,6 +12242,24 @@ func (e *TurnEngine) taskContinuationDraftContent(ctx context.Context, rt *turnR
 		if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason == "" && looksLikeRecoveryFileDraft(draft) {
 			return draft, true
 		}
+	}
+	return "", false
+}
+
+func (e *TurnEngine) taskContinuationHighConfidenceDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
+	if draft, ok := e.latestSubstantiveAssistantDraftContent(ctx, rt, targetPath); ok {
+		return draft, true
+	}
+	if draft, ok := e.latestRecoveryArtifactDraftContent(ctx, rt, targetPath); ok {
+		if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason == "" && looksLikeRecoveryFileDraft(draft) {
+			return draft, true
+		}
+	}
+	if draft, ok := e.latestPriorSubstantiveAssistantDraftContent(ctx, rt, targetPath); ok {
+		return draft, true
+	}
+	if draft, ok := e.latestContinuationSummaryDraftContent(ctx, rt, targetPath); ok {
+		return draft, true
 	}
 	return "", false
 }

@@ -634,6 +634,11 @@ Implemented so far in this spec:
     - `I see the file_write calls are going through but not actually replacing the content because I'm not providing content. Let me fix that:`
   - as `tool-recovery troubleshooting instead of the file body`
   - that closes the surviving task-16 family where the model narrated why `file_write` was not replacing content instead of emitting the actual script body for `scripts/validate-error-handling.sh`
+- task-lane empty `cli.execute` rewrites now require a high-confidence draft source:
+  - `handleTaskCLIExecuteWithoutCommand(...)` still rewrites to `file.write` when the session has a substantive assistant draft, recovery artifact draft, prior substantive draft, or continuation summary for the same target
+  - but it no longer hydrates from looser historical target-path fallback alone
+  - when the current step has no high-confidence draft for that file, the runtime now appends a task correction instead of silently rewriting to a stale prior target path
+  - this targets the live config-loader family where an empty `cli.execute` intended to write `tests/test_config_loader.py` kept being rewritten into another `file.write` for `config/pipeline-config-invalid.yaml`
 
 Still pending from this spec:
 
