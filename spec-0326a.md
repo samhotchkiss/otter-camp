@@ -639,6 +639,10 @@ Implemented so far in this spec:
   - but it no longer hydrates from looser historical target-path fallback alone
   - when the current step has no high-confidence draft for that file, the runtime now appends a task correction instead of silently rewriting to a stale prior target path
   - this targets the live config-loader family where an empty `cli.execute` intended to write `tests/test_config_loader.py` kept being rewritten into another `file.write` for `config/pipeline-config-invalid.yaml`
+- operator package-install churn diagnostics now normalize install specs instead of smearing whole shell commands:
+  - both `scripts/token-usage-report.sh` and `ottercamp db token-usage` now extract package-install attempts from assistant `cli_execute` metadata using anchored `pip install` / `python -m pip install` matching
+  - the report strips shell suffixes and ignores installer flags while retaining the actual package spec
+  - live smoke now shows repeated install churn as `pyyaml` instead of polluted strings such as `pip install pyyaml | pip3 install pyyaml | python3 -c "import pytest`
 
 Still pending from this spec:
 

@@ -2763,3 +2763,50 @@ Current remaining proof step:
 - desired behavior:
   - no stale rewrite to an unrelated prior target
   - one bounded task correction instead of duplicate successful writes to the wrong file
+
+## Update 23:31 MDT
+
+The next slice was operator-report accuracy, not runtime behavior.
+
+What was wrong:
+
+- package-install churn reporting in both:
+  - [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh)
+  - [`cmd/ottercamp/main.go`](../cmd/ottercamp/main.go)
+- used:
+  - `regexp_replace(command, '^.*?\\binstall\\b\\s+', '', 'i')`
+- in PostgreSQL that was too loose for the live command shapes, so the report could smear whole shell commands into `attempted_specs`
+- live bad examples looked like:
+  - `pip install pyyaml | pip3 install pyyaml | python3 -c "import pytest`
+  - `/usr/bin/python3 -m pip install --user pyyaml | pip install pyyaml | pip3 install pyyaml`
+
+What changed:
+
+- both report paths now:
+  - strip shell suffixes first
+  - anchor specifically on `pip install` / `pip3 install` / `python -m pip install`
+  - split the remaining command into tokens
+  - ignore installer flags such as `--user`, `--index-url`, `--target`, `-r`, and the values for flags that take one
+  - aggregate only the surviving package-spec tokens
+- the CLI integration test in [`cmd/ottercamp/main_db_integration_test.go`](../cmd/ottercamp/main_db_integration_test.go) now asserts:
+  - `attempted_specs == "pyyaml"`
+
+Verification:
+
+- `bash -n scripts/token-usage-report.sh`
+- `go test -tags=integration ./cmd/ottercamp -run 'TestDBTokenUsageJSONIncludesCacheReadsAndAttribution$' -count=1`
+- live shell smoke:
+  - `scripts/token-usage-report.sh --hours 6 --limit 8`
+  - repeated package install rows now show:
+    - turn `e9661e22-fa24-4fd3-8c6a-fff39ab49b43` -> `pyyaml`
+    - turn `093d95ca-af70-4987-afb9-3b38aef82d5f` -> `pyyaml`
+- live CLI smoke on the fresh source build:
+  - `go run ./cmd/ottercamp db token-usage --hours 6 --limit 8 --output json`
+  - repeated package install rows now show:
+    - `"attempted_specs": "pyyaml"`
+
+Why this matters:
+
+- the runtime churn guard for repeated installs was already more precise
+- the operator surfaces were lagging behind it
+- this closes that observability gap, so the report now tells the truth about which package the lane is actually looping on

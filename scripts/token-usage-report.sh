@@ -360,18 +360,58 @@ package_attempts AS (
   SELECT
     turn_id,
     session_id,
-    trim(
-      regexp_replace(
-        regexp_replace(command, '^.*?\binstall\b\s+', '', 'i'),
-        '\s*(\||;|&&|2>&1).*$',
-        '',
-        'i'
-      )
-    ) AS install_tail,
+    trim(both ',' FROM string_agg(token, ',' ORDER BY ord)) AS install_tail,
     created_at
-  FROM assistant_calls
-  WHERE command ~ '(^|[[:space:]])(pip|pip3)[[:space:]]+install([[:space:]]|$)'
-     OR command ~ '(^|[[:space:]])[^[:space:]]+[[:space:]]+-m[[:space:]]+pip[[:space:]]+install([[:space:]]|$)'
+  FROM (
+    SELECT
+      ac.turn_id,
+      ac.session_id,
+      ac.created_at,
+      tok.ord,
+      lower(tok.token) AS token,
+      lag(lower(tok.token)) OVER (
+        PARTITION BY ac.turn_id, ac.session_id, ac.created_at
+        ORDER BY tok.ord
+      ) AS prev_token
+    FROM assistant_calls ac
+    CROSS JOIN LATERAL (
+      SELECT
+        trim(
+          regexp_replace(
+            regexp_replace(
+              ac.command,
+              E'[\\r\\n].*$',
+              '',
+              'n'
+            ),
+            '\s*(\|\||&&|\||;|2>&1|1>&2|2>|1>|>>|>|<).*$',
+            '',
+            'i'
+          )
+        ) AS install_command
+    ) trimmed
+    CROSS JOIN LATERAL regexp_split_to_table(trimmed.install_command, '[[:space:]]+') WITH ORDINALITY AS tok(token, ord)
+    WHERE (
+        trimmed.install_command ~ '^[[:space:]]*(pip|pip3)[[:space:]]+install([[:space:]]|$)'
+        AND tok.ord >= 3
+      ) OR (
+        trimmed.install_command ~ '^[[:space:]]*[^[:space:]]+[[:space:]]+-m[[:space:]]+pip[[:space:]]+install([[:space:]]|$)'
+        AND tok.ord >= 5
+      )
+  ) package_tokens
+  WHERE token <> ''
+    AND token !~ '^(\\|\\||&&|\\||;)$'
+    AND token !~ '^(2>&1|1>&2|2>|1>|>>|>|<)$'
+    AND token NOT LIKE '-%'
+    AND COALESCE(prev_token, '') NOT IN (
+      '-r', '--requirement',
+      '-c', '--constraint',
+      '-i', '--index-url',
+      '--extra-index-url',
+      '--find-links',
+      '-t', '--target'
+    )
+  GROUP BY turn_id, session_id, created_at
 )
 SELECT
   turn_id,

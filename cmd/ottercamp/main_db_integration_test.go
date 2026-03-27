@@ -279,4 +279,20 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	if !strings.Contains(stdout, `"shell_file_build_readback_churn"`) || !strings.Contains(stdout, `scripts/demo.sh`) {
 		t.Fatalf("db token-usage output missing shell build/readback section: %q", stdout)
 	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("unmarshal db token-usage output: %v", err)
+	}
+	repeatedPackageInstalls, ok := payload["repeated_package_installs"].([]any)
+	if !ok || len(repeatedPackageInstalls) != 1 {
+		t.Fatalf("unexpected repeated_package_installs payload: %#v", payload["repeated_package_installs"])
+	}
+	row, ok := repeatedPackageInstalls[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected repeated_package_installs row: %#v", repeatedPackageInstalls[0])
+	}
+	if got, _ := row["attempted_specs"].(string); got != "pyyaml" {
+		t.Fatalf("attempted_specs = %q, want %q", got, "pyyaml")
+	}
 }
