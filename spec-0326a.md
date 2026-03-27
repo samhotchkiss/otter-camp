@@ -1149,6 +1149,7 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
       - `Please provide the output`
       - `run this command`
       - fenced shell snippets such as ```` ```bash ````
+      - fenced `claude-cli` / `claude-code` task-list commands such as ```` ```claude-cli ````
     - once normalized as unavailable, async project continuations fall back to the built-in project continuation summary instead of preserving an operator-facing request
     - this specifically targets the live project session churn where a continuation summary was telling the agent to run `claude-code task list --format json` and wait for output, which is nonsensical inside autonomous runtime execution
     - focused turn-engine coverage is green for operator-facing command-request normalization, alongside the preexisting continuation-summary unavailability cases

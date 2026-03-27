@@ -9484,6 +9484,14 @@ func continuationSummaryLooksUnavailable(summary string) bool {
 	if normalized == "" {
 		return true
 	}
+	if strings.Contains(normalized, "```") {
+		if strings.Contains(normalized, "claude-cli") ||
+			strings.Contains(normalized, "claude-code") ||
+			strings.Contains(normalized, "project:tasks:list") ||
+			strings.Contains(normalized, " task list") {
+			return true
+		}
+	}
 	patterns := []string{
 		"continuation summary unavailable",
 		"i don't have a continuation summary",

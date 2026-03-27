@@ -3156,6 +3156,37 @@ Initial live read:
 - in the short post-restart window immediately after the new binary came up, there were no newer copies of that exact reject-path failure
 - stronger live proof still depends on the next fresh orchestration-parent review rejection reaching `flow.review_decision` on this build
 
+## Update 08:42 MDT
+
+I closed the next live project-lane summary leak and proved it on the hot canary session.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - widened `continuationSummaryLooksUnavailable(...)` so operator-facing command-request summaries are also rejected when they arrive as fenced `claude-cli` / `claude-code` task-list commands, not just `bash` / `sh`
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for the exact live shape:
+    - ```` ```claude-cli project:tasks:list --filter status=draft --sort priority ````
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'TestContinuationTurnNormalizes(OperatorFacingCommandRequestSummary|OperatorFacingClaudeCLICommandSummary)$' -count=1`
+
+Live proof:
+
+- hot project session `db21265f-c37d-40e4-9ed5-13def09970f8` was still preserving raw command-request summaries just before the patch:
+  - `08:38:48 MDT` summary with ```` ```claude-cli project:tasks:list --filter status=draft --sort priority ````
+  - `08:40:19 MDT` summary with ```` ``` claude-code task:list --filter=status:draft ````
+- after the new binary came up, the same session switched to the fallback summary instead:
+  - `08:40:41 MDT` `[Continuation summary] Project execution is already underway...`
+  - `08:41:57 MDT` `[Continuation summary] Project execution is already underway...`
+
+Why this matters:
+
+- this was another path where async project continuations were inheriting operator-facing requests instead of actionable runtime context
+- the fallback summary is not perfect, but it is materially better than feeding the project lane a fake terminal command to run inside autonomous execution
+
 ## Update 08:12 MDT
 
 I traced the live task-14 review behavior after the new same-turn missing-tests guard fired and found the next seam precisely:
