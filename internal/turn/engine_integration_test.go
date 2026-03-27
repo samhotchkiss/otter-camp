@@ -2590,6 +2590,153 @@ Sam.blog should publish one durable operating system for thoughtful parents buil
 	}
 }
 
+func TestTurnEngineIntegrationRecoveryTurnAcceptsTaskWorktreeWriteAsDurableEX323(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	t.Setenv("OTTERCAMP_DATA_DIR", dataDir)
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	mustInsertProjectRepoBinding(t, ctx, fixture.pool, project)
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	projectRoot, err := workspace.ProjectRoot(dataDir, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+	mustInitWorkspaceGitRepo(t, projectRoot)
+
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	const targetPath = "templates/layout-04-magazine.html"
+	durableDraft := strings.TrimRight(`<!doctype html>
+<html lang="en">
+  <body>
+    <main class="magazine-layout">Recovered layout body.</main>
+  </body>
+</html>
+`, "\n")
+	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
+	artifactAbs := filepath.Join(projectRoot, filepath.FromSlash(artifactRel))
+	if err := os.MkdirAll(filepath.Dir(artifactAbs), 0o755); err != nil {
+		t.Fatalf("mkdir recovery artifact dir: %v", err)
+	}
+	if err := os.WriteFile(artifactAbs, []byte(durableDraft), 0o644); err != nil {
+		t.Fatalf("write recovery artifact: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(taskRecord.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		Version:      1,
+		TargetPath:   targetPath,
+		ArtifactPath: artifactRel,
+		UpdatedAt:    time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	updatedTask, err := taskRepo.UpdateMetadata(ctx, taskRecord.ID, metadata)
+	if err != nil {
+		t.Fatalf("Update task with recovery checkpoint: %v", err)
+	}
+	taskRecord = updatedTask
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls > 1 {
+			return ModelResponse{}, fmt.Errorf("unexpected extra model call after durable task-worktree recovery write")
+		}
+		return ModelResponse{
+			Content: "Recovered layout body follows.",
+			ToolCalls: []ModelToolCall{{
+				ID:   "recovery-write",
+				Name: "file_write",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"path":    targetPath,
+					"content": durableDraft,
+				},
+			}},
+		}, nil
+	}
+
+	dispatched := 0
+	taskRoot := ""
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched++
+		currentTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+		if err != nil {
+			t.Fatalf("GetByID task for worktree: %v", err)
+		}
+		taskRoot, err = fixture.engine.taskWorkspaceRoot(ctx, currentTask)
+		if err != nil {
+			t.Fatalf("taskWorkspaceRoot: %v", err)
+		}
+		targetAbs := filepath.Join(taskRoot, filepath.FromSlash(targetPath))
+		if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+			t.Fatalf("mkdir task-worktree target dir: %v", err)
+		}
+		if err := os.WriteFile(targetAbs, []byte(durableDraft), 0o644); err != nil {
+			t.Fatalf("write task-worktree target file: %v", err)
+		}
+		runID := uuid.New()
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      targetPath,
+				"byte_size": len(durableDraft),
+				"created":   true,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery: %v", err)
+	}
+
+	if modelCalls != 1 {
+		t.Fatalf("model calls = %d, want 1", modelCalls)
+	}
+	if dispatched != 1 {
+		t.Fatalf("tier2 dispatches = %d, want 1", dispatched)
+	}
+	if strings.TrimSpace(taskRoot) == "" {
+		t.Fatal("task worktree root = empty, want resolved worktree path")
+	}
+	targetAbs := filepath.Join(taskRoot, filepath.FromSlash(targetPath))
+	body, err := os.ReadFile(targetAbs)
+	if err != nil {
+		t.Fatalf("read task-worktree target file: %v", err)
+	}
+	if string(body) != durableDraft {
+		t.Fatalf("task-worktree target body = %q, want recovered draft", string(body))
+	}
+	if _, err := os.Stat(filepath.Join(projectRoot, filepath.FromSlash(targetPath))); err == nil {
+		t.Fatalf("target file unexpectedly exists in project workspace root")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat project workspace target: %v", err)
+	}
+
+	finalTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task after durable task-worktree write: %v", err)
+	}
+	if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(finalTask.Metadata); ok {
+		t.Fatal("expected recovery checkpoint to clear after durable task-worktree write")
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnRejectsToolRepairNarrationDraftEX320(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -22402,6 +22549,32 @@ func mustInsertProjectRepoBinding(t *testing.T, ctx context.Context, pool *pgxpo
 		IsActive:     true,
 	}); err != nil {
 		t.Fatalf("create repo binding environment: %v", err)
+	}
+}
+
+func mustInitWorkspaceGitRepo(t *testing.T, repoRoot string) {
+	t.Helper()
+
+	if err := os.MkdirAll(repoRoot, 0o755); err != nil {
+		t.Fatalf("mkdir repo root: %v", err)
+	}
+	readmePath := filepath.Join(repoRoot, "README.md")
+	if err := os.WriteFile(readmePath, []byte("# test workspace\n"), 0o644); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+
+	commands := [][]string{
+		{"init", "-b", "main"},
+		{"config", "user.email", "ottercamp-tests@example.com"},
+		{"config", "user.name", "OtterCamp Tests"},
+		{"add", "README.md"},
+		{"commit", "-m", "Initial commit"},
+	}
+	for _, args := range commands {
+		output, err := exec.Command("git", append([]string{"-C", repoRoot}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+		}
 	}
 }
 

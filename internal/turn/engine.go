@@ -15729,7 +15729,42 @@ func (e *TurnEngine) recoveryWorkspaceRoots(ctx context.Context, rt *turnRuntime
 	if err != nil {
 		return nil, err
 	}
-	return e.projectWorkspaceRoots(ctx, taskRecord.OrganizationID, projectRecord)
+	roots := make([]string, 0, 3)
+	if taskRoot, taskErr := e.taskWorkspaceRoot(ctx, taskRecord); taskErr == nil {
+		roots = appendUniqueWorkspaceRoots(roots, taskRoot)
+	}
+	projectRoots, err := e.projectWorkspaceRoots(ctx, taskRecord.OrganizationID, projectRecord)
+	if err != nil {
+		if len(roots) > 0 {
+			return roots, nil
+		}
+		return nil, err
+	}
+	roots = appendUniqueWorkspaceRoots(roots, projectRoots...)
+	if len(roots) == 0 {
+		return nil, fmt.Errorf("recovery workspace roots require at least one resolved root")
+	}
+	return roots, nil
+}
+
+func appendUniqueWorkspaceRoots(current []string, candidates ...string) []string {
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range current {
+			if turnSameFilesystemPath(existing, candidate) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			current = append(current, candidate)
+		}
+	}
+	return current
 }
 
 func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
@@ -19244,19 +19279,7 @@ func (e *TurnEngine) recoveryFileWriteTargetExists(ctx context.Context, rt *turn
 	if e == nil || e.tasks == nil || e.projects == nil || rt == nil || rt.session == nil {
 		return false, fmt.Errorf("task and project repositories are required")
 	}
-	taskID := resolveTaskID(rt.session)
-	if taskID == nil || *taskID == uuid.Nil {
-		return false, fmt.Errorf("task scope is required")
-	}
-	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
-	if err != nil {
-		return false, err
-	}
-	projectRecord, err := e.projects.GetByID(ctx, taskRecord.ProjectID)
-	if err != nil {
-		return false, err
-	}
-	workspaceRoots, err := e.projectWorkspaceRoots(ctx, taskRecord.OrganizationID, projectRecord)
+	workspaceRoots, err := e.recoveryWorkspaceRoots(ctx, rt)
 	if err != nil {
 		return false, err
 	}
