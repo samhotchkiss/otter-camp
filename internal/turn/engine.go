@@ -9020,6 +9020,7 @@ func buildSyntheticProjectKickoffHandoffFromRequest(projectID uuid.UUID, project
 	lines = append(lines, "Do not call memory.query, memory.list, or other memory tools during this bootstrap handoff unless the originating user request explicitly asks to reuse prior project work.")
 	lines = append(lines, "Frank, Lori, and Ellie are starter-trio governance agents for setup/review only, not project staff. Do not assign them to project roles; create or assign dedicated project staff instead.")
 	lines = append(lines, "Keep staffing discovery bounded. Use at most one staffing.browse_profiles pass per needed category and at most one staffing.get_profile call per candidate you actually intend to staff. Once you can name one staff PM, the concrete workers, and the needed reviewers, stop browsing profiles and persist staffing. Do not spend multiple rounds re-browsing similar profiles when the current candidates are already sufficient to act.")
+	lines = append(lines, "Staffing profile browsing is advisory, not required. If the profile catalog does not immediately provide a perfect PM/worker/reviewer mix, create fit-for-purpose dedicated project staff directly with agent.create_staff and agent.assign_project instead of looping on more profile browsing.")
 	lines = append(lines, "Do not spend a turn writing a staffing plan, rationale memo, or markdown table before you materialize staff. As soon as you have enough candidates, create the PM/workers/reviewers, assign them to the project, and continue bootstrap.")
 	lines = append(lines, "Once enough candidates are known, do not emit another assistant planning summary about staffing. Your next step should be the concrete agent.create_staff and assignment tool calls needed to materialize the roster.")
 	lines = append(lines, "Fresh bootstrap staffing must materially advance in this turn. Do not spend the turn narrating profile selection or re-listing role constraints. After the first viable PM, worker, and reviewer candidates are identified, the same turn must create and assign them before any further bootstrap narration.")
@@ -10514,6 +10515,8 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState, snapsh
 		lines = append(lines, "Your next action must create real project assignments, non-bootstrap tasks, and runnable flow templates, or report a concrete blocker preventing that.")
 		if state.BootstrapSetupDoneCount > 0 || state.BootstrapSetupTaskCount > 0 {
 			lines = append(lines, "Bootstrap is currently at the staffing/materialization step. Do not begin with project.list, project.get, task.list, file.list, file.read, or scaffold rereads. Your next tool activity should materially staff the project: do at most one bounded staffing lookup per needed role family, then create and assign the PM, workers, and reviewers in the same turn before attempting task decomposition.")
+			lines = append(lines, "Staffing profile browsing is advisory only. If a prior turn already used staffing.browse_profiles or staffing.get_profile, do not repeat staffing discovery now; reuse that earlier catalog or create the PM, workers, and reviewers directly with agent.create_staff and agent.assign_project.")
+			lines = append(lines, "If the catalog is not a perfect fit, create fit-for-purpose dedicated staff directly from the project brief instead of browsing more profiles.")
 			lines = append(lines, "Do not answer with blank output, an acknowledgement, or another bootstrap summary. If the current staffing candidates are insufficient, say the one concrete blocker preventing staff creation.")
 		}
 	}
@@ -11697,6 +11700,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 				ToolCallID: id,
 				Name:       name,
 				Error:      buildProjectBootstrapRestaffingToolGuardError(rt),
+			})
+			continue
+		}
+		if e.shouldBlockProjectBootstrapRepeatedStaffingDiscovery(ctx, rt, name) {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      buildProjectBootstrapRepeatedStaffingDiscoveryGuardError(),
 			})
 			continue
 		}
@@ -22581,6 +22592,40 @@ func shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt *turnRuntime, too
 	return true
 }
 
+func (e *TurnEngine) shouldBlockProjectBootstrapRepeatedStaffingDiscovery(ctx context.Context, rt *turnRuntime, toolName string) bool {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil {
+		return false
+	}
+	if !isProjectBootstrapStaffingDiscoveryTool(toolName) {
+		return false
+	}
+	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	if !projectBootstrapStateActive(state) || state.AssignmentCount > 0 {
+		return false
+	}
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return false
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") || !strings.EqualFold(strings.TrimSpace(message.Status), "final") {
+			continue
+		}
+		if rt.turn != nil && message.TurnID != nil && *message.TurnID == rt.turn.ID {
+			continue
+		}
+		discoveredTool, _, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || strings.TrimSpace(errText) != "" {
+			continue
+		}
+		if isProjectBootstrapStaffingDiscoveryTool(discoveredTool) {
+			return true
+		}
+	}
+	return false
+}
+
 func projectBootstrapChecklistOnlyRestartState(state projectBootstrapState, initialMessage string) bool {
 	if state.AssignmentCount != 0 ||
 		state.PlannedTaskCount != 0 ||
@@ -23386,7 +23431,11 @@ func buildProjectBootstrapRestaffingToolGuardError(rt *turnRuntime) string {
 }
 
 func buildProjectBootstrapExcessStaffingDiscoveryGuardError() string {
-	return "bootstrap staffing discovery budget is exhausted for this turn. You already have enough project and profile context to act; stop browsing profiles and create/assign the concrete PM, workers, and reviewers now."
+	return "bootstrap staffing discovery budget is exhausted for this turn. You already have enough project and profile context to act; stop browsing profiles and create/assign the concrete PM, workers, and reviewers now. If the current catalog is not a perfect match, create fit-for-purpose dedicated staff directly with agent.create_staff and agent.assign_project instead of re-browsing."
+}
+
+func buildProjectBootstrapRepeatedStaffingDiscoveryGuardError() string {
+	return "bootstrap staffing discovery already succeeded in an earlier turn for this session. Reuse the prior staffing catalog already in session history, or create fit-for-purpose PM, worker, and reviewer staff directly with agent.create_staff and agent.assign_project now. Do not browse profiles again unless you can name one concrete missing role that truly requires another lookup."
 }
 
 func buildProjectBootstrapRecoveryRereadToolGuardError(rt *turnRuntime, toolName string) string {

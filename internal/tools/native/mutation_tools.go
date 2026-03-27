@@ -3724,6 +3724,9 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 type bootstrapSetupPersistState struct {
 	RepoBindingPresent       bool
 	AssignmentCount          int
+	ProjectManagerCount      int
+	WorkerCount              int
+	ReviewerCount            int
 	PlannedTaskCount         int
 	PlannedLeafTaskCount     int
 	PlannedFlowTemplateCount int
@@ -3756,7 +3759,11 @@ func (e *NativeToolExecutor) loadBootstrapSetupPersistState(ctx context.Context,
 		if err != nil {
 			return state, err
 		}
-		state.AssignmentCount = e.countBootstrapMaterializedAssignments(ctx, assignments)
+		assignmentCounts := e.countBootstrapMaterializedAssignmentRoles(ctx, assignments)
+		state.AssignmentCount = assignmentCounts.Total
+		state.ProjectManagerCount = assignmentCounts.ProjectManager
+		state.WorkerCount = assignmentCounts.Worker
+		state.ReviewerCount = assignmentCounts.Reviewer
 	}
 
 	setupTaskIDs := make(map[uuid.UUID]struct{})
@@ -3846,36 +3853,67 @@ func (e *NativeToolExecutor) loadBootstrapSetupPersistState(ctx context.Context,
 	return state, nil
 }
 
-func (e *NativeToolExecutor) countBootstrapMaterializedAssignments(ctx context.Context, assignments []repo.AgentProjectAssignment) int {
+type bootstrapAssignmentRoleCounts struct {
+	Total          int
+	ProjectManager int
+	Worker         int
+	Reviewer       int
+}
+
+func (e *NativeToolExecutor) countBootstrapMaterializedAssignmentRoles(ctx context.Context, assignments []repo.AgentProjectAssignment) bootstrapAssignmentRoleCounts {
 	if len(assignments) == 0 {
-		return 0
+		return bootstrapAssignmentRoleCounts{}
 	}
 	if e == nil || e.agents == nil {
-		count := 0
+		counts := bootstrapAssignmentRoleCounts{}
 		for _, assignment := range assignments {
 			if assignment.IsActive && assignment.AgentID != uuid.Nil {
-				count++
+				counts.Total++
+				switch strings.ToLower(strings.TrimSpace(assignment.Role)) {
+				case "project_manager":
+					counts.ProjectManager++
+				case "worker":
+					counts.Worker++
+				case "reviewer":
+					counts.Reviewer++
+				}
 			}
 		}
-		return count
+		return counts
 	}
 
-	count := 0
+	counts := bootstrapAssignmentRoleCounts{}
 	for _, assignment := range assignments {
 		if !assignment.IsActive || assignment.AgentID == uuid.Nil {
 			continue
 		}
 		agentRecord, err := e.agents.GetByID(ctx, assignment.AgentID)
 		if err != nil {
-			count++
+			counts.Total++
+			switch strings.ToLower(strings.TrimSpace(assignment.Role)) {
+			case "project_manager":
+				counts.ProjectManager++
+			case "worker":
+				counts.Worker++
+			case "reviewer":
+				counts.Reviewer++
+			}
 			continue
 		}
 		if agentRecord.IsStarterTrio {
 			continue
 		}
-		count++
+		counts.Total++
+		switch strings.ToLower(strings.TrimSpace(assignment.Role)) {
+		case "project_manager":
+			counts.ProjectManager++
+		case "worker":
+			counts.Worker++
+		case "reviewer":
+			counts.Reviewer++
+		}
 	}
-	return count
+	return counts
 }
 
 func cloneUUIDSet(src map[uuid.UUID]struct{}) map[uuid.UUID]struct{} {
@@ -3915,6 +3953,9 @@ func buildBootstrapSetupPersistStepBlockedResponse(slug string, state bootstrapS
 			"bootstrap_state": map[string]any{
 				"repo_binding_present":        state.RepoBindingPresent,
 				"assignment_count":            state.AssignmentCount,
+				"project_manager_count":       state.ProjectManagerCount,
+				"worker_count":                state.WorkerCount,
+				"reviewer_count":              state.ReviewerCount,
 				"planned_task_count":          state.PlannedTaskCount,
 				"planned_leaf_task_count":     state.PlannedLeafTaskCount,
 				"planned_flow_template_count": state.PlannedFlowTemplateCount,
@@ -3930,10 +3971,10 @@ func buildBootstrapSetupPersistStepBlockedResponse(slug string, state bootstrapS
 		}
 		return blocked("Cannot persist `bind-repo-environment` until the project has a persisted repo/environment binding.")
 	case "staff-project":
-		if state.AssignmentCount > 0 {
+		if len(missingBootstrapStaffingRoles(state)) == 0 {
 			return nil
 		}
-		return blocked("Cannot persist `staff-project` until at least one active non-starter project assignment exists.")
+		return blocked(buildBootstrapStaffingRoleGateMessage("staff-project", state))
 	case "decompose-workstreams":
 		if state.PlannedTaskCount > 0 {
 			return nil
@@ -3985,8 +4026,8 @@ func buildBootstrapSetupPersistStepBlockedResponse(slug string, state bootstrapS
 		if !state.RepoBindingPresent {
 			return blocked("Cannot persist `record-frank-sign-off` until the project has a persisted repo/environment binding.")
 		}
-		if state.AssignmentCount == 0 {
-			return blocked("Cannot persist `record-frank-sign-off` until at least one active non-starter project assignment exists.")
+		if len(missingBootstrapStaffingRoles(state)) > 0 {
+			return blocked(buildBootstrapStaffingRoleGateMessage("record-frank-sign-off", state))
 		}
 		if state.PlannedTaskCount == 0 {
 			return blocked("Cannot persist `record-frank-sign-off` until bounded non-bootstrap project tasks have been created.")
@@ -4011,6 +4052,35 @@ func buildBootstrapSetupPersistStepBlockedResponse(slug string, state bootstrapS
 	default:
 		return nil
 	}
+}
+
+func missingBootstrapStaffingRoles(state bootstrapSetupPersistState) []string {
+	missing := make([]string, 0, 3)
+	if state.ProjectManagerCount == 0 {
+		missing = append(missing, "project_manager")
+	}
+	if state.WorkerCount == 0 {
+		missing = append(missing, "worker")
+	}
+	if state.ReviewerCount == 0 {
+		missing = append(missing, "reviewer")
+	}
+	return missing
+}
+
+func buildBootstrapStaffingRoleGateMessage(step string, state bootstrapSetupPersistState) string {
+	missing := missingBootstrapStaffingRoles(state)
+	if len(missing) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"Cannot persist `%s` until the project has an active non-starter staffing roster with at least one project_manager, worker, and reviewer assignment. Missing roles: %s. Current non-starter staffing counts: project_manager=%d, worker=%d, reviewer=%d.",
+		step,
+		strings.Join(missing, ", "),
+		state.ProjectManagerCount,
+		state.WorkerCount,
+		state.ReviewerCount,
+	)
 }
 
 func resolveBootstrapFirstWaveSelection(input map[string]any, tasks []repo.ProjectTask) (map[uuid.UUID]struct{}, bool, error) {

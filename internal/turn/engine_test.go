@@ -7903,6 +7903,46 @@ func TestBuildProjectBootstrapExcessStaffingDiscoveryGuardError(t *testing.T) {
 	if !strings.Contains(msg, "stop browsing profiles and create/assign the concrete PM, workers, and reviewers now") {
 		t.Fatalf("guard error = %q, want direct staffing action guidance", msg)
 	}
+	if !strings.Contains(msg, "agent.create_staff and agent.assign_project") {
+		t.Fatalf("guard error = %q, want direct staff creation fallback guidance", msg)
+	}
+}
+
+func TestShouldBlockProjectBootstrapRepeatedStaffingDiscovery(t *testing.T) {
+	sessionID := uuid.New()
+	currentTurnID := uuid.New()
+	priorTurnID := uuid.New()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{Status: projectBootstrapStatusActive})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	messages := newFakeMessageRepo()
+	messages.create(repo.ChatMessage{
+		SessionID: sessionID,
+		TurnID:    &priorTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"staffing.browse_profiles","output":{"profiles":[{"display_name":"Emiliano","role_name":"Project Manager"}]}}`,
+	})
+	engine := &TurnEngine{messages: messages}
+	rt := &turnRuntime{
+		turn: &repo.ChatTurn{ID: currentTurnID},
+		session: &chat.ChatSession{
+			ID:        sessionID,
+			ScopeType: "project",
+			Metadata:  metadata,
+		},
+	}
+
+	if !engine.shouldBlockProjectBootstrapRepeatedStaffingDiscovery(context.Background(), rt, "staffing.browse_profiles") {
+		t.Fatal("expected repeated staffing.browse_profiles to be blocked after prior successful staffing discovery")
+	}
+	if !engine.shouldBlockProjectBootstrapRepeatedStaffingDiscovery(context.Background(), rt, "staffing.get_profile") {
+		t.Fatal("expected repeated staffing.get_profile to be blocked after prior successful staffing discovery")
+	}
+	if engine.shouldBlockProjectBootstrapRepeatedStaffingDiscovery(context.Background(), rt, "agent.create_staff") {
+		t.Fatal("did not expect direct staff creation to be blocked")
+	}
 }
 
 func TestShouldBlockProjectBootstrapRestaffingToolAllowsMissingPMRecovery(t *testing.T) {
@@ -16274,8 +16314,14 @@ func TestBuildProjectBootstrapResumeActionPromptForStaffingMaterializationStep(t
 	if !strings.Contains(prompt, "Bootstrap is currently at the staffing/materialization step") {
 		t.Fatalf("prompt = %q, want staffing materialization guidance", prompt)
 	}
-	if !strings.Contains(prompt, "do one bounded staffing lookup per needed role category") {
+	if !strings.Contains(prompt, "do at most one bounded staffing lookup per needed role family") {
 		t.Fatalf("prompt = %q, want bounded staffing lookup guidance", prompt)
+	}
+	if !strings.Contains(prompt, "do not repeat staffing discovery now") {
+		t.Fatalf("prompt = %q, want no-repeat staffing discovery guidance", prompt)
+	}
+	if !strings.Contains(prompt, "agent.create_staff and agent.assign_project") {
+		t.Fatalf("prompt = %q, want direct staffing materialization guidance", prompt)
 	}
 	if !strings.Contains(prompt, "Do not answer with blank output, an acknowledgement, or another bootstrap summary") {
 		t.Fatalf("prompt = %q, want no-blank-output guidance", prompt)

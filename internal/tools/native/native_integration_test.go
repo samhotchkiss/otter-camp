@@ -6667,15 +6667,7 @@ func TestIntegrationBootstrapSetupPersistCompletesRequestedSetupSteps(t *testing
 	}); err != nil {
 		t.Fatalf("create project environment: %v", err)
 	}
-	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
-		ProjectID:      projectID,
-		AgentID:        actor.ID,
-		Role:           "worker",
-		AssignedByType: "agent",
-		AssignedByID:   &actor.ID,
-	}); err != nil {
-		t.Fatalf("assign project agent: %v", err)
-	}
+	assignBootstrapMaterializedTeam(t, ctx, pool, orgID, projectID, actor.ID)
 
 	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
 		"scope_type": "project",
@@ -6792,7 +6784,7 @@ func TestIntegrationBootstrapSetupPersistBlocksUnmaterializedChecklistAfterRepoB
 	if out["blocked_step_slug"] != "staff-project" {
 		t.Fatalf("blocked_step_slug = %v, want staff-project", out["blocked_step_slug"])
 	}
-	if got := fmt.Sprintf("%v", out["message"]); !strings.Contains(got, "active non-starter project assignment") {
+	if got := fmt.Sprintf("%v", out["message"]); !strings.Contains(got, "active non-starter staffing roster") {
 		t.Fatalf("message = %q, want staffing guidance", got)
 	}
 	if out["status"] != "blocked" {
@@ -6826,6 +6818,89 @@ func TestIntegrationBootstrapSetupPersistBlocksUnmaterializedChecklistAfterRepoB
 	}
 }
 
+func TestIntegrationBootstrapSetupPersistBlocksPartialStaffingRoster(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Persist Partial Staffing",
+		"slug":        "bootstrap-persist-partial-staffing-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap.setup.persist blocks staff-project when only a PM is assigned.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	repoRoot := t.TempDir()
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    projectID,
+		Name:         "repo-binding",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+
+	pm := testutil.MakeAgent(t, pool, orgID)
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		ProjectID:      projectID,
+		AgentID:        pm.ID,
+		Role:           "project_manager",
+		AssignedByType: "agent",
+		AssignedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("assign project manager: %v", err)
+	}
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap persist partial staffing",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
+		"completed_step_slugs": []string{"bind-repo-environment", "staff-project"},
+	})
+	if err != nil {
+		t.Fatalf("bootstrap.setup.persist partial staffing: %v", err)
+	}
+	if out["error"] != "bootstrap_step_not_ready" {
+		t.Fatalf("error = %v, want bootstrap_step_not_ready", out["error"])
+	}
+	if out["blocked_step_slug"] != "staff-project" {
+		t.Fatalf("blocked_step_slug = %v, want staff-project", out["blocked_step_slug"])
+	}
+	if got := fmt.Sprintf("%v", out["message"]); !strings.Contains(got, "Missing roles: worker, reviewer") {
+		t.Fatalf("message = %q, want missing worker/reviewer guidance", got)
+	}
+
+	state, ok := out["bootstrap_state"].(map[string]any)
+	if !ok {
+		t.Fatalf("bootstrap_state = %T, want map[string]any", out["bootstrap_state"])
+	}
+	if got := fmt.Sprintf("%v", state["project_manager_count"]); got != "1" {
+		t.Fatalf("project_manager_count = %v, want 1", state["project_manager_count"])
+	}
+	if got := fmt.Sprintf("%v", state["worker_count"]); got != "0" {
+		t.Fatalf("worker_count = %v, want 0", state["worker_count"])
+	}
+	if got := fmt.Sprintf("%v", state["reviewer_count"]); got != "0" {
+		t.Fatalf("reviewer_count = %v, want 0", state["reviewer_count"])
+	}
+}
+
 func TestIntegrationBootstrapSetupPersistBlocksFlowAndSignoffOvertrust(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -6854,15 +6929,7 @@ func TestIntegrationBootstrapSetupPersistBlocksFlowAndSignoffOvertrust(t *testin
 	}); err != nil {
 		t.Fatalf("create project environment: %v", err)
 	}
-	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
-		ProjectID:      projectID,
-		AgentID:        actor.ID,
-		Role:           "worker",
-		AssignedByType: "agent",
-		AssignedByID:   &actor.ID,
-	}); err != nil {
-		t.Fatalf("assign project agent: %v", err)
-	}
+	assignBootstrapMaterializedTeam(t, ctx, pool, orgID, projectID, actor.ID)
 
 	taskDescription := "Create the bounded first-wave content slice."
 	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
@@ -7022,15 +7089,7 @@ func TestIntegrationBootstrapSetupPersistRequiresExplicitFirstWaveSelectionAndPe
 	}); err != nil {
 		t.Fatalf("create project environment: %v", err)
 	}
-	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
-		ProjectID:      projectID,
-		AgentID:        actor.ID,
-		Role:           "worker",
-		AssignedByType: "agent",
-		AssignedByID:   &actor.ID,
-	}); err != nil {
-		t.Fatalf("assign project agent: %v", err)
-	}
+	assignBootstrapMaterializedTeam(t, ctx, pool, orgID, projectID, actor.ID)
 
 	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
 		"scope_type": "project",
@@ -7596,15 +7655,7 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 	}); err != nil {
 		t.Fatalf("create project environment: %v", err)
 	}
-	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(context.Background(), repo.AgentProjectAssignment{
-		ProjectID:      projectID,
-		AgentID:        actor.ID,
-		Role:           "worker",
-		AssignedByType: "agent",
-		AssignedByID:   &actor.ID,
-	}); err != nil {
-		t.Fatalf("assign project agent: %v", err)
-	}
+	assignBootstrapMaterializedTeam(t, ctx, pool, orgID, projectID, actor.ID)
 	template := makeExecutableProjectFlowTemplate(t, ctx, pool, projectID)
 	taskDescription := "Execute the bounded first-wave implementation slice."
 	if _, err := repo.NewProjectTaskRepo(pool).Create(context.Background(), repo.ProjectTask{
@@ -7743,15 +7794,7 @@ func TestIntegrationBootstrapSetupPersistAcceptsExpandedNaturalStepAliases(t *te
 	}); err != nil {
 		t.Fatalf("create project environment: %v", err)
 	}
-	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
-		ProjectID:      projectID,
-		AgentID:        actor.ID,
-		Role:           "worker",
-		AssignedByType: "agent",
-		AssignedByID:   &actor.ID,
-	}); err != nil {
-		t.Fatalf("assign project agent: %v", err)
-	}
+	assignBootstrapMaterializedTeam(t, ctx, pool, orgID, projectID, actor.ID)
 	taskDescription := "Draft the first bounded execution slice."
 	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
 		OrganizationID:  orgID,
@@ -7923,15 +7966,7 @@ func TestIntegrationBootstrapSetupPersistAcceptsFirstWaveTaskAliasExpansion(t *t
 	}); err != nil {
 		t.Fatalf("create project environment: %v", err)
 	}
-	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
-		ProjectID:      projectID,
-		AgentID:        actor.ID,
-		Role:           "worker",
-		AssignedByType: "agent",
-		AssignedByID:   &actor.ID,
-	}); err != nil {
-		t.Fatalf("assign project agent: %v", err)
-	}
+	assignBootstrapMaterializedTeam(t, ctx, pool, orgID, projectID, actor.ID)
 	taskDescription := "Draft the first bounded execution slice."
 	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
 		OrganizationID:  orgID,
@@ -9215,6 +9250,29 @@ func bootstrapSetupStatusesBySlug(t *testing.T, ctx context.Context, pool *pgxpo
 		statuses[readStringValue(metadata["bootstrap_step_slug"])] = taskRecord.WorkStatus
 	}
 	return statuses
+}
+
+func assignBootstrapMaterializedTeam(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID, assignedByID uuid.UUID) {
+	t.Helper()
+	assignments := []struct {
+		agentID uuid.UUID
+		role    string
+	}{
+		{agentID: testutil.MakeAgent(t, pool, orgID).ID, role: "project_manager"},
+		{agentID: testutil.MakeAgent(t, pool, orgID).ID, role: "worker"},
+		{agentID: testutil.MakeAgent(t, pool, orgID).ID, role: "reviewer"},
+	}
+	for _, item := range assignments {
+		if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+			ProjectID:      projectID,
+			AgentID:        item.agentID,
+			Role:           item.role,
+			AssignedByType: "agent",
+			AssignedByID:   &assignedByID,
+		}); err != nil {
+			t.Fatalf("assign bootstrap %s: %v", item.role, err)
+		}
+	}
 }
 
 func parseUUIDSlicePayload(t *testing.T, raw any) []uuid.UUID {
