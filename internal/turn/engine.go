@@ -13561,6 +13561,9 @@ func recoveryTaskTargetPathScore(taskRecord repo.ProjectTask, targetPath, draft 
 	if recoveryHistoricalReadPathShouldFallback(targetPath) {
 		score -= 2
 	}
+	if recoveryLowSignalPackageMarkerPath(targetPath) {
+		score -= 4
+	}
 	base := strings.ToLower(strings.TrimSuffix(filepath.Base(strings.TrimSpace(targetPath)), filepath.Ext(strings.TrimSpace(targetPath))))
 	if strings.Contains(base, "task-summary") || strings.Contains(base, "summary") {
 		score -= 3
@@ -13571,11 +13574,19 @@ func recoveryTaskTargetPathScore(taskRecord repo.ProjectTask, targetPath, draft 
 func normalizeRecoveryCheckpointTargetForTask(taskRecord repo.ProjectTask, checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) taskcheckpoint.RecoveryFileWriteCheckpoint {
 	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
 	targetPath := strings.TrimSpace(checkpoint.TargetPath)
+	preferred := strings.TrimSpace(preferredTaskDeliverablePath(taskRecord))
+	if targetPath != "" &&
+		recoveryLowSignalPackageMarkerPath(targetPath) &&
+		(preferred == "" || !sameWorkspaceRelativePath(preferred, targetPath)) &&
+		(explicitDeliverablePath(taskRecord) == "" || !sameWorkspaceRelativePath(explicitDeliverablePath(taskRecord), targetPath)) {
+		checkpoint.TargetPath = ""
+		targetPath = ""
+	}
 	if targetPath != "" && !looksLikeExplicitDeliverablePath(normalizeWorkspaceRelativePath(targetPath), targetPath) {
 		checkpoint.TargetPath = ""
 		targetPath = ""
 	}
-	if preferred := strings.TrimSpace(preferredTaskDeliverablePath(taskRecord)); preferred != "" {
+	if preferred != "" {
 		if sameWorkspaceRelativePath(preferred, targetPath) {
 			return checkpoint
 		}
@@ -14878,7 +14889,20 @@ func recoveryHistoricalReadPathShouldFallback(targetPath string) bool {
 		return false
 	}
 	lower := strings.ToLower(trimmed)
-	return strings.HasPrefix(lower, "planning/")
+	return strings.HasPrefix(lower, "planning/") || recoveryLowSignalPackageMarkerPath(lower)
+}
+
+func recoveryLowSignalPackageMarkerPath(targetPath string) bool {
+	trimmed := strings.TrimSpace(strings.ReplaceAll(targetPath, "\\", "/"))
+	if trimmed == "" {
+		return false
+	}
+	switch strings.ToLower(filepath.Base(trimmed)) {
+	case "__init__.py", "__init__.pyi":
+		return true
+	default:
+		return false
+	}
 }
 
 func recoveryHistoricalDraftCandidateScore(toolName, targetPath, draft string) (int, bool) {
@@ -24248,7 +24272,7 @@ func (e *TurnEngine) invalidateStaleRecoveryFocusValidationGuard(ctx context.Con
 	if targetPath == "" {
 		return false, taskRecord, nil
 	}
-	if looksLikeExplicitDeliverablePath(normalizeWorkspaceRelativePath(targetPath), targetPath) {
+	if looksLikeExplicitDeliverablePath(normalizeWorkspaceRelativePath(targetPath), targetPath) && !recoveryLowSignalPackageMarkerPath(targetPath) {
 		return false, taskRecord, nil
 	}
 	cleared, err := clearTaskValidationGuardMetadata(taskRecord.Metadata)

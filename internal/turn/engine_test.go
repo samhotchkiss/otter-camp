@@ -4876,7 +4876,7 @@ func TestNormalizeRecoveryCheckpointTargetForTaskPrefersExplicitDeliverablePath(
 	}
 }
 
-func TestNormalizeRecoveryCheckpointTargetForTaskKeepsPlanningTargetForNonReportTask(t *testing.T) {
+func TestNormalizeRecoveryCheckpointTargetForTaskRepointsPlanningTargetForCanonicalWorkTask(t *testing.T) {
 	taskRecord := repo.ProjectTask{
 		TaskNumber: 7,
 		Title:      "Validate task sizing and dependencies",
@@ -4891,8 +4891,25 @@ func TestNormalizeRecoveryCheckpointTargetForTaskKeepsPlanningTargetForNonReport
 	}
 
 	normalized := normalizeRecoveryCheckpointTargetForTask(taskRecord, checkpoint)
-	if normalized.TargetPath != checkpoint.TargetPath {
-		t.Fatalf("normalized target_path = %q, want unchanged %q", normalized.TargetPath, checkpoint.TargetPath)
+	if normalized.TargetPath != "Work/OC-7-VALIDATE-TASK-SIZING-AND-DEPENDENCIES.md" {
+		t.Fatalf("normalized target_path = %q, want canonical work target", normalized.TargetPath)
+	}
+}
+
+func TestNormalizeRecoveryCheckpointTargetForTaskReplacesPackageMarkerWithExplicitDeliverable(t *testing.T) {
+	description := "Verify pipeline config loads from file correctly, environment variable overrides apply properly, and invalid configs are rejected with clear errors. Output: tests/test_config_loader.py Write tests."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  14,
+		Title:       "Validate config loading and environment overrides",
+		Description: &description,
+	}
+	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath: "tests/__init__.py",
+	}
+
+	normalized := normalizeRecoveryCheckpointTargetForTask(taskRecord, checkpoint)
+	if normalized.TargetPath != "tests/test_config_loader.py" {
+		t.Fatalf("normalized target_path = %q, want explicit test file target", normalized.TargetPath)
 	}
 }
 
@@ -27964,6 +27981,106 @@ func TestValidationLoopBlockerForSessionClearsStaleRecoveryTargetFocusGuard(t *t
 	}
 	if checkpoint.TargetPath != "" {
 		t.Fatalf("checkpoint.TargetPath = %q, want empty", checkpoint.TargetPath)
+	}
+}
+
+func TestValidationLoopBlockerForSessionClearsPackageMarkerRecoveryTargetFocusGuard(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	description := "Verify pipeline config loads from file correctly, environment variable overrides apply properly, and invalid configs are rejected with clear errors. Write tests."
+	metadata := mustRawJSON(t, map[string]any{})
+	var err error
+	metadata, err = mergeTaskValidationGuardMetadata(metadata, taskValidationGuardState{
+		ToolName:           "file.read",
+		FailureClass:       "tool_validation",
+		FailureCode:        "recovery_target_focus_required",
+		FailureReason:      "recovery_target_focus_required",
+		Fingerprint:        "file.read:recovery_target_focus_required",
+		AttemptFingerprint: "file.read",
+		Count:              3,
+		BlockThreshold:     3,
+		Blocked:            true,
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+	metadata, err = taskcheckpoint.MergeRecoveryFileWriteCheckpoint(metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath: "tests/__init__.py",
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fakeTaskRepo")
+	}
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:          taskID,
+			ProjectID:   projectID,
+			TaskNumber:  14,
+			Title:       "Validate config loading and environment overrides",
+			Description: &description,
+			WorkStatus:  "blocked",
+			Metadata:    metadata,
+		},
+	}
+
+	blocked, _, err := fixture.engine.validationLoopBlockerForSession(context.Background(), fixture.session)
+	if err != nil {
+		t.Fatalf("validationLoopBlockerForSession: %v", err)
+	}
+	if blocked {
+		t.Fatal("expected package-marker recovery target focus guard to be invalidated")
+	}
+
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if _, ok := parseTaskValidationGuard(updated.Metadata); ok {
+		t.Fatal("expected validation guard metadata to be cleared")
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected checkpoint metadata to remain present")
+	}
+	if checkpoint.TargetPath != "" {
+		t.Fatalf("checkpoint.TargetPath = %q, want empty", checkpoint.TargetPath)
+	}
+}
+
+func TestRecoveryHistoricalReadPathShouldFallbackForPackageMarker(t *testing.T) {
+	t.Parallel()
+
+	if !recoveryHistoricalReadPathShouldFallback("tests/__init__.py") {
+		t.Fatal("expected package-marker test path to fallback")
+	}
+	if recoveryHistoricalReadPathShouldFallback("tests/test_config_loader.py") {
+		t.Fatal("did not expect substantive test file path to fallback")
+	}
+}
+
+func TestRecoveryTaskTargetPathScorePenalizesPackageMarkerPath(t *testing.T) {
+	t.Parallel()
+
+	description := "Verify pipeline config loads from file correctly, environment variable overrides apply properly, and invalid configs are rejected with clear errors. Write tests."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  14,
+		Title:       "Validate config loading and environment overrides",
+		Description: &description,
+	}
+
+	testFileScore := recoveryTaskTargetPathScore(taskRecord, "tests/test_config_loader.py", "def test_config_loader_reads_defaults():\n    assert load_config()['pipeline']['name'] == 'speaker-pipeline'\n")
+	packageMarkerScore := recoveryTaskTargetPathScore(taskRecord, "tests/__init__.py", "\"\"\"Tests for pipeline configuration loading and validation.\"\"\"")
+	if testFileScore <= packageMarkerScore {
+		t.Fatalf("test file score = %d, package marker score = %d, want substantive test file to outrank package marker", testFileScore, packageMarkerScore)
 	}
 }
 

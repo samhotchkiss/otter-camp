@@ -3127,6 +3127,47 @@ What this means:
 - the new branch is not just unit-tested; it is live and issuing the intended review retry guidance on the real hot task-14 lane
 - the live sequence also shows that task `14` moved through a real review rejection immediately after that retry generation instead of remaining stuck in the older test-artifact search loop
 
+## Update 01:21 MDT
+
+The next hot seam after that review-retry fix was not another generic review loop. It was recovery target drift onto trivial package-marker files.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - recovery scoring now penalizes low-signal package-marker targets like `tests/__init__.py`
+  - historical read-path fallback now treats those package markers like `planning/*` paths:
+    - they can still be observed
+    - but they should not anchor recovery if better task-aligned files exist
+  - recovery checkpoint normalization now clears those package-marker targets unless the task explicitly requested that path
+  - stale `recovery_target_focus_required` validation guards now invalidate on those package-marker targets too, instead of preserving them as if they were authoritative deliverables
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage proving:
+    - explicit deliverable metadata replaces a `tests/__init__.py` recovery target
+    - package-marker recovery targets invalidate the stale blocked guard path
+    - package-marker paths are fallback-only in historical read scoring
+    - substantive test files outrank package markers in recovery target scoring
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(NormalizeRecoveryCheckpointTargetForTask(ReplacesPackageMarkerWithExplicitDeliverable|RepointsPlanningTargetForCanonicalWorkTask)|ValidationLoopBlockerForSessionClears(PackageMarkerRecoveryTargetFocusGuard|StaleRecoveryTargetFocusGuard)|Recovery(HistoricalReadPathShouldFallbackForPackageMarker|TaskTargetPathScorePenalizesPackageMarkerPath)|ReviewApprovalRetryPromptRejectsWhenRequiredTestsCannotBeVerified|HandleTurnCompletedEventBlocksRepeatedReviewFileReadNotFoundTurnsAcrossSession|HandleTurnCompletedEventBlocksRepeatedEmptyReviewTurnsAcrossSession|HandleTurnCompletedEventBlocksRepeatedRetriesWithoutReviewDecision)$' -count=1`
+
+Why this slice exists:
+
+- fresh task `14` work turns were still getting pinned to `tests/__init__.py`
+- that low-value target then produced:
+  - repeated `recovery_target_focus_required`
+  - rereads of side artifacts
+  - another avoidable continuation cycle even after the review side had already rejected correctly
+- the goal here is not to force a specific target blindly
+- it is to stop trivial package markers from masquerading as the recovery anchor when the lane already has stronger concrete files
+
+Deploy status:
+
+- code complete
+- focused tests green
+- runtime rebuild/restart still pending at the time of this note
+
 ## Update 00:33 MDT
 
 I closed the remaining uncertainty on the task-worktree fix and turned it into an operator-visible report.
