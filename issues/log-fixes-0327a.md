@@ -106,3 +106,9 @@
   - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
   - note: `go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationFileWriteMissingContentRetryStillBlocksTrulyInvalidCalls$' -count=1` remains red on this branch, but that fixture exercises older broader file-write retry behavior and appears to be separate existing test debt rather than a regression introduced by this alias/troubleshooting hardening
   - live note: no fresh post-restart task-21 turn has executed yet, so production proof for the stale-tool-routing-draft rejection is still waiting on the next natural HTML-task retry
+- 2026-03-27 16:51:50 MDT - `ebff2033` `Continue content migration turns after checkpoints`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so content-migration checkpoints no longer short-circuit continuation setup before the normal task continuation summary/action prompt is appended
+  - strengthened [`internal/turn/engine_integration_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_integration_test.go) so the content-migration continuation prompt must include both the checkpoint state and the direct task-action / anti-generic-chat instructions
+  - verified with `go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegration(ContentMigrationContinuationUsesWorkspaceCheckpoint|ContentMigrationResumeUsesPersistedCheckpointState)$' -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
+  - live note: task 10 session `8048c518-b8e2-4e95-8e54-2fa763325b31` stopped emitting the generic checkpoint continuation reply and resumed direct task action on the next post-restart continuation turn
