@@ -2202,7 +2202,7 @@ func TestTurnEngineIntegrationRecoveryTurnBoundsRepeatedEmptyCLIExecuteWithoutRe
 	}
 }
 
-func TestTurnEngineIntegrationNonRecoveryEmptyCLIExecuteStillBlocksEX311(t *testing.T) {
+func TestTurnEngineIntegrationNonRecoveryEmptyCLIExecuteStopsEarlyAfterCorrectionEX311(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
 
@@ -2246,29 +2246,29 @@ func TestTurnEngineIntegrationNonRecoveryEmptyCLIExecuteStillBlocksEX311(t *test
 		t.Fatalf("HandleUserMessage: %v", err)
 	}
 
-	if modelCalls != 3 {
-		t.Fatalf("model calls = %d, want 3 before validation blocker stops retries", modelCalls)
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2 before same-turn stop", modelCalls)
 	}
-	if dispatched != 3 {
-		t.Fatalf("tier2 dispatches = %d, want 3", dispatched)
+	if dispatched != 0 {
+		t.Fatalf("tier2 dispatches = %d, want 0 for bounded malformed retry", dispatched)
 	}
 
 	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
 	if err != nil {
 		t.Fatalf("GetByID task: %v", err)
 	}
-	if updatedTask.WorkStatus != "blocked" {
-		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	if updatedTask.WorkStatus == "blocked" {
+		t.Fatalf("task work_status = %q, want not blocked", updatedTask.WorkStatus)
 	}
 	guard, ok := parseTaskValidationGuard(updatedTask.Metadata)
 	if !ok {
 		t.Fatal("expected validation guard metadata")
 	}
-	if !guard.Blocked {
-		t.Fatal("expected blocked validation guard")
+	if guard.Blocked {
+		t.Fatal("expected unblocked validation guard")
 	}
-	if guard.Count != validationLoopBlockThreshold {
-		t.Fatalf("guard count = %d, want %d", guard.Count, validationLoopBlockThreshold)
+	if guard.Count != validationLoopTurnStopThreshold {
+		t.Fatalf("guard count = %d, want %d", guard.Count, validationLoopTurnStopThreshold)
 	}
 	if guard.ToolName != "cli.execute" {
 		t.Fatalf("guard tool_name = %q, want cli.execute", guard.ToolName)
@@ -2285,23 +2285,46 @@ func TestTurnEngineIntegrationNonRecoveryEmptyCLIExecuteStillBlocksEX311(t *test
 		t.Fatalf("ListBySession messages: %v", err)
 	}
 	var commandRequiredResults int
-	var blockerMessages int
+	var correctionMessages int
+	var turnStopMessages int
 	for _, item := range messages {
 		if item.Role == "tool_result" && strings.Contains(item.Content, "command is required") {
 			commandRequiredResults++
 		}
-		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
-			blockerMessages++
+		if item.Role == "system" && strings.Contains(item.Content, "Task execution correction: cli.execute was emitted without `command`") {
+			correctionMessages++
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "Repeated identical cli.execute validation failure in this turn") {
+			turnStopMessages++
 		}
 		if item.Role == "system" && strings.Contains(item.Content, "Recovery correction: cli.execute was emitted without `command`") {
 			t.Fatalf("unexpected recovery correction in non-recovery turn: %s", item.Content)
 		}
 	}
-	if commandRequiredResults != 3 {
-		t.Fatalf("command_required tool_results = %d, want 3", commandRequiredResults)
+	if commandRequiredResults != 0 {
+		t.Fatalf("command_required tool_results = %d, want 0", commandRequiredResults)
 	}
-	if blockerMessages != 1 {
-		t.Fatalf("validation blocker system messages = %d, want 1", blockerMessages)
+	if correctionMessages != 1 {
+		t.Fatalf("task correction messages = %d, want 1", correctionMessages)
+	}
+	if turnStopMessages != 1 {
+		t.Fatalf("same-turn stop system messages = %d, want 1", turnStopMessages)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	lastTurn := turns[len(turns)-1]
+	if lastTurn.Status != "completed" {
+		t.Fatalf("turn status = %q, want completed", lastTurn.Status)
+	}
+	gotStopReason := ""
+	if lastTurn.StopReason != nil {
+		gotStopReason = strings.TrimSpace(*lastTurn.StopReason)
+	}
+	if gotStopReason != stopReasonValidationBlocked {
+		t.Fatalf("turn stop_reason = %q, want %q", gotStopReason, stopReasonValidationBlocked)
 	}
 }
 

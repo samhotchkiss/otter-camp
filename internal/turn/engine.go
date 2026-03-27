@@ -13776,11 +13776,29 @@ func (e *TurnEngine) handleTaskCLIExecuteWithoutCommand(ctx context.Context, rt 
 	}
 
 	targetPath, _, ok := e.recoveryFileOutputContext(ctx, rt)
-	if !ok || strings.TrimSpace(targetPath) == "" {
-		return false, false, nil
+	targetPath = strings.TrimSpace(targetPath)
+	draft := ""
+	draftOK := false
+	if ok && targetPath != "" {
+		draft, draftOK = e.taskContinuationHighConfidenceDraftContent(ctx, rt, targetPath)
 	}
-	draft, ok := e.taskContinuationHighConfidenceDraftContent(ctx, rt, targetPath)
-	if !ok || strings.TrimSpace(draft) == "" {
+	if !draftOK || strings.TrimSpace(draft) == "" {
+		output := map[string]any{}
+		if targetPath != "" {
+			output["deliverable_path"] = targetPath
+		}
+		blocked, err := e.handleToolValidationResults(ctx, rt, []ToolCall{*call}, []ToolResult{{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Error:      "command is required",
+			Output:     output,
+		}})
+		if err != nil {
+			return true, false, err
+		}
+		if blocked {
+			return true, true, nil
+		}
 		if rt.taskFileFixes >= taskFileWriteRepairBudget {
 			return false, false, nil
 		}
@@ -13793,7 +13811,7 @@ func (e *TurnEngine) handleTaskCLIExecuteWithoutCommand(ctx context.Context, rt 
 
 	call.Name = "file.write"
 	call.Arguments = mergeRewrittenFileWriteArguments(call.Arguments, map[string]any{
-		"path":        strings.TrimSpace(targetPath),
+		"path":        targetPath,
 		"content":     draft,
 		"create_dirs": true,
 	})
