@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -2386,6 +2387,111 @@ func TestExecuteCommandRelaunchUsesSelectedProject(t *testing.T) {
 	}
 	if relaunchedCalls != 1 {
 		t.Fatalf("RelaunchProject calls = %d, want 1", relaunchedCalls)
+	}
+}
+
+func TestExecuteCommandArchiveProjectUsesSelectedProject(t *testing.T) {
+	archivedCalls := 0
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		ArchiveProject: func(_ context.Context, projectID string) error {
+			archivedCalls++
+			if projectID != "proj-active" {
+				t.Fatalf("ArchiveProject projectID = %q, want %q", projectID, "proj-active")
+			}
+			return nil
+		},
+	})
+	model.workspace.selectedProjectID = "proj-active"
+
+	cmd := model.executeCommand(":archive-project")
+	if cmd == nil {
+		t.Fatal("executeCommand(:archive-project) returned nil cmd")
+	}
+
+	msg := cmd()
+	completed, ok := msg.(projectArchiveCompletedMsg)
+	if !ok {
+		t.Fatalf("cmd() returned %T, want projectArchiveCompletedMsg", msg)
+	}
+	if completed.ArchiveAll {
+		t.Fatal("completed.ArchiveAll = true, want false")
+	}
+	if !reflect.DeepEqual(completed.ProjectIDs, []string{"proj-active"}) {
+		t.Fatalf("completed.ProjectIDs = %v, want [proj-active]", completed.ProjectIDs)
+	}
+	if archivedCalls != 1 {
+		t.Fatalf("ArchiveProject calls = %d, want 1", archivedCalls)
+	}
+}
+
+func TestExecuteCommandArchiveProjectAllUsesLoadedProjects(t *testing.T) {
+	archived := make([]string, 0, 2)
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjects: func(_ context.Context) ([]SidebarProjectItem, error) {
+			return []SidebarProjectItem{
+				{ID: "proj-a", DisplayName: "A"},
+				{ID: "proj-b", DisplayName: "B"},
+			}, nil
+		},
+		ArchiveProject: func(_ context.Context, projectID string) error {
+			archived = append(archived, projectID)
+			return nil
+		},
+	})
+
+	cmd := model.executeCommand(":archive-project all")
+	if cmd == nil {
+		t.Fatal("executeCommand(:archive-project all) returned nil cmd")
+	}
+
+	msg := cmd()
+	completed, ok := msg.(projectArchiveCompletedMsg)
+	if !ok {
+		t.Fatalf("cmd() returned %T, want projectArchiveCompletedMsg", msg)
+	}
+	if !completed.ArchiveAll {
+		t.Fatal("completed.ArchiveAll = false, want true")
+	}
+	if !reflect.DeepEqual(completed.ProjectIDs, []string{"proj-a", "proj-b"}) {
+		t.Fatalf("completed.ProjectIDs = %v, want [proj-a proj-b]", completed.ProjectIDs)
+	}
+	if !reflect.DeepEqual(archived, []string{"proj-a", "proj-b"}) {
+		t.Fatalf("ArchiveProject archived = %v, want [proj-a proj-b]", archived)
+	}
+}
+
+func TestProjectArchiveCompletedClearsSelectionAndReturnsDashboard(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = MainPanel
+	model.workspace.setMainView(ViewProject)
+	model.activeScope = ScopeProject
+	model.workspace.selectedProjectID = "proj-active"
+	model.workspace.selectedProject = &ProjectDetail{ID: "proj-active", DisplayName: "Active Project"}
+	model.workspace.selectedTaskID = "task-1"
+
+	updated, cmd := model.Update(projectArchiveCompletedMsg{ProjectIDs: []string{"proj-active"}})
+	model = updated.(Model)
+
+	if model.workspace.mainView != ViewDashboard {
+		t.Fatalf("mainView = %q, want %q", model.workspace.mainView, ViewDashboard)
+	}
+	if model.activeScope != ScopeOrg {
+		t.Fatalf("activeScope = %q, want %q", model.activeScope, ScopeOrg)
+	}
+	if model.workspace.selectedProjectID != "" {
+		t.Fatalf("selectedProjectID = %q, want empty", model.workspace.selectedProjectID)
+	}
+	if model.workspace.selectedProject != nil {
+		t.Fatal("selectedProject should be cleared")
+	}
+	if model.workspace.selectedTaskID != "" {
+		t.Fatalf("selectedTaskID = %q, want empty", model.workspace.selectedTaskID)
+	}
+	if model.statusMessage != "Project archived." {
+		t.Fatalf("statusMessage = %q, want %q", model.statusMessage, "Project archived.")
+	}
+	if cmd == nil {
+		t.Fatal("project archive completion should trigger sidebar reload")
 	}
 }
 

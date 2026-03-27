@@ -171,6 +171,10 @@ func runTUICommand(args []string) int {
 				}
 				return strings.TrimSpace(resp.Data.ID), nil
 			}
+			runtimeHints.ArchiveProject = func(ctx context.Context, projectID string) error {
+				var resp struct{}
+				return apiClient.request(ctx, "POST", "/v1/projects/"+url.PathEscape(projectID)+"/archive", map[string]any{}, &resp)
+			}
 			runtimeHints.LoadRecentChats = func(ctx context.Context) ([]tuiapp.SidebarChatItem, error) {
 				return loadTUIRecentChats(ctx, apiClient)
 			}

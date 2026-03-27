@@ -111,6 +111,12 @@ type projectRelaunchCompletedMsg struct {
 	Err             error
 }
 
+type projectArchiveCompletedMsg struct {
+	ProjectIDs []string
+	ArchiveAll bool
+	Err        error
+}
+
 type loginCompletedMsg struct {
 	Err error
 }
@@ -1404,6 +1410,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			loadProjectDetailCmd(projectID, m.runtimeHints),
 			loadProjectTasksCmd(projectID, m.runtimeHints, false),
 		)
+	case projectArchiveCompletedMsg:
+		if typed.Err != nil {
+			if typed.ArchiveAll {
+				m.statusMessage = "Project archive-all failed: " + strings.TrimSpace(typed.Err.Error())
+			} else {
+				m.statusMessage = "Project archive failed: " + strings.TrimSpace(typed.Err.Error())
+			}
+			return m, nil
+		}
+		count := len(typed.ProjectIDs)
+		if typed.ArchiveAll {
+			m.statusMessage = fmt.Sprintf("Archived %d project(s).", count)
+			m.workspace.activity = appendActivity(m.workspace.activity, fmt.Sprintf("archived %d project(s)", count))
+		} else {
+			projectID := ""
+			if count > 0 {
+				projectID = strings.TrimSpace(typed.ProjectIDs[0])
+			}
+			m.statusMessage = "Project archived."
+			if projectID != "" {
+				m.workspace.activity = appendActivity(m.workspace.activity, "project archived: "+projectID)
+			}
+		}
+		m.workspace.setMainView(ViewDashboard)
+		m.setFocus(MainPanel)
+		m.activeScope = ScopeOrg
+		m.workspace.selectedProjectID = ""
+		m.workspace.selectedProject = nil
+		m.workspace.selectedTaskID = ""
+		return m, loadSidebarDataCmd(m.runtimeHints)
 	case statusClearMsg:
 		// EX-105: only clear if the generation matches (no newer status was set).
 		if typed.Generation == m.statusGeneration && m.statusMessage != "" {
@@ -6182,6 +6218,55 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		return func() tea.Msg {
 			restartedID, err := m.runtimeHints.RelaunchProject(context.Background(), projectID)
 			return projectRelaunchCompletedMsg{SourceProjectID: projectID, ProjectID: restartedID, Err: err}
+		}
+	case "archive-project", "archive":
+		if m.runtimeHints.ArchiveProject == nil {
+			m.statusMessage = "Project archive not available (no API client)."
+			return nil
+		}
+		if len(fields) > 1 {
+			if len(fields) == 2 && strings.EqualFold(fields[1], "all") {
+				if m.runtimeHints.LoadProjects == nil {
+					m.statusMessage = "Project archive-all not available (no project loader)."
+					return nil
+				}
+				m.statusMessage = "Archiving all projects…"
+				return func() tea.Msg {
+					projects, err := m.runtimeHints.LoadProjects(context.Background())
+					if err != nil {
+						return projectArchiveCompletedMsg{ArchiveAll: true, Err: err}
+					}
+					projectIDs := make([]string, 0, len(projects))
+					for _, item := range projects {
+						projectID := strings.TrimSpace(item.ID)
+						if projectID == "" {
+							continue
+						}
+						projectIDs = append(projectIDs, projectID)
+					}
+					if len(projectIDs) == 0 {
+						return projectArchiveCompletedMsg{ArchiveAll: true, ProjectIDs: nil}
+					}
+					for _, projectID := range projectIDs {
+						if err := m.runtimeHints.ArchiveProject(context.Background(), projectID); err != nil {
+							return projectArchiveCompletedMsg{ArchiveAll: true, ProjectIDs: projectIDs, Err: err}
+						}
+					}
+					return projectArchiveCompletedMsg{ArchiveAll: true, ProjectIDs: projectIDs}
+				}
+			}
+			m.statusMessage = "Usage: :archive-project [all]"
+			return nil
+		}
+		if m.workspace.selectedProjectID == "" {
+			m.statusMessage = "No project selected. Select a project first or use :archive-project all."
+			return nil
+		}
+		projectID := strings.TrimSpace(m.workspace.selectedProjectID)
+		m.statusMessage = "Archiving project…"
+		return func() tea.Msg {
+			err := m.runtimeHints.ArchiveProject(context.Background(), projectID)
+			return projectArchiveCompletedMsg{ProjectIDs: []string{projectID}, Err: err}
 		}
 	case "reconnect", "connect":
 		// EX-406: :reconnect/:connect — manually trigger a sidebar data refresh,

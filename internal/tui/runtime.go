@@ -318,6 +318,8 @@ type RuntimeHints struct {
 	// RelaunchProject restarts an archived bootstrap failure project and returns
 	// the fresh active restart project ID.
 	RelaunchProject func(ctx context.Context, projectID string) (string, error)
+	// ArchiveProject archives the specified project immediately.
+	ArchiveProject func(ctx context.Context, projectID string) error
 	// ResetOrgSession archives the current org session and creates a new one.
 	// Returns the new session UUID string.
 	ResetOrgSession func(ctx context.Context, currentSessionID string) (string, error)
