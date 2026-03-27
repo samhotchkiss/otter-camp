@@ -8707,7 +8707,7 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurns(t *testing.T) {
 		t.Fatalf("requeued session_id = %s, want %s", requeuedSessID, session.ID)
 	}
 	if requeuedMsgID == message.ID {
-		t.Fatalf("requeued message_id = %s, want refreshed bootstrap continuation message", requeuedMsgID)
+		t.Fatalf("requeued message_id = %s, want recovered execution kickoff message", requeuedMsgID)
 	}
 	if retryCount != 1 {
 		t.Fatalf("requeued retry_count = %d, want 1", retryCount)
@@ -8720,8 +8720,8 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurns(t *testing.T) {
 	`, requeuedMsgID).Scan(&requeuedSource); err != nil {
 		t.Fatalf("load requeued message source: %v", err)
 	}
-	if requeuedSource != "project_bootstrap" {
-		t.Fatalf("requeued message source = %q, want project_bootstrap", requeuedSource)
+	if requeuedSource != "task_queue_processor" {
+		t.Fatalf("requeued message source = %q, want task_queue_processor", requeuedSource)
 	}
 }
 
@@ -19964,6 +19964,191 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsForTaskQueueKickoff(
 	}
 	if retryCount != 1 {
 		t.Fatalf("requeued retry_count = %d, want 1", retryCount)
+	}
+}
+
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsCreatesMissingTaskQueueKickoff(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-execution-missing-kickoff",
+		DisplayName: "Requeue Active Execution Missing Kickoff",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Missing Kickoff Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You resume task work after queue recovery.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-execution-missing-kickoff-project",
+		DisplayName:    "Requeue Active Execution Missing Kickoff Project",
+		Description:    "Project for missing task-queue kickoff repair",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "requeue-active-execution-missing-kickoff-template",
+		DisplayName:    "Requeue Active Execution Missing Kickoff Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Recover missing kickoff before first wave execution",
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+		Metadata:        json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active flow node execution: %v", err)
+	}
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1", requeued)
+	}
+
+	messages, err := repo.NewChatMessageRepo(pool).ListBySession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list session messages: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("message count = %d, want 1", len(messages))
+	}
+	message := messages[0]
+	if message.Role != "user" {
+		t.Fatalf("kickoff role = %q, want user", message.Role)
+	}
+	if message.Status != "pending" {
+		t.Fatalf("kickoff status = %q, want pending", message.Status)
+	}
+	if !strings.Contains(message.Content, "Start work on task: Recover missing kickoff before first wave execution") {
+		t.Fatalf("kickoff content = %q, want task kickoff", message.Content)
+	}
+	if !strings.Contains(message.Content, execution.ID.String()) {
+		t.Fatalf("kickoff content = %q, want flow node execution id %s", message.Content, execution.ID)
+	}
+
+	var metadata map[string]any
+	if err := json.Unmarshal(message.Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal kickoff metadata: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["source"])); got != "task_queue_processor" {
+		t.Fatalf("kickoff source = %q, want task_queue_processor", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["flow_node_execution_id"])); got != execution.ID.String() {
+		t.Fatalf("kickoff flow_node_execution_id = %q, want %s", got, execution.ID)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["recovered_missing_kickoff"])); got != "true" {
+		t.Fatalf("kickoff recovered_missing_kickoff = %q, want true", got)
+	}
+
+	var (
+		jobStatus    string
+		requeuedMsg  uuid.UUID
+		requeuedSess uuid.UUID
+		requeuedExec *uuid.UUID
+		retryCount   int
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status,
+		       (payload->>'message_id')::uuid,
+		       (payload->>'session_id')::uuid,
+		       CASE
+		         WHEN COALESCE(payload->>'flow_node_execution_id', '') = '' THEN NULL
+		         ELSE (payload->>'flow_node_execution_id')::uuid
+		       END,
+		       COALESCE((payload->>'retry_count')::int, 0)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, session.ID).Scan(&jobStatus, &requeuedMsg, &requeuedSess, &requeuedExec, &retryCount); err != nil {
+		t.Fatalf("query requeued job: %v", err)
+	}
+	if jobStatus != "pending" {
+		t.Fatalf("requeued job status = %q, want pending", jobStatus)
+	}
+	if requeuedMsg != message.ID {
+		t.Fatalf("requeued message_id = %s, want %s", requeuedMsg, message.ID)
+	}
+	if requeuedSess != session.ID {
+		t.Fatalf("requeued session_id = %s, want %s", requeuedSess, session.ID)
+	}
+	if requeuedExec == nil || *requeuedExec != execution.ID {
+		t.Fatalf("requeued flow_node_execution_id = %v, want %s", requeuedExec, execution.ID)
+	}
+	if retryCount != 0 {
+		t.Fatalf("requeued retry_count = %d, want 0", retryCount)
 	}
 }
 

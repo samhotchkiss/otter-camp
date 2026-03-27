@@ -1226,13 +1226,19 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 	rows, err := w.pool.Query(ctx, `
 		WITH candidates AS (
 			SELECT DISTINCT ON (cs.id) cs.id,
-			       cm.id AS message_id,
-			       COALESCE((
+			       e.id AS execution_id,
+			       COALESCE(cm.id, '00000000-0000-0000-0000-000000000000'::uuid) AS message_id,
+			       COALESCE(cm.source, '') AS message_source,
+			       COALESCE(cm.message_consumed, false) AS message_consumed,
+			       CASE
+			         WHEN cm.id IS NULL THEN 0
+			         ELSE COALESCE((
 			         SELECT MAX(ct.retry_count) + 1
 			         FROM chat_turn ct
 			         WHERE ct.session_id = cs.id
 			           AND ct.trigger_message_id = cm.id
-			       ), 0) AS next_retry_count,
+			       ), 0)
+			       END AS next_retry_count,
 			       COALESCE((
 			         SELECT ct.error_message
 			         FROM chat_turn ct
@@ -1248,9 +1254,9 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			           AND ct.trigger_message_id = cm.id
 			         ORDER BY ct.turn_number DESC, ct.retry_count DESC, ct.created_at DESC, ct.id DESC
 			         LIMIT 1
-			       ), cm.created_at) AS latest_turn_completed_at,
+			       ), COALESCE(cm.created_at, e.started_at)) AS latest_turn_completed_at,
 			       e.started_at AS execution_started_at,
-			       cm.created_at AS message_created_at
+			       COALESCE(cm.created_at, e.started_at) AS message_created_at
 			FROM chat_session cs
 			JOIN flow_node_execution e
 			  ON e.session_id = cs.id
@@ -1261,58 +1267,75 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			  ON p.id = pt.project_id
 			JOIN flow_node fn
 			  ON fn.id = e.flow_node_id
-			JOIN chat_message cm
-			  ON cm.session_id = cs.id
+			LEFT JOIN LATERAL (
+				SELECT cm.id,
+				       cm.created_at,
+				       COALESCE(cm.metadata->>'source', '') AS source,
+				       EXISTS (
+				         SELECT 1
+				         FROM chat_turn ct
+				         WHERE ct.session_id = cs.id
+				           AND ct.trigger_message_id = cm.id
+				           AND ct.status IN ('completed', 'failed', 'cancelled')
+				       ) AS message_consumed,
+				       cm.metadata,
+				       cm.content
+				FROM chat_message cm
+				WHERE cm.session_id = cs.id
+				  AND cm.role = 'user'
+				  AND COALESCE(cm.metadata->'agent_turn_dispatch'->>'cancelled_at', '') = ''
+				  AND (
+				    (
+				      cm.content = 'supervisor recovery: resume task'
+				      AND COALESCE(cm.metadata->>'source', '') = 'supervisor'
+				    )
+				    OR (
+				      COALESCE(cm.metadata->>'source', '') = 'task_queue_processor'
+				      AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
+				    )
+				    OR (
+				      COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
+				      AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
+				    )
+				    OR (
+				      COALESCE(cm.metadata->>'source', '') = 'task_review_action'
+				      AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
+				    )
+				  )
+				  AND NOT EXISTS (
+				    SELECT 1
+				    FROM chat_turn latest
+				    WHERE latest.session_id = cs.id
+				      AND latest.trigger_message_id = cm.id
+				      AND latest.status = 'cancelled'
+				      AND NOT EXISTS (
+				        SELECT 1
+				        FROM chat_turn newer
+				        WHERE newer.session_id = latest.session_id
+				          AND newer.trigger_message_id = latest.trigger_message_id
+				          AND (
+				            newer.turn_number > latest.turn_number
+				            OR (newer.turn_number = latest.turn_number AND newer.retry_count > latest.retry_count)
+				          )
+				      )
+				  )
+				ORDER BY cm.created_at DESC, cm.id DESC
+				LIMIT 1
+			) cm ON true
 			WHERE cs.scope_type = 'project_task'
 			  AND cs.mode = 'async'
 			  AND cs.status = 'active'
 			  AND COALESCE(p.settings->'pause'->>'is_paused', 'false') <> 'true'
 			  AND cs.current_turn_id IS NULL
-			  AND cm.role = 'user'
-			  AND COALESCE(cm.metadata->'agent_turn_dispatch'->>'cancelled_at', '') = ''
-			  AND (
-			    (
-			      cm.content = 'supervisor recovery: resume task'
-			      AND COALESCE(cm.metadata->>'source', '') = 'supervisor'
-			    )
-			    OR (
-			      COALESCE(cm.metadata->>'source', '') = 'task_queue_processor'
-			      AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
-			    )
-			    OR (
-			      COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
-			      AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
-			    )
-			    OR (
-			      COALESCE(cm.metadata->>'source', '') = 'task_review_action'
-			      AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
-			    )
-			  )
 			  AND NOT EXISTS (
 			    SELECT 1
 			    FROM chat_turn ct
 			    WHERE ct.session_id = cs.id
 			      AND ct.status IN ('pending', 'in_progress')
 			  )
-			  AND NOT EXISTS (
-			    SELECT 1
-			    FROM chat_turn latest
-			    WHERE latest.session_id = cs.id
-			      AND latest.trigger_message_id = cm.id
-			      AND latest.status = 'cancelled'
-			      AND NOT EXISTS (
-			        SELECT 1
-			        FROM chat_turn newer
-			        WHERE newer.session_id = latest.session_id
-			          AND newer.trigger_message_id = latest.trigger_message_id
-			          AND (
-			            newer.turn_number > latest.turn_number
-			            OR (newer.turn_number = latest.turn_number AND newer.retry_count > latest.retry_count)
-			          )
-			      )
-			  )
 			  AND (
-			    COALESCE(fn.node_type, '') = 'review'
+			    cm.id IS NULL
+			    OR COALESCE(fn.node_type, '') = 'review'
 			    OR NOT EXISTS (
 			      SELECT 1
 			      FROM chat_turn halted
@@ -1338,6 +1361,9 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			      AND jq.status IN ('pending', 'claimed')
 			      AND (jq.payload->>'session_id')::uuid = cs.id
 			      AND NOT (
+			            cm.id IS NOT NULL
+			        AND
+			          (
 			            (
 			              COALESCE(cm.metadata->>'source', '') IN ('task_review_action', 'task_recovery_resume')
 			              OR (
@@ -1345,12 +1371,13 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			               AND cm.content = 'supervisor recovery: resume task'
 			                 )
 			            )
+			          )
 			        AND queued_message.created_at < cm.created_at
 			          )
 			  )
-			ORDER BY cs.id, cm.created_at DESC, cm.id DESC
+			ORDER BY cs.id, COALESCE(cm.created_at, e.started_at) DESC, COALESCE(cm.id, '00000000-0000-0000-0000-000000000000'::uuid) DESC
 		)
-		SELECT id, message_id, next_retry_count, latest_turn_error, latest_turn_completed_at
+		SELECT id, execution_id, message_id, message_source, message_consumed, next_retry_count, latest_turn_error, latest_turn_completed_at
 		FROM candidates
 		ORDER BY execution_started_at ASC, message_created_at ASC, id ASC
 		LIMIT $2
@@ -1363,12 +1390,25 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 	var repaired int64
 	for rows.Next() {
 		var sessionID uuid.UUID
+		var executionID uuid.UUID
 		var messageID uuid.UUID
+		var messageSource string
+		var messageConsumed bool
 		var retryCount int
 		var latestTurnError string
 		var latestTurnCompletedAt time.Time
-		if err := rows.Scan(&sessionID, &messageID, &retryCount, &latestTurnError, &latestTurnCompletedAt); err != nil {
+		if err := rows.Scan(&sessionID, &executionID, &messageID, &messageSource, &messageConsumed, &retryCount, &latestTurnError, &latestTurnCompletedAt); err != nil {
 			return repaired, fmt.Errorf("scan active execution session without turn: %w", err)
+		}
+		if messageID == uuid.Nil || (strings.EqualFold(strings.TrimSpace(messageSource), "supervisor") && messageConsumed) {
+			synthMessageID, synthErr := w.ensureTaskExecutionKickoffMessage(ctx, sessionID, executionID)
+			if synthErr != nil {
+				return repaired, fmt.Errorf("ensure task execution kickoff message for session %s: %w", sessionID, synthErr)
+			}
+			if synthMessageID == uuid.Nil {
+				continue
+			}
+			messageID = synthMessageID
 		}
 		if _, err := w.pool.Exec(ctx, `
 			UPDATE job_queue jq
@@ -1411,9 +1451,10 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		}
 		var runAfter *time.Time
 		payload := agentTurnKeyPayload{
-			SessionID:  sessionID,
-			MessageID:  messageID,
-			RetryCount: retryCount,
+			SessionID:           sessionID,
+			MessageID:           messageID,
+			RetryCount:          retryCount,
+			FlowNodeExecutionID: &executionID,
 		}
 		if retryAfterHint, ok := parseRateLimitRetryAfterFromText(latestTurnError); ok {
 			retryDelay := agentTurnRateLimitDelay(max(1, retryCount), retryAfterHint)
@@ -1761,6 +1802,245 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 		return uuid.Nil, fmt.Errorf("create project continuation message: %w", err)
 	}
 	return message.ID, nil
+}
+
+func (w *Worker) ensureTaskExecutionKickoffMessage(ctx context.Context, sessionID, executionID uuid.UUID) (uuid.UUID, error) {
+	if w == nil || w.pool == nil || sessionID == uuid.Nil || executionID == uuid.Nil {
+		return uuid.Nil, nil
+	}
+
+	tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("begin task execution kickoff repair: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1::text))`, executionID.String()); err != nil {
+		return uuid.Nil, fmt.Errorf("lock task execution kickoff repair: %w", err)
+	}
+
+	var existingMessageID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT id
+		FROM chat_message
+		WHERE session_id = $1
+		  AND role = 'user'
+		  AND status = 'pending'
+		  AND COALESCE(metadata->'agent_turn_dispatch'->>'cancelled_at', '') = ''
+		  AND COALESCE(metadata->>'source', '') = 'task_queue_processor'
+		  AND COALESCE(metadata->>'flow_node_execution_id', '') = $2
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, sessionID, executionID.String()).Scan(&existingMessageID)
+	if err == nil {
+		if commitErr := tx.Commit(ctx); commitErr != nil {
+			return uuid.Nil, fmt.Errorf("commit existing task execution kickoff repair: %w", commitErr)
+		}
+		return existingMessageID, nil
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, fmt.Errorf("query existing task execution kickoff message: %w", err)
+	}
+
+	var (
+		taskRecord repo.ProjectTask
+		node       repo.FlowNode
+		execution  repo.FlowNodeExecution
+	)
+	if err := tx.QueryRow(ctx, `
+		SELECT pt.organization_id,
+		       pt.project_id,
+		       pt.id,
+		       pt.title,
+		       pt.description,
+		       pt.work_status,
+		       pt.blocks_scope,
+		       pt.flow_template_id,
+		       pt.current_flow_node_id,
+		       pt.metadata,
+		       fn.id,
+		       fn.display_name,
+		       fn.node_type,
+		       fn.requires_human_review,
+		       e.visit_number
+		FROM flow_node_execution e
+		JOIN project_task pt
+		  ON pt.id = e.task_id
+		JOIN chat_session cs
+		  ON cs.id = e.session_id
+		JOIN flow_node fn
+		  ON fn.id = e.flow_node_id
+		WHERE e.id = $1
+		  AND e.status = 'active'
+		  AND e.session_id = $2
+		  AND cs.status = 'active'
+		  AND cs.scope_type = 'project_task'
+	`, executionID, sessionID).Scan(
+		&taskRecord.OrganizationID,
+		&taskRecord.ProjectID,
+		&taskRecord.ID,
+		&taskRecord.Title,
+		&taskRecord.Description,
+		&taskRecord.WorkStatus,
+		&taskRecord.BlocksScope,
+		&taskRecord.FlowTemplateID,
+		&taskRecord.CurrentFlowNodeID,
+		&taskRecord.Metadata,
+		&node.ID,
+		&node.DisplayName,
+		&node.NodeType,
+		&node.RequiresHumanReview,
+		&execution.VisitNumber,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, nil
+		}
+		return uuid.Nil, fmt.Errorf("load task execution kickoff repair state: %w", err)
+	}
+	execution.ID = executionID
+	execution.TaskID = taskRecord.ID
+	execution.FlowNodeID = node.ID
+	execution.SessionID = &sessionID
+	execution.Status = "active"
+
+	sequenceNumber := 1
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(MAX(sequence_number), 0) + 1
+		FROM chat_message
+		WHERE session_id = $1
+	`, sessionID).Scan(&sequenceNumber); err != nil {
+		return uuid.Nil, fmt.Errorf("next task execution kickoff sequence number: %w", err)
+	}
+
+	metadata, err := json.Marshal(map[string]any{
+		"source":                    "task_queue_processor",
+		"flow_node_execution_id":    executionID.String(),
+		"synthetic_user_message":    true,
+		"recovered_missing_kickoff": true,
+	})
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("marshal task execution kickoff metadata: %w", err)
+	}
+
+	content := buildRecoveredTaskExecutionKickoffMessage(taskRecord, execution, &node)
+	var messageID uuid.UUID
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO chat_message (
+			session_id,
+			turn_id,
+			sequence_number,
+			author_type,
+			author_id,
+			role,
+			content,
+			content_format,
+			status,
+			is_redacted,
+			redacted_at,
+			tool_call_id,
+			error_message,
+			metadata
+		)
+		VALUES ($1, NULL, $2, NULL, NULL, 'user', $3, 'text', 'pending', false, NULL, NULL, NULL, $4::jsonb)
+		RETURNING id
+	`, sessionID, sequenceNumber, content, metadata).Scan(&messageID); err != nil {
+		return uuid.Nil, fmt.Errorf("create recovered task execution kickoff message: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("commit task execution kickoff repair: %w", err)
+	}
+	return messageID, nil
+}
+
+func buildRecoveredTaskExecutionKickoffMessage(taskRecord repo.ProjectTask, execution repo.FlowNodeExecution, node *repo.FlowNode) string {
+	base := buildRecoveredTaskQueueKickoffMessage(taskRecord)
+	if node != nil && (strings.EqualFold(strings.TrimSpace(node.NodeType), "review") || node.RequiresHumanReview) {
+		title := strings.TrimSpace(taskRecord.Title)
+		if title == "" {
+			title = "Untitled task"
+		}
+		description := strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+		base = "Start review on task: " + title
+		if description != "" {
+			base += "\n\nTask description:\n" + description
+		}
+		base += "\n\nReview instruction:\nInspect the current deliverables and use flow.review_decision to approve or reject this review step. Approval closes with an empty review commit. Rejection may add review-scoped CriticMarkup notes."
+	}
+	if execution.ID == uuid.Nil {
+		return base
+	}
+	return base + "\n\nFlow node execution: " + execution.ID.String()
+}
+
+func buildRecoveredTaskQueueKickoffMessage(taskRecord repo.ProjectTask) string {
+	title := strings.TrimSpace(taskRecord.Title)
+	if title == "" {
+		title = "Untitled task"
+	}
+
+	description := strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+	base := "Start work on task: " + title
+	if description != "" {
+		base += "\n\nTask description:\n" + description
+	}
+	if recoveredTaskLooksLikeOrchestrationOnlyParent(taskRecord) {
+		base += "\n\nExecution instruction:\nThis task is an orchestration-only parent container. Do not execute the parent deliverable directly. Inspect the current child-task set and create or repair bounded executable child tasks beneath this parent. Do not begin by rereading planning artifacts unless a concrete blocker names one."
+	}
+	return base
+}
+
+func recoveredTaskLooksLikeOrchestrationOnlyParent(taskRecord repo.ProjectTask) bool {
+	if len(taskRecord.Metadata) != 0 && json.Valid(taskRecord.Metadata) {
+		var payload map[string]any
+		if err := json.Unmarshal(taskRecord.Metadata, &payload); err == nil {
+			if decomp, _ := payload["decomposition"].(map[string]any); decomp != nil {
+				if orchestrationOnly, _ := decomp["orchestration_only"].(bool); orchestrationOnly {
+					return true
+				}
+			}
+		}
+	}
+
+	titleText := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	descriptionText := strings.ToLower(strings.TrimSpace(valueOrEmpty(taskRecord.Description)))
+	text := titleText
+	if descriptionText != "" {
+		text += "\n" + descriptionText
+	}
+
+	titleLooksLikeWorkstream := strings.HasPrefix(titleText, "workstream ") || strings.HasPrefix(titleText, "ws")
+	signals := []string{
+		"parent orchestration task",
+		"parent/orchestration task",
+		"parent orchestration container",
+		"orchestration container",
+		"does not do execution work itself",
+		"does not perform execution work itself",
+		"does not perform execution work directly",
+		"validates that child tasks",
+		"validates child task outputs",
+		"validates child outputs",
+		"owns integration verification of its children",
+	}
+	matches := 0
+	for _, signal := range signals {
+		if strings.Contains(text, signal) {
+			matches++
+		}
+	}
+	if matches >= 2 {
+		return true
+	}
+	return titleLooksLikeWorkstream && matches >= 1
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func (w *Worker) countActionableProjectDraftTasks(ctx context.Context, projectID uuid.UUID) (int, error) {
