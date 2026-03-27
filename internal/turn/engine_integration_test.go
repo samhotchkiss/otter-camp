@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -3393,12 +3394,16 @@ func TestTurnEngineIntegrationRecoveryTurnRewritesEmptyCLIExecuteToPersistedFile
 		t.Fatalf("write recovery artifact: %v", err)
 	}
 	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
-	updatedTask, err := taskRepo.UpdateMetadata(ctx, taskRecord.ID, taskcheckpoint.ApplyRecoveryFileWriteCheckpoint(taskRecord.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(taskRecord.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
 		Version:      1,
 		TargetPath:   targetPath,
 		ArtifactPath: artifactRel,
-		UpdatedAt:    time.Now().UTC(),
-	}))
+		UpdatedAt:    time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	updatedTask, err := taskRepo.UpdateMetadata(ctx, taskRecord.ID, metadata)
 	if err != nil {
 		t.Fatalf("Update task with recovery checkpoint: %v", err)
 	}
@@ -4844,12 +4849,16 @@ func TestTurnEngineIntegrationRecoveryTurnStopsAfterDurableRecoveredWrite(t *tes
 		t.Fatalf("write recovery artifact: %v", err)
 	}
 	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
-	updatedTask, err := taskRepo.UpdateMetadata(ctx, taskRecord.ID, taskcheckpoint.ApplyRecoveryFileWriteCheckpoint(taskRecord.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(taskRecord.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
 		Version:      1,
 		TargetPath:   targetPath,
 		ArtifactPath: artifactRel,
-		UpdatedAt:    time.Now().UTC(),
-	}))
+		UpdatedAt:    time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	updatedTask, err := taskRepo.UpdateMetadata(ctx, taskRecord.ID, metadata)
 	if err != nil {
 		t.Fatalf("Update task with recovery checkpoint: %v", err)
 	}
@@ -6104,21 +6113,15 @@ func TestTurnEngineIntegrationFreshKickoffRetryKeepsSingleProjectAndSession(t *t
 			}
 			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "session-1", Name: "session.create", Tier: "tier1", Arguments: map[string]any{"scope_type": "project", "scope_id": createdProjectID.String(), "mode": "async"}}}}, nil
 		case 3:
-			return ModelResponse{}, fmt.Errorf("simulated_fresh_kickoff_retry")
-		case 4:
 			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "create-retry", Name: "project.create", Tier: "tier1", Arguments: map[string]any{"name": "Sam Blog Fresh", "slug": "sam-blog-fresh"}}}}, nil
-		case 5:
-			if createdProjectID == uuid.Nil {
-				t.Fatal("createdProjectID missing before retry session.create")
-			}
-			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "session-retry", Name: "session.create", Tier: "tier1", Arguments: map[string]any{"scope_type": "project", "scope_id": createdProjectID.String(), "mode": "async"}}}}, nil
 		default:
-			return ModelResponse{Content: "kickoff stabilized"}, nil
+			t.Fatalf("unexpected extra model call %d", round)
+			return ModelResponse{}, nil
 		}
 	}
 
-	if err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID); err == nil || !strings.Contains(err.Error(), "simulated_fresh_kickoff_retry") {
-		t.Fatalf("first HandleUserMessage error = %v, want simulated retry failure", err)
+	if err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID); err != nil {
+		t.Fatalf("first HandleUserMessage: %v", err)
 	}
 	if err := fixture.engine.handleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID, nil, 1, nil); err != nil {
 		t.Fatalf("retry handleUserMessage: %v", err)
@@ -15989,8 +15992,8 @@ func TestTurnEngineIntegrationProjectExecutionContinuationAutoQueuesRunnableDraf
 
 	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
 	workerAgent := mustCreateBootstrapWorkerAgent(t, ctx, fixture.pool, fixture.org.ID)
-	assignments := assignment.NewService(repo.NewProjectAssignmentRepo(fixture.pool))
-	for _, item := range []assignment.AssignInput{
+	assignments := repo.NewAgentProjectAssignmentRepo(fixture.pool)
+	for _, item := range []repo.AgentProjectAssignment{
 		{ProjectID: project.ID, AgentID: pmAgent.ID, Role: "pm", AssignedByType: "agent", AssignedByID: &lori.ID},
 		{ProjectID: project.ID, AgentID: workerAgent.ID, Role: "worker", AssignedByType: "agent", AssignedByID: &lori.ID},
 	} {
@@ -16061,7 +16064,7 @@ func TestTurnEngineIntegrationProjectExecutionContinuationAutoQueuesRunnableDraf
 	userMessage, err := messageRepo.Create(ctx, repo.ChatMessage{
 		SessionID: projectSession.ID,
 		Role:      "user",
-		Content:   buildProjectExecutionContinuationPrompt(completedTask, 1),
+		Content:   buildProjectExecutionContinuationPrompt(completedTask, 1, projectExecutionContinuationSnapshot{}),
 		Status:    "pending",
 		Metadata:  continuationMetadata,
 	})
@@ -16219,8 +16222,8 @@ func TestTurnEngineIntegrationProjectExecutionContinuationIgnoresTerminalTaskSes
 	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
 	workerAgent := mustCreateBootstrapWorkerAgent(t, ctx, fixture.pool, fixture.org.ID)
 	reviewerAgent := mustCreateBootstrapReviewerAgent(t, ctx, fixture.pool, fixture.org.ID)
-	assignments := assignment.NewService(repo.NewProjectAssignmentRepo(fixture.pool))
-	for _, item := range []assignment.AssignInput{
+	assignments := repo.NewAgentProjectAssignmentRepo(fixture.pool)
+	for _, item := range []repo.AgentProjectAssignment{
 		{ProjectID: project.ID, AgentID: pmAgent.ID, Role: "pm", AssignedByType: "agent", AssignedByID: &lori.ID},
 		{ProjectID: project.ID, AgentID: workerAgent.ID, Role: "worker", AssignedByType: "agent", AssignedByID: &lori.ID},
 		{ProjectID: project.ID, AgentID: reviewerAgent.ID, Role: "reviewer", AssignedByType: "agent", AssignedByID: &lori.ID},
@@ -16329,8 +16332,8 @@ func TestTurnEngineIntegrationProjectExecutionContinuationAfterTerminalTaskTurn(
 	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
 	workerAgent := mustCreateBootstrapWorkerAgent(t, ctx, fixture.pool, fixture.org.ID)
 	reviewerAgent := mustCreateBootstrapReviewerAgent(t, ctx, fixture.pool, fixture.org.ID)
-	assignments := assignment.NewService(repo.NewProjectAssignmentRepo(fixture.pool))
-	for _, item := range []assignment.AssignInput{
+	assignments := repo.NewAgentProjectAssignmentRepo(fixture.pool)
+	for _, item := range []repo.AgentProjectAssignment{
 		{ProjectID: project.ID, AgentID: pmAgent.ID, Role: "pm", AssignedByType: "agent", AssignedByID: &lori.ID},
 		{ProjectID: project.ID, AgentID: workerAgent.ID, Role: "worker", AssignedByType: "agent", AssignedByID: &lori.ID},
 		{ProjectID: project.ID, AgentID: reviewerAgent.ID, Role: "reviewer", AssignedByType: "agent", AssignedByID: &lori.ID},
@@ -20663,7 +20666,7 @@ func TestTurnEngineIntegrationExplicitDeliverableWriteRecordsCanonicalCommitBefo
 	if len(executions) < 2 {
 		t.Fatalf("flow execution count = %d, want >= 2", len(executions))
 	}
-	if strings.TrimSpace(executions[0].CommitSHA) == "" {
+	if executions[0].CommitSHA == nil || strings.TrimSpace(*executions[0].CommitSHA) == "" {
 		t.Fatal("expected completed work execution to record canonical commit_sha before review")
 	}
 
@@ -22072,6 +22075,20 @@ func mustInsertProjectRepoBinding(t *testing.T, ctx context.Context, pool *pgxpo
 	}
 }
 
+func mustProjectWorkspaceRoot(t *testing.T, ctx context.Context, fixture *integrationFixture, projectID uuid.UUID) string {
+	t.Helper()
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, projectID)
+	if err != nil {
+		t.Fatalf("GetByID project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot(fixture.engine.dataDir, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace.ProjectRoot: %v", err)
+	}
+	return workspaceRoot
+}
+
 func mustCreateProjectSession(t *testing.T, ctx context.Context, fixture *integrationFixture, projectID uuid.UUID, participantAgentIDs ...uuid.UUID) repo.ChatSession {
 	t.Helper()
 
@@ -22134,6 +22151,122 @@ func mustCreateBootstrapPMAgent(t *testing.T, ctx context.Context, pool *pgxpool
 		t.Fatalf("create bootstrap PM agent: %v", err)
 	}
 	return agentRecord
+}
+
+func mustCreateBootstrapWorkerAgent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID) repo.Agent {
+	t.Helper()
+
+	agentRecord, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:       orgID,
+		DisplayName:          "Bootstrap Worker",
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "You are the bootstrap worker.",
+		OperatorInstructions: "",
+		AgentType:            "worker",
+		PrivateMemory:        false,
+		MemoryReadScopes:     []string{"org", "project", "task", "agent"},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create bootstrap worker agent: %v", err)
+	}
+	return agentRecord
+}
+
+func mustCreateBootstrapReviewerAgent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID) repo.Agent {
+	t.Helper()
+
+	agentRecord, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:       orgID,
+		DisplayName:          "Bootstrap Reviewer",
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "You are the bootstrap reviewer.",
+		OperatorInstructions: "",
+		AgentType:            "reviewer",
+		PrivateMemory:        false,
+		MemoryReadScopes:     []string{"org", "project", "task", "agent"},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create bootstrap reviewer agent: %v", err)
+	}
+	return agentRecord
+}
+
+func mustCreateReviewFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID) repo.FlowTemplate {
+	t.Helper()
+
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgID,
+		Slug:           "turn-review-flow-" + uuid.NewString()[:8],
+		DisplayName:    "Turn Review Flow",
+		Description:    "Turn engine review flow",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create review flow template: %v", err)
+	}
+
+	workNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create review work flow node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create review flow node: %v", err)
+	}
+	mergeNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Merge",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create review merge flow node: %v", err)
+	}
+
+	workNode.NextNodeID = &reviewNode.ID
+	reviewNode.NextNodeID = &mergeNode.ID
+	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
+		t.Fatalf("update review work flow node: %v", err)
+	}
+	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
+		t.Fatalf("update review flow node: %v", err)
+	}
+
+	template.StartNodeID = &workNode.ID
+	template, err = templateRepo.Update(ctx, template)
+	if err != nil {
+		t.Fatalf("update review flow template start node: %v", err)
+	}
+	return template
 }
 
 func mustCreateExecutionFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID, userID uuid.UUID) repo.FlowTemplate {

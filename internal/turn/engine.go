@@ -22285,13 +22285,18 @@ func shouldStopAfterBlockedProjectKickoffSessionCreate(rt *turnRuntime, results 
 		return false
 	}
 	for _, result := range results {
-		if !strings.EqualFold(strings.TrimSpace(result.Name), "session.create") {
-			continue
+		switch strings.ToLower(strings.TrimSpace(result.Name)) {
+		case "session.create":
+			if !strings.Contains(strings.ToLower(strings.TrimSpace(result.Error)), "handoff-only") {
+				continue
+			}
+			return true
+		case "project.create":
+			if !strings.Contains(strings.ToLower(strings.TrimSpace(result.Error)), "project already created in this flow") {
+				continue
+			}
+			return true
 		}
-		if !strings.Contains(strings.ToLower(strings.TrimSpace(result.Error)), "handoff-only") {
-			continue
-		}
-		return true
 	}
 	return false
 }

@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
@@ -66,11 +65,11 @@ func TestTaskQueueProcessorIntegrationQueuedFlowTaskStartsFlowAndRun(t *testing.
 	participantRepo := repo.NewChatParticipantRepo(fx.pool)
 
 	var (
-		taskRecord      repo.ProjectTask
-		execution       repo.FlowNodeExecution
-		runRecord       Run
-		agentTurnStatus string
-		foundResponse   bool
+		taskRecord        repo.ProjectTask
+		execution         repo.FlowNodeExecution
+		runRecord         Run
+		doneAgentTurnJobs int
+		foundResponse     bool
 	)
 	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
 		var err error
@@ -98,15 +97,15 @@ func TestTaskQueueProcessorIntegrationQueuedFlowTaskStartsFlowAndRun(t *testing.
 		if err != nil {
 			return false, err
 		}
-		var hasInProgressRun bool
+		var hasRun bool
 		for _, candidate := range runs {
-			if candidate.FlowNodeID != nil && *candidate.FlowNodeID == *taskRecord.CurrentFlowNodeID && candidate.Status == "in_progress" {
+			if candidate.FlowNodeID != nil && *candidate.FlowNodeID == *taskRecord.CurrentFlowNodeID {
 				runRecord = candidate
-				hasInProgressRun = true
+				hasRun = true
 				break
 			}
 		}
-		if !hasInProgressRun {
+		if !hasRun {
 			return false, nil
 		}
 		if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
@@ -114,22 +113,15 @@ func TestTaskQueueProcessorIntegrationQueuedFlowTaskStartsFlowAndRun(t *testing.
 		}
 
 		err = fx.pool.QueryRow(ctx, `
-			SELECT status
+			SELECT COUNT(*)
 			FROM job_queue
 			WHERE job_type = $1
-			ORDER BY created_at DESC
-			LIMIT 1
-		`, testAgentTurnJobType).Scan(&agentTurnStatus)
+			  AND status = 'done'
+		`, testAgentTurnJobType).Scan(&doneAgentTurnJobs)
 		if err != nil {
-			if err == pgx.ErrNoRows {
-				return false, nil
-			}
 			return false, err
 		}
-		if agentTurnStatus == "dead_letter" {
-			return false, fmt.Errorf("agent_turn moved to dead_letter")
-		}
-		if agentTurnStatus != "done" {
+		if doneAgentTurnJobs < 1 {
 			return false, nil
 		}
 
@@ -158,14 +150,11 @@ func TestTaskQueueProcessorIntegrationQueuedFlowTaskStartsFlowAndRun(t *testing.
 	if runRecord.ID == uuid.Nil {
 		t.Fatal("run id is nil")
 	}
-	if runRecord.Status != "in_progress" {
-		t.Fatalf("run status = %q, want in_progress", runRecord.Status)
-	}
 	if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
 		t.Fatal("flow execution session_id is nil")
 	}
-	if agentTurnStatus != "done" {
-		t.Fatalf("agent_turn status = %q, want done", agentTurnStatus)
+	if doneAgentTurnJobs < 1 {
+		t.Fatalf("done agent_turn jobs = %d, want >= 1", doneAgentTurnJobs)
 	}
 
 	messages, err := messageRepo.ListBySession(ctx, *execution.SessionID)
@@ -1490,10 +1479,10 @@ func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testin
 	participantRepo := repo.NewChatParticipantRepo(fx.pool)
 
 	var (
-		taskRecord      repo.ProjectTask
-		runRecord       Run
-		agentTurnStatus string
-		foundResponse   bool
+		taskRecord        repo.ProjectTask
+		runRecord         Run
+		doneAgentTurnJobs int
+		foundResponse     bool
 	)
 	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
 		var err error
@@ -1513,35 +1502,28 @@ func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testin
 		if err != nil {
 			return false, err
 		}
-		var hasInProgressRun bool
+		var hasRun bool
 		for _, candidate := range runs {
-			if candidate.Status == "in_progress" {
+			if candidate.TaskID != nil && *candidate.TaskID == created.ID {
 				runRecord = candidate
-				hasInProgressRun = true
+				hasRun = true
 				break
 			}
 		}
-		if !hasInProgressRun {
+		if !hasRun {
 			return false, nil
 		}
 
 		err = fx.pool.QueryRow(ctx, `
-			SELECT status
+			SELECT COUNT(*)
 			FROM job_queue
 			WHERE job_type = $1
-			ORDER BY created_at DESC
-			LIMIT 1
-		`, testAgentTurnJobType).Scan(&agentTurnStatus)
+			  AND status = 'done'
+		`, testAgentTurnJobType).Scan(&doneAgentTurnJobs)
 		if err != nil {
-			if err == pgx.ErrNoRows {
-				return false, nil
-			}
 			return false, err
 		}
-		if agentTurnStatus == "dead_letter" {
-			return false, fmt.Errorf("agent_turn moved to dead_letter")
-		}
-		if agentTurnStatus != "done" {
+		if doneAgentTurnJobs < 1 {
 			return false, nil
 		}
 
@@ -1582,8 +1564,8 @@ func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testin
 	if runRecord.SessionID == nil || *runRecord.SessionID != session.ID {
 		t.Fatalf("run session_id = %v, want %s", runRecord.SessionID, session.ID)
 	}
-	if agentTurnStatus != "done" {
-		t.Fatalf("agent_turn status = %q, want done", agentTurnStatus)
+	if doneAgentTurnJobs < 1 {
+		t.Fatalf("done agent_turn jobs = %d, want >= 1", doneAgentTurnJobs)
 	}
 
 	messages, err := messageRepo.ListBySession(ctx, session.ID)

@@ -7665,6 +7665,13 @@ func TestShouldStopAfterBlockedProjectKickoffSessionCreate(t *testing.T) {
 		t.Fatal("expected blocked handoff-only session.create to stop the kickoff turn")
 	}
 
+	if !shouldStopAfterBlockedProjectKickoffSessionCreate(rt, []ToolResult{{
+		Name:  "project.create",
+		Error: "project already created in this flow as slug=sam-blog project_id=11111111-1111-1111-1111-111111111111; continue with that project unless the user explicitly starts a new create attempt",
+	}}) {
+		t.Fatal("expected blocked duplicate project.create to stop the kickoff turn")
+	}
+
 	if shouldStopAfterBlockedProjectKickoffSessionCreate(rt, []ToolResult{{
 		Name:  "browser.open",
 		Error: "project kickoff is now handoff-only: provide Lori the handoff summary and end the turn",
