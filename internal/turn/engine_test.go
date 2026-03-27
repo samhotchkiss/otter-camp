@@ -5018,6 +5018,79 @@ func TestHandleTurnCompletedEventRetriesGenericRecoveryReply(t *testing.T) {
 	}
 }
 
+func TestHandleTurnCompletedEventRetriesGenericSyntheticRecoveryResumeReply(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	base := time.Unix(1700001100, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work"},
+		},
+	}
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	message.Content = "Continue the active task recovery now. Your next response must take direct recovery action from the durable drafts above."
+	message.Metadata = syntheticContinuationActionMessageMetadata(fixture.session, "task_recovery_resume")
+	fixture.messages.upsert(message)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "I'm ready to help! What would you like to know?")
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil || jobs[0].payload.RetryCount != 1 {
+		t.Fatalf("payload.retry_count = %#v, want 1", jobs[0].payload)
+	}
+	if jobs[0].payload.MessageID == fixture.userMessageID {
+		t.Fatalf("payload.message_id = %s, want fresh retry prompt message", jobs[0].payload.MessageID)
+	}
+	if jobs[0].runAfter == nil || !jobs[0].runAfter.Equal(base.Add(defaultAutoContinueDelay)) {
+		t.Fatalf("run_after = %v, want %s", jobs[0].runAfter, base.Add(defaultAutoContinueDelay))
+	}
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	latest := messages[len(messages)-1]
+	if latest.ID != jobs[0].payload.MessageID {
+		t.Fatalf("latest message id = %s, want %s", latest.ID, jobs[0].payload.MessageID)
+	}
+	if latest.Role != "user" {
+		t.Fatalf("latest role = %q, want user", latest.Role)
+	}
+	if latest.Content != message.Content {
+		t.Fatalf("latest content = %q, want retry prompt copy", latest.Content)
+	}
+}
+
 func TestHandleTurnCompletedEventBlocksRepeatedGenericRecoveryReply(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 

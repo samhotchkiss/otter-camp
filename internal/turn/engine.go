@@ -21622,6 +21622,9 @@ func isRecoveryResumeMessage(message repo.ChatMessage) bool {
 	if tasksvc.IsRecoveryResumeAction(stringValue(metadata["recovery_action"])) {
 		return true
 	}
+	if strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), "task_recovery_resume") {
+		return true
+	}
 	if strings.EqualFold(strings.TrimSpace(message.Content), "supervisor recovery: resume task") {
 		return true
 	}
