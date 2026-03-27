@@ -190,6 +190,55 @@ func TestRouterSelectConnectionTreatsExpiredPersistedRateLimitAsDegraded(t *test
 	}
 }
 
+func TestRouterSelectConnectionTreatsExpiredPersistedUnavailableAsDegraded(t *testing.T) {
+	orgID := uuid.New()
+	providerID := uuid.New()
+	expiredUnavailableID := uuid.New()
+	freshUnavailableID := uuid.New()
+
+	router := NewRouter(
+		&stubProfileLookup{
+			profiles: map[string]repo.ModelProfile{
+				"standard": {
+					LogicalProfileID: "standard",
+					ProviderID:       providerID,
+				},
+			},
+		},
+		&stubConnectionLookup{
+			items: map[uuid.UUID][]repo.ProviderConnection{
+				providerID: {
+					{
+						ID:               freshUnavailableID,
+						ProviderID:       providerID,
+						IsEnabled:        true,
+						FailoverPriority: 1,
+						HealthStatus:     string(HealthStateUnavailable),
+						UpdatedAt:        time.Now().UTC(),
+					},
+					{
+						ID:               expiredUnavailableID,
+						ProviderID:       providerID,
+						IsEnabled:        true,
+						FailoverPriority: 2,
+						HealthStatus:     string(HealthStateUnavailable),
+						UpdatedAt:        time.Now().UTC().Add(-2 * healthProbeBackoffMax),
+					},
+				},
+			},
+		},
+		NewHealthChecker(),
+	)
+
+	selected, err := router.SelectConnection(context.Background(), orgID, "standard", "agent_turn", PrioritySyncInteractive)
+	if err != nil {
+		t.Fatalf("SelectConnection: %v", err)
+	}
+	if selected.ID != expiredUnavailableID {
+		t.Fatalf("selected connection = %s, want expired persisted unavailable connection %s", selected.ID, expiredUnavailableID)
+	}
+}
+
 func TestRouterSelectConnectionReturnsRateLimitedBackoffWhenAllConnectionsCoolingDown(t *testing.T) {
 	orgID := uuid.New()
 	providerID := uuid.New()

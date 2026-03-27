@@ -84,6 +84,82 @@ func TestModelInvocationRepoCreateAndUpdateCompletion(t *testing.T) {
 	}
 }
 
+func TestModelInvocationRepoUpdateCompletionClearsFailureFields(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	orgRepo := NewOrgRepo(pool)
+	providerRepo := NewModelProviderRepo(pool)
+	connectionRepo := NewProviderConnectionRepo(pool)
+	invocationRepo := NewModelInvocationRepo(pool)
+
+	org, err := orgRepo.Create(ctx, Organization{Slug: "invocation-clear-failure", DisplayName: "Invocation Clear Failure"})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	provider, err := providerRepo.Create(ctx, ModelProvider{
+		Slug:        "invocation-clear-failure-provider",
+		DisplayName: "Invocation Clear Failure Provider",
+		APIBaseURL:  "https://provider.example/v1",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	connection, err := connectionRepo.Create(ctx, ProviderConnection{
+		OrganizationID: org.ID,
+		ProviderID:     provider.ID,
+		DisplayName:    "Primary",
+		APIKeyRef:      "ref:provider-primary",
+		IsEnabled:      true,
+	})
+	if err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+
+	profileID := "standard"
+	created, err := invocationRepo.Create(ctx, ModelInvocation{
+		OrganizationID:       org.ID,
+		ModelProviderID:      provider.ID,
+		ProviderConnectionID: &connection.ID,
+		ModelProfileID:       &profileID,
+		InvocationPurpose:    "agent_turn",
+		ModelName:            "gpt-4o-mini",
+		IsStreaming:          true,
+	})
+	if err != nil {
+		t.Fatalf("create invocation: %v", err)
+	}
+
+	failureClass := "provider_transient"
+	errorCode := "provider_transient_failure"
+	errorMessage := "transient model failure"
+	if _, err := invocationRepo.UpdateFailure(ctx, created.ID, "failed", &failureClass, &errorCode, &errorMessage); err != nil {
+		t.Fatalf("update failure: %v", err)
+	}
+
+	if err := invocationRepo.UpdateCompletion(ctx, created.ID, 100, 55, 7, 25, 90, nil, nil); err != nil {
+		t.Fatalf("update completion: %v", err)
+	}
+
+	stored, err := invocationRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if stored.Status != "completed" {
+		t.Fatalf("status = %q, want completed", stored.Status)
+	}
+	if stored.FailureClass != nil {
+		t.Fatalf("failure_class = %v, want nil", stored.FailureClass)
+	}
+	if stored.ErrorCode != nil {
+		t.Fatalf("error_code = %v, want nil", stored.ErrorCode)
+	}
+	if stored.ErrorMessage != nil {
+		t.Fatalf("error_message = %v, want nil", stored.ErrorMessage)
+	}
+}
+
 func TestModelInvocationRepoListByOrgIsScoped(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

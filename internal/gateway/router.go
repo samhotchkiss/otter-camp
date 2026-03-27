@@ -184,6 +184,9 @@ func persistedHealthState(connection repo.ProviderConnection) HealthState {
 		}
 		return HealthStateRateLimited
 	case HealthStateUnavailable:
+		if unavailableBackoffExpired(connection) {
+			return HealthStateDegraded
+		}
 		return HealthStateUnavailable
 	default:
 		return HealthStateHealthy
@@ -205,6 +208,14 @@ func ConnectionRecoveryReadyAt(connection repo.ProviderConnection) (time.Time, b
 }
 
 func rateLimitBackoffExpired(connection repo.ProviderConnection) bool {
+	readyAt, ok := ConnectionRecoveryReadyAt(connection)
+	if !ok {
+		return false
+	}
+	return !time.Now().UTC().Before(readyAt)
+}
+
+func unavailableBackoffExpired(connection repo.ProviderConnection) bool {
 	readyAt, ok := ConnectionRecoveryReadyAt(connection)
 	if !ok {
 		return false

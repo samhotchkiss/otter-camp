@@ -200,6 +200,9 @@ func (r *ModelInvocationRepo) UpdateCompletion(ctx context.Context, id uuid.UUID
 	command, err := r.db.Exec(ctx, `
 		UPDATE model_invocation
 		SET status = 'completed',
+		    failure_class = NULL,
+		    error_code = NULL,
+		    error_message = NULL,
 		    input_tokens = $2,
 		    output_tokens = $3,
 		    cache_read_tokens = $4,

@@ -537,6 +537,77 @@ func TestPriorityQueue_PersistsHealthyStatusAfterSuccessfulRecovery(t *testing.T
 	}
 }
 
+func TestPriorityQueue_SelectsExpiredPersistedUnavailableConnectionOnColdStart(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org := mustCreateOrg(t, pool, "queue-cold-start-unavailable-recovery")
+	connRepo := repo.NewProviderConnectionRepo(pool)
+	profileRepo := repo.NewModelProfileRepo(pool)
+
+	serverURL := testutil.MockProviderServer(t, testutil.MockProviderFixture{
+		Handlers: []testutil.MockHandler{{StatusCode: http.StatusOK, Body: `{"ok":true}`}},
+	})
+	provider := testutil.MakeProvider(t, pool, testutil.MakeProviderOptions{
+		OrganizationID:      org.ID,
+		ProviderAPIBaseURL:  serverURL,
+		ConnectionName:      "cold-start-recovery",
+		FailoverPriority:    1,
+		MaxConcurrent:       1,
+		ProviderSlug:        "queue-cold-start-" + uuid.NewString()[:8],
+		ProviderDisplayName: "Queue Cold Start Recovery",
+	})
+
+	if _, err := connRepo.SetHealthStatus(ctx, provider.Connection.ID, string(gateway.HealthStateUnavailable)); err != nil {
+		t.Fatalf("SetHealthStatus unavailable: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE provider_connection
+		SET updated_at = $2
+		WHERE id = $1
+	`, provider.Connection.ID, time.Now().UTC().Add(-2*time.Minute)); err != nil {
+		t.Fatalf("age persisted unavailable connection: %v", err)
+	}
+
+	profile := testutil.MakeModelProfile(t, pool, org.ID, provider.Provider.ID)
+	queue, err := gateway.NewPriorityQueue(gateway.QueueOptions{
+		Concurrency: gateway.NewConcurrencyManager(1, map[uuid.UUID]int{
+			provider.Connection.ID: 1,
+		}),
+		Router:       gateway.NewRouter(profileRepo, connRepo, gateway.NewHealthChecker()),
+		Executor:     providerHTTPExecutor{client: &http.Client{Timeout: 2 * time.Second}},
+		Health:       gateway.NewHealthChecker(),
+		HealthStore:  connRepo,
+		PollInterval: 2 * time.Millisecond,
+		Sleep:        func(context.Context, time.Duration) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("NewPriorityQueue: %v", err)
+	}
+	defer queue.Close()
+
+	response, err := queue.Enqueue(ctx, gateway.GatewayRequest{
+		OrganizationID:    org.ID,
+		ProfileID:         profile.LogicalProfileID,
+		InvocationPurpose: "agent_turn",
+		Priority:          gateway.PrioritySyncInteractive,
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if response.ConnectionID != provider.Connection.ID {
+		t.Fatalf("response connection = %s, want %s", response.ConnectionID, provider.Connection.ID)
+	}
+
+	stored, err := connRepo.GetByID(ctx, provider.Connection.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if stored.HealthStatus != string(gateway.HealthStateHealthy) {
+		t.Fatalf("health_status = %q, want %q", stored.HealthStatus, gateway.HealthStateHealthy)
+	}
+}
+
 func TestPriorityQueue_OrderingUnderLoad(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

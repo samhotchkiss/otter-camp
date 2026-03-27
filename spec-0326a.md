@@ -775,6 +775,20 @@ Still pending from this spec:
   - focused unit coverage is green
   - the runtime is already deployed on this matcher
   - the first post-deploy task-16 retry instead took the preexisting synthetic `file.write` rewrite path and settled without re-emitting the bad narration, so this matcher remains preventive rather than freshly exercised in production
+- persisted transient-unavailable provider connections now recover across process boundaries instead of becoming effectively permanent after a restart:
+  - the router already respected the in-memory health checker’s probe backoff for `unavailable` connections, but cold-start routing still treated the persisted `provider_connection.health_status='unavailable'` row as a hard skip forever
+  - the router now treats persisted `unavailable` the same way it already treats persisted expired `rate_limited` rows:
+    - stay skipped during the probe backoff window
+    - then become eligible again as `degraded`
+  - the persisted recovery window comes from `ConnectionRecoveryReadyAt(...)`, which already falls back to `updated_at + healthProbeBackoffMax` when there is no explicit retry timestamp
+  - this specifically addresses the live `claude-swh-me` seam where a burst of `provider_transient_failure` rows at `02:00 MDT` left the connection persisted as `unavailable`, which made the router treat it as dead after process restart even though the in-memory checker only intended a short probe quarantine
+  - focused coverage now proves:
+    - unit: expired persisted `unavailable` rows are selected as degraded on cold start
+    - integration: the priority queue can route through the only expired persisted-unavailable connection on a fresh process and persist it back to `healthy` after success
+- `model_invocation` completion now clears stale failure metadata:
+  - `UpdateCompletion(...)` now nulls `failure_class`, `error_code`, and `error_message` when an invocation is marked `completed`
+  - this fixes the live retry/fallback artifact where successful Anthropic invocations were still carrying `provider_transient_failure`, which made operator reports look noisier than the actual terminal invocation state
+  - focused repo integration coverage now proves a failed invocation that later completes does not retain stale failure fields
 
 ## Deferred Follow-Up, Not In This Spec
 

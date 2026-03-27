@@ -3062,6 +3062,123 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 02:52 MDT
+
+I found a real provider-routing bug while checking why `claude-swh-me` still looked dead even after its transient-failure burst should have aged out.
+
+What was wrong:
+
+- the in-memory gateway health checker only treats `unavailable` as a temporary probe quarantine:
+  - before `recoveryReadyAt`, `GetStateKnown(...)` returns `unavailable`
+  - after that backoff elapses, it degrades the connection so routing can probe it again
+- but cold-start routing uses the persisted `provider_connection.health_status` row when there is no in-memory health record yet
+- in [`internal/gateway/router.go`](../internal/gateway/router.go), persisted `unavailable` was being skipped unconditionally
+- that meant a transient failure burst could leave a connection effectively dead after worker restart, even though the runtime only intended a short quarantine
+
+Live evidence:
+
+- `claude-swh-me` was still persisted as `unavailable` at `02:47 MDT`
+- its metadata had no explicit retry timestamp, unlike the `rate_limited` path
+- the last failures on that connection were:
+  - `01:16 MDT`: normal `provider_rate_limited`
+  - `02:00 MDT`: seven consecutive `provider_transient_failure` rows
+- after that burst, the connection stayed persisted as `unavailable`, which made it a cold-start routing seam rather than a mere display issue
+
+What I changed:
+
+- [`internal/gateway/router.go`](../internal/gateway/router.go)
+  - persisted `unavailable` now uses the same recovery-window logic the router already applies to expired persisted `rate_limited`
+  - once `ConnectionRecoveryReadyAt(...)` has elapsed, the router treats that persisted row as `degraded` instead of hard-skipping it forever
+- [`internal/gateway/router_test.go`](../internal/gateway/router_test.go)
+  - added focused unit coverage proving an expired persisted `unavailable` connection is selected on cold start
+- [`internal/modelgw/routing_integration_test.go`](../internal/modelgw/routing_integration_test.go)
+  - added an integration proof where the only connection starts persisted as `unavailable`, the row is aged past the probe window, and the priority queue successfully routes through it and persists it back to `healthy`
+
+Verification:
+
+- `go test ./internal/gateway -run 'TestRouterSelectConnection(TreatsExpiredPersistedUnavailableAsDegraded|TreatsExpiredPersistedRateLimitAsDegraded|SkipsPersistedUnavailableOnColdStart)$' -count=1`
+- `go test -tags=integration ./internal/modelgw -run 'TestPriorityQueue_(PersistsHealthyStatusAfterSuccessfulRecovery|SelectsExpiredPersistedUnavailableConnectionOnColdStart)$' -count=1`
+
+Why this matters:
+
+- it is the first concrete explanation for the live mismatch where the user believed `claude-swh-me` had usable credits but OtterCamp was behaving as if the key were still dead
+- the problem was not purely quota; it was also persisted transient unavailability surviving restarts in a harsher form than intended
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime restart still pending at the time of this note
+- the next live proof target is the `02:58-03:01 MDT` retry wave for sessions already queued on the new worker
+
+## Update 03:04 MDT
+
+The persisted-unavailable provider recovery fix is now live-proven.
+
+What happened after restart:
+
+- the worker was restarted on the patched router before the queued `02:58-03:01 MDT` retry wave
+- by `03:01:23 MDT`, provider health showed:
+  - `claude-swh-me` -> `healthy`
+  - `Anthropic Primary` -> `degraded`
+  - `pearl-swh-me` still correctly `rate_limited`
+- there were no remaining `agent_turn` jobs left in `job_queue` for the watched sessions:
+  - `4e2277bb-09aa-4267-a12e-cdd92fe6587c`
+  - `8b8f849f-e367-4366-8e25-6f5770fcdf62`
+  - `eb57c99d-f1ab-4778-ad05-3bb55b78e575`
+  - `e6d4faaa-2490-4572-8c6a-a58f5ffe27d2`
+  - `db21265f-c37d-40e4-9ed5-13def09970f8`
+
+Direct live proof:
+
+- session `8b8f849f-e367-4366-8e25-6f5770fcdf62` produced fresh invocations on `claude-swh-me` after restart:
+  - `03:01:44 MDT` completed on `claude-swh-me`
+  - `03:01:47 MDT` another `claude-swh-me` invocation was already `in_flight`
+- that is the exact cold-start seam we were chasing:
+  - before the fix, this connection could sit persisted as `unavailable` after a restart
+  - after the fix, the aged persisted row became probeable again and was actually routed in production
+
+So this is no longer a speculative router hardening slice. It is behaving live on the real Anthropic worker.
+
+## Update 03:09 MDT
+
+The same live query surfaced a second, smaller correctness bug in usage persistence.
+
+What was wrong:
+
+- some `model_invocation` rows were `status='completed'` but still carried:
+  - `error_code='provider_transient_failure'`
+  - `failure_class='provider_transient'`
+- example session:
+  - `eb57c99d-f1ab-4778-ad05-3bb55b78e575`
+- example rows:
+  - `4f2306eb-f015-4190-81de-be0a044fffcb`
+  - `9dc31454-c62c-4fde-95ef-b211e92ebc32`
+
+Root cause:
+
+- [`internal/repo/model_invocation.go`](../internal/repo/model_invocation.go)
+  - `UpdateCompletion(...)` was setting `status='completed'` and token fields
+  - but it was not clearing any previously written `failure_class`, `error_code`, or `error_message`
+- so a row that had first been marked failed during a retry/fallback path could later complete successfully and still retain stale provider-failure metadata
+
+What I changed:
+
+- [`internal/repo/model_invocation.go`](../internal/repo/model_invocation.go)
+  - `UpdateCompletion(...)` now clears `failure_class`, `error_code`, and `error_message`
+- [`internal/repo/model_invocation_integration_test.go`](../internal/repo/model_invocation_integration_test.go)
+  - added focused coverage proving a previously failed invocation loses stale failure fields once completion is persisted
+
+Verification:
+
+- `go test -tags=integration ./internal/repo -run 'TestModelInvocationRepo(CreateAndUpdateCompletion|UpdateCompletionClearsFailureFields)$' -count=1`
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime restart for this smaller persistence-only cleanup was still pending at the time of this note
+
 ## Update 02:15 MDT
 
 I found the next narrow deliverable-targeting bug in fresh live traffic and patched it.
