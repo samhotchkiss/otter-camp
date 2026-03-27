@@ -736,10 +736,32 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 			SELECT jq.id,
 			       ROW_NUMBER() OVER (
 			           PARTITION BY jq.payload->>'session_id'
-			           ORDER BY jq.created_at DESC, jq.run_after DESC, jq.id DESC
+			           ORDER BY CASE
+			                        WHEN COALESCE(cm.metadata->>'source', '') IN ('task_queue_processor', 'task_review_action', 'task_recovery_resume')
+			                         AND COALESCE(jq.payload->>'flow_node_execution_id', '') <> ''
+			                         AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = COALESCE(jq.payload->>'flow_node_execution_id', '')
+			                         AND EXISTS (
+			                         	SELECT 1
+			                         	FROM flow_node_execution e
+			                         	WHERE e.session_id = cs.id
+			                         	  AND e.status = 'active'
+			                         	  AND e.id::text = COALESCE(jq.payload->>'flow_node_execution_id', '')
+			                         )
+			                        THEN 0
+			                        WHEN EXISTS (
+			                         	SELECT 1
+			                         	FROM flow_node_execution e
+			                         	WHERE e.session_id = cs.id
+			                         	  AND e.status = 'active'
+			                        )
+			                        THEN 1
+			                        ELSE 0
+			                    END ASC,
+			                    jq.created_at DESC, jq.run_after DESC, jq.id DESC
 			       ) AS rn
 			FROM job_queue jq
 			JOIN chat_session cs ON cs.id = (jq.payload->>'session_id')::uuid
+			LEFT JOIN chat_message cm ON cm.id = (jq.payload->>'message_id')::uuid
 			WHERE jq.status = 'pending'
 			  AND jq.job_type = 'agent_turn'
 			  AND cs.scope_type = 'project_task'
@@ -1319,7 +1341,13 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 				          )
 				      )
 				  )
-				ORDER BY cm.created_at DESC, cm.id DESC
+				ORDER BY CASE
+				           WHEN COALESCE(cm.metadata->>'source', '') IN ('task_queue_processor', 'task_review_action', 'task_recovery_resume')
+				            AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
+				           THEN 0
+				           ELSE 1
+				         END ASC,
+				         cm.created_at DESC, cm.id DESC
 				LIMIT 1
 			) cm ON true
 			WHERE cs.scope_type = 'project_task'
@@ -1362,17 +1390,24 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			      AND (jq.payload->>'session_id')::uuid = cs.id
 			      AND NOT (
 			            cm.id IS NOT NULL
-			        AND
-			          (
-			            (
-			              COALESCE(cm.metadata->>'source', '') IN ('task_review_action', 'task_recovery_resume')
-			              OR (
-			                   COALESCE(cm.metadata->>'source', '') = 'supervisor'
-			               AND cm.content = 'supervisor recovery: resume task'
-			                 )
+			        AND (
+			              (
+			                (
+			                  COALESCE(cm.metadata->>'source', '') IN ('task_review_action', 'task_recovery_resume')
+			                  OR (
+			                       COALESCE(cm.metadata->>'source', '') = 'supervisor'
+			                   AND cm.content = 'supervisor recovery: resume task'
+			                     )
+			                )
+			                AND queued_message.created_at < cm.created_at
+			              )
+			           OR (
+			                COALESCE(cm.metadata->>'source', '') = 'task_queue_processor'
+			                AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
+			                AND COALESCE(queued_message.metadata->>'source', '') = 'supervisor'
+			                AND queued_message.content = 'supervisor recovery: resume task'
+			              )
 			            )
-			          )
-			        AND queued_message.created_at < cm.created_at
 			          )
 			  )
 			ORDER BY cs.id, COALESCE(cm.created_at, e.started_at) DESC, COALESCE(cm.id, '00000000-0000-0000-0000-000000000000'::uuid) DESC
@@ -1430,10 +1465,14 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			              COALESCE(selected_message.metadata->>'source', '') = 'supervisor'
 			          AND selected_message.content = 'supervisor recovery: resume task'
 			            )
+			         OR (
+			              COALESCE(selected_message.metadata->>'source', '') = 'task_queue_processor'
+			          AND COALESCE(selected_message.metadata->>'flow_node_execution_id', '') = $4::text
+			            )
 			          )
 			  )
 			  AND (jq.payload->>'message_id')::uuid <> $3
-		`, agentTurnJobType, sessionID, messageID); err != nil {
+		`, agentTurnJobType, sessionID, messageID, executionID); err != nil {
 			return repaired, fmt.Errorf("purge superseded agent_turn dispatches for session %s: %w", sessionID, err)
 		}
 		if _, err := w.pool.Exec(ctx, `
@@ -4465,13 +4504,45 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 			             )
 			           THEN 1
 			           ELSE 0
-			       END AS agent_turn_claim_bias,
+			           END AS agent_turn_claim_bias,
 			       ROW_NUMBER() OVER (
 			           PARTITION BY CASE
 			               WHEN job_type = '%s' THEN COALESCE(payload->>'session_id', id::text)
 			               ELSE id::text
 			           END
 			           ORDER BY priority DESC,
+			                    CASE
+			                        WHEN job_type = '%s'
+			                          AND EXISTS (
+			                              SELECT 1
+			                              FROM chat_session cs
+			                              JOIN chat_message cm
+			                                ON cm.id = (job_queue.payload->>'message_id')::uuid
+			                              JOIN flow_node_execution e
+			                                ON e.session_id = cs.id
+			                               AND e.status = 'active'
+			                               AND e.id::text = COALESCE(job_queue.payload->>'flow_node_execution_id', '')
+			                              WHERE cs.id = (job_queue.payload->>'session_id')::uuid
+			                                AND cs.scope_type = 'project_task'
+			                                AND cs.mode = 'async'
+			                                AND COALESCE(cm.metadata->>'source', '') IN ('task_queue_processor', 'task_review_action', 'task_recovery_resume')
+			                                AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = COALESCE(job_queue.payload->>'flow_node_execution_id', '')
+			                          )
+			                        THEN 0
+			                        WHEN job_type = '%s'
+			                          AND EXISTS (
+			                              SELECT 1
+			                              FROM chat_session cs
+			                              JOIN flow_node_execution e
+			                                ON e.session_id = cs.id
+			                               AND e.status = 'active'
+			                              WHERE cs.id = (job_queue.payload->>'session_id')::uuid
+			                                AND cs.scope_type = 'project_task'
+			                                AND cs.mode = 'async'
+			                          )
+			                        THEN 1
+			                        ELSE 0
+			                    END ASC,
 			                    CASE
 			                        WHEN job_type = '%s'
 			                          AND EXISTS (
@@ -4689,7 +4760,7 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 		WHERE jq.id = claimable.id
 		RETURNING jq.id, jq.job_type, jq.priority, jq.payload, jq.status, jq.claimed_by, jq.claimed_at,
 		          jq.attempts, jq.max_attempts, jq.last_error, jq.run_after, jq.created_at, jq.updated_at
-	`, maxInFlightProjectContinuations, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, whereFilter), args...)
+		`, maxInFlightProjectContinuations, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, whereFilter), args...)
 	if err != nil {
 		return nil, fmt.Errorf("claim pending jobs: %w", err)
 	}

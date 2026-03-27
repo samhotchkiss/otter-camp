@@ -2689,6 +2689,187 @@ func TestJobWorkerPurgeStaleAgentTurnJobsKeepsSupervisorRecoveryJobForActiveExec
 	}
 }
 
+func TestJobWorkerPurgeStaleAgentTurnJobsPrefersExecutionKickoffOverNewerSupervisorRecovery(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "purge-prefers-execution-kickoff-over-supervisor-recovery",
+		DisplayName: "Purge Prefers Execution Kickoff Over Supervisor Recovery",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Execution Claim Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You execute active task work first.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "purge-prefers-execution-kickoff-over-supervisor-recovery-project",
+		DisplayName:    "Purge Prefers Execution Kickoff Over Supervisor Recovery Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "purge-prefers-execution-kickoff-over-supervisor-recovery-template",
+		DisplayName:    "Purge Prefers Execution Kickoff Over Supervisor Recovery Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Execute",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         project.ID,
+		Title:             "Execution kickoff outranks supervisor recovery",
+		WorkStatus:        "in_progress",
+		BlocksScope:       "task",
+		FlowTemplateID:    &template.ID,
+		CurrentFlowNodeID: &flowNode.ID,
+		CreatedByType:     "system",
+		CreatedByID:       &agent.ID,
+		AssignedAgentID:   &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active execution: %v", err)
+	}
+
+	executionMetadata := json.RawMessage(fmt.Sprintf(`{"source":"task_queue_processor","flow_node_execution_id":"%s","flow_event_type":"flow.advanced"}`, execution.ID))
+	executionMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "task queue wakeup",
+		Status:    "pending",
+		Metadata:  executionMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create execution kickoff message: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	supervisorMetadata := json.RawMessage(fmt.Sprintf(`{"source":"supervisor","reason":"active execution lost live task turn","flow_node_execution_id":"%s"}`, execution.ID))
+	supervisorMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "supervisor recovery: resume task",
+		Status:    "pending",
+		Metadata:  supervisorMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create supervisor recovery message: %v", err)
+	}
+
+	var executionJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0,"flow_node_execution_id":"%s"}`, session.ID, executionMessage.ID, execution.ID),
+		fmt.Sprintf("agent_turn:%s:%s", session.ID, executionMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, executionMessage.ID, 0),
+	).Scan(&executionJobID); err != nil {
+		t.Fatalf("insert execution kickoff job: %v", err)
+	}
+	var supervisorJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0,"flow_node_execution_id":"%s"}`, session.ID, supervisorMessage.ID, execution.ID),
+		fmt.Sprintf("agent_turn:%s:%s", session.ID, supervisorMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, supervisorMessage.ID, 0),
+	).Scan(&supervisorJobID); err != nil {
+		t.Fatalf("insert supervisor recovery job: %v", err)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 1 {
+		t.Fatalf("purged jobs = %d, want 1", purged)
+	}
+
+	var executionStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, executionJobID).Scan(&executionStatus); err != nil {
+		t.Fatalf("query execution kickoff job: %v", err)
+	}
+	if executionStatus != "pending" {
+		t.Fatalf("execution kickoff job status = %q, want pending", executionStatus)
+	}
+
+	var supervisorStatus string
+	var supervisorError *string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, last_error
+		FROM job_queue
+		WHERE id = $1
+	`, supervisorJobID).Scan(&supervisorStatus, &supervisorError); err != nil {
+		t.Fatalf("query supervisor recovery job: %v", err)
+	}
+	if supervisorStatus != "dead_letter" || supervisorError == nil || *supervisorError != "purged stale project_task continuation" {
+		got := "<nil>"
+		if supervisorError != nil {
+			got = *supervisorError
+		}
+		t.Fatalf("supervisor recovery job = (%q, %q), want dead_letter/purged stale project_task continuation", supervisorStatus, got)
+	}
+}
+
 func TestJobWorkerPurgeStaleAgentTurnJobsKeepsProjectSupervisorPMRecoveryJob(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -7186,6 +7367,180 @@ func TestJobWorkerClaimPendingAgentTurnsPrefersNewestTaskSessionMessage(t *testi
 	}
 }
 
+func TestJobWorkerClaimPendingAgentTurnsPrefersExecutionKickoffOverNewerSupervisorRecovery(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "claim-prefers-execution-kickoff-over-newer-supervisor-recovery",
+		DisplayName: "Claim Prefers Execution Kickoff Over Newer Supervisor Recovery",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "claim-prefers-execution-kickoff-over-newer-supervisor-recovery-" + uuid.NewString()[:8],
+		DisplayName:    "Claim Prefers Execution Kickoff Over Newer Supervisor Recovery",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Execution Bias Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Prefer execution-owned task prompts over generic supervisor resumes.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "claim-prefers-execution-kickoff-over-newer-supervisor-recovery-template",
+		DisplayName:    "Claim Prefers Execution Kickoff Over Newer Supervisor Recovery Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Execute",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         project.ID,
+		Title:             "Execution-owned kickoff wins",
+		WorkStatus:        "in_progress",
+		FlowTemplateID:    &template.ID,
+		CurrentFlowNodeID: &flowNode.ID,
+		AssignedAgentID:   &agent.ID,
+		CreatedByType:     "system",
+		CreatedByID:       &agent.ID,
+		Metadata:          json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create task session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active execution: %v", err)
+	}
+
+	executionMetadata := json.RawMessage(fmt.Sprintf(`{"source":"task_queue_processor","flow_node_execution_id":"%s","flow_event_type":"flow.advanced"}`, execution.ID))
+	olderMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "task queue wakeup",
+		Status:    "pending",
+		Metadata:  executionMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create execution kickoff message: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	supervisorMetadata := json.RawMessage(fmt.Sprintf(`{"source":"supervisor","reason":"active execution lost live task turn","flow_node_execution_id":"%s"}`, execution.ID))
+	newerMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "supervisor recovery: resume task",
+		Status:    "pending",
+		Metadata:  supervisorMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create supervisor recovery message: %v", err)
+	}
+
+	var olderJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0,"flow_node_execution_id":"%s"}`, session.ID, olderMessage.ID, execution.ID),
+		fmt.Sprintf("agent_turn:%s:%s", session.ID, olderMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, olderMessage.ID, 0),
+	).Scan(&olderJobID); err != nil {
+		t.Fatalf("insert execution kickoff job: %v", err)
+	}
+	var newerJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0,"flow_node_execution_id":"%s"}`, session.ID, newerMessage.ID, execution.ID),
+		fmt.Sprintf("agent_turn:%s:%s", session.ID, newerMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, newerMessage.ID, 0),
+	).Scan(&newerJobID); err != nil {
+		t.Fatalf("insert supervisor recovery job: %v", err)
+	}
+
+	claimed, err := worker.claimPendingAgentTurns(ctx, 1)
+	if err != nil {
+		t.Fatalf("claimPendingAgentTurns: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed jobs = %d, want 1", len(claimed))
+	}
+	if claimed[0].ID != olderJobID {
+		t.Fatalf("claimed job = %s, want execution kickoff job %s", claimed[0].ID, olderJobID)
+	}
+
+	var olderStatus, newerStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, olderJobID).Scan(&olderStatus); err != nil {
+		t.Fatalf("query older job: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, newerJobID).Scan(&newerStatus); err != nil {
+		t.Fatalf("query newer job: %v", err)
+	}
+	if olderStatus != "claimed" {
+		t.Fatalf("execution kickoff job status = %q, want claimed", olderStatus)
+	}
+	if newerStatus == "claimed" {
+		t.Fatalf("supervisor recovery job status = %q, want not claimed", newerStatus)
+	}
+}
+
 func TestJobWorkerRequeueStrandedSupervisorRecoveryTurnsSkipsPausedAndArchivedProjects(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -8709,8 +9064,8 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurns(t *testing.T) {
 	if requeuedMsgID == message.ID {
 		t.Fatalf("requeued message_id = %s, want recovered execution kickoff message", requeuedMsgID)
 	}
-	if retryCount != 1 {
-		t.Fatalf("requeued retry_count = %d, want 1", retryCount)
+	if retryCount != 0 {
+		t.Fatalf("requeued retry_count = %d, want 0", retryCount)
 	}
 	var requeuedSource string
 	if err := pool.QueryRow(ctx, `
@@ -9479,8 +9834,8 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsPreservesRateLimitBa
 	if requeuedMsgID != message.ID {
 		t.Fatalf("requeued message_id = %s, want %s", requeuedMsgID, message.ID)
 	}
-	if retryCount != 1 {
-		t.Fatalf("requeued retry_count = %d, want 1", retryCount)
+	if retryCount != 0 {
+		t.Fatalf("requeued retry_count = %d, want 0", retryCount)
 	}
 	if !jitterApplied {
 		t.Fatal("expected rate_limit_jitter_applied = true")
@@ -12556,6 +12911,214 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsLogicallyCancel
 	}
 	if retryCount != 1 {
 		t.Fatalf("requeued retry_count = %d, want 1", retryCount)
+	}
+}
+
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsPrefersExecutionKickoffOverNewerSupervisorRecovery(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-execution-prefers-kickoff-over-supervisor",
+		DisplayName: "Requeue Active Execution Prefers Kickoff Over Supervisor",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Execution Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover active execution ownership.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-execution-prefers-kickoff-over-supervisor-project",
+		DisplayName:    "Requeue Active Execution Prefers Kickoff Over Supervisor Project",
+		Description:    "Project for kickoff-preference recovery coverage",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "requeue-active-execution-prefers-kickoff-over-supervisor-template",
+		DisplayName:    "Requeue Active Execution Prefers Kickoff Over Supervisor Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Execute",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         project.ID,
+		Title:             "Prefer execution kickoff over supervisor recovery",
+		WorkStatus:        "in_progress",
+		BlocksScope:       "task",
+		CurrentFlowNodeID: &flowNode.ID,
+		FlowTemplateID:    &template.ID,
+		CreatedByType:     "system",
+		CreatedByID:       &agent.ID,
+		AssignedAgentID:   &agent.ID,
+		Metadata:          json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active flow node execution: %v", err)
+	}
+	taskQueueMetadata := json.RawMessage(fmt.Sprintf(`{"source":"task_queue_processor","flow_node_execution_id":"%s","flow_event_type":"flow.advanced"}`, execution.ID))
+	taskQueueMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "task queue wakeup",
+		Status:    "pending",
+		Metadata:  taskQueueMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create task queue kickoff message: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	supervisorMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "supervisor recovery: resume task",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"supervisor","reason":"active execution lost live task turn","flow_node_execution_id":"%s"}`, execution.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create supervisor recovery message: %v", err)
+	}
+
+	var supervisorJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0,"flow_node_execution_id":"%s"}`, session.ID, supervisorMessage.ID, execution.ID),
+		fmt.Sprintf("agent_turn:%s:%s", session.ID, supervisorMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, supervisorMessage.ID, 0),
+	).Scan(&supervisorJobID); err != nil {
+		t.Fatalf("insert pending supervisor recovery job: %v", err)
+	}
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1", requeued)
+	}
+
+	var (
+		requeuedJobID  uuid.UUID
+		status         string
+		requeuedMsgID  uuid.UUID
+		requeuedSessID uuid.UUID
+		requeuedExecID *uuid.UUID
+		retryCount     int
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT id,
+		       status,
+		       (payload->>'message_id')::uuid,
+		       (payload->>'session_id')::uuid,
+		       CASE
+		         WHEN COALESCE(payload->>'flow_node_execution_id', '') = '' THEN NULL
+		         ELSE (payload->>'flow_node_execution_id')::uuid
+		       END,
+		       COALESCE((payload->>'retry_count')::int, 0)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		  AND status = 'pending'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, session.ID).Scan(&requeuedJobID, &status, &requeuedMsgID, &requeuedSessID, &requeuedExecID, &retryCount); err != nil {
+		t.Fatalf("query requeued active execution job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("requeued job status = %q, want pending", status)
+	}
+	if requeuedJobID == supervisorJobID {
+		t.Fatalf("requeued job id = %s, want a fresh execution-bound dispatch", requeuedJobID)
+	}
+	if requeuedSessID != session.ID {
+		t.Fatalf("requeued session_id = %s, want %s", requeuedSessID, session.ID)
+	}
+	if requeuedMsgID != taskQueueMessage.ID {
+		t.Fatalf("requeued message_id = %s, want task queue message %s", requeuedMsgID, taskQueueMessage.ID)
+	}
+	if requeuedExecID == nil || *requeuedExecID != execution.ID {
+		t.Fatalf("requeued flow_node_execution_id = %v, want %s", requeuedExecID, execution.ID)
+	}
+	if retryCount != 0 {
+		t.Fatalf("requeued retry_count = %d, want 0", retryCount)
+	}
+
+	var supervisorStatus string
+	var supervisorError *string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, last_error
+		FROM job_queue
+		WHERE id = $1
+	`, supervisorJobID).Scan(&supervisorStatus, &supervisorError); err != nil {
+		t.Fatalf("query supervisor recovery job: %v", err)
+	}
+	if supervisorStatus != "dead_letter" || supervisorError == nil || *supervisorError != "superseded stale message-attempt dispatch during task requeue" {
+		got := "<nil>"
+		if supervisorError != nil {
+			got = *supervisorError
+		}
+		t.Fatalf("supervisor recovery job = (%q, %q), want dead_letter/superseded stale message-attempt dispatch during task requeue", supervisorStatus, got)
 	}
 }
 
