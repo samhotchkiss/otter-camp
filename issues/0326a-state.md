@@ -1903,3 +1903,31 @@ Live proof:
   - no newer `agent_turn` rows appeared for that session in the follow-up check
 
 So that worker-side queue churn is now cut off. The remaining pending proof item is still the async cooldown preflight on a fresh live retry after `18:45 MDT`.
+
+## Update 18:49 MDT
+
+The async cooldown-preflight slice is now live-proven.
+
+Live proof:
+
+- after the restarted runtime crossed the first scheduled retry window, the due non-paused async sessions rolled forward to fresh delayed retry jobs:
+  - project session `3764d5d5-8c0e-45b4-87be-0b94c16e58e3`
+    - old job `done` at `run_after=2026-03-26 18:45:23 MDT`
+    - fresh replacement `pending` at `created_at=2026-03-26 18:45:27 MDT`
+    - new `run_after=2026-03-26 19:15:32 MDT`
+  - task session `d602574b-392a-4aa5-9523-73830c77790d`
+    - old job `done` at `run_after=2026-03-26 18:47:52 MDT`
+    - fresh replacement `pending` at `created_at=2026-03-26 18:47:54 MDT`
+    - new `run_after=2026-03-26 19:17:53 MDT`
+  - task session `ff24b664-4a00-43a4-9bbc-8db3921f1b7f`
+    - old job `done` at `run_after=2026-03-26 18:47:52 MDT`
+    - fresh replacement `pending` at `created_at=2026-03-26 18:48:23 MDT`
+    - new `run_after=2026-03-26 19:17:53 MDT`
+- in the same check window, there were still zero fresh `model_invocation` rows for `invocation_purpose='agent_turn'` in the last 20 minutes
+
+Why this matters:
+
+- before this slice, router-level all-connections-cooling-down retries still created failed pre-routing `agent_turn` invocation rows
+- on the new build, those due async retries are being rescheduled without spending prompt assembly plus synthetic failed invocation rows
+
+So the cooldown optimization is no longer just unit-tested; it is now behaving live on real pending async sessions.
