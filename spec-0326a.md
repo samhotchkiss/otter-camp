@@ -1243,3 +1243,16 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
       - blocking project-lane `flow.get_execution` under the snapshot prompt
       - blocking recursive `file.list(path=results)` under the snapshot prompt
       - preserving parent-scoped `task.list`
+  - newest project continuation inspection-plan summary sanitization slice:
+    - continuation summaries that are just generic inspection plans now collapse to the standard fallback summary instead of being carried into the next async project turn
+    - this covers live patterns like:
+      - `I need to inspect the current task tree...`
+      - `Let me examine the project structure...`
+      - `The path forward is clear: ...`
+    - this targets the hot project session seam where the summary model was still emitting pseudo-work summaries like:
+      - `I need to inspect the current task tree ...`
+      - fenced `Let me examine ...` blocks
+      - enumerated next-step plans
+    - focused turn-engine coverage is green for:
+      - the earlier `<function_calls>` pseudo-tool-plan normalization
+      - the new generic inspection-plan normalization

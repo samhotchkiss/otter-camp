@@ -3104,6 +3104,44 @@ Deploy status:
 - tests green
 - runtime rebuild/restart still pending at the time of this note
 
+## Update 09:39 MDT
+
+I tightened the continuation-summary sanitizer for the same hot project lane instead of waiting for another replay.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `continuationSummaryLooksUnavailable(...)` now treats generic inspection-plan summaries as unusable
+  - new normalized patterns include:
+    - `I need to inspect the current task tree`
+    - `Let me examine the project structure`
+    - `The path forward is clear:`
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage proving that a continuation summary made of generic inspection-plan narration now normalizes to `Continuation summary unavailable.`
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(ContinuationTurnNormalizesFunctionCallPlanSummary|ContinuationTurnNormalizesInspectionPlanSummary)$' -count=1`
+
+Why this slice exists:
+
+- the hot project session was still generating continuation summaries like:
+  - `I need to inspect the current task tree to identify the 2 remaining draft tasks ...`
+  - fenced `Let me examine the project structure ...`
+  - `The path forward is clear: ...`
+- those are not durable handoff summaries; they just re-inject meta intent into the next async turn
+
+Expected effect:
+
+- when the summary model produces one of those generic plan-only summaries, async project continuations fall back to the deterministic project continuation summary instead of preserving more rediscovery narration
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime rebuild/restart still pending at the time of this note
+
 ## Update 09:20 MDT
 
 I cut the next project-continuation seam instead of waiting on another replay.
