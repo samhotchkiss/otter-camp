@@ -3935,6 +3935,9 @@ func (e *TurnEngine) nextRunnableDraftProjectTask(ctx context.Context, projectID
 		if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
 			continue
 		}
+		if taskLooksLikeOrchestrationOnlyParent(task) {
+			continue
+		}
 		if task.AssignedAgentID == nil || *task.AssignedAgentID == uuid.Nil || task.FlowTemplateID == nil || *task.FlowTemplateID == uuid.Nil {
 			continue
 		}
@@ -21549,16 +21552,13 @@ func (e *TurnEngine) shouldBlockTaskExecutionBroadContextTool(ctx context.Contex
 }
 
 func taskExecutionAllowsLimitedProjectContext(taskRecord repo.ProjectTask) bool {
-	if taskMetadataMarksOrchestrationOnlyTurn(taskRecord.Metadata) {
+	if taskLooksLikeOrchestrationOnlyParent(taskRecord) {
 		return true
 	}
 	title := strings.ToLower(strings.TrimSpace(taskRecord.Title))
 	description := ""
 	if taskRecord.Description != nil {
 		description = strings.ToLower(strings.TrimSpace(*taskRecord.Description))
-	}
-	if strings.Contains(description, "orchestration task") && strings.Contains(description, "parent task") {
-		return true
 	}
 	if (strings.Contains(title, "first-wave") || strings.Contains(title, "first wave")) &&
 		(strings.Contains(title, "validate") || strings.Contains(description, "validate")) &&
@@ -21569,15 +21569,7 @@ func taskExecutionAllowsLimitedProjectContext(taskRecord repo.ProjectTask) bool 
 }
 
 func taskExecutionAllowsChildTaskDecomposition(taskRecord repo.ProjectTask) bool {
-	if taskMetadataMarksOrchestrationOnlyTurn(taskRecord.Metadata) {
-		return true
-	}
-	description := ""
-	if taskRecord.Description != nil {
-		description = strings.ToLower(strings.TrimSpace(*taskRecord.Description))
-	}
-	return strings.Contains(description, "orchestration task") &&
-		strings.Contains(description, "parent task")
+	return taskLooksLikeOrchestrationOnlyParent(taskRecord)
 }
 
 func taskMetadataMarksOrchestrationOnlyTurn(metadata json.RawMessage) bool {
@@ -21591,6 +21583,45 @@ func taskMetadataMarksOrchestrationOnlyTurn(metadata json.RawMessage) bool {
 	}
 	orchestrationOnly, _ := decomp["orchestration_only"].(bool)
 	return orchestrationOnly
+}
+
+func taskLooksLikeOrchestrationOnlyParent(taskRecord repo.ProjectTask) bool {
+	if taskMetadataMarksOrchestrationOnlyTurn(taskRecord.Metadata) {
+		return true
+	}
+	titleText := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	descriptionText := ""
+	if taskRecord.Description != nil {
+		descriptionText = strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	text := titleText
+	if descriptionText != "" {
+		text += "\n" + descriptionText
+	}
+	titleLooksLikeWorkstream := strings.HasPrefix(titleText, "workstream ") || strings.HasPrefix(titleText, "ws")
+	signals := []string{
+		"parent orchestration task",
+		"parent/orchestration task",
+		"parent orchestration container",
+		"orchestration container",
+		"does not do execution work itself",
+		"does not perform execution work itself",
+		"does not perform execution work directly",
+		"validates that child tasks",
+		"validates child task outputs",
+		"validates child outputs",
+		"owns integration verification of its children",
+	}
+	matches := 0
+	for _, signal := range signals {
+		if strings.Contains(text, signal) {
+			matches++
+		}
+	}
+	if matches >= 2 {
+		return true
+	}
+	return titleLooksLikeWorkstream && matches >= 1
 }
 
 func (e *TurnEngine) shouldBlockProjectExecutionPrematureDoneTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {

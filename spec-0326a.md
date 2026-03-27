@@ -853,6 +853,18 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
 
 ## Latest Checkpoint
 
+- project continuation auto-queue now skips orchestration-only parent containers:
+  - live proof on project session `db21265f-c37d-40e4-9ed5-13def09970f8` showed the widened read-only continuation repair auto-queueing task `11`
+  - that task is explicitly described as a parent/orchestration container that "does not do execution work itself", so promoting it into a `project_task` lane was the wrong recovery path
+  - `nextRunnableDraftProjectTask(...)` now skips draft tasks that match the orchestration-only parent heuristic instead of selecting them as runnable execution work
+  - the same heuristic is now shared by task-lane context/decomposition guards, so `Parent/orchestration task ... Does not do execution work itself` descriptions are treated as orchestration-only even when the metadata lacks an explicit `decomposition.orchestration_only=true` bit
+  - focused turn-engine coverage now proves both:
+    - the orchestration-only heuristic matches that live parent-task description shape
+    - the next-runnable selector skips the parent and chooses the bounded child task instead
+- deploy state for this slice:
+  - code complete
+  - focused tests green
+  - runtime restart/live proof still pending at this checkpoint
 - project-continuation read-only repair widened again:
   - `session.list` and `inbox.list` are now treated as read-only discovery tools in the same continuation auto-queue path
   - this closes the remaining observed browse-only project continuation gaps from live `max_tool_calls` turns like `e8556561-...` and `eae611d8-...`

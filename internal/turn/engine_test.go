@@ -10072,6 +10072,79 @@ func TestShouldBlockTaskExecutionOffTargetEvidenceTool(t *testing.T) {
 	}
 }
 
+func TestTaskLooksLikeOrchestrationOnlyParent(t *testing.T) {
+	t.Parallel()
+
+	description := "Parent/orchestration task for wave gating validation. Validates that child tasks exercise the gating behavior correctly. Does not do execution work itself."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  11,
+		Title:       "Workstream C: Wave Gating Validation",
+		Description: &description,
+	}
+
+	if !taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+		t.Fatal("expected orchestration-only parent heuristic to match")
+	}
+	if !taskExecutionAllowsLimitedProjectContext(taskRecord) {
+		t.Fatal("expected orchestration-only parent to allow limited project context")
+	}
+	if !taskExecutionAllowsChildTaskDecomposition(taskRecord) {
+		t.Fatal("expected orchestration-only parent to allow bounded child decomposition")
+	}
+}
+
+func TestNextRunnableDraftProjectTaskSkipsOrchestrationOnlyParent(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+
+	projectID := uuid.New()
+	parentID := uuid.New()
+	childID := uuid.New()
+	agentID := uuid.New()
+	flowID := uuid.New()
+
+	parentDescription := "Parent/orchestration task for wave gating validation. Validates that child tasks exercise the gating behavior correctly. Does not do execution work itself."
+	childDescription := "Output: results/wave-gating-check.md Validate that first-wave tasks activate only when selected and later-wave tasks remain draft."
+
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:              parentID,
+				ProjectID:       projectID,
+				TaskNumber:      11,
+				Title:           "Workstream C: Wave Gating Validation",
+				WorkStatus:      "draft",
+				AssignedAgentID: &agentID,
+				FlowTemplateID:  &flowID,
+				Description:     &parentDescription,
+			},
+			childID: {
+				ID:              childID,
+				ProjectID:       projectID,
+				TaskNumber:      12,
+				Title:           "Validate first-wave gating behavior",
+				WorkStatus:      "draft",
+				AssignedAgentID: &agentID,
+				FlowTemplateID:  &flowID,
+				Description:     &childDescription,
+			},
+		},
+	}
+
+	nextTask, ok, err := fixture.engine.nextRunnableDraftProjectTask(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("nextRunnableDraftProjectTask: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected a runnable draft task")
+	}
+	if nextTask.ID != childID {
+		t.Fatalf("next runnable task = %s, want %s", nextTask.ID, childID)
+	}
+}
+
 func TestBuildTaskExecutionOffTargetEvidenceToolGuardError(t *testing.T) {
 	t.Parallel()
 

@@ -3062,6 +3062,55 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 05:15 MDT
+
+The next live investigation changed the diagnosis on the `task 11` churn.
+
+What I verified live:
+
+- project session `db21265f-c37d-40e4-9ed5-13def09970f8` auto-queued task `11` after a read-only project continuation turn
+- the first `project_task` turn for task `11` then opened with:
+  - `task.get`
+  - `flow.get_execution`
+  - `file.read planning/discovery-plan/oc-11-validation-plan.md`
+  - `file.read planning/discovery-plan/oc-11-problem-brief.md`
+  - both planning reads returned `not_found`, then the turn halted on the existing repeated `file.read` cutoff
+- querying the live task row showed task `11` is not normal execution work:
+  - title: `Workstream C: Wave Gating Validation`
+  - description: `Parent/orchestration task ... Does not do execution work itself.`
+  - metadata already carries discovery-plan artifact contracts for `problem-brief`, `research-plan`, `assumption-log`, and `validation-plan`
+
+What this means:
+
+- the immediate read misses were not a bad recovery-target inference
+- they were a downstream symptom of the wrong task being promoted into a task-execution lane
+- the actual bug is in the project continuation auto-queue selector, which was still treating orchestration-only parents as runnable draft execution work
+
+Code/test slice landed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `nextRunnableDraftProjectTask(...)` now skips draft tasks that match the orchestration-only parent heuristic
+  - task-lane helpers now share a broader orchestration-only heuristic that recognizes the live description shape:
+    - `Parent/orchestration task`
+    - `Does not do execution work itself`
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage proving:
+    - the orchestration-only heuristic matches this parent-task description shape
+    - the next-runnable selector skips the orchestration parent and selects the bounded child task instead
+  - also reran the adjacent `handleCompletedProjectExecutionContinuationTurn` slice to keep the auto-queue repair path covered
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(TaskLooksLikeOrchestrationOnlyParent|NextRunnableDraftProjectTaskSkipsOrchestrationOnlyParent)$' -count=1`
+- `go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurn.*' -count=1`
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime restart/live proof still pending at the time of this note
+
 ## Update 04:55 MDT
 
 What changed:
