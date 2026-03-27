@@ -310,6 +310,15 @@ func (s *Supervisor) detectResumableBlockedTasks(ctx context.Context) error {
 			ORDER BY fe.started_at ASC, fe.id ASC
 			LIMIT 1
 		) e ON true
+		LEFT JOIN LATERAL (
+			SELECT NULLIF(TRIM(BOTH FROM payload->>'blocker_reason'), '') AS blocker_reason
+			FROM project_task_event
+			WHERE task_id = t.id
+			  AND event_type = 'status.changed'
+			  AND COALESCE(payload->>'to_status', '') = 'blocked'
+			ORDER BY created_at DESC, id DESC
+			LIMIT 1
+		) latest_blocked ON true
 		LEFT JOIN chat_session s
 		  ON s.scope_type = 'project_task'
 		 AND s.scope_id = t.id
@@ -321,6 +330,8 @@ func (s *Supervisor) detectResumableBlockedTasks(ctx context.Context) error {
 		  AND t.updated_at < $1
 		  AND rs.id IS NULL
 		  AND s.id IS NULL
+		  AND COALESCE(t.metadata->'agent_turn_validation_guard'->>'failure_code', '') <> 'review_decision_required'
+		  AND COALESCE(latest_blocked.blocker_reason, '') NOT ILIKE 'review turn completed without calling flow.review_decision%'
 		ORDER BY t.updated_at ASC, t.id ASC
 	`, cutoff)
 	if err != nil {

@@ -2882,6 +2882,141 @@ func TestSupervisor_ResumableBlockedTaskGetsAutoResumed(t *testing.T) {
 	}
 }
 
+func TestSupervisor_ReviewDecisionBlockedTaskStaysBlocked(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+	projectRecord, _ := seedRunProjectTaskWithPM(t, ctx, pool, org.ID)
+	worker := seedSupervisorAgent(t, ctx, pool, org.ID, "Review Blocked Worker")
+	template := seedTaskQueueFlowTemplate(t, ctx, pool, org.ID, projectRecord.ID)
+	if template.StartNodeID == nil || *template.StartNodeID == uuid.Nil {
+		t.Fatal("expected executable flow template start node")
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	taskRecord, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         projectRecord.ID,
+		Title:             "Blocked review decision task",
+		WorkStatus:        "in_progress",
+		FlowTemplateID:    &template.ID,
+		CurrentFlowNodeID: template.StartNodeID,
+		AssignedAgentID:   &worker.ID,
+		CreatedByType:     "system",
+		Metadata:          json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	taskService, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     pool,
+		EventBus: eventbus.New(pool, newDiscardLogger(), eventbus.Config{}),
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	blockerReason := "review turn completed without calling flow.review_decision: Let me check the git diff to see what was actually committed on this branch."
+	if _, err := taskService.MarkBlocked(ctx, taskRecord.ID, blockerReason, tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+
+	blockedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID blocked task: %v", err)
+	}
+	guardedMetadata, err := tasksvc.MergeValidationGuardMetadata(blockedTask.Metadata, tasksvc.ValidationGuardState{
+		InitialMessageID:   uuid.NewString(),
+		Fingerprint:        "flow.review_decision:required",
+		AttemptFingerprint: "flow.review_decision:required:attempt",
+		ToolName:           "flow.review_decision",
+		FailureClass:       "tool_validation",
+		FailureCode:        "review_decision_required",
+		FailureReason:      "review turn completed without calling flow.review_decision",
+		Count:              3,
+		BlockThreshold:     3,
+		Blocked:            true,
+	})
+	if err != nil {
+		t.Fatalf("MergeValidationGuardMetadata: %v", err)
+	}
+	blockedTask.Metadata = guardedMetadata
+	if _, err := taskRepo.Update(ctx, blockedTask); err != nil {
+		t.Fatalf("update guarded task: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  *template.StartNodeID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create active execution: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE project_task SET updated_at = $2 WHERE id = $1`, taskRecord.ID, time.Now().UTC().Add(-2*time.Minute)); err != nil {
+		t.Fatalf("backdate blocked task: %v", err)
+	}
+
+	bus := eventbus.New(pool, newDiscardLogger(), eventbus.Config{})
+	runService, err := NewRunService(RunServiceOptions{
+		Pool:     pool,
+		EventBus: bus,
+		Policy:   allowRunCreationPolicy{},
+		Logger:   newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewRunService: %v", err)
+	}
+
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		Pool:       pool,
+		RunService: runService,
+		EventBus:   bus,
+		Logger:     newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+	if err := supervisor.detectResumableBlockedTasks(ctx); err != nil {
+		t.Fatalf("detectResumableBlockedTasks: %v", err)
+	}
+
+	updatedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+	guard, ok := tasksvc.ParseValidationGuard(updatedTask.Metadata)
+	if !ok {
+		t.Fatalf("expected validation guard to remain, metadata=%s", string(updatedTask.Metadata))
+	}
+	if guard.FailureCode != "review_decision_required" {
+		t.Fatalf("validation failure_code = %q, want review_decision_required", guard.FailureCode)
+	}
+	updatedExecution, err := repo.NewFlowNodeExecutionRepo(pool).GetByID(ctx, execution.ID)
+	if err != nil {
+		t.Fatalf("GetByID execution: %v", err)
+	}
+	if updatedExecution.Status != "active" {
+		t.Fatalf("execution status = %q, want active", updatedExecution.Status)
+	}
+
+	var resumedEvents int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task_event
+		WHERE task_id = $1
+		  AND event_type = 'status.changed'
+		  AND COALESCE(payload->>'recovery_action', '') = 'resume_validation_blocked_task'
+	`, taskRecord.ID).Scan(&resumedEvents); err != nil {
+		t.Fatalf("count resumed events: %v", err)
+	}
+	if resumedEvents != 0 {
+		t.Fatalf("resume_validation_blocked_task events = %d, want 0", resumedEvents)
+	}
+}
+
 func TestSupervisor_StrandedActiveExecutionFailureFailsWithoutTaskService(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
