@@ -12577,8 +12577,8 @@ func TestBuildProjectBootstrapAutomaticFailureRecordUsesStaffingCheckpointForPer
 	if record.LastCheckpoint != projectBootstrapCheckpointStaffingPersisted {
 		t.Fatalf("record.LastCheckpoint = %q, want %q", record.LastCheckpoint, projectBootstrapCheckpointStaffingPersisted)
 	}
-	if record.LastSuccessfulCheckpoint != projectBootstrapCheckpointStaffingPersisted {
-		t.Fatalf("record.LastSuccessfulCheckpoint = %q, want %q", record.LastSuccessfulCheckpoint, projectBootstrapCheckpointStaffingPersisted)
+	if record.LastSuccessfulCheckpoint != projectBootstrapCheckpointProjectCreated {
+		t.Fatalf("record.LastSuccessfulCheckpoint = %q, want %q", record.LastSuccessfulCheckpoint, projectBootstrapCheckpointProjectCreated)
 	}
 	if record.SetupPersisted != true {
 		t.Fatalf("record.SetupPersisted = %v, want true", record.SetupPersisted)

@@ -67,6 +67,9 @@ type projectBootstrapProjectState struct {
 	Checkpoints              []projectBootstrapCheckpoint        `json:"checkpoints,omitempty"`
 	ValidationFindings       []projectBootstrapValidationFinding `json:"validation_findings,omitempty"`
 	AssignmentCount          int                                 `json:"assignment_count,omitempty"`
+	ProjectManagerCount      int                                 `json:"project_manager_count,omitempty"`
+	WorkerCount              int                                 `json:"worker_count,omitempty"`
+	ReviewerCount            int                                 `json:"reviewer_count,omitempty"`
 	PlannedTaskCount         int                                 `json:"planned_task_count,omitempty"`
 	PlannedFlowTemplateCount int                                 `json:"planned_flow_template_count,omitempty"`
 	FirstWaveTaskCount       int                                 `json:"first_wave_task_count,omitempty"`
@@ -96,14 +99,18 @@ func projectBootstrapStateWithDerived(previous, current projectBootstrapState) p
 
 	checkpoints := make([]projectBootstrapCheckpoint, 0, len(projectBootstrapCheckpointOrder))
 	lastSuccessful := ""
+	prerequisitesSatisfied := true
 	for _, name := range projectBootstrapCheckpointOrder {
 		checkpoint := projectBootstrapCheckpoint{Name: name, Status: projectBootstrapCheckpointStatusPending}
 		if previousCheckpoint, ok := previousByName[name]; ok {
 			checkpoint.RecordedAt = cloneTimePointer(previousCheckpoint.RecordedAt)
 		}
 
-		completed := reached[name]
-		if previousCheckpoint, ok := previousByName[name]; ok && strings.EqualFold(strings.TrimSpace(previousCheckpoint.Status), projectBootstrapCheckpointStatusCompleted) {
+		completed := prerequisitesSatisfied && reached[name]
+		if previousCheckpoint, ok := previousByName[name]; ok &&
+			prerequisitesSatisfied &&
+			projectBootstrapCheckpointCarryForwardAllowed(name, current) &&
+			strings.EqualFold(strings.TrimSpace(previousCheckpoint.Status), projectBootstrapCheckpointStatusCompleted) {
 			completed = true
 		}
 
@@ -124,6 +131,9 @@ func projectBootstrapStateWithDerived(previous, current projectBootstrapState) p
 			}
 		}
 
+		if !completed {
+			prerequisitesSatisfied = false
+		}
 		checkpoints = append(checkpoints, checkpoint)
 	}
 
@@ -133,6 +143,15 @@ func projectBootstrapStateWithDerived(previous, current projectBootstrapState) p
 	current.ValidationFindings = projectBootstrapValidationFindings(current)
 	current.Status = projectBootstrapStatusFromCheckpoints(checkpoints, current)
 	return current
+}
+
+func projectBootstrapCheckpointCarryForwardAllowed(name string, state projectBootstrapState) bool {
+	switch strings.TrimSpace(name) {
+	case projectBootstrapCheckpointStaffingPersisted:
+		return projectBootstrapStaffingStateReady(state)
+	default:
+		return true
+	}
 }
 
 func projectBootstrapCheckpointIndex(checkpoints []projectBootstrapCheckpoint) map[string]projectBootstrapCheckpoint {
@@ -173,7 +192,7 @@ func projectBootstrapReachedCheckpoints(state projectBootstrapState) map[string]
 			state.UpdatedAt != nil ||
 			state.CompletedAt != nil ||
 			state.FailedAt != nil,
-		projectBootstrapCheckpointStaffingPersisted:      state.AssignmentCount > 0 || state.StaffingDraftCount > 0,
+		projectBootstrapCheckpointStaffingPersisted:      projectBootstrapStaffingStateReady(state),
 		projectBootstrapCheckpointTaskTreePersisted:      state.PlannedTaskCount > 0,
 		projectBootstrapCheckpointFlowTemplatesPersisted: state.PlannedFlowTemplateCount > 0,
 		projectBootstrapCheckpointFirstWaveSelected:      state.FirstWaveTaskCount > 0,
@@ -181,6 +200,32 @@ func projectBootstrapReachedCheckpoints(state projectBootstrapState) map[string]
 		projectBootstrapCheckpointFirstWaveJobsClaimed:   firstWaveJobsReached,
 	}
 	return reached
+}
+
+func projectBootstrapStaffingStateReady(state projectBootstrapState) bool {
+	return projectBootstrapStaffingCountsReady(
+		state.ProjectManagerCount,
+		state.WorkerCount,
+		state.ReviewerCount,
+		state.AssignmentCount,
+	)
+}
+
+func projectBootstrapMissingStaffingRoles(state projectBootstrapState) []string {
+	if projectBootstrapStaffingStateReady(state) {
+		return nil
+	}
+	missing := make([]string, 0, 3)
+	if state.ProjectManagerCount == 0 {
+		missing = append(missing, "project_manager")
+	}
+	if state.WorkerCount == 0 {
+		missing = append(missing, "worker")
+	}
+	if state.ReviewerCount == 0 {
+		missing = append(missing, "reviewer")
+	}
+	return missing
 }
 
 func projectBootstrapPrimaryFailureClass(state projectBootstrapState) string {
@@ -380,6 +425,9 @@ func projectBootstrapProjectStateSnapshot(state projectBootstrapState) projectBo
 		Checkpoints:              append([]projectBootstrapCheckpoint(nil), state.Checkpoints...),
 		ValidationFindings:       append([]projectBootstrapValidationFinding(nil), state.ValidationFindings...),
 		AssignmentCount:          state.AssignmentCount,
+		ProjectManagerCount:      state.ProjectManagerCount,
+		WorkerCount:              state.WorkerCount,
+		ReviewerCount:            state.ReviewerCount,
 		PlannedTaskCount:         state.PlannedTaskCount,
 		PlannedFlowTemplateCount: state.PlannedFlowTemplateCount,
 		FirstWaveTaskCount:       state.FirstWaveTaskCount,

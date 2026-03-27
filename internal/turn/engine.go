@@ -4927,6 +4927,9 @@ type projectBootstrapProgress struct {
 	BootstrapSetupDoneCount  int
 	FrankSignOffRecorded     bool
 	AssignmentCount          int
+	ProjectManagerCount      int
+	WorkerCount              int
+	ReviewerCount            int
 	StaffingDraftCount       int
 	PlannedTaskCount         int
 	PlannedFlowTemplateCount int
@@ -5084,6 +5087,9 @@ func projectBootstrapProgressAdvancedBeyondState(state projectBootstrapState, pr
 		progress.BootstrapSetupDoneCount > state.BootstrapSetupDoneCount ||
 		(progress.FrankSignOffRecorded && !state.FrankSignOffRecorded) ||
 		progress.AssignmentCount > state.AssignmentCount ||
+		progress.ProjectManagerCount > state.ProjectManagerCount ||
+		progress.WorkerCount > state.WorkerCount ||
+		progress.ReviewerCount > state.ReviewerCount ||
 		progress.StaffingDraftCount > state.StaffingDraftCount ||
 		progress.PlannedTaskCount > state.PlannedTaskCount ||
 		progress.PlannedFlowTemplateCount > state.PlannedFlowTemplateCount ||
@@ -5163,6 +5169,22 @@ func projectBootstrapLastCheckpoint(progress projectBootstrapProgress) string {
 	return checkpoint
 }
 
+func projectBootstrapStaffingReady(progress projectBootstrapProgress) bool {
+	return projectBootstrapStaffingCountsReady(
+		progress.ProjectManagerCount,
+		progress.WorkerCount,
+		progress.ReviewerCount,
+		progress.AssignmentCount,
+	)
+}
+
+func projectBootstrapStaffingCountsReady(projectManagerCount, workerCount, reviewerCount, assignmentCount int) bool {
+	if projectManagerCount == 0 && workerCount == 0 && reviewerCount == 0 {
+		return assignmentCount >= 3
+	}
+	return projectManagerCount > 0 && workerCount > 0 && reviewerCount > 0
+}
+
 func projectBootstrapReachedFirstWaveClaim(progress projectBootstrapProgress) bool {
 	return projectBootstrapLastCheckpoint(progress) == projectBootstrapCheckpointJobsClaimed
 }
@@ -5181,6 +5203,9 @@ type projectBootstrapState struct {
 	BootstrapSetupDoneCount  int                                 `json:"bootstrap_setup_done_count,omitempty"`
 	FrankSignOffRecorded     bool                                `json:"frank_sign_off_recorded,omitempty"`
 	AssignmentCount          int                                 `json:"assignment_count,omitempty"`
+	ProjectManagerCount      int                                 `json:"project_manager_count,omitempty"`
+	WorkerCount              int                                 `json:"worker_count,omitempty"`
+	ReviewerCount            int                                 `json:"reviewer_count,omitempty"`
 	StaffingDraftCount       int                                 `json:"staffing_draft_count,omitempty"`
 	PlannedTaskCount         int                                 `json:"planned_task_count,omitempty"`
 	PlannedFlowTemplateCount int                                 `json:"planned_flow_template_count,omitempty"`
@@ -5299,7 +5324,11 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	if err != nil {
 		return projectBootstrapProgress{}, err
 	}
-	progress.AssignmentCount = e.countBootstrapMaterializedAssignments(ctx, assignments)
+	assignmentCounts := e.countBootstrapMaterializedAssignmentRoles(ctx, assignments)
+	progress.AssignmentCount = assignmentCounts.Total
+	progress.ProjectManagerCount = assignmentCounts.ProjectManager
+	progress.WorkerCount = assignmentCounts.Worker
+	progress.ReviewerCount = assignmentCounts.Reviewer
 	progress.StaffingDraftCount, err = e.countProjectBootstrapStaffingDrafts(ctx, projectID)
 	if err != nil {
 		return projectBootstrapProgress{}, err
@@ -5541,23 +5570,21 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 		progress.ValidationFailureClass = projectBootstrapFailureMissingAssignments
 		progress.ValidationFailureReason = "kickoff validation failed: planned tasks were created before any active project assignments were persisted"
 		return progress, nil
-	case e.pool != nil:
-		pmAssignment, pmErr := repo.NewAgentProjectAssignmentRepo(e.pool).GetPM(ctx, projectID)
-		if errors.Is(pmErr, repo.ErrNotFound) || pmAssignment.AgentID == uuid.Nil || !pmAssignment.IsActive {
-			progress.ValidationStatus = projectBootstrapValidationFailed
-			progress.ValidationFailureClass = projectBootstrapFailureMissingPM
-			progress.ValidationFailureReason = "kickoff validation failed: staffed project persisted work but did not assign an active project manager"
-			return progress, nil
-		}
-		if pmErr != nil {
-			return projectBootstrapProgress{}, pmErr
-		}
-		if !e.bootstrapHasMaterializedProjectRole(ctx, assignments, "reviewer") {
-			progress.ValidationStatus = projectBootstrapValidationFailed
-			progress.ValidationFailureClass = projectBootstrapFailureMissingReviewer
-			progress.ValidationFailureReason = "kickoff validation failed: staffed project persisted executable work but did not assign an active reviewer"
-			return progress, nil
-		}
+	case progress.ProjectManagerCount == 0:
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureClass = projectBootstrapFailureMissingPM
+		progress.ValidationFailureReason = "kickoff validation failed: staffed project persisted work but did not assign an active project manager"
+		return progress, nil
+	case progress.WorkerCount == 0:
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureClass = projectBootstrapFailureMissingAssignments
+		progress.ValidationFailureReason = "kickoff validation failed: staffed project persisted executable work but did not assign an active worker"
+		return progress, nil
+	case progress.ReviewerCount == 0:
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureClass = projectBootstrapFailureMissingReviewer
+		progress.ValidationFailureReason = "kickoff validation failed: staffed project persisted executable work but did not assign an active reviewer"
+		return progress, nil
 	case !repoBindingKnown:
 		return progress, nil
 	case !repoBindingPresent:
@@ -5986,27 +6013,68 @@ func (e *TurnEngine) countProjectBootstrapCurrentFlowTemplates(ctx context.Conte
 	return count, nil
 }
 
-func (e *TurnEngine) countBootstrapMaterializedAssignments(ctx context.Context, assignments []repo.AgentProjectAssignment) int {
+type bootstrapMaterializedAssignmentRoleCounts struct {
+	Total          int
+	ProjectManager int
+	Worker         int
+	Reviewer       int
+}
+
+func (e *TurnEngine) countBootstrapMaterializedAssignmentRoles(ctx context.Context, assignments []repo.AgentProjectAssignment) bootstrapMaterializedAssignmentRoleCounts {
 	if len(assignments) == 0 {
-		return 0
+		return bootstrapMaterializedAssignmentRoleCounts{}
 	}
 	if e == nil || e.agents == nil {
-		return len(assignments)
+		counts := bootstrapMaterializedAssignmentRoleCounts{}
+		for _, assignment := range assignments {
+			if !assignment.IsActive || assignment.AgentID == uuid.Nil {
+				continue
+			}
+			counts.Total++
+			switch assignmentrole.Normalize(assignment.Role) {
+			case "project_manager":
+				counts.ProjectManager++
+			case "worker":
+				counts.Worker++
+			case "reviewer":
+				counts.Reviewer++
+			}
+		}
+		return counts
 	}
 
-	count := 0
+	counts := bootstrapMaterializedAssignmentRoleCounts{}
 	for _, assignment := range assignments {
+		if !assignment.IsActive || assignment.AgentID == uuid.Nil {
+			continue
+		}
 		agentRecord, err := e.agents.GetByID(ctx, assignment.AgentID)
 		if err != nil {
-			count++
+			counts.Total++
+			switch assignmentrole.Normalize(assignment.Role) {
+			case "project_manager":
+				counts.ProjectManager++
+			case "worker":
+				counts.Worker++
+			case "reviewer":
+				counts.Reviewer++
+			}
 			continue
 		}
 		if agentRecord.IsStarterTrio {
 			continue
 		}
-		count++
+		counts.Total++
+		switch assignmentrole.Normalize(assignment.Role) {
+		case "project_manager":
+			counts.ProjectManager++
+		case "worker":
+			counts.Worker++
+		case "reviewer":
+			counts.Reviewer++
+		}
 	}
-	return count
+	return counts
 }
 
 func (e *TurnEngine) bootstrapHasMaterializedProjectRole(ctx context.Context, assignments []repo.AgentProjectAssignment, role string) bool {
@@ -6777,7 +6845,7 @@ func projectBootstrapLastSuccessfulCheckpoint(progress projectBootstrapProgress)
 		reached bool
 	}{
 		{name: projectBootstrapCheckpointProjectCreated, reached: true},
-		{name: projectBootstrapCheckpointStaffingPersisted, reached: progress.AssignmentCount > 0 || progress.StaffingDraftCount > 0},
+		{name: projectBootstrapCheckpointStaffingPersisted, reached: projectBootstrapStaffingReady(progress)},
 		{name: projectBootstrapCheckpointTaskTreePersisted, reached: progress.PlannedTaskCount > 0},
 		{name: projectBootstrapCheckpointFlowTemplatesPersisted, reached: progress.PlannedFlowTemplateCount > 0},
 		{name: projectBootstrapCheckpointFirstWaveSelected, reached: progress.FirstWaveTaskCount > 0},
@@ -6948,6 +7016,9 @@ func applyProjectBootstrapProgressState(state *projectBootstrapState, progress p
 	state.BootstrapSetupDoneCount = progress.BootstrapSetupDoneCount
 	state.FrankSignOffRecorded = progress.FrankSignOffRecorded
 	state.AssignmentCount = progress.AssignmentCount
+	state.ProjectManagerCount = progress.ProjectManagerCount
+	state.WorkerCount = progress.WorkerCount
+	state.ReviewerCount = progress.ReviewerCount
 	state.StaffingDraftCount = progress.StaffingDraftCount
 	state.PlannedTaskCount = progress.PlannedTaskCount
 	state.PlannedFlowTemplateCount = progress.PlannedFlowTemplateCount
@@ -10301,8 +10372,12 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 		lines = append(lines, "Current phase: "+phase)
 	}
 	lines = append(lines, fmt.Sprintf(
-		"Persisted counts: assignments=%d planned_tasks=%d flow_templates=%d first_wave_tasks=%d first_wave_promoted=%d first_wave_jobs=%d",
+		"Persisted counts: staffing_drafts=%d assignments=%d (project_manager=%d worker=%d reviewer=%d) planned_tasks=%d flow_templates=%d first_wave_tasks=%d first_wave_promoted=%d first_wave_jobs=%d",
+		state.StaffingDraftCount,
 		state.AssignmentCount,
+		state.ProjectManagerCount,
+		state.WorkerCount,
+		state.ReviewerCount,
 		state.PlannedTaskCount,
 		state.PlannedFlowTemplateCount,
 		state.FirstWaveTaskCount,
@@ -10332,6 +10407,12 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 	if pm := strings.TrimSpace(snapshot.ExistingPM); pm != "" {
 		lines = append(lines, "Existing PM: "+pm)
 	}
+	if missing := projectBootstrapMissingStaffingRoles(state); len(missing) > 0 && (state.StaffingDraftCount > 0 || state.AssignmentCount > 0 || state.BootstrapSetupDoneCount > 0) {
+		lines = append(lines, fmt.Sprintf(
+			"Bootstrap staffing is not fully persisted yet. Missing active non-starter roles: %s. Existing staff drafts do not count until they are assigned with agent.assign_project.",
+			strings.Join(missing, ", "),
+		))
+	}
 	compactRoster := projectBootstrapResumeUsesCompactRoster(state)
 	if assignments := strings.TrimSpace(snapshot.AssignmentLine); assignments != "" && !compactRoster {
 		lines = append(lines, "Existing active assignments: "+assignments)
@@ -10349,7 +10430,7 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 			lines = append(lines, "The next acceptable bootstrap action is a direct task.update on the named blocked task id above using one of the active assignee ids above. Do not answer with narrative, recollection, or a state summary. If you do not take that direct repair action or report a concrete blocker, bootstrap will be treated as failed.")
 		}
 	}
-	scaffoldOnlyRecovery := (state.AssignmentCount > 0 && state.PlannedTaskCount == 0 &&
+	scaffoldOnlyRecovery := (projectBootstrapStaffingStateReady(state) && state.PlannedTaskCount == 0 &&
 		(strings.TrimSpace(state.CurrentPhase) == projectBootstrapCheckpointTaskTreePersisted ||
 			strings.TrimSpace(state.LastSuccessfulCheckpoint) == projectBootstrapCheckpointStaffingPersisted)) ||
 		projectBootstrapRestartScaffoldFailureReason(state.ValidationFailureReason)
@@ -10362,7 +10443,7 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 	if flowTemplatesReady && state.FirstWaveTaskCount == 0 && state.FirstWavePromotedCount == 0 && state.FirstWaveJobCount == 0 {
 		lines = append(lines, "The persisted task tree already has runnable flow templates. Do not create more agents, parent tasks, or child tasks unless a concrete task is still unassigned or fails a boundedness/validation rule. Reuse the existing staffed task tree and move a small first executable wave into execution now.")
 	}
-	if state.AssignmentCount == 0 && state.PlannedTaskCount == 0 && state.PlannedFlowTemplateCount == 0 {
+	if !projectBootstrapStaffingStateReady(state) && state.PlannedTaskCount == 0 && state.PlannedFlowTemplateCount == 0 {
 		lines = append(lines, "Bootstrap is not complete just because the governance gate or checklist tasks are marked done. Bootstrap only counts as complete after real project assignments, non-bootstrap project tasks, and runnable flow templates are persisted.")
 		lines = append(lines, "If the project currently contains only the bootstrap checklist tasks, your next acceptable action is to create staffed project work. Do not answer with a completion claim, and do not treat task 1-8 alone as a finished bootstrap.")
 	}
@@ -10409,7 +10490,7 @@ func shouldRequireDirectBootstrapRepairAction(state projectBootstrapState, snaps
 }
 
 func projectBootstrapResumeShouldRootAtResumeMessage(state projectBootstrapState) bool {
-	if state.AssignmentCount > 0 ||
+	if projectBootstrapStaffingStateReady(state) ||
 		state.PlannedTaskCount > 0 ||
 		state.PlannedFlowTemplateCount > 0 ||
 		state.FirstWaveTaskCount > 0 ||
@@ -10510,13 +10591,14 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState, snapsh
 		lines = append(lines, "Your first tool call in this resume turn should be bootstrap.setup.persist using completed_step_slugs containing select-first-wave plus first_wave_task_ids or first_wave_task_numbers for the exact runnable subset.")
 		lines = append(lines, "Use the selectable task ids already listed in the persisted bootstrap resume state above. Do not begin with project.get, project.list, task.list, flow.list_templates, agent.list, or scaffold file reads before that bootstrap.setup.persist call.")
 	}
-	if state.AssignmentCount == 0 && state.PlannedTaskCount == 0 && state.PlannedFlowTemplateCount == 0 {
+	if !projectBootstrapStaffingStateReady(state) && state.PlannedTaskCount == 0 && state.PlannedFlowTemplateCount == 0 {
 		lines = append(lines, "Do not claim bootstrap is complete just because the governance gate or checklist tasks are done. Those system-managed setup tasks do not count as staffed project work.")
 		lines = append(lines, "Your next action must create real project assignments, non-bootstrap tasks, and runnable flow templates, or report a concrete blocker preventing that.")
 		if state.BootstrapSetupDoneCount > 0 || state.BootstrapSetupTaskCount > 0 {
 			lines = append(lines, "Bootstrap is currently at the staffing/materialization step. Do not begin with project.list, project.get, task.list, file.list, file.read, or scaffold rereads. Your next tool activity should materially staff the project: do at most one bounded staffing lookup per needed role family, then create and assign the PM, workers, and reviewers in the same turn before attempting task decomposition.")
 			lines = append(lines, "Staffing profile browsing is advisory only. If a prior turn already used staffing.browse_profiles or staffing.get_profile, do not repeat staffing discovery now; reuse that earlier catalog or create the PM, workers, and reviewers directly with agent.create_staff and agent.assign_project.")
 			lines = append(lines, "If the catalog is not a perfect fit, create fit-for-purpose dedicated staff directly from the project brief instead of browsing more profiles.")
+			lines = append(lines, "If suitable dedicated staff drafts already exist, reuse those drafts first and finish the missing agent.assign_project calls before creating more agents or rereading broader project state.")
 			lines = append(lines, "Do not answer with blank output, an acknowledgement, or another bootstrap summary. If the current staffing candidates are insufficient, say the one concrete blocker preventing staff creation.")
 		}
 	}
@@ -21895,6 +21977,9 @@ func (e *TurnEngine) handleProjectBootstrapTerminalTurnFailure(ctx context.Conte
 		state.LastResponderID = rt.agent.ID.String()
 	}
 	state.AssignmentCount = progress.AssignmentCount
+	state.ProjectManagerCount = progress.ProjectManagerCount
+	state.WorkerCount = progress.WorkerCount
+	state.ReviewerCount = progress.ReviewerCount
 	state.StaffingDraftCount = progress.StaffingDraftCount
 	state.PlannedTaskCount = progress.PlannedTaskCount
 	state.PlannedFlowTemplateCount = progress.PlannedFlowTemplateCount
@@ -22664,7 +22749,7 @@ func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName str
 			return true
 		}
 	}
-	scaffoldOnlyRecovery := (state.AssignmentCount > 0 && state.PlannedTaskCount == 0 &&
+	scaffoldOnlyRecovery := (projectBootstrapStaffingStateReady(state) && state.PlannedTaskCount == 0 &&
 		(strings.TrimSpace(state.CurrentPhase) == projectBootstrapCheckpointTaskTreePersisted ||
 			strings.TrimSpace(state.LastSuccessfulCheckpoint) == projectBootstrapCheckpointStaffingPersisted)) ||
 		strings.Contains(initialMessage, "did not yet materialize any executable non-bootstrap project tasks") ||
@@ -23453,7 +23538,7 @@ func buildProjectBootstrapRecoveryRereadToolGuardError(rt *turnRuntime, toolName
 			return "bootstrap checklist-only restart already has the active project id and canonical bootstrap scaffold. Do not reread project, task, or workspace state first. Your next tool activity must materially staff the project: do one bounded staffing lookup if needed, then create and assign the PM, workers, and reviewers before decomposing work."
 		}
 	}
-	scaffoldOnlyRecovery := (state.AssignmentCount > 0 && state.PlannedTaskCount == 0 &&
+	scaffoldOnlyRecovery := (projectBootstrapStaffingStateReady(state) && state.PlannedTaskCount == 0 &&
 		(strings.TrimSpace(state.CurrentPhase) == projectBootstrapCheckpointTaskTreePersisted ||
 			strings.TrimSpace(state.LastSuccessfulCheckpoint) == projectBootstrapCheckpointStaffingPersisted)) ||
 		strings.Contains(initialMessage, "did not yet materialize any executable non-bootstrap project tasks") ||
@@ -23841,7 +23926,7 @@ func shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt *turnRuntime, block
 	}
 	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
 	initialMessage := strings.ToLower(strings.TrimSpace(rt.initialMessageText))
-	scaffoldOnlyRecovery := (state.AssignmentCount > 0 && state.PlannedTaskCount == 0 &&
+	scaffoldOnlyRecovery := (projectBootstrapStaffingStateReady(state) && state.PlannedTaskCount == 0 &&
 		(strings.TrimSpace(state.CurrentPhase) == projectBootstrapCheckpointTaskTreePersisted ||
 			strings.TrimSpace(state.LastSuccessfulCheckpoint) == projectBootstrapCheckpointStaffingPersisted)) ||
 		strings.Contains(initialMessage, "did not yet materialize any executable non-bootstrap project tasks") ||

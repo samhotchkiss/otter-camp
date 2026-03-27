@@ -17030,8 +17030,8 @@ func TestTurnEngineIntegrationBootstrapProgressCountsStaffingDraftsWithoutAssign
 	if progress.StaffingDraftCount != 1 {
 		t.Fatalf("staffing_draft_count = %d, want 1", progress.StaffingDraftCount)
 	}
-	if checkpoint := projectBootstrapLastSuccessfulCheckpoint(progress); checkpoint != projectBootstrapCheckpointStaffingPersisted {
-		t.Fatalf("last_successful_checkpoint = %q, want %q", checkpoint, projectBootstrapCheckpointStaffingPersisted)
+	if checkpoint := projectBootstrapLastSuccessfulCheckpoint(progress); checkpoint != projectBootstrapCheckpointProjectCreated {
+		t.Fatalf("last_successful_checkpoint = %q, want %q", checkpoint, projectBootstrapCheckpointProjectCreated)
 	}
 	reason := buildProjectBootstrapWatchdogFailureReason(&projectBootstrapTimeoutError{
 		Timeout:  90 * time.Second,
