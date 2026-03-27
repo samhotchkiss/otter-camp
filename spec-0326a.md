@@ -592,6 +592,10 @@ Implemented so far in this spec:
   - the runtime blocks the task lane instead of auto-continuing another discovery-only pass
   - review lanes are no longer exempt from that cutoff; their threshold is tighter at `3` consecutive `max_tool_calls` turns, and when review churn hits the same pattern, the runtime ends the hot turn and queues a fresh `task_review_action` prompt instead of letting review keep burning `max_tool_calls`
   - the `max_tool_calls` budget-hit path now routes through the same cutoff helper inside `dispatchTools(...)`, so capped review turns cannot skip the classifier just because the stop happened before the outer turn-finalization branch
+- async `project_task` wrong-path `file.write` correction is now narrower:
+  - the engine still canonicalizes obviously equivalent or generic wrong paths to the intended task deliverable
+  - but it no longer silently rewrites across strong artifact-family boundaries such as `tests/` or `results/` into a code deliverable under `src/`
+  - that keeps auxiliary test/result artifacts from clobbering the primary deliverable path and pushes those attempts back through normal deliverable-bound validation instead
 
 Still pending from this spec:
 

@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -11859,6 +11860,9 @@ func (e *TurnEngine) handleTaskFileWriteWrongPath(ctx context.Context, rt *turnR
 	if sameOrNestedTurnWorkspacePath(attemptedPath, targetPath) {
 		return false, false, nil
 	}
+	if !shouldRewriteTaskFileWritePath(attemptedPath, targetPath) {
+		return false, false, nil
+	}
 
 	normalized["path"] = targetPath
 	if _, exists := normalized["create_dirs"]; !exists {
@@ -11893,6 +11897,45 @@ func normalizeTurnWorkspacePath(value string) string {
 		return ""
 	}
 	return cleaned
+}
+
+func shouldRewriteTaskFileWritePath(attemptedPath, targetPath string) bool {
+	attemptedFamily := classifyTaskFileArtifactFamily(attemptedPath)
+	targetFamily := classifyTaskFileArtifactFamily(targetPath)
+	if attemptedFamily != "" && targetFamily != "" && attemptedFamily != targetFamily {
+		return false
+	}
+	return true
+}
+
+func classifyTaskFileArtifactFamily(value string) string {
+	normalized := strings.ToLower(strings.Trim(strings.TrimSpace(strings.ReplaceAll(value, "\\", "/")), "/"))
+	if normalized == "" {
+		return ""
+	}
+	parts := strings.Split(normalized, "/")
+	first := parts[0]
+	switch first {
+	case "src", "app", "lib", "cmd", "internal", "pkg":
+		return "code"
+	case "test", "tests", "spec", "specs", "__tests__":
+		return "test"
+	case "results", "result", "evidence", "artifacts":
+		return "results"
+	case "review", "reviews", ".ottercamp":
+		return "review"
+	case "docs", "doc", "documentation":
+		return "docs"
+	}
+	base := path.Base(normalized)
+	switch {
+	case strings.HasPrefix(base, "test_"),
+		strings.Contains(base, "_test."),
+		strings.Contains(base, ".test."),
+		strings.Contains(base, ".spec."):
+		return "test"
+	}
+	return ""
 }
 
 func sameOrNestedTurnWorkspacePath(pathValue, rootValue string) bool {

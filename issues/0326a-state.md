@@ -2245,3 +2245,38 @@ Why this matters:
 - the old claim-time purge was only trimming the symptom
 - the worker was still recreating the same stale continuation work from a second requeue path
 - with both requeue paths fixed, those settled project sessions are no longer polluting the runnable queue with dead-on-arrival continuation dispatches
+
+## Update 21:18 MDT
+
+Anthropic traffic is active again, which exposed the next concrete hot-turn family under real load.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - narrowed `handleTaskFileWriteWrongPath(...)` so it no longer silently rewrites `file.write` across strong artifact-family boundaries
+  - example of the now-blocked rewrite family:
+    - `tests/test_pipeline_logger.py` or `results/logging-results.md`
+    - silently retargeted into the execution deliverable `src/pipeline_logger.py`
+  - the engine still rewrites obviously equivalent generic document aliases to the intended deliverable target; it now only skips the rewrite when both attempted path and target path have known but different artifact families
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added `TestHandleTaskFileWriteWrongPathSkipsCrossArtifactFamilyRewrite`
+  - reran the existing canonical-path rewrite cases to confirm the narrower rule still preserves intended rewrite behavior for recovery-target and inferred-document aliases
+
+Focused verification:
+
+- `go test ./internal/turn -run 'TestHandleTaskFileWriteWrongPath(RewritesToRecoveryTarget|SkipsCrossArtifactFamilyRewrite|SkipsNonExecutionFirstTasks|RewritesToInferredTestExecutionTarget|RewritesScenarioExecutionPlanToCanonicalTarget|RewritesValidationExecutionDocumentToCanonicalTarget|RewritesGenericDocumentPathToCanonicalTarget|RewritesToCheckpointTargetWhenPreferredUnknown)$' -count=1`
+
+Live read after rebuild and tmux restart:
+
+- runtime health stayed green: `./bin/ottercamp health --output json` returned `status=ok`
+- in the fresh post-deploy window, there were `0` new async task assistant `file.write` calls targeting `tests/`, `test/`, or `results/`
+- the only fresh `mismatched_deliverable_context` rows were on session `75a97d7c-cc59-4f3f-970c-775d9226e908`, and those turns were read-only discovery churn:
+  - `7aa49903-c1c1-451f-bad8-aab69b60eb86`
+  - `41d0e2af-b0e8-4a6f-bf71-a49f41c92737`
+  - `637930d4-6602-40d2-b546-0d3ba663d3e0`
+- those turns did not include any new `file.write` attempts to `tests/` or `results/`; they were already inspecting the polluted deliverable and then stopped via `max_tool_calls` / `validation_loop_blocked`
+
+Why this matters:
+
+- the old behavior hid a wrong-path mutation by mutating the tool call itself, which is how support artifacts could overwrite the primary deliverable and trigger more recovery churn
+- the narrowed rewrite rule keeps the intended “canonicalize obvious aliases” behavior while removing the most damaging silent retarget case that showed up in live traffic
