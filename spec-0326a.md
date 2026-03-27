@@ -547,6 +547,13 @@ Implemented so far in this spec:
 - claim-time worker cleanup now retires project dispatches that were already permanently unclaimable under existing claim SQL:
   - inactive `project_bootstrap` dispatches
   - settled `project_execution_continuation` / `project_continuation_resume` dispatches with no unfinished tasks
+- claim-time worker cleanup now also retires orphaned stale `project_task` execution dispatches:
+  - pending or claimed `agent_turn` rows older than the stale-claim threshold
+  - active async `project_task` session
+  - active `flow_node_execution`
+  - `current_turn_id IS NULL`
+  - and no matching `chat_turn` exists for that message attempt
+  - after purging those rows, the worker immediately reruns `RequeueActiveExecutionSessionsWithoutTurns(...)` so current state can mint a fresh dispatch instead of leaving the session parked behind the dead backlog
 - async `project` and `project_task` turns now preflight model availability before prompt assembly:
   - the engine asks the live gateway whether the routed profile is already in an all-connections-cooling-down window
   - on a real router-level cooldown, the turn now goes straight to the existing delayed `ErrRateLimited` retry path without assembling prompt context, appending an assistant placeholder, or creating a no-op `agent_turn` invocation row

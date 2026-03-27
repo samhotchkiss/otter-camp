@@ -3852,6 +3852,48 @@ func (w *Worker) claimPendingAgentTurns(ctx context.Context, limit int) ([]Job, 
 	`, agentTurnJobType); err != nil {
 		return nil, fmt.Errorf("dead-letter stale terminal agent_turn jobs before claim: %w", err)
 	}
+	stalePendingOrphanBefore := w.clock.Now().UTC().Add(-w.staleClaimThreshold)
+	purgedOrphanDispatches, err := w.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    claimed_by = NULL,
+		    claimed_at = NULL,
+		    last_error = 'purged stale orphan task execution dispatch during claim',
+		    updated_at = now()
+		WHERE jq.status IN ('pending', 'claimed')
+		  AND jq.job_type = $1
+		  AND jq.run_after <= $2
+		  AND EXISTS (
+		    SELECT 1
+		    FROM chat_session cs
+		    JOIN flow_node_execution e
+		      ON e.session_id = cs.id
+		     AND e.status = 'active'
+		    WHERE cs.id = (jq.payload->>'session_id')::uuid
+		      AND cs.scope_type = 'project_task'
+		      AND cs.mode = 'async'
+		      AND cs.status = 'active'
+		      AND cs.current_turn_id IS NULL
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    WHERE ct.session_id = (jq.payload->>'session_id')::uuid
+		      AND ct.trigger_message_id = (jq.payload->>'message_id')::uuid
+		      AND ct.retry_count = COALESCE((jq.payload->>'retry_count')::int, 0)
+		  )
+	`, agentTurnJobType, stalePendingOrphanBefore)
+	if err != nil {
+		return nil, fmt.Errorf("dead-letter stale orphan task execution dispatches before claim: %w", err)
+	}
+	if purgedOrphanDispatches.RowsAffected() > 0 {
+		if w.logger != nil {
+			w.logger.Info("job queue: dead-lettered stale orphan task execution dispatches before claim", "count", purgedOrphanDispatches.RowsAffected())
+		}
+		if _, err := w.RequeueActiveExecutionSessionsWithoutTurns(ctx); err != nil {
+			return nil, fmt.Errorf("requeue active execution sessions after orphan dispatch cleanup: %w", err)
+		}
+	}
 	return w.claimPendingByFilter(ctx, limit, "job_type = $3")
 }
 

@@ -4665,6 +4665,166 @@ func TestJobWorkerClaimPendingAgentTurnsDeadLettersTerminalMessageAttemptDispatc
 	}
 }
 
+func TestJobWorkerClaimPendingAgentTurnsRequeuesStaleOrphanTaskExecutionDispatch(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "claim-requeue-stale-orphan-task-execution-dispatch",
+		DisplayName: "Claim Requeue Stale Orphan Task Execution Dispatch",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover stale execution dispatches.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "claim-requeue-stale-orphan-task-execution-dispatch-project",
+		DisplayName:    "Claim Requeue Stale Orphan Task Execution Dispatch Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "claim-requeue-stale-orphan-task-execution-dispatch-template",
+		DisplayName:    "Claim Requeue Stale Orphan Task Execution Dispatch Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Execute",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Recover orphan stale dispatch",
+		WorkStatus:      "in_progress",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active execution: %v", err)
+	}
+	staleMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active task recovery now.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"task_recovery_resume","flow_node_execution_id":"%s"}`, execution.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create stale message: %v", err)
+	}
+
+	var staleJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key, created_at, updated_at)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now() - interval '10 minutes', 70, $2, $3, now() - interval '10 minutes', now() - interval '10 minutes')
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0,"flow_node_execution_id":"%s"}`, session.ID, staleMessage.ID, execution.ID),
+		fmt.Sprintf("agent_turn:%s:%s", session.ID, staleMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, staleMessage.ID, 0),
+	).Scan(&staleJobID); err != nil {
+		t.Fatalf("insert stale orphan job: %v", err)
+	}
+
+	claimed, err := worker.claimPendingAgentTurns(ctx, 10)
+	if err != nil {
+		t.Fatalf("claimPendingAgentTurns: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed jobs = %d, want 1", len(claimed))
+	}
+	if claimed[0].ID == staleJobID {
+		t.Fatalf("claimed stale orphan job %s, want fresh requeued dispatch", staleJobID)
+	}
+
+	var staleStatus string
+	var staleError *string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, last_error
+		FROM job_queue
+		WHERE id = $1
+	`, staleJobID).Scan(&staleStatus, &staleError); err != nil {
+		t.Fatalf("query stale orphan job: %v", err)
+	}
+	if staleStatus != "dead_letter" || staleError == nil || *staleError != "purged stale orphan task execution dispatch during claim" {
+		got := "<nil>"
+		if staleError != nil {
+			got = *staleError
+		}
+		t.Fatalf("stale orphan job = (%q, %q), want dead_letter/purged stale orphan task execution dispatch during claim", staleStatus, got)
+	}
+
+	var claimedSessionID uuid.UUID
+	if err := json.Unmarshal(claimed[0].Payload, &struct {
+		SessionID *uuid.UUID `json:"session_id"`
+	}{SessionID: &claimedSessionID}); err != nil {
+		t.Fatalf("decode claimed payload: %v", err)
+	}
+	if claimedSessionID != session.ID {
+		t.Fatalf("claimed session_id = %s, want %s", claimedSessionID, session.ID)
+	}
+}
+
 func TestJobWorkerClaimPendingAgentTurnsClaimsOnlyOneJobPerSession(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

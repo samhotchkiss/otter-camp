@@ -1972,3 +1972,35 @@ Current proof gap:
     - delayed retry still rolls forward
     - no new `model_invocation` row is created
     - and now also no new `chat_turn` row is created
+
+## Update 19:24 MDT
+
+I used the Anthropic cooldown window to harden a different queue seam that was hiding runnable work behind dead backlog.
+
+What changed:
+
+- [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - `claimPendingAgentTurns(...)` now dead-letters orphaned stale `project_task` execution dispatches when all of the following are true:
+    - async `project_task` session is still `active`
+    - the session has an active `flow_node_execution`
+    - `current_turn_id IS NULL`
+    - the dispatch is already past the stale-claim threshold
+    - and there is no matching `chat_turn` for that exact message attempt
+  - after purging those stale rows, the worker immediately runs `RequeueActiveExecutionSessionsWithoutTurns(...)` so a fresh current-state dispatch can be recreated instead of leaving the session blocked behind the old pending row
+- [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+  - added `TestJobWorkerClaimPendingAgentTurnsRequeuesStaleOrphanTaskExecutionDispatch`
+
+Focused verification:
+
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerClaimPendingAgentTurns(RequeuesStaleOrphanTaskExecutionDispatch|DeadLettersTerminalMessageAttemptDispatch|IgnoresStalePendingTurnWithoutActiveExecution|IgnoresStalePendingCurrentTurnWithoutLiveOwnership)$' -count=1`
+
+Live proof:
+
+- rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and `./bin/ottercamp health --output json` returned `status=ok`
+- on startup, the new worker logged:
+  - `job queue: dead-lettered stale orphan task execution dispatches before claim count=22`
+- direct DB verification after that sweep:
+  - non-paused orphan stale `project_task` dispatches of that exact shape dropped to `0`
+  - the only remaining rows in the raw orphan query belonged to paused projects (`rerun-45`, `rerun-41`), so they are correctly excluded from claim as parked backlog rather than runnable work
+
+This does not restore Anthropic capacity by itself, but it removes another source of misleading queue pressure and ensures active task executions are not blocked behind dead ancient dispatches once provider capacity returns.
