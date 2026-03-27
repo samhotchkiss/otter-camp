@@ -3185,6 +3185,38 @@ Live status right after deploy:
   - first fresh post-deploy retries at `2026-03-27 06:06:46 MDT` were still interrupted by transient provider failure immediately after rereading the orchestration summary
   - so this slice is deployed and healthy, but the new auto-injected child-task lookup has not yet been observed on a completed live review turn
 
+## Update 06:14 MDT
+
+I extended the transient review retry carry-forward logic to the orchestration-parent summary case that task 9 is currently burning on.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `reviewApprovalRetryPrompt(...)` now emits a specialized orchestration-parent retry prompt when:
+    - the task is an orchestration-only parent in review
+    - the preferred parent summary target was already read successfully in the failed turn
+    - the turn did not yet reach direct child-task evidence
+  - that retry prompt says:
+    - do not reread the parent summary
+    - do not call `task.get` on the parent
+    - continue directly with `task.list parent_task_id=<current task> status=all`
+  - this composes with the just-landed narrow `parent_task_id` auto-injection, so transiently interrupted task-9 reviews should now resume on child-task evidence instead of paying for another summary reread
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for the new orchestration-parent retry prompt helper
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(ReviewApprovalRetryPromptCarriesForwardOrchestrationParentSummaryEvidence|HandleTransientModelTurnFailureUsesReviewRetryPromptFromFailedTurn|MaybeInjectOrchestrationParentReviewTaskListParentID|MaybeInjectOrchestrationParentReviewTaskListParentIDIgnoresExplicitBroadProjectScope)$' -count=1`
+- `go build -o ./bin/ottercamp ./cmd/ottercamp`
+- rebuilt/restarted tmux `codex-e2e-20260324`
+- `./bin/ottercamp health --output json`
+
+Live status:
+
+- deployed and healthy on the new binary
+- fresh live proof is still pending the next post-restart task-9 retry on this runtime
+
 ## Update 05:40 MDT
 
 The orchestration-parent review prompt fix is now live-proven, and the next concrete leak is narrower.

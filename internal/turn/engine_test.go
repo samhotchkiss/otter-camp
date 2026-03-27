@@ -30096,6 +30096,87 @@ func TestReviewApprovalRetryPromptRejectsMissingPreferredDeliverable(t *testing.
 	}
 }
 
+func TestReviewApprovalRetryPromptCarriesForwardOrchestrationParentSummaryEvidence(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+	description := "Parent/orchestration task for pipeline scaffold work. Validates direct child tasks. Does not do execution work itself. Deliverable: Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  9,
+				Title:       "Workstream A: Pipeline Scaffold Setup",
+				Description: &description,
+				WorkStatus:  "review",
+			},
+		},
+	}
+
+	latestUser := repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session),
+	}
+	latestUser.Metadata = mustMarshalJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"synthetic_user_message": true,
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.messages.upsert(latestUser)
+
+	turnID := uuid.New()
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "I'll start by inspecting the preferred deliverable target.",
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustMarshalJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":      "Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md",
+				"byte_size": 3162,
+				"content":   "# OC-9 summary",
+			},
+		})),
+	})
+
+	taskRecord, err := fixture.engine.tasks.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	retryPrompt, ok, err := fixture.engine.reviewApprovalRetryPrompt(context.Background(), fixture.session, taskRecord, &latestUser, &repo.ChatTurn{ID: turnID})
+	if err != nil {
+		t.Fatalf("reviewApprovalRetryPrompt: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected orchestration-parent retry prompt")
+	}
+	if !strings.Contains(retryPrompt, "Do not reread that summary") {
+		t.Fatalf("retryPrompt = %q, want no-reread guidance", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "parent_task_id "+taskID.String()) {
+		t.Fatalf("retryPrompt = %q, want direct child-task lookup guidance", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "status=all") {
+		t.Fatalf("retryPrompt = %q, want status=all guidance", retryPrompt)
+	}
+}
+
 func TestTaskContinuationResumeMessageMetadataIncludesFlowNodeExecutionID(t *testing.T) {
 	t.Parallel()
 

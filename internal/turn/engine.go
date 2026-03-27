@@ -1729,6 +1729,9 @@ func (e *TurnEngine) reviewApprovalRetryPrompt(ctx context.Context, session *cha
 		if retryPrompt, ok := reviewRetryPromptForMissingPreferredDeliverable(messages, latestCompleted, latestUser, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
 			return retryPrompt, true, nil
 		}
+		if retryPrompt, ok := reviewRetryPromptForOrchestrationParentChildEvidence(messages, latestCompleted, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+			return retryPrompt, true, nil
+		}
 		if retryPrompt, ok := reviewRetryPromptForMissingRequiredTests(messages, latestCompleted, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
 			return retryPrompt, true, nil
 		}
@@ -1819,6 +1822,59 @@ func reviewRetryPromptForMissingRequiredTests(messages []repo.ChatMessage, lates
 		" Call flow.review_decision immediately with decision=reject, flow_node_execution_id " + executionID.String() + ", and concise findings that the required test coverage or related test artifacts could not be verified from the delivered workspace." +
 		" Use the missing or inaccessible test artifacts as evidence." +
 		" Do not reply with explanation text, a review plan, or placeholder arguments."
+	return retryPrompt, true
+}
+
+func reviewRetryPromptForOrchestrationParentChildEvidence(messages []repo.ChatMessage, latestCompleted *repo.ChatTurn, latestUser *repo.ChatMessage, taskRecord repo.ProjectTask, executionID uuid.UUID, basePrompt string) (string, bool) {
+	if latestCompleted == nil || latestCompleted.ID == uuid.Nil || latestUser == nil || executionID == uuid.Nil {
+		return "", false
+	}
+	if !taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+		return "", false
+	}
+	targetPath := parsePromptDeliverableTarget(latestUser.Content)
+	if targetPath == "" {
+		return "", false
+	}
+	turnMessages := messagesForTurn(messages, latestCompleted.ID)
+	if len(turnMessages) == 0 {
+		return "", false
+	}
+
+	parentSummaryReadable := false
+	directChildLookupObserved := false
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok {
+			continue
+		}
+		errorCode := normalizeValidationFailureCode(errText)
+		if errorCode == "" {
+			errorCode = normalizeValidationFailureCode(anyString(output["error"]))
+		}
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "file.read":
+			if errorCode == "" && normalizeWorkspaceRelativePath(anyString(output["path"])) == targetPath && intValue(output["byte_size"]) > 0 {
+				parentSummaryReadable = true
+			}
+		case "task.list":
+			if errorCode == "" {
+				directChildLookupObserved = true
+			}
+		}
+	}
+	if !parentSummaryReadable || directChildLookupObserved {
+		return "", false
+	}
+
+	retryPrompt := basePrompt +
+		"\nYour last review attempt already established that the parent orchestration summary `" + targetPath + "` is present and substantive." +
+		" Do not reread that summary or call task.get on the parent again." +
+		" Continue directly with direct child-task evidence by calling task.list with parent_task_id " + taskRecord.ID.String() + " and status=all, then inspect only the direct child outputs needed for the review decision." +
+		" Do not re-list the broader project task tree, do not inspect planning companion files, and do not restart from the parent summary."
 	return retryPrompt, true
 }
 

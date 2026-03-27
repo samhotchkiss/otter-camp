@@ -988,3 +988,13 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
       - explicit broad-project requests still remain blocked
     - runtime was rebuilt/restarted successfully at `2026-03-27 06:11 MDT`
     - fresh live proof is still pending because the first post-deploy task-9 retries on the new binary failed provider-side immediately after rereading the parent summary, before they reached `task.list`
+  - orchestration-parent transient review retries now also carry forward the already-read parent summary:
+    - `reviewApprovalRetryPrompt(...)` now emits a specialized retry prompt when an orchestration-only parent review turn already proved the preferred parent summary is readable but did not yet reach direct child-task evidence
+    - that retry prompt explicitly says:
+      - do not reread the parent summary
+      - do not call `task.get` on the parent
+      - continue directly with `task.list parent_task_id=<current task> status=all`
+    - this pairs with the new narrow `parent_task_id` auto-injection so a transiently interrupted task-9 review can resume directly on child-task evidence instead of paying another parent-summary reread
+    - focused turn-engine coverage is green for the new retry prompt helper
+    - runtime was rebuilt/restarted successfully at `2026-03-27 06:14 MDT`
+    - fresh live proof is still pending the next post-restart task-9 retry on the new binary
