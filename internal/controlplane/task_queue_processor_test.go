@@ -826,6 +826,43 @@ func TestTaskQueueProcessorHandleFlowAdvancedEventIgnoresTerminalTransition(t *t
 	}
 }
 
+func TestBuildQueueKickoffMessageForOrchestrationOnlyParent(t *testing.T) {
+	description := "Parent/orchestration task for wave gating validation. Validates that child tasks exercise the gating behavior correctly. Does not do execution work itself."
+	taskRecord := repo.ProjectTask{
+		Title:       "Workstream C: Wave Gating Validation",
+		Description: &description,
+	}
+
+	message := buildQueueKickoffMessage(taskRecord)
+	if !strings.Contains(message, "Start work on task: Workstream C: Wave Gating Validation") {
+		t.Fatalf("kickoff message = %q, want task title prefix", message)
+	}
+	if !strings.Contains(message, "orchestration-only parent container") {
+		t.Fatalf("kickoff message = %q, want orchestration-parent instruction", message)
+	}
+	if !strings.Contains(message, "create or repair bounded executable child tasks beneath this parent") {
+		t.Fatalf("kickoff message = %q, want bounded child-task guidance", message)
+	}
+}
+
+func TestBuildFlowTransitionKickoffMessageForRejectedOrchestrationOnlyParent(t *testing.T) {
+	description := "Parent/orchestration task for wave gating validation. Validates that child tasks exercise the gating behavior correctly. Does not do execution work itself."
+	taskRecord := repo.ProjectTask{
+		Title:       "Workstream C: Wave Gating Validation",
+		Description: &description,
+	}
+	node := repo.FlowNode{DisplayName: "Execute & Build", NodeType: "work"}
+	execution := repo.FlowNodeExecution{ID: uuid.New()}
+
+	message := buildFlowTransitionKickoffMessage(taskRecord, node, execution, "flow.rejected", "Missing bounded child tasks.")
+	if !strings.Contains(message, "Previous flow step was rejected.") {
+		t.Fatalf("kickoff message = %q, want rejection note", message)
+	}
+	if !strings.Contains(message, "Use the rejection feedback to adjust or recreate bounded executable child tasks beneath this parent") {
+		t.Fatalf("kickoff message = %q, want orchestration rejection guidance", message)
+	}
+}
+
 func TestTaskQueueProcessorHandleFlowAdvancedEventIgnoresTaskFlowRuntimeMismatch(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()

@@ -3118,6 +3118,54 @@ Deploy status:
   - `export OTTERCAMP_MODE=development`
 - fresh live proof of the selector change is still pending the next project continuation retry on this build
 
+## Update 05:20 MDT
+
+The first fresh retry on the new runtime showed there is a second orchestration-parent activation path.
+
+What happened live:
+
+- project session `db21265f-c37d-40e4-9ed5-13def09970f8` resumed on a fresh pending continuation message
+- before that project turn could settle, task `11` got a new active task session again:
+  - session `fcef7e7d-847d-4caa-9bd4-c8c85e41a337`
+  - kickoff user message `f58b0ec6-0d37-4935-b148-edb43cd88e30`
+  - content still started with `Start work on task: Workstream C: Wave Gating Validation`
+- the kickoff metadata showed this was not the patched project continuation selector:
+  - `source = task_queue_processor`
+  - `flow_event_type = flow.rejected`
+  - `flow_node_execution_id = 283e4c7f-be76-436e-b769-6cdcfe3f684f`
+
+What this means:
+
+- skipping orchestration parents in `nextRunnableDraftProjectTask(...)` was still the right fix for the project-continuation repair path
+- but `task_queue_processor` was separately reactivating the same orchestration parent after review rejection with a generic task-work kickoff
+- that second path is what kept feeding `task 11` back into planning-artifact rereads
+
+Code/test slice landed:
+
+- [`internal/controlplane/task_queue_processor.go`](../internal/controlplane/task_queue_processor.go)
+  - `buildQueueKickoffMessage(...)` now adds orchestration-only parent instructions:
+    - do not execute the parent deliverable directly
+    - inspect the child-task set
+    - create or repair bounded executable child tasks beneath the parent
+    - do not begin by rereading planning artifacts unless a concrete blocker names one
+  - `buildFlowTransitionKickoffMessage(...)` now adds explicit rejection-recovery guidance for orchestration-only parents on `flow.rejected`
+  - the queue processor uses the same description/metadata heuristic shape that now exists in the turn engine for orchestration-only parents
+- [`internal/controlplane/task_queue_processor_test.go`](../internal/controlplane/task_queue_processor_test.go)
+  - added focused unit coverage for:
+    - orchestration-parent queue kickoff guidance
+    - orchestration-parent `flow.rejected` kickoff guidance
+
+Verification:
+
+- `gofmt -w internal/controlplane/task_queue_processor.go internal/controlplane/task_queue_processor_test.go`
+- `go test ./internal/controlplane -run 'Test(BuildQueueKickoffMessageForOrchestrationOnlyParent|BuildFlowTransitionKickoffMessageForRejectedOrchestrationOnlyParent|TaskQueueProcessorHandleFlowAdvancedEvent.*)$' -count=1`
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime restart/live proof of the new kickoff wording is still pending at the time of this note
+
 ## Update 04:55 MDT
 
 What changed:

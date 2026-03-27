@@ -1222,10 +1222,14 @@ func buildQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 	}
 
 	description := strings.TrimSpace(valueOrEmpty(taskRecord.Description))
-	if description == "" {
-		return "Start work on task: " + title
+	base := "Start work on task: " + title
+	if description != "" {
+		base += "\n\nTask description:\n" + description
 	}
-	return "Start work on task: " + title + "\n\nTask description:\n" + description
+	if taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+		base += "\n\nExecution instruction:\nThis task is an orchestration-only parent container. Do not execute the parent deliverable directly. Inspect the current child-task set and create or repair bounded executable child tasks beneath this parent. Do not begin by rereading planning artifacts unless a concrete blocker names one."
+	}
+	return base
 }
 
 func buildFlowKickoffMessage(taskRecord repo.ProjectTask, execution repo.FlowNodeExecution, node *repo.FlowNode) string {
@@ -1971,11 +1975,59 @@ func buildFlowTransitionKickoffMessage(
 		if trimmed := strings.TrimSpace(rejectionFeedback); trimmed != "" {
 			base += "\nFeedback:\n" + trimmed
 		}
+		if taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+			base += "\n\nRejection recovery instruction:\nThis task remains orchestration-only after rejection. Use the rejection feedback to adjust or recreate bounded executable child tasks beneath this parent instead of treating the parent as a normal deliverable."
+		}
 	}
 	if execution.ID != uuid.Nil {
 		base += "\n\nFlow node execution: " + execution.ID.String()
 	}
 	return base
+}
+
+func taskLooksLikeOrchestrationOnlyParent(taskRecord repo.ProjectTask) bool {
+	if len(taskRecord.Metadata) != 0 && json.Valid(taskRecord.Metadata) {
+		var payload map[string]any
+		if err := json.Unmarshal(taskRecord.Metadata, &payload); err == nil {
+			if decomp, _ := payload["decomposition"].(map[string]any); decomp != nil {
+				if orchestrationOnly, _ := decomp["orchestration_only"].(bool); orchestrationOnly {
+					return true
+				}
+			}
+		}
+	}
+
+	titleText := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	descriptionText := strings.ToLower(strings.TrimSpace(valueOrEmpty(taskRecord.Description)))
+	text := titleText
+	if descriptionText != "" {
+		text += "\n" + descriptionText
+	}
+
+	titleLooksLikeWorkstream := strings.HasPrefix(titleText, "workstream ") || strings.HasPrefix(titleText, "ws")
+	signals := []string{
+		"parent orchestration task",
+		"parent/orchestration task",
+		"parent orchestration container",
+		"orchestration container",
+		"does not do execution work itself",
+		"does not perform execution work itself",
+		"does not perform execution work directly",
+		"validates that child tasks",
+		"validates child task outputs",
+		"validates child outputs",
+		"owns integration verification of its children",
+	}
+	matches := 0
+	for _, signal := range signals {
+		if strings.Contains(text, signal) {
+			matches++
+		}
+	}
+	if matches >= 2 {
+		return true
+	}
+	return titleLooksLikeWorkstream && matches >= 1
 }
 
 func valueOrEmpty(value *string) string {

@@ -868,6 +868,17 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
   - first respawn attempt failed because `.env` was sourced without export, so `OTTERCAMP_MODE` was missing in tmux
   - second respawn used `set -a`, `source .env`, and `OTTERCAMP_MODE=development`; `./bin/ottercamp health --output json` is green again
   - fresh live proof of the selector change is still pending the next project continuation retry on this build
+- orchestration-parent wakeups are now specialized in the control-plane queue processor:
+  - the next live trace showed task `11` being reactivated through `task_queue_processor`, not through the patched project continuation selector
+  - the wakeup metadata on the new task session carried:
+    - `source=task_queue_processor`
+    - `flow_event_type=flow.rejected`
+    - a live `flow_node_execution_id`
+  - `buildQueueKickoffMessage(...)` and `buildFlowTransitionKickoffMessage(...)` now recognize orchestration-only parent tasks and inject explicit instructions to repair/create bounded child tasks instead of treating the parent as a normal deliverable
+  - this pairs with the engine-side child-decomposition allowance already added for the same description shape
+  - focused control-plane coverage now proves:
+    - the queue kickoff message for orchestration-only parents carries bounded-child repair guidance
+    - the `flow.rejected` kickoff variant adds explicit rejection-recovery guidance for child-task repair
 - project-continuation read-only repair widened again:
   - `session.list` and `inbox.list` are now treated as read-only discovery tools in the same continuation auto-queue path
   - this closes the remaining observed browse-only project continuation gaps from live `max_tool_calls` turns like `e8556561-...` and `eae611d8-...`
