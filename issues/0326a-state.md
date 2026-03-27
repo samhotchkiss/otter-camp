@@ -2355,3 +2355,35 @@ What this means now:
   - each emitted `Repeated same-turn read-only discovery churn (2/3)` on review-lane traffic
 - the remaining proof gap is narrower:
   - we still need a fresh live example where the same-turn cutoff fires on a non-review work lane before the older cross-turn machinery would have taken over
+
+## Update 21:58 MDT
+
+I shipped the next narrow review hardening slice aimed at the hottest remaining burn family after the read-only discovery cuts.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - empty review turns now honor the normal review retry ceiling instead of bypassing it
+  - added a session-level brake for repeated empty review outputs:
+    - after `3` consecutive review turns in the same session hit the empty-output retry path, the runtime now blocks the lane instead of appending yet another fresh `task_review_action`
+  - factored the repeated review-decision block path into a shared helper so the retry-limit and repeated-empty-output cases both persist the same validation guard metadata before blocking
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - renamed and tightened the retry-limit regression to assert block behavior:
+    - `TestHandleTurnCompletedEventBlocksEmptyReviewTurnWithoutDecisionAtRetryLimit`
+  - added:
+    - `TestHandleTurnCompletedEventBlocksRepeatedEmptyReviewTurnsAcrossSession`
+
+Focused verification:
+
+- `go test ./internal/turn -run 'Test(HandleTurnCompletedEventBlocksEmptyReviewTurnWithoutDecisionAtRetryLimit|HandleTurnCompletedEventBlocksRepeatedEmptyReviewTurnsAcrossSession|HandleToolValidationResultsRetriesReviewAfterSameTurnReadOnlyDiscoveryChurn|MaybeBlockRepeatedReadOnlyDiscoveryCapTurnsRetriesReviewLane)$' -count=1`
+
+Why this slice matters:
+
+- the live hot review sessions were not just hitting discovery churn; they were also appending `Review turn returned empty assistant output` across long session-level streaks
+- the old empty-output branch returned before the normal `maxGenericRecoveryReplyRetries` gate, which meant blank/tool-only review passes could keep auto-retrying far longer than intended
+- this patch closes that hole and adds a session-level cutoff for the repeated-empty family itself, which is the safer way to stop the `0,1,0,1` review oscillation that was still dominating sessions like `14a8b07b-f9c1-457d-a63e-e90c08be948e`
+
+Deployment status:
+
+- code and focused tests are complete locally
+- next step is rebuild/restart and then live verification on fresh review traffic

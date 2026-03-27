@@ -601,6 +601,10 @@ Implemented so far in this spec:
   - it allows an initial discovery pass plus one repeat, then stops on the third discovery-only round in the same turn instead of paying for another `max_tool_calls` continuation
   - it only engages when the turn has no mutation tools anywhere in its assistant tool-call history, so mixed inspect-then-edit turns do not fall into this cutoff
   - when the lane is a review lane, the same cutoff now routes into the review retry path with fresh `task_review_action` guidance instead of generic “take a concrete mutation step” messaging
+- review-lane empty-output churn now has a real brake:
+  - empty review turns no longer bypass the normal retry ceiling
+  - after `3` consecutive review turns in the same session return the empty-output retry path, the runtime blocks the lane instead of auto-retrying another blank/tool-only review pass
+  - that specifically targets the hot Anthropic review family where repeated inspect-only turns kept appending `Review turn returned empty assistant output` without ever emitting `flow.review_decision`
 
 Still pending from this spec:
 

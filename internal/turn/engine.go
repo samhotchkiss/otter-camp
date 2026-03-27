@@ -78,6 +78,7 @@ const (
 	maxConsecutiveAutoTurns                   = 10
 	maxGenericRecoveryReplyRetries            = defaultModelRetryBudget - 1
 	maxProjectBootstrapAutoTurns              = 3
+	maxEmptyReviewOutputCapTurns              = 3
 	defaultSummarizeLayerBudget               = 0
 	chunkPollSteerEveryNChunks                = 10
 	maxContinuationTurnDepth                  = 3
@@ -1547,6 +1548,32 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 
 	reason := "review turn completed without calling flow.review_decision"
 	if assistantContent == "" {
+		if emptyCount, emptyCapReached, emptyCapErr := e.repeatedEmptyReviewOutputTurnCapReached(ctx, session.ID, latestCompleted); emptyCapErr != nil {
+			return true, emptyCapErr
+		} else if emptyCapReached {
+			return e.blockReviewTurnWithoutDecision(
+				ctx,
+				session,
+				taskRecord,
+				latestUser,
+				latestCompleted,
+				fmt.Sprintf("review turn repeatedly returned empty assistant output across %d consecutive turns", emptyCount),
+				fmt.Sprintf("[Review turn halted after %d consecutive empty assistant outputs. The task is now blocked instead of auto-retrying another blank review pass. Inspect the current deliverables and call flow.review_decision with the active flow_node_execution_id to approve or reject the review step.]", emptyCount),
+				assistantContent,
+			)
+		}
+		if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
+			return e.blockReviewTurnWithoutDecision(
+				ctx,
+				session,
+				taskRecord,
+				latestUser,
+				latestCompleted,
+				reason,
+				"[Review turn halted: "+reason+" after repeated retries. The task is now blocked. Inspect the current deliverables and call flow.review_decision with the active flow_node_execution_id to approve or reject the review step.]",
+				assistantContent,
+			)
+		}
 		if _, err := e.appendSystemMessage(ctx, latestCompleted.ID, session.ID, "[Review turn returned empty assistant output. Retrying with a fresh review-decision prompt.]"); err != nil {
 			return true, err
 		}
@@ -1592,25 +1619,16 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 		return enqueued, nil
 	}
 	if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
-		if _, err := e.appendSystemMessage(ctx, latestCompleted.ID, session.ID, "[Review turn halted: "+reason+" after repeated retries. The task is now blocked. Inspect the current deliverables and call flow.review_decision with the active flow_node_execution_id to approve or reject the review step.]"); err != nil {
-			return true, err
-		}
-		if e.taskTransitions == nil {
-			return true, fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
-		}
-		updatedTask, err := e.persistBlockedReviewDecisionValidationGuard(ctx, taskRecord, latestUser, latestCompleted)
-		if err != nil {
-			return true, err
-		}
-		taskRecord = updatedTask
-		if assistantContent != "" {
-			snippet, _ := truncateRecoveryResumeExcerpt(assistantContent, 160)
-			reason += fmt.Sprintf(": %s", snippet)
-		}
-		if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
-			return true, err
-		}
-		return true, nil
+		return e.blockReviewTurnWithoutDecision(
+			ctx,
+			session,
+			taskRecord,
+			latestUser,
+			latestCompleted,
+			reason,
+			"[Review turn halted: "+reason+" after repeated retries. The task is now blocked. Inspect the current deliverables and call flow.review_decision with the active flow_node_execution_id to approve or reject the review step.]",
+			assistantContent,
+		)
 	}
 
 	nextMessageID := latestUser.ID
@@ -1694,6 +1712,55 @@ func (e *TurnEngine) reviewApprovalRetryPrompt(ctx context.Context, session *cha
 		" Reissue flow.review_decision immediately with decision=approve and flow_node_execution_id " + executionID.String() + "." +
 		" Do not reply with explanation text, a review plan, or placeholder arguments."
 	return retryPrompt, true, nil
+}
+
+func (e *TurnEngine) blockReviewTurnWithoutDecision(
+	ctx context.Context,
+	session *chat.ChatSession,
+	taskRecord repo.ProjectTask,
+	latestUser *repo.ChatMessage,
+	latestCompleted *repo.ChatTurn,
+	reason string,
+	systemMessage string,
+	assistantContent string,
+) (bool, error) {
+	if e == nil || session == nil || latestUser == nil || latestCompleted == nil {
+		return true, nil
+	}
+	if _, err := e.appendSystemMessage(ctx, latestCompleted.ID, session.ID, systemMessage); err != nil {
+		return true, err
+	}
+	if e.taskTransitions == nil {
+		return true, fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+	}
+	updatedTask, err := e.persistBlockedReviewDecisionValidationGuard(ctx, taskRecord, latestUser, latestCompleted)
+	if err != nil {
+		return true, err
+	}
+	if strings.TrimSpace(assistantContent) != "" {
+		snippet, _ := truncateRecoveryResumeExcerpt(assistantContent, 160)
+		reason += fmt.Sprintf(": %s", snippet)
+	}
+	if _, err := e.taskTransitions.MarkBlocked(ctx, updatedTask.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) repeatedEmptyReviewOutputTurnCapReached(ctx context.Context, sessionID uuid.UUID, currentTurn *repo.ChatTurn) (int, bool, error) {
+	if e == nil || e.turns == nil || e.messages == nil || sessionID == uuid.Nil || currentTurn == nil || currentTurn.ID == uuid.Nil {
+		return 0, false, nil
+	}
+	turns, err := e.turns.ListBySession(ctx, sessionID)
+	if err != nil {
+		return 0, false, err
+	}
+	messages, err := e.messages.ListBySession(ctx, sessionID)
+	if err != nil {
+		return 0, false, err
+	}
+	count := consecutiveRecentReviewEmptyOutputTurnCount(turns, messages, currentTurn, maxEmptyReviewOutputCapTurns)
+	return count, count >= maxEmptyReviewOutputCapTurns, nil
 }
 
 func (e *TurnEngine) reviewApprovalWorkspaceClean(ctx context.Context, taskRecord repo.ProjectTask) (bool, error) {
@@ -9612,6 +9679,74 @@ func recentConsecutiveMaxToolCallTurnIDs(turns []repo.ChatTurn, currentTurn *cha
 		return nil
 	}
 	return collected
+}
+
+func consecutiveRecentReviewEmptyOutputTurnCount(turns []repo.ChatTurn, messages []repo.ChatMessage, currentTurn *repo.ChatTurn, threshold int) int {
+	if currentTurn == nil || currentTurn.ID == uuid.Nil || threshold <= 0 {
+		return 0
+	}
+	ordered := make([]repo.ChatTurn, 0, len(turns))
+	for _, turn := range turns {
+		ordered = append(ordered, turn)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].TurnNumber == ordered[j].TurnNumber {
+			if ordered[i].RetryCount == ordered[j].RetryCount {
+				return ordered[i].CreatedAt.After(ordered[j].CreatedAt)
+			}
+			return ordered[i].RetryCount > ordered[j].RetryCount
+		}
+		return ordered[i].TurnNumber > ordered[j].TurnNumber
+	})
+
+	count := 0
+	started := false
+	for _, turn := range ordered {
+		if turn.ID == currentTurn.ID {
+			count++
+			started = true
+			if count >= threshold {
+				return count
+			}
+			continue
+		}
+		if !started {
+			continue
+		}
+		if turn.TurnNumber > currentTurn.TurnNumber ||
+			(turn.TurnNumber == currentTurn.TurnNumber && turn.RetryCount >= currentTurn.RetryCount) {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(turn.Status), "completed") {
+			break
+		}
+		if !turnHasSystemMessageContaining(messages, turn.ID, "Review turn returned empty assistant output") {
+			break
+		}
+		count++
+		if count >= threshold {
+			return count
+		}
+	}
+	return count
+}
+
+func turnHasSystemMessageContaining(messages []repo.ChatMessage, turnID uuid.UUID, substring string) bool {
+	if turnID == uuid.Nil || strings.TrimSpace(substring) == "" {
+		return false
+	}
+	for _, message := range messages {
+		if message.TurnID == nil || *message.TurnID != turnID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		if strings.Contains(message.Content, substring) {
+			return true
+		}
+	}
+	return false
 }
 
 func summarizeReadOnlyDiscoveryTurn(messages []repo.ChatMessage, turnID uuid.UUID, reviewLane bool) ([]string, []string, bool) {

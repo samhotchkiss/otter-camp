@@ -2712,7 +2712,7 @@ func TestHandleTurnCompletedEventBlocksRepeatedReviewTurnWithoutDecision(t *test
 	}
 }
 
-func TestHandleTurnCompletedEventRetriesEmptyReviewTurnWithoutDecisionAtRetryLimit(t *testing.T) {
+func TestHandleTurnCompletedEventBlocksEmptyReviewTurnWithoutDecisionAtRetryLimit(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	base := time.Unix(1700002000, 0).UTC()
 	fixture.engine.now = func() time.Time { return base }
@@ -2772,57 +2772,125 @@ func TestHandleTurnCompletedEventRetriesEmptyReviewTurnWithoutDecisionAtRetryLim
 	}
 
 	jobs := fixture.enqueuer.agentTurnJobs()
-	if len(jobs) != 1 {
-		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	if len(jobs) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
 	}
-	if jobs[0].payload == nil || jobs[0].payload.RetryCount != maxGenericRecoveryReplyRetries+1 {
-		t.Fatalf("payload.retry_count = %#v, want %d", jobs[0].payload, maxGenericRecoveryReplyRetries+1)
-	}
-	if jobs[0].runAfter == nil || !jobs[0].runAfter.Equal(base.Add(defaultAutoContinueDelay)) {
-		t.Fatalf("run_after = %v, want %s", jobs[0].runAfter, base.Add(defaultAutoContinueDelay))
-	}
-	if len(blocker.calls) != 0 {
-		t.Fatalf("blocked calls = %d, want 0", len(blocker.calls))
+	if len(blocker.calls) != 1 {
+		t.Fatalf("blocked calls = %d, want 1", len(blocker.calls))
 	}
 	updated, err := taskRepo.GetByID(context.Background(), taskID)
 	if err != nil {
 		t.Fatalf("GetByID task: %v", err)
 	}
-	if updated.WorkStatus != "review" {
-		t.Fatalf("task work_status = %q, want review", updated.WorkStatus)
+	if updated.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updated.WorkStatus)
 	}
 	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
 	if err != nil {
 		t.Fatalf("ListBySession: %v", err)
 	}
 	var sawSystem bool
-	var retryPrompt *chat.ChatMessage
 	for i := range messages {
 		msg := messages[i]
-		if msg.Role == "system" && strings.Contains(msg.Content, "empty assistant output") {
+		if msg.Role == "system" && strings.Contains(msg.Content, "after repeated retries") {
 			sawSystem = true
-		}
-		if msg.ID == jobs[0].payload.MessageID {
-			retryPrompt = &msg
 		}
 	}
 	if !sawSystem {
-		t.Fatal("missing empty-output retry system message")
+		t.Fatal("missing repeated-retries halt system message")
 	}
-	if retryPrompt == nil {
-		t.Fatal("missing retry prompt message")
+}
+
+func TestHandleTurnCompletedEventBlocksRepeatedEmptyReviewTurnsAcrossSession(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	base := time.Unix(1700002050, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
 	}
-	if !strings.Contains(retryPrompt.Content, "flow.review_decision") {
-		t.Fatalf("retry prompt = %q, want flow.review_decision guidance", retryPrompt.Content)
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.chat.session.Mode = fixture.session.Mode
+	fixture.chat.session.Metadata = fixture.session.Metadata
+	fixture.engine.tasks = taskRepo
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "review"},
+		},
 	}
-	if !strings.Contains(retryPrompt.Content, executionID.String()) {
-		t.Fatalf("retry prompt = %q, want flow execution id %s", retryPrompt.Content, executionID)
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.taskTransitions = blocker
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
 	}
-	if !strings.Contains(retryPrompt.Content, "Your last review turn returned empty assistant output.") {
-		t.Fatalf("retry prompt = %q, want empty-output retry warning", retryPrompt.Content)
+	message.Content = fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	message.Metadata = mustRawJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"synthetic_user_message": true,
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.messages.upsert(message)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	for i := 0; i < maxEmptyReviewOutputCapTurns-1; i++ {
+		priorTurnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "")
+		fixture.messages.create(repo.ChatMessage{
+			SessionID:     fixture.session.ID,
+			TurnID:        &priorTurnID,
+			Role:          "system",
+			Content:       "[Review turn returned empty assistant output. Retrying with a fresh review-decision prompt.]",
+			ContentFormat: "text",
+			Status:        "final",
+		})
 	}
-	if !strings.Contains(retryPrompt.Content, "must either emit the concrete flow.review_decision tool call") {
-		t.Fatalf("retry prompt = %q, want direct-action requirement", retryPrompt.Content)
+
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "")
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+	if len(blocker.calls) != 1 {
+		t.Fatalf("blocked calls = %d, want 1", len(blocker.calls))
+	}
+	if !strings.Contains(blocker.calls[0].reason, "empty assistant output across 3 consecutive turns") {
+		t.Fatalf("blocked reason = %q, want repeated empty-output churn", blocker.calls[0].reason)
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updated.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updated.WorkStatus)
+	}
+	if !fixture.messages.containsContentSubstring("Review turn halted after 3 consecutive empty assistant outputs") {
+		t.Fatal("expected repeated empty-output halt system message")
 	}
 }
 
