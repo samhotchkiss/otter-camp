@@ -1707,6 +1707,57 @@ func TestHandleTurnJobAsyncProjectTaskRateLimitedPreflightDefersPastRetryCapWith
 	}
 }
 
+func TestHandleTurnJobAsyncOrganizationRateLimitedPreflightDefersPastRetryCapWithoutTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.now = func() time.Time { return time.Unix(1700000000, 0).UTC() }
+	fixture.engine.modelRetryBudget = 1
+	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
+		t.Fatalf("unexpected prompt assembly call %d for turn %s", call, input.TurnID)
+	}
+	retryAfter := 4*time.Minute + 9*time.Second
+	fixture.model.probeFn = func(context.Context, ModelRequest) error {
+		return NewRateLimitedError(retryAfter, errors.New("all provider connections are rate limited"))
+	}
+
+	payload, err := json.Marshal(AgentTurnPayload{
+		SessionID:  fixture.session.ID,
+		MessageID:  fixture.userMessageID,
+		RetryCount: maxRateLimitRetries + 1,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("HandleTurnJob: %v", err)
+	}
+
+	if fixture.model.probeCalls != 1 {
+		t.Fatalf("probe calls = %d, want 1", fixture.model.probeCalls)
+	}
+	if fixture.model.streamCalls != 0 {
+		t.Fatalf("stream calls = %d, want 0", fixture.model.streamCalls)
+	}
+	if got := len(fixture.invocations.creates); got != 0 {
+		t.Fatalf("invocation creates = %d, want 0", got)
+	}
+	if got := len(fixture.chat.turnOrder); got != 0 {
+		t.Fatalf("turn count = %d, want 0", got)
+	}
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn retries = %d, want 1", len(jobs))
+	}
+	if job := jobs[0]; job.payload == nil || job.payload.RetryCount != maxRateLimitRetries+2 {
+		t.Fatalf("retry payload = %+v, want retry_count=%d", jobs[0].payload, maxRateLimitRetries+2)
+	}
+	if !fixture.messages.containsContentSubstring("[Rate limited, retrying in ") {
+		t.Fatal("missing rate-limited retry status message")
+	}
+}
+
 func TestHandleTurnJobAsyncProjectTaskAvailabilityProbeFallsBackOnNonRateLimitError(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	fixture.session.ScopeType = "project"

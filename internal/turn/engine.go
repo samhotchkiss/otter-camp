@@ -7094,7 +7094,7 @@ func allowAsyncCooldownPreflightPastRetryCap(session *chat.ChatSession) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(session.ScopeType)) {
-	case "project", "project_task":
+	case "organization", "project", "project_task":
 		return true
 	default:
 		return false
@@ -21408,7 +21408,7 @@ func shouldPreflightMainModelAvailabilityForSession(session *chat.ChatSession) b
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(session.ScopeType)) {
-	case "project", "project_task":
+	case "organization", "project", "project_task":
 		return true
 	default:
 		return false

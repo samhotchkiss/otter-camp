@@ -2066,3 +2066,32 @@ Live proof:
   - last `chat_turn` stayed `4d7eae1c-8d71-4b6b-bd9c-712a35893839` from `18:54:02 MDT`
   - last `agent_turn` invocation stayed `f9b92830-77ec-4335-b393-12a0ec528bb3` from `18:23:44 MDT`
   - so the async task retry now rolls forward without creating either a new turn or a new invocation while Anthropic is still cooling down
+
+## Update 20:17 MDT
+
+I found the last remaining cooldown-churn scope and fixed it too.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - model-availability preflight now also applies to async `organization` sessions, not just async `project` and `project_task`
+  - the same async cooldown preflight now stays active past the old retry cap for org scope too
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added `TestHandleTurnJobAsyncOrganizationRateLimitedPreflightDefersPastRetryCapWithoutTurn`
+
+Focused verification:
+
+- `go test ./internal/turn -run 'Test(HandleTurnJobAsyncProjectTaskRateLimitedPreflightDefersBeforePromptAssembly|HandleTurnJobAsyncProjectTaskRateLimitedPreflightDefersPastRetryCapWithoutTurn|HandleTurnJobAsyncOrganizationRateLimitedPreflightDefersPastRetryCapWithoutTurn|HandleTurnJobAsyncProjectTaskAvailabilityProbeFallsBackOnNonRateLimitError|HandleTurnJobRateLimitedEnqueuesRetryUsingProviderHint|HandleTurnJobRateLimitedDoesNotRetryInsideSingleTurn)$' -count=1`
+
+Live proof:
+
+- before the patch, org async canary session `b1000247-b94d-4c14-a942-4b90dc7e8727` still hit the old pre-routing churn path at `20:13:40 MDT`:
+  - fresh failed turn `d103c0f9-1666-4a9e-9ed1-e9a096cbed9c`
+  - fresh failed invocation `7f7f40db-cd35-4b94-9ae4-b2218859df8c`
+  - invocation had `provider_connection_id = NULL`, so this was the router-level all-connections-rate-limited case, not a live routed connection
+- after deploying the org-scope fix, I forced the same pending org retry due immediately:
+  - old pending job `f401d567-f030-4316-826e-2dd221b8a367` was pulled forward from `20:43:45 MDT`
+  - fresh retry job `e838b49a-564f-4121-b1b6-071fbd5ea617` was created at `20:16:41 MDT` with `run_after=20:46:48 MDT` and `retry_count=4`
+  - last turn stayed `d103c0f9-1666-4a9e-9ed1-e9a096cbed9c`
+  - last invocation stayed `7f7f40db-cd35-4b94-9ae4-b2218859df8c`
+  - so org async retries now also roll forward without creating a new turn or a new invocation while Anthropic is still in an all-connections-cooling-down state
