@@ -464,6 +464,7 @@ func (l operatorDashboardLoader) countPausedProjects(ctx context.Context, organi
 		SELECT COUNT(*)
 		FROM project
 		WHERE organization_id = $1
+		  AND status = 'active'
 		  AND COALESCE((settings->'pause'->>'is_paused')::boolean, false)
 	`, organizationID).Scan(&count)
 	return count, err
@@ -473,9 +474,12 @@ func (l operatorDashboardLoader) countHumanInputItems(ctx context.Context, organ
 	var count int
 	err := l.pool.QueryRow(ctx, `
 		SELECT COUNT(*)
-		FROM inbox_item
-		WHERE organization_id = $1
-		  AND target_user_id = $2
+		FROM inbox_item i
+		LEFT JOIN project_task t ON t.id = i.source_task_id
+		LEFT JOIN project p ON p.id = COALESCE(i.source_project_id, t.project_id)
+		WHERE i.organization_id = $1
+		  AND i.target_user_id = $2
+		  AND (p.id IS NULL OR p.status = 'active')
 		  AND is_acted = false
 		  AND item_type IN ('human_approval_required', 'draft_action_review', 'browser_handoff', 'blocker_filed', 'system_alert')
 		  AND NOT (
@@ -483,7 +487,7 @@ func (l operatorDashboardLoader) countHumanInputItems(ctx context.Context, organ
 			AND EXISTS (
 				SELECT 1
 				FROM project_task t
-				WHERE t.id = inbox_item.source_task_id
+				WHERE t.id = i.source_task_id
 				  AND COALESCE((t.metadata->'agent_turn_validation_guard'->>'blocked')::boolean, false)
 			)
 		  )
@@ -1231,6 +1235,7 @@ func (l operatorDashboardLoader) loadPausedProjectItems(ctx context.Context, org
 			updated_at
 		FROM project
 		WHERE organization_id = $1
+		  AND status = 'active'
 		  AND COALESCE((settings->'pause'->>'is_paused')::boolean, false)
 		ORDER BY updated_at DESC, id DESC
 		LIMIT $2
@@ -1292,6 +1297,7 @@ func (l operatorDashboardLoader) loadHumanInputItems(ctx context.Context, organi
 		LEFT JOIN project p ON p.id = COALESCE(i.source_project_id, t.project_id)
 		WHERE i.organization_id = $1
 		  AND i.target_user_id = $2
+		  AND (p.id IS NULL OR p.status = 'active')
 		  AND i.is_acted = false
 		  AND i.item_type IN ('human_approval_required', 'draft_action_review', 'browser_handoff', 'blocker_filed', 'system_alert')
 		  AND NOT (
