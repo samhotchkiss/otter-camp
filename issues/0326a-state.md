@@ -3062,6 +3062,33 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 05:55 MDT
+
+I landed the tiny compatibility slice that the first live task-9 proof exposed.
+
+What changed:
+
+- [`internal/tools/native/query_tools.go`](../internal/tools/native/query_tools.go)
+  - `task.list(status=all)` now normalizes `all` to the same behavior as omitting the status filter entirely
+  - this keeps the new `parent_task_id` path compatible with the exact argument shape Anthropic was already emitting in live review turns
+- [`internal/tools/native/native_integration_test.go`](../internal/tools/native/native_integration_test.go)
+  - `TestIntegrationTaskListFiltersByParentTaskID` now exercises the live-shaped request:
+    - `task.list(parent_task_id=..., status=all)`
+
+Verification:
+
+- `gofmt -w internal/tools/native/query_tools.go internal/tools/native/native_integration_test.go`
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegration(TaskListFiltersByParentTaskID|TaskListHidesProjectContinuationMetaDraftsByDefault|TaskListDefaultsToCurrentProjectSessionScope)$' -count=1`
+- `go build -o ./bin/ottercamp ./cmd/ottercamp`
+- rebuilt/restarted tmux `codex-e2e-20260324`
+- `./bin/ottercamp health --output json`
+
+Why this matters:
+
+- after the first bounded-review deploy, live task-9 traffic immediately tried `task.list` with `status=all`
+- without this alias, a future correctly parent-scoped call using that same argument shape would have returned an empty set for the wrong reason
+- this keeps the newly added child-task lookup path permissive in the exact way the live model is already asking for it, without reopening the broader project-wide task listing surface
+
 ## Update 05:40 MDT
 
 The orchestration-parent review prompt fix is now live-proven, and the next concrete leak is narrower.

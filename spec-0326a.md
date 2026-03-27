@@ -952,3 +952,9 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - orchestration-parent review lanes now block `task.get` on the current parent task itself
     - prompt text explicitly says not to reread the parent task record during review once the parent summary is in hand
     - focused turn-engine coverage is green for that addition
+  - compatibility follow-on landed immediately after the first live proof:
+    - `task.list(status=all)` is now treated as an unfiltered status request instead of a literal status value
+    - this is intentionally narrow and matches the live Anthropic argument shape already seen in task-9 review turns
+    - focused native integration coverage now proves `task.list(parent_task_id=..., status=all)` still returns the expected child tasks
+    - runtime was rebuilt/restarted successfully at `2026-03-27 05:55 MDT`
+    - `./bin/ottercamp health --output json` remained green after that deploy

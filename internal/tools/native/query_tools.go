@@ -165,6 +165,9 @@ func (e *NativeToolExecutor) handleTaskList(ctx context.Context, input map[strin
 	limit := clamp(readInt(input, "limit", 50), 1, 200)
 	cursor := decodeCursor(readCursor(input))
 	statusFilter, _ := readString(input, "status")
+	if strings.EqualFold(strings.TrimSpace(statusFilter), "all") {
+		statusFilter = ""
+	}
 	parentTaskID, hasParentTaskID := readUUID(input, "parent_task_id")
 
 	taskRows := make([]repo.ProjectTask, 0)

@@ -4907,6 +4907,7 @@ func TestIntegrationTaskListFiltersByParentTaskID(t *testing.T) {
 	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
 	out, err := executor.Execute(integrationExecCtxWithSession(orgID, actor.ID, taskSession.ID), "task.list", map[string]any{
 		"parent_task_id": parentTask.ID.String(),
+		"status":         "all",
 	})
 	if err != nil {
 		t.Fatalf("task.list parent_task_id: %v", err)
