@@ -2493,5 +2493,52 @@ Deployment status:
 - `./bin/ottercamp health --output json` returned `status=ok`
 - short live smoke after restart:
   - querying assistant messages for `redirected to` / `cli_execute with python3` over the last ten minutes only surfaced the older pre-fix task-14 message at `22:14:05 MDT`
-  - no fresh post-restart assistant message has repeated the `scripts/...` -> `config/pipeline-config-invalid.yaml` redirect complaint yet
+- no fresh post-restart assistant message has repeated the `scripts/...` -> `config/pipeline-config-invalid.yaml` redirect complaint yet
 - next step is stronger live proof on a fresh execution-first config/script task turn
+
+## Update 22:31 MDT
+
+I sampled the active post-restart review turns and found another small but high-signal improvement opportunity.
+
+Live signal:
+
+- fresh review turn `6edb9cc3-653f-476c-a64f-f1b6d544bfbf` for task `16` started with the same generic discovery pattern:
+  - assistant: "I'll start by inspecting the task details and the current state of deliverables in the workspace."
+  - then `task.get`
+  - then broad `file.list`
+  - then commit history
+  - only after that did it start reading the actual deliverable
+
+Root cause:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `buildTaskReviewActionPrompt(...)` told the model to "inspect the current deliverables" but did not surface a concrete target path
+  - for the hot review lanes, task metadata alone often had no explicit deliverable path, even though the session already knew the real file from recent `file.read` history
+
+What changed:
+
+- `buildTaskReviewActionPrompt(...)` now adds:
+  - the preferred deliverable target path when `preferredTaskDeliverablePath(taskRecord)` resolves
+  - otherwise, the most recent session-level `deliverable_path` / `file.read` / `file.write` target
+  - an explicit instruction to inspect that target directly before broad workspace discovery
+- added focused regression:
+  - `TestBuildTaskReviewActionPromptIncludesPreferredDeliverableTarget`
+  - `TestBuildTaskReviewActionPromptFallsBackToRecentSessionDeliverableTarget`
+
+Focused verification:
+
+- `go test ./internal/turn -run 'Test(BuildTaskReviewActionPrompt(FallsBackToRecentSessionDeliverableTarget|IncludesPreferredDeliverableTarget|IncludesExplicitArtifactContractPaths)|HandleTaskFileWriteWrongPathSkipsScriptToConfigRewrite|MaxToolCallsAsyncReviewAtRetryLimitDoesNotContinue)$' -count=1`
+
+Deployment status:
+
+- runtime rebuilt and tmux `codex-e2e-20260324` restarted cleanly
+- `./bin/ottercamp health --output json` returned `status=ok`
+- live proof landed immediately on task-14 review session `001ec072-f681-400a-bf5e-f4a22c42e1fb`:
+  - fresh `task_review_action` turn `4bd77cd0-ed9e-4bfb-8bd7-bad0a475dbf2`
+  - prompt now includes:
+    - `Start with the preferred deliverable target \`config/pipeline-config.yaml\`...`
+  - first assistant/tool sequence changed accordingly:
+    - assistant: `I'll start by inspecting the task details and the preferred deliverable target.`
+    - then direct `file.read` of `config/pipeline-config.yaml`
+    - only later did it drift into broader repo inspection
+- so the review prompt is now successfully steering the first inspection step toward the concrete known deliverable instead of opening with root-level discovery

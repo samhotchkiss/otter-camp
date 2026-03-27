@@ -28030,6 +28030,80 @@ func TestBuildTaskReviewActionPromptIncludesExplicitArtifactContractPaths(t *tes
 	}
 }
 
+func TestBuildTaskReviewActionPromptIncludesPreferredDeliverableTarget(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Validate pipeline error handling and retry logic. Deliverable: scripts/validate-error-handling.sh"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  16,
+				Title:       "Validate pipeline error handling and retry logic",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"bootstrap_first_wave_selected": true,
+				}),
+			},
+		},
+	}
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "scripts/validate-error-handling.sh") {
+		t.Fatalf("prompt = %q, want preferred deliverable path", prompt)
+	}
+	if !strings.Contains(prompt, "do not begin by listing the repository root") {
+		t.Fatalf("prompt = %q, want direct-inspection guidance", prompt)
+	}
+}
+
+func TestBuildTaskReviewActionPromptFallsBackToRecentSessionDeliverableTarget(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Validate pipeline metrics and alerting hooks."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  13,
+				Title:       "Validate pipeline metrics and alerting hooks",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"bootstrap_first_wave_selected": true,
+				}),
+			},
+		},
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path": "scripts/validate-metrics-alerting.sh",
+			},
+		})),
+	})
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "scripts/validate-metrics-alerting.sh") {
+		t.Fatalf("prompt = %q, want recent session deliverable path", prompt)
+	}
+}
+
 func TestFlowNodeExecutionIDFromSessionMetadata(t *testing.T) {
 	t.Parallel()
 

@@ -611,6 +611,10 @@ Implemented so far in this spec:
 - task-lane file-write canonicalization no longer crosses `scripts/` and `config/` families:
   - `handleTaskFileWriteWrongPath(...)` now classifies `scripts/` and `config/` as distinct artifact families
   - that prevents execution-first task rewrites from silently redirecting a script write like `scripts/pipeline_config.py` into a config target such as `config/pipeline-config-invalid.yaml`
+- review action prompts now surface the preferred deliverable target when one exists:
+  - `buildTaskReviewActionPrompt(...)` tells the model to inspect the concrete target path directly before broad workspace discovery
+  - that is aimed at the surviving review turns that still spend their early budget on root `file.list` / generic repo inspection before opening the one actual deliverable
+  - when static task metadata does not expose a target path, the prompt now falls back to the most recent session-level `file.read` / `file.write` / `deliverable_path` evidence instead of remaining generic
 
 Still pending from this spec:
 

@@ -19607,6 +19607,9 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 		"Do not continue implementation, do not write deliverable files, and do not summarize what you plan to review.",
 	}
 	if taskRecord, ok := e.reviewPromptTaskRecord(ctx, session); ok {
+		if targetPath := strings.TrimSpace(e.reviewPromptDeliverableTarget(ctx, session, taskRecord)); targetPath != "" {
+			lines = append(lines, fmt.Sprintf("Start with the preferred deliverable target `%s`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `%s` is missing.", targetPath, targetPath))
+		}
 		if contracts := reviewPromptArtifactContracts(taskRecord); len(contracts) == 0 {
 			lines = append(lines, "Do not invent companion planning-artifact requirements from neighboring tasks, generic playbook assumptions, or filenames alone. If the current task metadata does not carry an explicit artifact contract, review the actual deliverable files against this task's title and description only.")
 		} else {
@@ -19617,6 +19620,44 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 		lines = append(lines, "Use flow_node_execution_id "+executionID.String()+" in flow.review_decision.")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (e *TurnEngine) reviewPromptDeliverableTarget(ctx context.Context, session *chat.ChatSession, taskRecord repo.ProjectTask) string {
+	if targetPath := strings.TrimSpace(preferredTaskDeliverablePath(taskRecord)); targetPath != "" {
+		return targetPath
+	}
+	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
+		if targetPath := normalizeWorkspaceRelativePath(checkpoint.TargetPath); targetPath != "" {
+			return targetPath
+		}
+	}
+	if e == nil || e.messages == nil || session == nil || session.ID == uuid.Nil {
+		return ""
+	}
+	messages, err := e.messages.ListBySession(ctx, session.ID)
+	if err != nil {
+		return ""
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, _, ok := parseToolResultMessage(message.Content)
+		if !ok {
+			continue
+		}
+		if targetPath := normalizeWorkspaceRelativePath(anyString(output["deliverable_path"])); targetPath != "" {
+			return targetPath
+		}
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "file.read", "file.write":
+			if targetPath := normalizeWorkspaceRelativePath(anyString(output["path"])); targetPath != "" {
+				return targetPath
+			}
+		}
+	}
+	return ""
 }
 
 func (e *TurnEngine) reviewPromptTaskRecord(ctx context.Context, session *chat.ChatSession) (repo.ProjectTask, bool) {
