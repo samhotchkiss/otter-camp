@@ -310,6 +310,12 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	if !strings.Contains(stdout, `"provider_health"`) || !strings.Contains(stdout, connection.DisplayName) {
 		t.Fatalf("db token-usage output missing provider health section: %q", stdout)
 	}
+	if !strings.Contains(stdout, `"effective_health_status": "rate_limited"`) {
+		t.Fatalf("db token-usage output missing effective provider health: %q", stdout)
+	}
+	if !strings.Contains(stdout, `"recovery_ready_at": "`+retryUntil+`"`) {
+		t.Fatalf("db token-usage output missing provider recovery_ready_at: %q", stdout)
+	}
 	if !strings.Contains(stdout, `"rate_limit_routing_split"`) || !strings.Contains(stdout, `pre_routing`) || !strings.Contains(stdout, `post_routing`) {
 		t.Fatalf("db token-usage output missing routing split section: %q", stdout)
 	}

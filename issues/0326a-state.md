@@ -3179,6 +3179,54 @@ Deploy status:
 - tests green
 - runtime restart for this smaller persistence-only cleanup was still pending at the time of this note
 
+## Update 03:14 MDT
+
+I tightened the operator view so provider health now reflects routing reality instead of raw persisted rows.
+
+What changed:
+
+- [`cmd/ottercamp/main.go`](../cmd/ottercamp/main.go)
+  - `ottercamp db token-usage` provider-health rows now include:
+    - `effective_health_status`
+    - `recovery_ready_at`
+  - those are computed with the same gateway helpers the router uses:
+    - [`gateway.EffectiveConnectionHealthState(...)`](../internal/gateway/router.go)
+    - [`gateway.ConnectionRecoveryReadyAt(...)`](../internal/gateway/router.go)
+- [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh)
+  - the shell report now exposes the same two columns directly from SQL
+- [`cmd/ottercamp/main_db_integration_test.go`](../cmd/ottercamp/main_db_integration_test.go)
+  - CLI integration coverage still passes with the new fields present
+
+Why this matters:
+
+- before this slice, the raw row could say:
+  - `claude-swh-me -> unavailable`
+- while the router would already treat that same connection as effective `degraded` and eligible for probing once the backoff window elapsed
+- that mismatch made it harder to tell whether OtterCamp was truly blocked or just waiting for the next provider probe window
+
+Live smoke result:
+
+- shell report now shows the more truthful shape, for example:
+  - `claude-swh-me`
+  - `health_status = unavailable`
+  - `effective_health_status = degraded`
+  - `recovery_ready_at = 2026-03-27 03:12:23 MDT`
+- healthy rows no longer show meaningless synthetic recovery timestamps
+
+Verification:
+
+- `go test -tags=integration ./cmd/ottercamp -run 'TestDBTokenUsageJSONIncludesCacheReadsAndAttribution$' -count=1`
+- `bash -n scripts/token-usage-report.sh`
+- live smoke:
+  - `go run ./cmd/ottercamp db token-usage --hours 1 --limit 5 --output json | jq '.provider_health'`
+  - `./scripts/token-usage-report.sh --hours 1 --limit 5`
+
+Deploy status:
+
+- this is operator-surface only; no runtime restart was needed for it
+- the remaining undeployed runtime slice is still the `model_invocation` completion cleanup that clears stale failure metadata on successful retries
+- I deferred that restart because fresh Anthropic `agent_turn` invocations became active again while I was checking the deployment window
+
 ## Update 02:15 MDT
 
 I found the next narrow deliverable-targeting bug in fresh live traffic and patched it.

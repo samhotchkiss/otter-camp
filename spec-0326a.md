@@ -789,6 +789,14 @@ Still pending from this spec:
   - `UpdateCompletion(...)` now nulls `failure_class`, `error_code`, and `error_message` when an invocation is marked `completed`
   - this fixes the live retry/fallback artifact where successful Anthropic invocations were still carrying `provider_transient_failure`, which made operator reports look noisier than the actual terminal invocation state
   - focused repo integration coverage now proves a failed invocation that later completes does not retain stale failure fields
+- operator token-usage views now expose effective provider recovery state instead of only raw persisted health:
+  - `ottercamp db token-usage` now includes:
+    - `effective_health_status`
+    - `recovery_ready_at`
+  - the CLI computes those fields with the same gateway helpers the router uses, so expired persisted `unavailable` now appears as effective `degraded` instead of looking permanently dead
+  - the shell report in [`scripts/token-usage-report.sh`](./scripts/token-usage-report.sh) now surfaces the same two columns for quick live ops inspection
+  - `recovery_ready_at` is only shown for recovery states (`rate_limited` and `unavailable`), not for already-healthy connections
+  - focused CLI integration coverage remains green after the added fields
 
 ## Deferred Follow-Up, Not In This Spec
 

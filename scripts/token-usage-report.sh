@@ -903,10 +903,27 @@ SELECT
   pc.display_name,
   mp.slug AS provider_slug,
   pc.health_status,
+  CASE
+    WHEN pc.health_status = 'rate_limited'
+      AND NULLIF(pc.metadata->>'health_rate_limited_until', '')::timestamptz IS NOT NULL
+      AND NULLIF(pc.metadata->>'health_rate_limited_until', '')::timestamptz <= now()
+      THEN 'degraded'
+    WHEN pc.health_status = 'unavailable'
+      AND pc.updated_at + interval '1 minute' <= now()
+      THEN 'degraded'
+    ELSE pc.health_status
+  END AS effective_health_status,
   pc.is_enabled,
   pc.failover_priority,
   pc.max_concurrent,
-  NULLIF(pc.metadata->>'health_rate_limited_until', '')::timestamptz AS rate_limited_until
+  NULLIF(pc.metadata->>'health_rate_limited_until', '')::timestamptz AS rate_limited_until,
+  CASE
+    WHEN pc.health_status = 'rate_limited'
+      THEN NULLIF(pc.metadata->>'health_rate_limited_until', '')::timestamptz
+    WHEN pc.health_status = 'unavailable'
+      THEN pc.updated_at + interval '1 minute'
+    ELSE NULL
+  END AS recovery_ready_at
 FROM provider_connection pc
 JOIN model_provider mp ON mp.id = pc.provider_id
 CROSS JOIN effective_org eo

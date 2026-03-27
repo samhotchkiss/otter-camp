@@ -44,6 +44,7 @@ import (
 	deliverysvc "github.com/samhotchkiss/otter-camp/internal/delivery"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
+	"github.com/samhotchkiss/otter-camp/internal/gateway"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	oclog "github.com/samhotchkiss/otter-camp/internal/log"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
@@ -2634,10 +2635,12 @@ type dbTokenUsageProviderHealthRow struct {
 	DisplayName      string     `json:"display_name"`
 	ProviderSlug     string     `json:"provider_slug"`
 	HealthStatus     string     `json:"health_status"`
+	EffectiveHealth  string     `json:"effective_health_status"`
 	IsEnabled        bool       `json:"is_enabled"`
 	FailoverPriority int        `json:"failover_priority"`
 	MaxConcurrent    int        `json:"max_concurrent"`
 	RateLimitedUntil *time.Time `json:"rate_limited_until,omitempty"`
+	RecoveryReadyAt  *time.Time `json:"recovery_ready_at,omitempty"`
 }
 
 type dbTokenUsageRoutingSplitRow struct {
@@ -3244,7 +3247,9 @@ func loadDBTokenUsageReport(ctx context.Context, pool *pgxpool.Pool, windowHours
 			pc.is_enabled,
 			pc.failover_priority,
 			pc.max_concurrent,
-			NULLIF(pc.metadata->>'health_rate_limited_until', '')::timestamptz AS rate_limited_until
+			NULLIF(pc.metadata->>'health_rate_limited_until', '')::timestamptz AS rate_limited_until,
+			pc.updated_at,
+			pc.metadata
 		FROM provider_connection pc
 		JOIN model_provider mp ON mp.id = pc.provider_id
 		WHERE ($1::uuid IS NULL OR pc.organization_id = $1)
@@ -3257,6 +3262,8 @@ func loadDBTokenUsageReport(ctx context.Context, pool *pgxpool.Pool, windowHours
 	defer providerRows.Close()
 	for providerRows.Next() {
 		var row dbTokenUsageProviderHealthRow
+		var updatedAt time.Time
+		var metadata json.RawMessage
 		if scanErr := providerRows.Scan(
 			&row.DisplayName,
 			&row.ProviderSlug,
@@ -3265,8 +3272,22 @@ func loadDBTokenUsageReport(ctx context.Context, pool *pgxpool.Pool, windowHours
 			&row.FailoverPriority,
 			&row.MaxConcurrent,
 			&row.RateLimitedUntil,
+			&updatedAt,
+			&metadata,
 		); scanErr != nil {
 			return nil, scanErr
+		}
+		connection := repo.ProviderConnection{
+			HealthStatus: row.HealthStatus,
+			Metadata:     metadata,
+			UpdatedAt:    updatedAt,
+		}
+		row.EffectiveHealth = string(gateway.EffectiveConnectionHealthState(connection))
+		if row.HealthStatus == string(gateway.HealthStateRateLimited) || row.HealthStatus == string(gateway.HealthStateUnavailable) {
+			if readyAt, ok := gateway.ConnectionRecoveryReadyAt(connection); ok {
+				readyAt = readyAt.UTC()
+				row.RecoveryReadyAt = &readyAt
+			}
 		}
 		report.ProviderHealth = append(report.ProviderHealth, row)
 	}
@@ -3705,17 +3726,23 @@ func printDBTokenUsageReportTable(w io.Writer, formatter clitools.OutputFormatte
 		if row.RateLimitedUntil != nil {
 			rateLimitedUntil = row.RateLimitedUntil.UTC().Format(time.RFC3339)
 		}
+		recoveryReadyAt := "∅"
+		if row.RecoveryReadyAt != nil {
+			recoveryReadyAt = row.RecoveryReadyAt.UTC().Format(time.RFC3339)
+		}
 		providerRows = append(providerRows, []string{
 			row.DisplayName,
 			row.ProviderSlug,
 			row.HealthStatus,
+			row.EffectiveHealth,
 			strconv.FormatBool(row.IsEnabled),
 			strconv.Itoa(row.FailoverPriority),
 			strconv.Itoa(row.MaxConcurrent),
 			rateLimitedUntil,
+			recoveryReadyAt,
 		})
 	}
-	_ = formatter.WriteTable([]string{"Display Name", "Provider", "Health", "Enabled", "Priority", "Max Concurrent", "Rate Limited Until"}, providerRows)
+	_ = formatter.WriteTable([]string{"Display Name", "Provider", "Health", "Effective Health", "Enabled", "Priority", "Max Concurrent", "Rate Limited Until", "Recovery Ready At"}, providerRows)
 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "== Rate-Limit Failure Routing Split ==")
