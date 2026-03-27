@@ -1707,6 +1707,72 @@ func TestHandleTurnJobAsyncProjectTaskRateLimitedPreflightDefersPastRetryCapWith
 	}
 }
 
+func TestHandleTurnJobAsyncProjectTaskRateLimitedPreflightRetiresMatchingPendingCurrentTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	taskID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.now = func() time.Time { return time.Unix(1700000000, 0).UTC() }
+	fixture.engine.modelRetryBudget = 1
+	if fixture.flowAdvancer.tasks.items == nil {
+		fixture.flowAdvancer.tasks.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	agentID := fixture.chat.participants[0].ParticipantID
+	fixture.flowAdvancer.tasks.items[taskID] = repo.ProjectTask{
+		ID:              taskID,
+		ProjectID:       projectID,
+		WorkStatus:      "in_progress",
+		AssignedAgentID: &agentID,
+	}
+	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
+		t.Fatalf("unexpected prompt assembly call %d for turn %s", call, input.TurnID)
+	}
+	retryAfter := 2*time.Minute + 7*time.Second
+	fixture.model.probeFn = func(context.Context, ModelRequest) error {
+		return NewRateLimitedError(retryAfter, errors.New("all provider connections are rate limited"))
+	}
+
+	existingTurn, _, err := fixture.chat.CreateForMessageAttempt(context.Background(), fixture.session.ID, agentID, fixture.userMessageID, 0)
+	if err != nil {
+		t.Fatalf("CreateForMessageAttempt: %v", err)
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if fixture.model.probeCalls != 1 {
+		t.Fatalf("probe calls = %d, want 1", fixture.model.probeCalls)
+	}
+	if fixture.model.streamCalls != 0 {
+		t.Fatalf("stream calls = %d, want 0", fixture.model.streamCalls)
+	}
+	if got := len(fixture.invocations.creates); got != 0 {
+		t.Fatalf("invocation creates = %d, want 0", got)
+	}
+	refreshedTurn := fixture.chat.turnByID(existingTurn.ID)
+	if refreshedTurn == nil {
+		t.Fatal("expected matching pending turn to remain addressable")
+	}
+	if refreshedTurn.Status != "failed" {
+		t.Fatalf("turn status = %q, want failed", refreshedTurn.Status)
+	}
+	if fixture.session.CurrentTurnID != nil {
+		t.Fatalf("current_turn_id = %v, want nil", *fixture.session.CurrentTurnID)
+	}
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn retries = %d, want 1", len(jobs))
+	}
+	if job := jobs[0]; job.payload == nil || job.payload.RetryCount != 1 {
+		t.Fatalf("retry payload = %+v, want retry_count=1", jobs[0].payload)
+	}
+	if !fixture.messages.containsContentSubstring("[Rate limited, retrying in ") {
+		t.Fatal("missing rate-limited retry status message")
+	}
+}
+
 func TestHandleTurnJobAsyncOrganizationRateLimitedPreflightDefersPastRetryCapWithoutTurn(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	fixture.engine.now = func() time.Time { return time.Unix(1700000000, 0).UTC() }
@@ -23523,6 +23589,24 @@ func (f *fakeChatService) SetStopReason(ctx context.Context, id uuid.UUID, stopR
 	} else {
 		reason := strings.TrimSpace(*stopReason)
 		turn.StopReason = &reason
+	}
+	return repo.ChatTurn(*turn), nil
+}
+
+func (f *fakeChatService) SetFailed(ctx context.Context, id uuid.UUID, errorMessage string, completedAt time.Time) (repo.ChatTurn, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	turn := f.turns[id]
+	if turn == nil {
+		return repo.ChatTurn{}, repo.ErrNotFound
+	}
+	turn.Status = "failed"
+	turn.CompletedAt = &completedAt
+	if strings.TrimSpace(errorMessage) == "" {
+		turn.ErrorMessage = nil
+	} else {
+		msg := strings.TrimSpace(errorMessage)
+		turn.ErrorMessage = &msg
 	}
 	return repo.ChatTurn(*turn), nil
 }

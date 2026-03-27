@@ -577,6 +577,10 @@ Implemented so far in this spec:
   - async `organization`, `project`, and `project_task` cooldown preflight now continues to apply even after the old `maxRateLimitRetries` threshold:
     - queued cooldown retries can legitimately exceed that counter because the worker keeps rolling them forward during provider backoff windows
     - late-stage async retries now still defer before turn creation instead of minting throwaway failed turns with no invocation
+  - that preflight path now also retires a matching already-created `pending` current turn before it reschedules the retry:
+    - this covers supervisor stranded-execution recovery, which intentionally precreates a `pending` turn for `supervisor recovery: resume task`
+    - without this extra retirement step, the preflight could reschedule the retry but leave the never-started pending turn behind as `current_turn_id`, producing a wedged session with a stale pending turn plus a newer retry job
+    - focused turn-engine coverage now proves that the matching pending turn is marked failed and `current_turn_id` is cleared while the deferred retry is still queued
 - worker recovery now skips requeueing `project_task` async sessions that are already blocked by a persisted validation-loop guard:
   - active flow-node executions with `work_status='blocked'` plus `agent_turn_validation_guard.blocked=true` no longer get revived by `RequeueActiveExecutionSessionsWithoutTurns(...)`
   - that removes hot queue churn where the worker would enqueue another `agent_turn` only for the turn engine to immediately suppress it as `validation_loop_blocked`

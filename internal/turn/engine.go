@@ -360,6 +360,7 @@ type turnRepository interface {
 	CreateForMessageAttempt(ctx context.Context, sessionID, agentID, messageID uuid.UUID, retryCount int) (repo.ChatTurn, bool, error)
 	Create(ctx context.Context, turn repo.ChatTurn) (repo.ChatTurn, error)
 	ListBySession(ctx context.Context, sessionID uuid.UUID) ([]repo.ChatTurn, error)
+	SetFailed(ctx context.Context, id uuid.UUID, errorMessage string, completedAt time.Time) (repo.ChatTurn, error)
 	SetStopReason(ctx context.Context, id uuid.UUID, stopReason *string) (repo.ChatTurn, error)
 	SetTriggerMessageID(ctx context.Context, id uuid.UUID, triggerMessageID *uuid.UUID) (repo.ChatTurn, error)
 }
@@ -7273,6 +7274,9 @@ func (e *TurnEngine) handlePreTurnRateLimitedAvailability(
 	if enqueueErr != nil {
 		return true, true, fmt.Errorf("enqueue rate-limited turn retry: %w", enqueueErr)
 	}
+	if retireErr := e.retireDeferredPendingCurrentTurn(ctx, session, messageID, retryCount, "rate-limit preflight deferred pending turn before start; scheduling retry"); retireErr != nil {
+		return true, true, retireErr
+	}
 	message := fmt.Sprintf("[Rate limited, retrying in %s...]", formatRetryDelay(retryDelay))
 	if !enqueued {
 		message = "[Project paused - retry deferred until resume.]"
@@ -7281,6 +7285,43 @@ func (e *TurnEngine) handlePreTurnRateLimitedAvailability(
 		return true, true, appendErr
 	}
 	return true, true, nil
+}
+
+func (e *TurnEngine) retireDeferredPendingCurrentTurn(
+	ctx context.Context,
+	session *chat.ChatSession,
+	messageID uuid.UUID,
+	retryCount int,
+	failureReason string,
+) error {
+	if e == nil || e.chat == nil || e.turns == nil || e.sessions == nil || session == nil || session.CurrentTurnID == nil {
+		return nil
+	}
+	turnID := *session.CurrentTurnID
+	if turnID == uuid.Nil {
+		return nil
+	}
+	currentTurn, err := e.chat.GetTurn(ctx, turnID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if currentTurn == nil || !strings.EqualFold(strings.TrimSpace(currentTurn.Status), "pending") {
+		return nil
+	}
+	if currentTurn.TriggerMessageID == nil || *currentTurn.TriggerMessageID != messageID || currentTurn.RetryCount != retryCount {
+		return nil
+	}
+	if _, err := e.turns.SetFailed(ctx, currentTurn.ID, strings.TrimSpace(failureReason), e.now().UTC()); err != nil {
+		return err
+	}
+	if _, err := e.sessions.UpdateCurrentTurn(ctx, session.ID, nil); err != nil {
+		return err
+	}
+	session.CurrentTurnID = nil
+	return nil
 }
 
 func allowAsyncCooldownPreflightPastRetryCap(session *chat.ChatSession) bool {

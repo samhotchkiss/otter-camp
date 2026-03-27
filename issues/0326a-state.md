@@ -3115,6 +3115,67 @@ Current proof state:
 - runtime restart was the next step after this note
 - live proof is still pending the next fresh task lane that would otherwise try a helper-file write with a mismatched extension
 
+## Update 02:35 MDT
+
+I found and fixed the next queue/runtime interaction bug while waiting on the repaired task retries.
+
+What happened live:
+
+- task-10 still did not reach a fresh model turn by `02:32 MDT`
+  - the repaired review prompt is still correct and still points at:
+    - `results/review-path-validation-summary.md`
+  - but the lane only appended another:
+    - `[Rate limited, retrying in 30m6s...]`
+  - there was still no new `chat_turn`, which confirms the cooldown preflight is continuing to defer before turn creation
+- while checking other pending async lanes, I found exactly one session with a stale `pending current_turn` older than 15 minutes:
+  - session `4e2277bb-09aa-4267-a12e-cdd92fe6587c`
+  - pending turn `2a38334b-9102-4dd2-ab71-1d5cf69120b9`
+  - trigger message `87ce7109-c403-4cf0-82cb-6d29a0bb8c17`
+  - content `supervisor recovery: resume task`
+  - newer queued retry job already existed for that same message at higher `retry_count`
+- after I cleared that one stale row operationally, the worker immediately dead-lettered the old retry as a stale orphan and minted a fresh retry job:
+  - old job `933604f2-51b6-408f-b98d-7eecfe7b3660` -> `dead_letter`
+  - new job `3d92c8cc-542f-434f-9355-528a12cefddd` -> `pending`
+  - same message `87ce7109-c403-4cf0-82cb-6d29a0bb8c17`
+  - new `retry_count=2`
+
+Root cause:
+
+- the stale row was not coming from the worker claim filter
+- it came from two legitimate features interacting badly:
+  - supervisor stranded-execution recovery in [`internal/controlplane/stranded_execution.go`](../internal/controlplane/stranded_execution.go) intentionally precreates a `pending` current turn for `supervisor recovery: resume task`
+  - the newer cooldown preflight in [`internal/turn/engine.go`](../internal/turn/engine.go) now returns before `CreateForMessageAttempt(...)`
+- when the provider is already rate limited, that preflight correctly enqueues the retry but previously left the already-precreated pending supervisor-recovery turn behind as `current_turn_id`
+
+What I changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - expanded the `turnRepository` contract to include `SetFailed(...)`
+  - added `retireDeferredPendingCurrentTurn(...)`
+  - `handlePreTurnRateLimitedAvailability(...)` now:
+    - enqueues the delayed retry
+    - then checks whether the session already has a matching `pending` current turn for the same `message_id` and `retry_count`
+    - if so, it marks that never-started turn failed and clears `current_turn_id` before appending the session-scoped rate-limit message
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added `TestHandleTurnJobAsyncProjectTaskRateLimitedPreflightRetiresMatchingPendingCurrentTurn`
+  - extended the fake turn repo/service with `SetFailed(...)` support so the regression matches the production path
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(HandleTurnJobAsyncProjectTaskRateLimitedPreflight(DefersBeforePromptAssembly|DefersPastRetryCapWithoutTurn|RetiresMatchingPendingCurrentTurn)|HandleTurnJobAsyncOrganizationRateLimitedPreflightDefersPastRetryCapWithoutTurn)$' -count=1`
+
+Why this matters:
+
+- the original cooldown preflight fix removed throwaway turn creation for normal async retries
+- supervisor recovery was the last path that could still strand a never-started pending turn behind that same defer-before-turn-creation behavior
+- this patch closes that gap without weakening the preflight itself
+
+Current live proof state:
+
+- the stale supervisor-recovery row was repaired operationally before the code fix was deployed
+- so the new retirement helper is test-green and ready for runtime restart, but not yet freshly live-proven on a new supervisor-recovery cooldown cycle
+
 ## Update 01:36 MDT
 
 I traced the next recovery seam to an engine/native target mismatch on task `10`.
