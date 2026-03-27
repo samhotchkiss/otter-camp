@@ -2280,3 +2280,72 @@ Why this matters:
 
 - the old behavior hid a wrong-path mutation by mutating the tool call itself, which is how support artifacts could overwrite the primary deliverable and trigger more recovery churn
 - the narrowed rewrite rule keeps the intended “canonicalize obvious aliases” behavior while removing the most damaging silent retarget case that showed up in live traffic
+
+## Update 21:35 MDT
+
+I shipped one narrow runtime slice aimed at the new post-`21:18` async task burn family.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - async `project_task` work lanes now classify pure same-turn read-only discovery rounds as deterministic churn
+  - the classifier only applies when the current turn has no mutation tools anywhere in its assistant tool-call history
+  - it fingerprints the round family from persisted assistant `tool_calls` metadata and stops on the third discovery-only round in the same turn instead of paying for another continuation
+  - review lanes are intentionally excluded from this new cutoff; they were already supposed to be handled by the older cross-turn review discovery cap
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added:
+    - `TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdReadOnlyDiscoveryRoundInSameTurn`
+    - `TestHandleToolValidationResultsIgnoresReadOnlyDiscoveryRoundChurnAfterMutationInSameTurn`
+  - reran the adjacent same-turn churn slice plus the existing multi-turn read-only discovery cap slice
+
+Focused verification:
+
+- `go test ./internal/turn -run 'Test(HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdReadOnlyDiscoveryRoundInSameTurn|HandleToolValidationResultsIgnoresReadOnlyDiscoveryRoundChurnAfterMutationInSameTurn|HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdWrittenFileReadbackInSameTurn|HandleToolValidationResultsIgnoresWrittenFileReadbackChurnAfterInterveningRewrite|HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdPackageInstallAttemptInSameTurn)$' -count=1`
+- `go test ./internal/turn -run 'Test(MaybeBlockRepeatedReadOnlyDiscoveryCapTurns|MaybeBlockRepeatedReadOnlyDiscoveryCapTurnsIgnoresMutationTurns|MaybeBlockRepeatedReadOnlyDiscoveryCapTurnsTreatsReadOnlyCLIExecuteAsDiscovery|MaybeBlockRepeatedReadOnlyDiscoveryCapTurnsIgnoresMutatingCLIExecute|MaybeBlockRepeatedReadOnlyDiscoveryCapTurnsRetriesReviewLane|HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdReadOnlyDiscoveryRoundInSameTurn|HandleToolValidationResultsIgnoresReadOnlyDiscoveryRoundChurnAfterMutationInSameTurn)$' -count=1`
+
+Deployment status:
+
+- rebuilt `./bin/ottercamp`
+- restarted tmux `codex-e2e-20260324` `serve` and `worker --concurrency 2`
+- `./bin/ottercamp health --output json` returned `status=ok`
+
+Fresh live read after deploy:
+
+- Anthropic traffic resumed immediately after the restart
+- the new live hot family is **not** the work-lane same-turn discovery case I just cut
+- it is a review-lane cross-turn discovery loop on session `b93b49f3-ca00-472f-9531-2adf6198f374`
+- consecutive review turns:
+  - `b769c519-95d4-408b-91c3-c949846d1b52`
+  - `db73a3fe-0bb2-4994-a4ef-eade59dbeb52`
+  - `b0ef8a5f-f97e-4e6e-933c-bed3527db160`
+  - `162e432f-bfb4-40a5-98ea-d68d8559a85c`
+- all four completed with `stop_reason=max_tool_calls`
+- the assistant tool-call families on those turns were still pure read-only discovery:
+  - `file.list`
+  - `task.get`
+  - `git.log`
+  - `git.diff`
+  - `file.read`
+- there were no fresh system messages containing `read-only discovery churn` and no fresh `validation_loop_blocked` turns in that post-restart window
+
+What this means:
+
+- the new work-lane same-turn cutoff is shipped, tested, and live on the binary
+- but it is not the current live bottleneck
+- the next real runtime seam looked like the older review-lane cross-turn cap might be missing that family
+
+Follow-up live read a few minutes later:
+
+- the review-lane cap did fire on the next retry turn for that same session:
+  - turn `2656120e-b223-4aec-9305-6f0e9a4837ed`
+  - `stop_reason=validation_loop_blocked`
+  - system message:
+    - `Repeated read-only discovery churn across 3 consecutive max-tool-call turns using file.list, file.read, git.diff, git.log, task.get with recurring not_found, path_traversal`
+- the same turn then appended a fresh review-action prompt instead of auto-continuing another discovery-only review pass
+
+What this means now:
+
+- the older review-lane cross-turn read-only discovery cap is live-proven again on fresh Anthropic traffic
+- the new same-turn work-lane cutoff remains deployed and unit-tested, but it has not been the dominant live family in the first post-restart window
+- the remaining proof gap is narrower:
+  - we still need a fresh live example where the new work-lane same-turn cutoff fires before the older cross-turn machinery would have taken over

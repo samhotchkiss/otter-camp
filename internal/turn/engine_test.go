@@ -19267,7 +19267,7 @@ func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdPackageInstallAt
 			"exit_code":   0,
 		},
 	}}
-	failures, err := fixture.engine.collectAsyncTaskToolResultChurnFailures(context.Background(), rt, results)
+	failures, err := fixture.engine.collectAsyncTaskToolResultChurnFailures(context.Background(), rt, taskRepo.items[taskID], calls, results)
 	if err != nil {
 		t.Fatalf("collectAsyncTaskToolResultChurnFailures: %v", err)
 	}
@@ -20020,6 +20020,274 @@ func TestHandleToolValidationResultsIgnoresWrittenFileReadbackChurnAfterInterven
 	}
 	if fixture.messages.containsContentSubstring("written-file readback churn") {
 		t.Fatal("did not expect written-file readback churn validation message")
+	}
+}
+
+func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdReadOnlyDiscoveryRoundInSameTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	reason := "repeated discovery-only task rounds in the same turn using `file.list`, `file.read`, `git.diff`, `git.log`, `task.get` and no mutation tools"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{"existing":"value"}`), taskValidationGuardState{
+		InitialMessageID: fixture.userMessageID.String(),
+		Fingerprint:      readOnlyDiscoveryRoundChurnFingerprint(turnID),
+		ToolName:         "task.discovery",
+		FailureClass:     "tool_validation",
+		FailureCode:      duplicateReadOnlyDiscoveryRoundChurnCode,
+		FailureReason:    reason,
+		Count:            1,
+		BlockThreshold:   validationLoopBlockThreshold,
+		Blocked:          false,
+		FirstSeenAt:      time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:       time.Now().UTC().Format(time.RFC3339Nano),
+		LastTurnID:       turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Validate pipeline alerting and metrics scripts",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	for idx, round := range []struct {
+		callID    string
+		toolCalls []map[string]any
+		results   []map[string]any
+	}{
+		{
+			callID: "round-1",
+			toolCalls: []map[string]any{
+				{"id": "r1-list", "name": "file_list", "arguments": map[string]any{"path": "."}},
+				{"id": "r1-task", "name": "task_get", "arguments": map[string]any{}},
+				{"id": "r1-log", "name": "git_log", "arguments": map[string]any{}},
+			},
+			results: []map[string]any{
+				{"tool_name": "file.list", "output": map[string]any{"path": "."}},
+				{"tool_name": "task.get", "output": map[string]any{"task_number": 21}},
+				{"tool_name": "git.log", "output": map[string]any{"stdout": "abc123"}},
+			},
+		},
+		{
+			callID: "round-2",
+			toolCalls: []map[string]any{
+				{"id": "r2-list", "name": "file_list", "arguments": map[string]any{"path": "config"}},
+				{"id": "r2-diff", "name": "git_diff", "arguments": map[string]any{"pathspec": "config"}},
+				{"id": "r2-read", "name": "file_read", "arguments": map[string]any{"path": "config/pipeline-config.yaml"}},
+			},
+			results: []map[string]any{
+				{"tool_name": "file.list", "output": map[string]any{"path": "config"}},
+				{"tool_name": "git.diff", "output": map[string]any{"stdout": ""}},
+				{"tool_name": "file.read", "output": map[string]any{"path": "config/pipeline-config.yaml", "content": "steps: []\n"}},
+			},
+		},
+	} {
+		fixture.messages.create(repo.ChatMessage{
+			SessionID: fixture.session.ID,
+			TurnID:    &turnID,
+			Role:      "assistant",
+			Status:    "final",
+			Content:   fmt.Sprintf("discovery round %d", idx+1),
+			Metadata: mustMarshalJSON(t, map[string]any{
+				"tool_calls": round.toolCalls,
+			}),
+		})
+		for resultIdx, payload := range round.results {
+			toolCallID := round.toolCalls[resultIdx]["id"].(string)
+			fixture.messages.create(repo.ChatMessage{
+				SessionID:  fixture.session.ID,
+				TurnID:     &turnID,
+				Role:       "tool_result",
+				Status:     "final",
+				ToolCallID: &toolCallID,
+				Content:    string(mustRawJSON(t, payload)),
+			})
+		}
+	}
+
+	currentToolCalls := []map[string]any{
+		{"id": "r3-list", "name": "file_list", "arguments": map[string]any{"path": "tests"}},
+		{"id": "r3-diff", "name": "git_diff", "arguments": map[string]any{"pathspec": "tests"}},
+		{"id": "r3-read", "name": "file_read", "arguments": map[string]any{"path": "tests/test_metrics_alerting.py"}},
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "discovery round 3",
+		Metadata: mustMarshalJSON(t, map[string]any{
+			"tool_calls": currentToolCalls,
+		}),
+	})
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{
+		{ID: "r3-list", Name: "file.list", Arguments: map[string]any{"path": "tests"}},
+		{ID: "r3-diff", Name: "git.diff", Arguments: map[string]any{"pathspec": "tests"}},
+		{ID: "r3-read", Name: "file.read", Arguments: map[string]any{"path": "tests/test_metrics_alerting.py"}},
+	}
+	results := []ToolResult{
+		{ToolCallID: "r3-list", Name: "file.list", Output: map[string]any{"path": "tests"}},
+		{ToolCallID: "r3-diff", Name: "git.diff", Output: map[string]any{"stdout": ""}},
+		{ToolCallID: "r3-read", Name: "file.read", Output: map[string]any{"path": "tests/test_metrics_alerting.py", "content": "def test_metrics_alerting():\n    pass\n"}},
+	}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	guard, ok := parseTaskValidationGuard(updated.Metadata)
+	if !ok {
+		t.Fatal("expected validation guard metadata")
+	}
+	if guard.Count != validationLoopTurnStopThreshold {
+		t.Fatalf("guard.Count = %d, want %d", guard.Count, validationLoopTurnStopThreshold)
+	}
+	if !fixture.messages.containsContentSubstring("Repeated same-turn read-only discovery churn") {
+		t.Fatal("expected repeated read-only discovery early-stop validation message")
+	}
+}
+
+func TestHandleToolValidationResultsIgnoresReadOnlyDiscoveryRoundChurnAfterMutationInSameTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Validate pipeline alerting and metrics scripts",
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "write the file first",
+		Metadata: mustMarshalJSON(t, map[string]any{
+			"tool_calls": []map[string]any{{
+				"id":   "write-1",
+				"name": "file_write",
+				"arguments": map[string]any{
+					"path":    "src/pipeline_logger.py",
+					"content": "print('ok')\n",
+				},
+			}},
+		}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		ToolCallID: func() *string {
+			id := "write-1"
+			return &id
+		}(),
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.write",
+			"output": map[string]any{
+				"path":      "src/pipeline_logger.py",
+				"byte_size": 12,
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "discover some more",
+		Metadata: mustMarshalJSON(t, map[string]any{
+			"tool_calls": []map[string]any{
+				{"id": "list-1", "name": "file_list", "arguments": map[string]any{"path": "."}},
+				{"id": "diff-1", "name": "git_diff", "arguments": map[string]any{}},
+			},
+		}),
+	})
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{
+		{ID: "list-1", Name: "file.list", Arguments: map[string]any{"path": "."}},
+		{ID: "diff-1", Name: "git.diff", Arguments: map[string]any{}},
+	}
+	results := []ToolResult{
+		{ToolCallID: "list-1", Name: "file.list", Output: map[string]any{"path": "."}},
+		{ToolCallID: "diff-1", Name: "git.diff", Output: map[string]any{"stdout": ""}},
+	}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if handled {
+		t.Fatal("handled = true, want false")
+	}
+	if fixture.messages.containsContentSubstring("Repeated same-turn read-only discovery churn") {
+		t.Fatal("did not expect repeated read-only discovery validation message")
 	}
 }
 

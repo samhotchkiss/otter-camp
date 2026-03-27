@@ -110,6 +110,7 @@ const (
 	duplicateShellFileBuildChurnCode          = "duplicate_shell_file_build_churn"
 	duplicateShellFileReadbackChurnCode       = "duplicate_shell_file_readback_churn"
 	duplicateWrittenFileReadbackChurnCode     = "duplicate_written_file_readback_churn"
+	duplicateReadOnlyDiscoveryRoundChurnCode  = "duplicate_read_only_discovery_round_churn"
 	validationLoopSuppressionReason           = "validation_loop_blocked"
 	recoveryCLIRepairBudget                   = 1
 	recoveryFileWriteRepairBudget             = 1
@@ -17502,7 +17503,7 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 	}
 
 	failures := collectToolValidationFailures(calls, results)
-	churnFailures, err := e.collectAsyncTaskToolResultChurnFailures(ctx, rt, results)
+	churnFailures, err := e.collectAsyncTaskToolResultChurnFailures(ctx, rt, taskRecord, calls, results)
 	if err != nil {
 		return false, err
 	}
@@ -17707,7 +17708,7 @@ func (e *TurnEngine) retryReviewValidationLoop(ctx context.Context, rt *turnRunt
 	return true, nil
 }
 
-func (e *TurnEngine) collectAsyncTaskToolResultChurnFailures(ctx context.Context, rt *turnRuntime, results []ToolResult) ([]toolValidationFailure, error) {
+func (e *TurnEngine) collectAsyncTaskToolResultChurnFailures(ctx context.Context, rt *turnRuntime, taskRecord repo.ProjectTask, calls []ToolCall, results []ToolResult) ([]toolValidationFailure, error) {
 	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
 		return nil, nil
 	}
@@ -17750,6 +17751,16 @@ func (e *TurnEngine) collectAsyncTaskToolResultChurnFailures(ctx context.Context
 			if _, exists := seen[key]; exists {
 				continue
 			}
+			seen[key] = struct{}{}
+			failures = append(failures, failure)
+		}
+	}
+	if failure, ok := classifyRepeatedReadOnlyDiscoveryRoundChurn(rt, taskRecord, turnMessages, calls); ok {
+		key := strings.TrimSpace(failure.Fingerprint)
+		if key == "" {
+			key = strings.TrimSpace(failure.AttemptFingerprint)
+		}
+		if _, exists := seen[key]; !exists {
 			seen[key] = struct{}{}
 			failures = append(failures, failure)
 		}
@@ -18098,6 +18109,134 @@ func classifyRepeatedWrittenFileReadbackChurn(turnMessages []repo.ChatMessage, a
 
 func writtenFileReadbackChurnAttemptFingerprint(path string) string {
 	return "written-file-readback:" + normalizeWorkspaceRelativePath(path)
+}
+
+func classifyRepeatedReadOnlyDiscoveryRoundChurn(rt *turnRuntime, taskRecord repo.ProjectTask, turnMessages []repo.ChatMessage, calls []ToolCall) (toolValidationFailure, bool) {
+	if rt == nil || rt.session == nil || rt.turn == nil {
+		return toolValidationFailure{}, false
+	}
+	if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		return toolValidationFailure{}, false
+	}
+	_, currentHasBroadContext, currentReadOnly := summarizeReadOnlyDiscoveryCallBatch(calls)
+	if !currentReadOnly {
+		return toolValidationFailure{}, false
+	}
+	if !currentHasBroadContext && len(calls) < 2 {
+		return toolValidationFailure{}, false
+	}
+	discoveryRounds, toolNames, ok := summarizeSameTurnReadOnlyDiscoveryRounds(turnMessages)
+	if !ok || discoveryRounds < 2 {
+		return toolValidationFailure{}, false
+	}
+	reason := "repeated discovery-only task rounds in the same turn with no mutation tools"
+	if len(toolNames) > 0 {
+		reason = fmt.Sprintf("repeated discovery-only task rounds in the same turn using %s and no mutation tools", joinQuotedStrings(toolNames))
+	}
+	failure := buildToolValidationFailure(
+		"task.discovery",
+		duplicateReadOnlyDiscoveryRoundChurnCode,
+		reason,
+		"",
+		"",
+	)
+	failure.Fingerprint = readOnlyDiscoveryRoundChurnFingerprint(rt.turn.ID)
+	failure.ObservedCount = discoveryRounds
+	return failure, true
+}
+
+func readOnlyDiscoveryRoundChurnFingerprint(turnID uuid.UUID) string {
+	return "task.discovery:" + duplicateReadOnlyDiscoveryRoundChurnCode + ":" + turnID.String()
+}
+
+func summarizeReadOnlyDiscoveryCallBatch(calls []ToolCall) ([]string, bool, bool) {
+	if len(calls) == 0 {
+		return nil, false, false
+	}
+	toolNames := map[string]struct{}{}
+	hasBroadContext := false
+	for _, call := range calls {
+		toolName, broadContext, ok := normalizeReadOnlyDiscoveryToolCall(strings.TrimSpace(call.Name), call.Arguments)
+		if !ok {
+			return nil, false, false
+		}
+		toolNames[toolName] = struct{}{}
+		if broadContext {
+			hasBroadContext = true
+		}
+	}
+	return sortedSetValues(toolNames), hasBroadContext, true
+}
+
+func summarizeSameTurnReadOnlyDiscoveryRounds(turnMessages []repo.ChatMessage) (int, []string, bool) {
+	if len(turnMessages) == 0 {
+		return 0, nil, false
+	}
+	toolNames := map[string]struct{}{}
+	rounds := 0
+	sawBroadContext := false
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "assistant") || len(message.Metadata) == 0 {
+			continue
+		}
+		var meta struct {
+			ToolCalls []storedAssistantToolCall `json:"tool_calls"`
+		}
+		if err := json.Unmarshal(message.Metadata, &meta); err != nil || len(meta.ToolCalls) == 0 {
+			continue
+		}
+		roundHasBroadContext := false
+		for _, call := range meta.ToolCalls {
+			toolName, broadContext, ok := normalizeReadOnlyDiscoveryToolCall(strings.TrimSpace(call.Name), call.Arguments)
+			if !ok {
+				return 0, nil, false
+			}
+			toolNames[toolName] = struct{}{}
+			if broadContext {
+				roundHasBroadContext = true
+			}
+		}
+		rounds++
+		if roundHasBroadContext {
+			sawBroadContext = true
+		}
+	}
+	if rounds == 0 || !sawBroadContext {
+		return 0, nil, false
+	}
+	return rounds, sortedSetValues(toolNames), true
+}
+
+func normalizeReadOnlyDiscoveryToolCall(name string, arguments map[string]any) (string, bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "file.list", "file_list":
+		return "file.list", true, true
+	case "file.search", "file_search":
+		return "file.search", true, true
+	case "git.log", "git_log":
+		return "git.log", true, true
+	case "git.diff", "git_diff":
+		return "git.diff", true, true
+	case "git.status", "git_status":
+		return "git.status", true, true
+	case "task.get", "task_get":
+		return "task.get", true, true
+	case "project.get", "project_get":
+		return "project.get", true, true
+	case "flow.get_execution", "flow_get_execution":
+		return "flow.get_execution", true, true
+	case "flow.get_template", "flow_get_template":
+		return "flow.get_template", true, true
+	case "file.read", "file_read":
+		return "file.read", false, true
+	case "cli.execute", "cli_execute":
+		if !isReadOnlyDiscoveryCLIExecuteCall(arguments) {
+			return "", false, false
+		}
+		return "cli.execute", true, true
+	default:
+		return "", false, false
+	}
 }
 
 func latestSuccessfulFileWriteSequenceForPath(turnMessages []repo.ChatMessage, targetPath string) (int64, bool) {
@@ -18777,6 +18916,9 @@ func buildValidationLoopBlockReason(state taskValidationGuardState) string {
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateWrittenFileReadbackChurnCode) {
 		return fmt.Sprintf("deterministic same-turn written-file readback churn blocked after %d identical target rereads: %s", state.Count, reason)
 	}
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateReadOnlyDiscoveryRoundChurnCode) {
+		return fmt.Sprintf("deterministic same-turn read-only discovery churn blocked after %d repeated discovery-only rounds: %s", state.Count, reason)
+	}
 	if toolName == "" {
 		return fmt.Sprintf("deterministic tool validation loop blocked after %d identical failures: %s", state.Count, reason)
 	}
@@ -18970,6 +19112,9 @@ func buildValidationLoopTurnStopSystemMessage(state taskValidationGuardState) st
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateWrittenFileReadbackChurnCode) {
 		return fmt.Sprintf("[Repeated identical written-file readback churn in this turn (%d/%d): %s. Ending the turn early so the next continuation can mutate or execute that file instead of rereading the same unchanged target again.]", state.Count, validationLoopBlockThreshold, reason)
 	}
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateReadOnlyDiscoveryRoundChurnCode) {
+		return fmt.Sprintf("[Repeated same-turn read-only discovery churn (%d/%d): %s. Ending the turn early so the next continuation can take a concrete mutation step instead of another discovery-only pass.]", state.Count, validationLoopBlockThreshold, reason)
+	}
 	if toolName == "" {
 		return fmt.Sprintf("[Repeated identical tool validation failure in this turn (%d/%d): %s. Ending the turn early so the next continuation can take a narrower step.]", state.Count, validationLoopBlockThreshold, reason)
 	}
@@ -18996,6 +19141,9 @@ func buildValidationLoopSystemMessage(state taskValidationGuardState) string {
 	}
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateWrittenFileReadbackChurnCode) {
 		return fmt.Sprintf("[Deterministic same-turn written-file readback churn blocked after %d identical target rereads: %s]", state.Count, reason)
+	}
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateReadOnlyDiscoveryRoundChurnCode) {
+		return fmt.Sprintf("[Deterministic same-turn read-only discovery churn blocked after %d repeated discovery-only rounds: %s]", state.Count, reason)
 	}
 	return fmt.Sprintf("[Deterministic tool validation loop blocked after %d identical failures: %s (%s)]", state.Count, toolName, reason)
 }
