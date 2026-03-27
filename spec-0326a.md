@@ -1043,4 +1043,17 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
       - `file.read Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md` returned the new reject-only guard error instead of rereading the summary
     - newest follow-on hardening extends that same reject-only guard to broader discovery tools like `file.list`, `file.search`, `task.list`, `task.get`, and `project.get`
     - focused turn-engine coverage is green
-    - live proof for the broadened non-`file.read` discovery block is still pending the next reject-prompt retry on the new binary
+    - live proof for the broadened non-`file.read` discovery block now exists too:
+      - task-9 retry `22` at `2026-03-27 06:42:08 MDT`
+      - after `file.read` was blocked, the model tried `file.list Work pattern=OC-9*`
+      - runtime returned the new reject-only discovery guard error instead of allowing that workspace search
+  - newest scheduler fix:
+    - transient provider failures now reuse an already reject-only review prompt instead of regenerating a fresh base review prompt
+    - this closes the oscillation where base prompts and reject prompts alternated across retries even though no new evidence had appeared
+    - focused turn-engine coverage is green
+    - live proof now exists:
+      - task-9 retry `24` at `2026-03-27 06:47:45 MDT` failed before any tool call
+      - the next queued retry `25` reused message `6f334db1-0ff9-48de-8daf-9d0fc43a916a`
+      - that queued message still carries the reject-only markers:
+        - `zero direct child tasks`
+        - `decision=reject`

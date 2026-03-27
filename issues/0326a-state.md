@@ -3381,8 +3381,63 @@ Verification:
 Current status:
 
 - the reject-only `file.read` block is live-proven
-- the broadened reject-only discovery block is deployed and test-green
-- first live proof for the widened non-`file.read` block is still pending the next reject-prompt retry on the new binary
+- the broadened reject-only discovery block is now live-proven too
+
+Fresh live proof:
+
+- task-9 retry `22` started at `06:41:53 MDT`
+- first tool call:
+  - `file.read Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md`
+  - blocked again by the reject-only reread guard
+- next assistant fallback:
+  - `file.list path=Work pattern=OC-9*`
+  - blocked by the widened reject-only discovery guard with:
+    - `task review already established that task 9 (Workstream A: Pipeline Scaffold Setup) has zero direct child-task evidence and should reject. Do not inspect additional files, tasks, or project state with file.list; call flow.review_decision with decision=reject immediately using the existing evidence.`
+
+What this means:
+
+- the file-summary reread escape path is closed
+- the broader workspace-discovery escape path is also closed
+- the remaining live seam is now narrower still: whether the next retry finally issues `flow.review_decision reject` or simply bounces between blocked discovery attempts until the provider fails again
+
+## Update 06:48 MDT
+
+The transient retry scheduler fix is now live-proven too.
+
+What was still wrong before this slice:
+
+- when a reject-only review prompt hit a provider failure before any tool call, the next queued retry could still fall back to the base review prompt
+- that kept alternating base prompts and reject prompts even though no new evidence had appeared
+
+What I changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `transientTurnRetryMessageID(...)` now reuses an already reject-only review prompt instead of regenerating a fresh retry prompt after a transient provider failure
+  - the trigger is intentionally narrow:
+    - only when the current review prompt already says `Call flow.review_decision immediately with decision=reject`
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage that a reject-only review prompt is reused across transient failures
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(HandleTransientModelTurnFailureUsesReviewRetryPromptFromFailedTurn|HandleTransientModelTurnFailureReusesImmediateRejectReviewPrompt|ShouldBlockOrchestrationParentReviewRejectDiscoveryTool|ReviewApprovalRetryPromptRejectsOrchestrationParentWithoutDirectChildrenAcrossRetryTurns)$' -count=1`
+- rebuilt/restarted tmux `codex-e2e-20260324`
+- `./bin/ottercamp health --output json`
+
+Live proof:
+
+- task-9 retry `24` started at `06:47:45 MDT`
+- it failed before any tool call, so this was the exact old regression case
+- on the new binary, the next queued retry `25` now points to message `6f334db1-0ff9-48de-8daf-9d0fc43a916a`
+- that message still carries the reject-only evidence markers:
+  - `zero direct child tasks`
+  - `decision=reject`
+
+That is the proof we needed:
+
+- reject-only review prompts no longer fall back to the base review prompt after a transient provider failure
+- the remaining question is purely behavioral at this point: whether the next successful provider window causes the model to finally call `flow.review_decision reject`
 
 ## Update 05:40 MDT
 

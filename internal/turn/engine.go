@@ -7816,6 +7816,9 @@ func (e *TurnEngine) transientTurnRetryMessageID(
 	if !taskReviewActionMessage(latestUser) && !isRecoveryResumeMessage(latestUser) {
 		return messageID, false, nil
 	}
+	if reviewPromptRequestsImmediateReject(latestUser.Content) {
+		return messageID, false, nil
+	}
 	taskRecord, err := e.tasks.GetByID(ctx, session.ScopeID)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
@@ -7844,6 +7847,10 @@ func (e *TurnEngine) transientTurnRetryMessageID(
 		return messageID, false, nil
 	}
 	return retryMessage.ID, true, nil
+}
+
+func reviewPromptRequestsImmediateReject(content string) bool {
+	return strings.Contains(strings.TrimSpace(content), "Call flow.review_decision immediately with decision=reject")
 }
 
 func (e *TurnEngine) consecutiveTransientModelFailuresForMessage(ctx context.Context, sessionID, messageID, excludeTurnID uuid.UUID) (int, error) {

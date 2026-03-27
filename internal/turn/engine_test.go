@@ -2451,6 +2451,99 @@ func TestHandleTransientModelTurnFailureUsesReviewRetryPromptFromFailedTurn(t *t
 	}
 }
 
+func TestHandleTransientModelTurnFailureReusesImmediateRejectReviewPrompt(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	base := time.Unix(1700000000, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+
+	projectID := uuid.New()
+	taskID := uuid.New()
+	executionID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+	description := "Parent/orchestration task for pipeline scaffold work. Validates direct child tasks. Does not do execution work itself. Deliverable: Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.engine.tasks = &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:              taskID,
+			OrganizationID:  fixture.session.OrganizationID,
+			ProjectID:       projectID,
+			AssignedAgentID: &assignedID,
+			Title:           "Workstream A: Pipeline Scaffold Setup",
+			Description:     &description,
+			WorkStatus:      "review",
+		},
+	}}
+
+	rejectPrompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session) +
+		"\nYour prior review evidence already established that the parent orchestration summary `Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md` is present and substantive." +
+		" It also established that task.list returned zero direct child tasks beneath this orchestration parent." +
+		" Call flow.review_decision immediately with decision=reject, flow_node_execution_id " + executionID.String() + ", and concise findings that the orchestration parent has no direct child-task evidence to validate against its summary." +
+		" Use the empty direct child-task lookup as the rejection evidence." +
+		" Do not reread the parent summary, do not re-list the broader project task tree, and do not search planning companion files."
+	userMessage := repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   rejectPrompt,
+		Metadata: mustMarshalJSON(t, map[string]any{
+			"source":                 "task_review_action",
+			"synthetic_user_message": true,
+			"flow_node_execution_id": executionID.String(),
+		}),
+	}
+	fixture.messages.upsert(userMessage)
+
+	turnRecord, created, err := fixture.chat.CreateForMessageAttempt(context.Background(), fixture.session.ID, assignedID, userMessage.ID, 0)
+	if err != nil {
+		t.Fatalf("CreateForMessageAttempt: %v", err)
+	}
+	if !created {
+		t.Fatal("expected reject-only review turn to be created")
+	}
+	if err := fixture.chat.StartTurn(context.Background(), turnRecord.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+	turn := fixture.chat.turnByID(turnRecord.ID)
+	if turn == nil {
+		t.Fatal("missing reject-only review turn")
+	}
+
+	runtime := &turnRuntime{
+		session:            fixture.session,
+		agent:              repo.Agent{ID: assignedID},
+		turn:               turn,
+		initialMessageID:   userMessage.ID,
+		initialMessageText: userMessage.Content,
+		startedAt:          base.Add(-time.Second),
+	}
+	handled, err := fixture.engine.handleTransientModelTurnFailure(context.Background(), runtime, userMessage.ID, nil, 0, ErrModelTransient)
+	if err != nil {
+		t.Fatalf("handleTransientModelTurnFailure: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected transient model failure to be handled")
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn retries = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil {
+		t.Fatal("retry payload missing")
+	}
+	if jobs[0].payload.MessageID != userMessage.ID {
+		t.Fatalf("retry message_id = %s, want reuse of existing reject-only prompt %s", jobs[0].payload.MessageID, userMessage.ID)
+	}
+	if fixture.messages.containsContent("[Transient retry narrowed the next review prompt using evidence gathered before the provider failure.]") {
+		t.Fatal("did not expect narrowed retry status when reusing the existing reject-only prompt")
+	}
+}
+
 func TestHandleTurnJobAsyncProjectTaskTransientProviderRetryCapStopsRequeue(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	fixture.engine.modelRetryBudget = 3
