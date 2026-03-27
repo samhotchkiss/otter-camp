@@ -2961,3 +2961,51 @@ Why this matters:
 - the runtime cutoffs were already using these churn families
 - but the operator surfaces still had one remaining formatting artifact
 - now the shell report and the CLI JSON agree on the exact normalized target paths, which makes the next live canary comparison easier to trust
+
+## Update 00:02 MDT
+
+I added one more narrow same-turn cutoff for the current helper-file rewrite loop.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - async task turns now classify repeated redirected `file.write` attempts as deterministic churn when the model keeps asking to write helper paths like `gen.py` / `tools/gen.py` but the runtime keeps writing the same target deliverable instead
+  - once the current turn has already observed `3` such redirected writes, the turn now stops immediately instead of waiting for a prior cross-turn guard count
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for the exact helper-file redirect shape and kept adjacent file-write/readback churn regressions green
+
+Why this slice exists:
+
+- the hottest recent turn was `7cf145f0-dcc0-45f0-85ab-57b5ea2f17f7` on session `a0389ee3-e6bb-49ce-a942-ce612e146459`
+- that turn kept trying helper-file paths such as:
+  - `gen_script.py`
+  - `tools/gen.py`
+  - `gen.py`
+- but each successful `file.write` result still reported the same redirected target:
+  - `scripts/validate-error-handling.sh`
+- the turn then burned more rounds checking whether those helper files existed, rereading the target, and trying another helper path
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdRedirectedFileWriteInSameTurn|HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdPackageInstallAttemptWithInterleavedChecks|HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdShellFileReadbackInSameTurn|HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdWrittenFileReadbackInSameTurn|HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdIdenticalSuccessfulFileWriteInSameTurn)$' -count=1`
+
+Deploy status:
+
+- rebuilt `./bin/ottercamp`
+- restarted tmux `codex-e2e-20260324` serve/worker
+- `./bin/ottercamp health --output json` is `ok`
+
+Live-proof status:
+
+- deployed, but not yet freshly exercised in production
+- immediately after restart, fresh task traffic was hitting a different family first:
+  - turn `bc253bf2-288a-426d-abda-7480bc5856dc` on session `13bf8058-133d-49e8-97be-6e1853fbd2f7`
+  - current pattern there is `file.edit -> old_string_not_found` followed by a bad `cat` probe, not another helper-file redirect loop
+
+So this slice is:
+
+- code complete
+- tested
+- deployed
+- awaiting first fresh live repro

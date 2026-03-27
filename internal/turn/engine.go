@@ -107,6 +107,7 @@ const (
 	validationLoopBlockThreshold              = 3
 	validationLoopTurnStopThreshold           = 2
 	duplicateSuccessfulFileWriteChurnCode     = "duplicate_successful_write_churn"
+	duplicateRedirectedFileWriteChurnCode     = "duplicate_redirected_file_write_churn"
 	duplicatePackageInstallChurnCode          = "duplicate_package_install_churn"
 	duplicateShellFileBuildChurnCode          = "duplicate_shell_file_build_churn"
 	duplicateShellFileReadbackChurnCode       = "duplicate_shell_file_readback_churn"
@@ -17946,6 +17947,9 @@ func (e *TurnEngine) collectAsyncTaskToolResultChurnFailures(ctx context.Context
 		if failure, ok := classifyRepeatedSuccessfulFileWriteChurn(turnMessages, result); ok {
 			candidates = append(candidates, failure)
 		}
+		if failure, ok := classifyRepeatedRedirectedFileWriteChurn(turnMessages, assistantCalls, result); ok {
+			candidates = append(candidates, failure)
+		}
 		if failure, ok := classifyRepeatedPackageInstallChurn(turnMessages, assistantCalls, result); ok {
 			candidates = append(candidates, failure)
 		}
@@ -18068,6 +18072,89 @@ func classifyRepeatedSuccessfulFileWriteChurn(turnMessages []repo.ChatMessage, r
 
 func successfulFileWriteChurnAttemptFingerprint(path string, byteSize int, created bool) string {
 	return fmt.Sprintf("file.write:success:%s:%d:%t", normalizeWorkspaceRelativePath(path), byteSize, created)
+}
+
+func classifyRepeatedRedirectedFileWriteChurn(turnMessages []repo.ChatMessage, assistantCalls map[string]storedAssistantToolCall, result ToolResult) (toolValidationFailure, bool) {
+	if !strings.EqualFold(strings.TrimSpace(result.Name), "file.write") || strings.TrimSpace(result.Error) != "" {
+		return toolValidationFailure{}, false
+	}
+	callID := strings.TrimSpace(result.ToolCallID)
+	if callID == "" || len(assistantCalls) == 0 {
+		return toolValidationFailure{}, false
+	}
+	currentCall, ok := assistantCalls[callID]
+	if !ok {
+		return toolValidationFailure{}, false
+	}
+	currentAttemptedPath := normalizeWorkspaceRelativePath(fileWritePathFromArguments(currentCall.Arguments))
+	currentWrittenPath := normalizeWorkspaceRelativePath(anyString(result.Output["path"]))
+	if currentAttemptedPath == "" || currentWrittenPath == "" || sameWorkspaceRelativePath(currentAttemptedPath, currentWrittenPath) {
+		return toolValidationFailure{}, false
+	}
+	if anyInt(result.Output["byte_size"]) <= 0 {
+		return toolValidationFailure{}, false
+	}
+
+	matchCount := 0
+	currentRecorded := false
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") || message.ToolCallID == nil {
+			continue
+		}
+		messageCallID := strings.TrimSpace(*message.ToolCallID)
+		if messageCallID == "" {
+			continue
+		}
+		toolName, output, errText, parsed := parseToolResultMessage(message.Content)
+		if !parsed || !strings.EqualFold(strings.TrimSpace(toolName), "file.write") || strings.TrimSpace(errText) != "" {
+			continue
+		}
+		priorCall, exists := assistantCalls[messageCallID]
+		if !exists {
+			continue
+		}
+		priorAttemptedPath := normalizeWorkspaceRelativePath(fileWritePathFromArguments(priorCall.Arguments))
+		priorWrittenPath := normalizeWorkspaceRelativePath(anyString(output["path"]))
+		if priorAttemptedPath == "" || priorWrittenPath == "" || sameWorkspaceRelativePath(priorAttemptedPath, priorWrittenPath) {
+			continue
+		}
+		if !sameWorkspaceRelativePath(priorWrittenPath, currentWrittenPath) {
+			continue
+		}
+		matchCount++
+		if messageCallID == callID {
+			currentRecorded = true
+		}
+	}
+	if !currentRecorded {
+		matchCount++
+	}
+	if matchCount < validationLoopBlockThreshold {
+		return toolValidationFailure{}, false
+	}
+
+	reason := fmt.Sprintf("repeated off-target file.write attempts were redirected to `%s` in the same turn; latest requested `%s`", currentWrittenPath, currentAttemptedPath)
+	failure := buildToolValidationFailure(
+		"file.write",
+		duplicateRedirectedFileWriteChurnCode,
+		reason,
+		redirectedFileWriteChurnAttemptFingerprint(currentWrittenPath),
+		currentWrittenPath,
+	)
+	failure.ObservedCount = matchCount
+	return failure, true
+}
+
+func redirectedFileWriteChurnAttemptFingerprint(path string) string {
+	return "file.write:redirected:" + normalizeWorkspaceRelativePath(path)
+}
+
+func fileWritePathFromArguments(arguments map[string]any) string {
+	if len(arguments) == 0 {
+		return ""
+	}
+	normalized := toolargs.Normalize("file.write", cloneMap(arguments))
+	return strings.TrimSpace(anyString(normalized["path"]))
 }
 
 func classifyRepeatedPackageInstallChurn(turnMessages []repo.ChatMessage, assistantCalls map[string]storedAssistantToolCall, result ToolResult) (toolValidationFailure, bool) {
@@ -19093,6 +19180,11 @@ func shouldStopTurnAfterRepeatedTaskValidationFailure(rt *turnRuntime, current, 
 		failure.ObservedCount >= validationLoopBlockThreshold {
 		return true
 	}
+	if current.Count == 0 &&
+		strings.EqualFold(strings.TrimSpace(failure.FailureCode), duplicateRedirectedFileWriteChurnCode) &&
+		failure.ObservedCount >= validationLoopBlockThreshold {
+		return true
+	}
 	if next.Count < validationLoopTurnStopThreshold {
 		return false
 	}
@@ -19115,6 +19207,9 @@ func buildValidationLoopBlockReason(state taskValidationGuardState) string {
 	toolName := strings.TrimSpace(state.ToolName)
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateSuccessfulFileWriteChurnCode) {
 		return fmt.Sprintf("deterministic same-turn successful file.write churn blocked after %d identical rewrites: %s", state.Count, reason)
+	}
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateRedirectedFileWriteChurnCode) {
+		return fmt.Sprintf("deterministic same-turn redirected file.write churn blocked after %d off-target attempts: %s", state.Count, reason)
 	}
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicatePackageInstallChurnCode) {
 		return fmt.Sprintf("deterministic same-turn package-install churn blocked after %d identical attempts: %s", state.Count, reason)
@@ -19312,6 +19407,9 @@ func buildValidationLoopTurnStopSystemMessage(state taskValidationGuardState) st
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateSuccessfulFileWriteChurnCode) {
 		return fmt.Sprintf("[Repeated identical successful file.write churn in this turn (%d/%d): %s. Ending the turn early so the next continuation can take a narrower step.]", state.Count, validationLoopBlockThreshold, reason)
 	}
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateRedirectedFileWriteChurnCode) {
+		return fmt.Sprintf("[Repeated redirected file.write churn in this turn (%d/%d): %s. Ending the turn early so the next continuation writes the deliverable directly instead of staging more helper files.]", state.Count, validationLoopBlockThreshold, reason)
+	}
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicatePackageInstallChurnCode) {
 		return fmt.Sprintf("[Repeated identical cli.execute package-install churn in this turn (%d/%d): %s. Ending the turn early so the next continuation can take a narrower step.]", state.Count, validationLoopBlockThreshold, reason)
 	}
@@ -19344,6 +19442,9 @@ func buildValidationLoopSystemMessage(state taskValidationGuardState) string {
 	}
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicatePackageInstallChurnCode) {
 		return fmt.Sprintf("[Deterministic same-turn package-install churn blocked after %d identical attempts: %s]", state.Count, reason)
+	}
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateRedirectedFileWriteChurnCode) {
+		return fmt.Sprintf("[Deterministic same-turn redirected file.write churn blocked after %d off-target attempts: %s]", state.Count, reason)
 	}
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateShellFileBuildChurnCode) {
 		return fmt.Sprintf("[Deterministic same-turn shell file-build churn blocked after %d identical target rewrites: %s]", state.Count, reason)

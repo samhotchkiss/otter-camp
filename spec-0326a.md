@@ -639,6 +639,10 @@ Implemented so far in this spec:
   - but it no longer hydrates from looser historical target-path fallback alone
   - when the current step has no high-confidence draft for that file, the runtime now appends a task correction instead of silently rewriting to a stale prior target path
   - this targets the live config-loader family where an empty `cli.execute` intended to write `tests/test_config_loader.py` kept being rewritten into another `file.write` for `config/pipeline-config-invalid.yaml`
+- repeated off-target helper-file writes that the runtime keeps redirecting back onto the same deliverable now stop as deterministic same-turn churn:
+  - async task turns now classify the third successful `file.write` in one turn as redirected-write churn when the requested path keeps changing (`gen.py`, `tools/gen.py`, etc.) but the runtime keeps writing the same deliverable path instead
+  - the turn-stop path is immediate once the current turn has already observed three such redirected writes, so the lane does not need a prior cross-turn guard increment to stop
+  - this specifically targets the hot task-16 pattern where helper script writes were being rewritten onto `scripts/validate-error-handling.sh`, followed by more helper-file discovery and readback loops
 - operator package-install churn diagnostics now normalize install specs instead of smearing whole shell commands:
   - both `scripts/token-usage-report.sh` and `ottercamp db token-usage` now extract package-install attempts from assistant `cli_execute` metadata using anchored `pip install` / `python -m pip install` matching
   - the report strips shell suffixes and ignores installer flags while retaining the actual package spec
