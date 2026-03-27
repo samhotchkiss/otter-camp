@@ -1837,3 +1837,40 @@ Current signal:
 - that means the router is already telling us “all connections cooling down” before a specific connection is chosen
 
 So the next possible runtime slice, if we decide it is worth it, is a preflight defer for async turns when routing returns an all-connections-cooling-down backoff.
+
+## Update 18:37 MDT
+
+I implemented that router-aware preflight defer for async execution turns.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - async `project` and `project_task` turns now ask the model gateway for an availability preflight immediately after profile resolution and before tool resolution / prompt assembly
+  - when that probe returns a real `ErrRateLimited`, the turn now exits directly into the existing delayed retry path instead of assembling prompt context, appending an assistant placeholder, or creating a no-op `agent_turn` invocation row
+  - non-rate-limit probe failures are ignored and fall back to the normal model path, so this slice only changes the known all-connections-cooling-down case
+- [`internal/gateway/client.go`](../internal/gateway/client.go)
+  - `LiveModelGateway` now implements the optional availability probe by reusing router selection
+  - router-level `ConnectionsRateLimitedError` is translated into the ordinary turn-level `ErrRateLimited`
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused async tests proving:
+    - rate-limited preflight defers before prompt assembly
+    - non-rate-limit probe errors do not short-circuit normal execution
+
+Focused verification:
+
+- `go test ./internal/turn -run 'Test(HandleTurnJobAsyncProjectTaskRateLimitedPreflightDefersBeforePromptAssembly|HandleTurnJobAsyncProjectTaskAvailabilityProbeFallsBackOnNonRateLimitError|HandleTurnJobRateLimitedEnqueuesRetryUsingProviderHint|HandleTurnJobRateLimitedDoesNotRetryInsideSingleTurn)$' -count=1`
+- `go test ./internal/gateway -run '^$' -count=1`
+
+Why this is worth doing even though it changes telemetry shape:
+
+- the recent `Rate-Limit Failure Routing Split` showed the current cooldown churn is almost entirely `pre_routing`
+- that means the router already knows no Anthropic connection can be selected
+- in that case, spending prompt assembly plus a synthetic failed `agent_turn` invocation is wasted work
+
+What is still not live-proven yet:
+
+- I have not restarted the runtime on this newest slice yet
+- I also have not yet observed a fresh cooldown retry on the new binary to confirm the intended effect in production:
+  - delayed retry still enqueued
+  - no prompt assembly for that turn
+  - no new pre-routing `agent_turn` invocation row created for the deferred attempt

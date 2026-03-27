@@ -1600,6 +1600,74 @@ func TestHandleTurnJobRateLimitedDoesNotRetryInsideSingleTurn(t *testing.T) {
 	}
 }
 
+func TestHandleTurnJobAsyncProjectTaskRateLimitedPreflightDefersBeforePromptAssembly(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = uuid.New()
+	fixture.engine.now = func() time.Time { return time.Unix(1700000000, 0).UTC() }
+	fixture.engine.modelRetryBudget = 1
+	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
+		t.Fatalf("unexpected prompt assembly call %d for turn %s", call, input.TurnID)
+	}
+	retryAfter := 2*time.Minute + 7*time.Second
+	fixture.model.probeFn = func(context.Context, ModelRequest) error {
+		return NewRateLimitedError(retryAfter, errors.New("all provider connections are rate limited"))
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if fixture.model.probeCalls != 1 {
+		t.Fatalf("probe calls = %d, want 1", fixture.model.probeCalls)
+	}
+	if fixture.model.streamCalls != 0 {
+		t.Fatalf("stream calls = %d, want 0", fixture.model.streamCalls)
+	}
+	if got := len(fixture.invocations.creates); got != 0 {
+		t.Fatalf("invocation creates = %d, want 0", got)
+	}
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn retries = %d, want 1", len(jobs))
+	}
+	if job := jobs[0]; job.payload == nil || job.payload.RetryCount != 1 {
+		t.Fatalf("retry payload = %+v, want retry_count=1", jobs[0].payload)
+	}
+	if !fixture.messages.containsContentSubstring("[Rate limited, retrying in ") {
+		t.Fatal("missing rate-limited retry status message")
+	}
+}
+
+func TestHandleTurnJobAsyncProjectTaskAvailabilityProbeFallsBackOnNonRateLimitError(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = uuid.New()
+	fixture.model.probeFn = func(context.Context, ModelRequest) error {
+		return errors.New("probe unavailable")
+	}
+	fixture.model.streamFn = func(context.Context, ModelRequest, func(string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if fixture.model.probeCalls != 1 {
+		t.Fatalf("probe calls = %d, want 1", fixture.model.probeCalls)
+	}
+	if fixture.assembler.calls != 1 {
+		t.Fatalf("assemble calls = %d, want 1", fixture.assembler.calls)
+	}
+	if fixture.model.streamCalls != 1 {
+		t.Fatalf("stream calls = %d, want 1", fixture.model.streamCalls)
+	}
+	if got := len(fixture.invocations.creates); got != 1 {
+		t.Fatalf("invocation creates = %d, want 1", got)
+	}
+}
+
 func TestHandleTurnJobRateLimitedUsesBackoffWhenNoRetryHint(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	base := time.Unix(1700000000, 0).UTC()
@@ -22539,12 +22607,22 @@ func (f *fakeSummarizationChecker) ShouldSummarize(context.Context, uuid.UUID, i
 }
 
 type fakeModelGateway struct {
+	probeFn    func(ctx context.Context, req ModelRequest) error
 	streamFn   func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error)
 	completeFn func(ctx context.Context, req ModelRequest) (ModelResponse, error)
 
+	probeCalls               int
 	streamCalls              int
 	listeningEvalCalls       int
 	continuationSummaryCalls int
+}
+
+func (f *fakeModelGateway) ProbeAvailability(ctx context.Context, req ModelRequest) error {
+	f.probeCalls++
+	if f.probeFn != nil {
+		return f.probeFn(ctx, req)
+	}
+	return nil
 }
 
 func (f *fakeModelGateway) StreamComplete(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {

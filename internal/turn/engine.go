@@ -279,6 +279,10 @@ type ModelGateway interface {
 	Complete(ctx context.Context, req ModelRequest) (ModelResponse, error)
 }
 
+type ModelAvailabilityProbe interface {
+	ProbeAvailability(ctx context.Context, req ModelRequest) error
+}
+
 type ToolDispatcher interface {
 	DispatchTier1(ctx context.Context, call ToolCall) (ToolResult, error)
 	DispatchTier2(ctx context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error)
@@ -7262,6 +7266,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 		profile, err := e.resolveModelProfile(ctx, rt.session, rt.agent, "agent_turn", rt.modelRetryUsed, taskComplexity)
 		if err != nil {
 			return fmt.Errorf("resolveModelProfile: %w", err)
+		}
+		if err := e.preflightMainModelAvailability(ctx, rt, profile); err != nil {
+			return err
 		}
 
 		toolSet, err := e.toolResolver.GetSessionToolSet(ctx, rt.session.ID, rt.agent.ID)
@@ -21301,6 +21308,51 @@ func (e *TurnEngine) callMainModel(
 		}
 		e.updateRunTokenRollup(ctx, rollupInvocation, usage)
 		return response, nil
+	}
+}
+
+func (e *TurnEngine) preflightMainModelAvailability(ctx context.Context, rt *turnRuntime, profile repo.ModelProfile) error {
+	if !shouldPreflightMainModelAvailability(rt) {
+		return nil
+	}
+	probe, ok := e.models.(ModelAvailabilityProbe)
+	if !ok || probe == nil {
+		return nil
+	}
+	err := probe.ProbeAvailability(ctx, ModelRequest{
+		OrganizationID: rt.session.OrganizationID,
+		SessionID:      rt.session.ID,
+		TurnID:         rt.turn.ID,
+		AgentID:        rt.agent.ID,
+		RunID:          cloneUUIDPointer(rt.runID),
+		RunStepID:      cloneUUIDPointer(rt.runStepID),
+		RunAttemptID:   cloneUUIDPointer(rt.runAttemptID),
+		Purpose:        "agent_turn",
+		Profile:        profile,
+	})
+	if err == nil || errors.Is(err, ErrRateLimited) {
+		return err
+	}
+	e.logger.Debug(
+		"model availability probe failed; continuing with normal turn execution",
+		"session_id", rt.session.ID,
+		"turn_id", rt.turn.ID,
+		"scope_type", strings.TrimSpace(rt.session.ScopeType),
+		"mode", strings.TrimSpace(rt.session.Mode),
+		"error", err,
+	)
+	return nil
+}
+
+func shouldPreflightMainModelAvailability(rt *turnRuntime) bool {
+	if rt == nil || rt.session == nil || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(rt.session.ScopeType)) {
+	case "project", "project_task":
+		return true
+	default:
+		return false
 	}
 }
 

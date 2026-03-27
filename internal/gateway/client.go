@@ -203,6 +203,37 @@ func (g *LiveModelGateway) Complete(ctx context.Context, req turn.ModelRequest) 
 	return g.complete(ctx, req, false, nil)
 }
 
+func (g *LiveModelGateway) ProbeAvailability(ctx context.Context, req turn.ModelRequest) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if g == nil || g.router == nil {
+		return fmt.Errorf("live model gateway is not configured")
+	}
+
+	orgID := req.OrganizationID
+	if orgID == uuid.Nil && req.Profile.OrganizationID != nil {
+		orgID = *req.Profile.OrganizationID
+	}
+	if orgID == uuid.Nil {
+		return fmt.Errorf("organization id is required")
+	}
+	if strings.TrimSpace(req.Profile.LogicalProfileID) == "" {
+		return fmt.Errorf("model profile id is required")
+	}
+
+	priority := priorityForPurpose(req.Purpose)
+	_, _, err := g.selectConnection(ctx, orgID, req, priority)
+	if err == nil {
+		return nil
+	}
+	var rateLimited ConnectionsRateLimitedError
+	if errors.As(err, &rateLimited) {
+		return turn.NewRateLimitedError(rateLimited.RetryAfter, err)
+	}
+	return err
+}
+
 type providerCallResult struct {
 	Content      string
 	ToolCalls    []turn.ModelToolCall

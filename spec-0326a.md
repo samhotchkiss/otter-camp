@@ -547,6 +547,10 @@ Implemented so far in this spec:
 - claim-time worker cleanup now retires project dispatches that were already permanently unclaimable under existing claim SQL:
   - inactive `project_bootstrap` dispatches
   - settled `project_execution_continuation` / `project_continuation_resume` dispatches with no unfinished tasks
+- async `project` and `project_task` turns now preflight model availability before prompt assembly:
+  - the engine asks the live gateway whether the routed profile is already in an all-connections-cooling-down window
+  - on a real router-level cooldown, the turn now goes straight to the existing delayed `ErrRateLimited` retry path without assembling prompt context, appending an assistant placeholder, or creating a no-op `agent_turn` invocation row
+  - non-rate-limit probe failures fall back to the normal model path so this slice only changes the known cooldown case
 - tool-result parsing and operator diagnostics now treat native validation failures stored in `output.error` as real tool errors instead of silently classifying them as successes
 - async `project_task` work lanes now have a session-level cutoff for cross-turn read-only discovery churn:
   - after `5` consecutive `max_tool_calls` turns
