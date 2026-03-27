@@ -2603,6 +2603,15 @@ type dbTokenUsageCLIRootRow struct {
 	LastSeen      time.Time `json:"last_seen"`
 }
 
+type dbTokenUsageValidationLoopBlockRow struct {
+	TurnID       uuid.UUID `json:"turn_id"`
+	SessionID    uuid.UUID `json:"session_id"`
+	ScopeType    string    `json:"scope_type"`
+	Mode         string    `json:"mode"`
+	BlockExcerpt string    `json:"block_excerpt"`
+	CompletedAt  time.Time `json:"completed_at"`
+}
+
 type dbTokenUsageStopReasonRow struct {
 	ScopeType            string    `json:"scope_type"`
 	Mode                 string    `json:"mode"`
@@ -2655,21 +2664,22 @@ type dbTokenUsageBacklogRow struct {
 }
 
 type dbTokenUsageReport struct {
-	WindowHours                 int                             `json:"window_hours"`
-	Limit                       int                             `json:"limit"`
-	OrganizationID              *uuid.UUID                      `json:"organization_id,omitempty"`
-	Overview                    dbTokenUsageOverview            `json:"overview"`
-	ByPurpose                   []dbTokenUsagePurposeRow        `json:"by_purpose"`
-	TopSessions                 []dbTokenUsageSessionRow        `json:"top_sessions"`
-	TopTurns                    []dbTokenUsageTurnRow           `json:"top_turns"`
-	RepeatedPackageInstalls     []dbTokenUsagePackageInstallRow `json:"repeated_package_installs"`
-	ShellFileBuildReadbackChurn []dbTokenUsageShellChurnRow     `json:"shell_file_build_readback_churn"`
-	CLIWorkingDirectoryRoots    []dbTokenUsageCLIRootRow        `json:"task_cli_working_directory_roots"`
-	CompletedByStopReason       []dbTokenUsageStopReasonRow     `json:"completed_by_stop_reason"`
-	Failures                    []dbTokenUsageFailureRow        `json:"failures"`
-	ProviderHealth              []dbTokenUsageProviderHealthRow `json:"provider_health"`
-	RateLimitRoutingSplit       []dbTokenUsageRoutingSplitRow   `json:"rate_limit_routing_split"`
-	PendingBacklog              []dbTokenUsageBacklogRow        `json:"pending_agent_turn_backlog"`
+	WindowHours                 int                                  `json:"window_hours"`
+	Limit                       int                                  `json:"limit"`
+	OrganizationID              *uuid.UUID                           `json:"organization_id,omitempty"`
+	Overview                    dbTokenUsageOverview                 `json:"overview"`
+	ByPurpose                   []dbTokenUsagePurposeRow             `json:"by_purpose"`
+	TopSessions                 []dbTokenUsageSessionRow             `json:"top_sessions"`
+	TopTurns                    []dbTokenUsageTurnRow                `json:"top_turns"`
+	RepeatedPackageInstalls     []dbTokenUsagePackageInstallRow      `json:"repeated_package_installs"`
+	ShellFileBuildReadbackChurn []dbTokenUsageShellChurnRow          `json:"shell_file_build_readback_churn"`
+	CLIWorkingDirectoryRoots    []dbTokenUsageCLIRootRow             `json:"task_cli_working_directory_roots"`
+	RecentValidationLoopBlocks  []dbTokenUsageValidationLoopBlockRow `json:"recent_validation_loop_blocks"`
+	CompletedByStopReason       []dbTokenUsageStopReasonRow          `json:"completed_by_stop_reason"`
+	Failures                    []dbTokenUsageFailureRow             `json:"failures"`
+	ProviderHealth              []dbTokenUsageProviderHealthRow      `json:"provider_health"`
+	RateLimitRoutingSplit       []dbTokenUsageRoutingSplitRow        `json:"rate_limit_routing_split"`
+	PendingBacklog              []dbTokenUsageBacklogRow             `json:"pending_agent_turn_backlog"`
 }
 
 func runDBTokenUsage(args []string) int {
@@ -3461,6 +3471,63 @@ func loadDBTokenUsageReport(ctx context.Context, pool *pgxpool.Pool, windowHours
 		return nil, err
 	}
 
+	validationLoopRows, err := pool.Query(ctx, `
+		WITH ranked AS (
+			SELECT
+				ct.id AS turn_id,
+				ct.session_id,
+				cs.scope_type,
+				cs.mode,
+				regexp_replace(trim(coalesce(cm.content, '')), '\s+', ' ', 'g') AS block_excerpt,
+				ct.completed_at,
+				ROW_NUMBER() OVER (
+					PARTITION BY ct.id
+					ORDER BY cm.created_at DESC NULLS LAST, cm.sequence_number DESC NULLS LAST, cm.id DESC NULLS LAST
+				) AS rn
+			FROM chat_turn ct
+			JOIN chat_session cs ON cs.id = ct.session_id
+			LEFT JOIN chat_message cm
+				ON cm.turn_id = ct.id
+				AND cm.role = 'system'
+			WHERE ct.completed_at >= $1
+			  AND ct.status = 'completed'
+			  AND ct.stop_reason = 'validation_loop_blocked'
+			  AND ($2::uuid IS NULL OR cs.organization_id = $2)
+		)
+		SELECT
+			turn_id,
+			session_id,
+			scope_type,
+			mode,
+			COALESCE(NULLIF(left(block_excerpt, 240), ''), 'validation_loop_blocked') AS block_excerpt,
+			completed_at
+		FROM ranked
+		WHERE rn = 1
+		ORDER BY completed_at DESC
+		LIMIT $3
+	`, sinceAt, orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer validationLoopRows.Close()
+	for validationLoopRows.Next() {
+		var row dbTokenUsageValidationLoopBlockRow
+		if scanErr := validationLoopRows.Scan(
+			&row.TurnID,
+			&row.SessionID,
+			&row.ScopeType,
+			&row.Mode,
+			&row.BlockExcerpt,
+			&row.CompletedAt,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		report.RecentValidationLoopBlocks = append(report.RecentValidationLoopBlocks, row)
+	}
+	if err := validationLoopRows.Err(); err != nil {
+		return nil, err
+	}
+
 	return report, nil
 }
 
@@ -3584,6 +3651,21 @@ func printDBTokenUsageReportTable(w io.Writer, formatter clitools.OutputFormatte
 		})
 	}
 	_ = formatter.WriteTable([]string{"Root Kind", "Executions", "Distinct Tasks", "Last Seen"}, cliRootRows)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "== Recent Validation-Loop Blocks ==")
+	validationLoopRows := make([][]string, 0, len(report.RecentValidationLoopBlocks))
+	for _, row := range report.RecentValidationLoopBlocks {
+		validationLoopRows = append(validationLoopRows, []string{
+			row.TurnID.String(),
+			row.SessionID.String(),
+			row.ScopeType,
+			row.Mode,
+			row.BlockExcerpt,
+			row.CompletedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	_ = formatter.WriteTable([]string{"Turn", "Session", "Scope", "Mode", "Block Excerpt", "Completed At"}, validationLoopRows)
 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "== Completed Turns By Stop Reason ==")

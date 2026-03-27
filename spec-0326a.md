@@ -658,6 +658,21 @@ Implemented so far in this spec:
     - older rows still show `project_workspace`
     - fresh rows at `2026-03-27 00:27:46 MDT` and `00:27:53 MDT` are already landing as `task_worktree`
   - that confirms the task-worktree fix is live and that the remaining mixed sample is historical overlap across the restart boundary, not a still-broken resolver
+- operator token-usage reporting now also surfaces the exact recent `validation_loop_blocked` families instead of only the stop-reason totals:
+  - both `scripts/token-usage-report.sh` and `ottercamp db token-usage` now emit `recent_validation_loop_blocks`
+  - each row shows:
+    - `turn_id`
+    - `session_id`
+    - `scope_type`
+    - `mode`
+    - the latest system-message blocker excerpt for that blocked turn
+    - `completed_at`
+  - live smoke immediately made the next dominant families visible without ad hoc SQL:
+    - repeated `file.read -> not_found`
+    - review turns halting after repeated empty outputs
+    - `file.list -> recovery_target_focus_required`
+    - `file.write -> non_substantive_content`
+  - that makes the next runtime-hardening decision materially safer because we can now see the exact blocker wording the turn engine is emitting
 - operator package-install churn diagnostics now normalize install specs instead of smearing whole shell commands:
   - both `scripts/token-usage-report.sh` and `ottercamp db token-usage` now extract package-install attempts from assistant `cli_execute` metadata using anchored `pip install` / `python -m pip install` matching
   - the report strips shell suffixes and ignores installer flags while retaining the actual package spec

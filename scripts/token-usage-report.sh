@@ -774,6 +774,48 @@ FROM root_rollup
 ORDER BY executions DESC, root_kind ASC;
 
 \echo
+\echo '== Recent Validation-Loop Blocks =='
+WITH params AS (
+  SELECT
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
+    NULLIF(:'org_id', '')::uuid AS org_id
+),
+ranked AS (
+  SELECT
+    ct.id AS turn_id,
+    ct.session_id,
+    cs.scope_type,
+    cs.mode,
+    COALESCE(NULLIF(left(regexp_replace(trim(coalesce(cm.content, '')), E'\\s+', ' ', 'g'), 240), ''), 'validation_loop_blocked') AS block_excerpt,
+    ct.completed_at,
+    ROW_NUMBER() OVER (
+      PARTITION BY ct.id
+      ORDER BY cm.created_at DESC NULLS LAST, cm.sequence_number DESC NULLS LAST, cm.id DESC NULLS LAST
+    ) AS rn
+  FROM chat_turn ct
+  JOIN chat_session cs ON cs.id = ct.session_id
+  LEFT JOIN chat_message cm
+    ON cm.turn_id = ct.id
+   AND cm.role = 'system'
+  CROSS JOIN params p
+  WHERE ct.completed_at >= p.since_at
+    AND ct.status = 'completed'
+    AND ct.stop_reason = 'validation_loop_blocked'
+    AND (p.org_id IS NULL OR cs.organization_id = p.org_id)
+)
+SELECT
+  turn_id,
+  session_id,
+  scope_type,
+  mode,
+  block_excerpt,
+  completed_at
+FROM ranked
+WHERE rn = 1
+ORDER BY completed_at DESC
+LIMIT :'limit_rows'::int;
+
+\echo
 \echo '== Completed Turns By Stop Reason =='
 WITH params AS (
   SELECT

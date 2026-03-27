@@ -237,6 +237,13 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 		{
 			SessionID: session.ID,
 			TurnID:    &turn.ID,
+			Role:      "system",
+			Status:    "final",
+			Content:   "[Repeated identical file.list validation failure in this turn (2/3): recovery_target_focus_required. Ending the turn early so the next continuation can take a narrower step.]",
+		},
+		{
+			SessionID: session.ID,
+			TurnID:    &turn.ID,
 			Role:      "assistant",
 			Status:    "final",
 			Content:   "Trying pip directly.",
@@ -318,6 +325,9 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	if !strings.Contains(stdout, `"task_cli_working_directory_roots"`) || !strings.Contains(stdout, `task_worktree`) || !strings.Contains(stdout, `project_workspace`) {
 		t.Fatalf("db token-usage output missing cli working directory root section: %q", stdout)
 	}
+	if !strings.Contains(stdout, `"recent_validation_loop_blocks"`) || !strings.Contains(stdout, `recovery_target_focus_required`) {
+		t.Fatalf("db token-usage output missing recent validation-loop blocks section: %q", stdout)
+	}
 
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
@@ -361,5 +371,16 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	}
 	if !rootKinds["task_worktree"] || !rootKinds["project_workspace"] {
 		t.Fatalf("unexpected cli root kinds: %#v", rootKinds)
+	}
+	validationLoopBlocks, ok := payload["recent_validation_loop_blocks"].([]any)
+	if !ok || len(validationLoopBlocks) == 0 {
+		t.Fatalf("unexpected recent_validation_loop_blocks payload: %#v", payload["recent_validation_loop_blocks"])
+	}
+	blockRow, ok := validationLoopBlocks[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected validation-loop block row: %#v", validationLoopBlocks[0])
+	}
+	if got, _ := blockRow["block_excerpt"].(string); !strings.Contains(got, "recovery_target_focus_required") {
+		t.Fatalf("block_excerpt = %q, want recovery_target_focus_required", got)
 	}
 }

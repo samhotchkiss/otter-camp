@@ -3115,3 +3115,49 @@ Why this matters:
 - it converts a previously hand-debugged runtime seam into a first-class operator signal
 - it gives us an immediate canary for whether task-lane shell/file alignment stays healthy after future changes
 - it also prevents us from chasing old rows and mixed restart windows as if they were fresh regressions
+
+## Update 00:39 MDT
+
+I added one more operator slice so the next guardrail decision is based on the actual live blocker text, not just stop-reason counts.
+
+What changed:
+
+- [`cmd/ottercamp/main.go`](../cmd/ottercamp/main.go)
+  - `ottercamp db token-usage` now includes `recent_validation_loop_blocks`
+  - each row shows:
+    - `turn_id`
+    - `session_id`
+    - `scope_type`
+    - `mode`
+    - the latest system-message `block_excerpt`
+    - `completed_at`
+- [`cmd/ottercamp/main_db_integration_test.go`](../cmd/ottercamp/main_db_integration_test.go)
+  - the integration fixture now inserts a synthetic validation-loop block system message
+  - the JSON report test asserts that `recent_validation_loop_blocks` is present and carries the blocker excerpt
+- [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh)
+  - now prints the same `Recent Validation-Loop Blocks` section in the shell report
+
+Verification:
+
+- `gofmt -w cmd/ottercamp/main.go cmd/ottercamp/main_db_integration_test.go`
+- `bash -n scripts/token-usage-report.sh`
+- `go test -tags=integration ./cmd/ottercamp -run 'TestDBTokenUsageJSONIncludesCacheReadsAndAttribution$' -count=1`
+- `go build -o ./bin/ottercamp ./cmd/ottercamp`
+- live smoke on both:
+  - `./bin/ottercamp db token-usage --hours 2 --limit 8`
+  - `scripts/token-usage-report.sh --hours 2 --limit 8`
+
+Live read right after landing:
+
+- the dominant current blockers are no longer guesswork
+- the newest rows show:
+  - repeated `file.read` validation failures with `not_found`
+  - review turns halted after repeated empty outputs / missing `flow.review_decision`
+  - `file.list` failures with `recovery_target_focus_required`
+  - `file.write` failures with `non_substantive_content`
+
+Why this matters:
+
+- the top aggregate bucket is still `project_task async -> validation_loop_blocked`
+- before this slice, we could count those turns but still needed ad hoc SQL to know what they actually were
+- now the report itself tells us which blocker family is hot enough to justify the next runtime cut
