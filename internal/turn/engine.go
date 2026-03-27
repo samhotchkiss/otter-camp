@@ -1944,6 +1944,9 @@ func (e *TurnEngine) reviewApprovalRetryPrompt(ctx context.Context, session *cha
 		if retryPrompt, ok := reviewRetryPromptForPersistedMissingRequiredTests(messages, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
 			return retryPrompt, true, nil
 		}
+		if retryPrompt, ok := reviewRetryPromptForMissingSecondaryPlanningArtifacts(messages, latestCompleted, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+			return retryPrompt, true, nil
+		}
 		return "", false, nil
 	}
 	clean, err := e.reviewApprovalWorkspaceClean(ctx, taskRecord)
@@ -2615,6 +2618,179 @@ func reviewRetryPromptForMissingPreferredDeliverable(messages []repo.ChatMessage
 		" Use the missing preferred deliverable as the rejection evidence." +
 		" Do not reply with explanation text, a review plan, or placeholder arguments."
 	return retryPrompt, true
+}
+
+func reviewRetryPromptForMissingSecondaryPlanningArtifacts(messages []repo.ChatMessage, latestCompleted *repo.ChatTurn, latestUser *repo.ChatMessage, taskRecord repo.ProjectTask, executionID uuid.UUID, basePrompt string) (string, bool) {
+	if latestCompleted == nil || latestCompleted.ID == uuid.Nil || latestUser == nil || executionID == uuid.Nil {
+		return "", false
+	}
+	if taskLooksLikeOrchestrationOnlyParent(taskRecord) || len(reviewPromptArtifactContracts(taskRecord)) != 0 {
+		return "", false
+	}
+
+	turnMessages := messagesForTurn(messages, latestCompleted.ID)
+	if len(turnMessages) == 0 || !reviewTurnContainsRepeatedFileReadNotFoundStop(turnMessages) {
+		return "", false
+	}
+
+	rootPath, samplePaths, hasDeliverables := reviewTurnDeliverableEvidence(turnMessages)
+	if !hasDeliverables {
+		return "", false
+	}
+	planningPaths := reviewTurnPlannedPlanningReadPaths(turnMessages)
+	if len(planningPaths) == 0 {
+		return "", false
+	}
+
+	deliverableEvidence := "the current deliverables"
+	if rootPath != "" {
+		deliverableEvidence = "the current deliverables under `" + rootPath + "`"
+	}
+	if len(samplePaths) > 0 {
+		deliverableEvidence += " (for example " + quotedPathList(samplePaths, 3) + ")"
+	}
+
+	retryPrompt := basePrompt +
+		"\nYour last review attempt already established that " + deliverableEvidence + " exist in the workspace." +
+		" The missing files were secondary planning artifacts (" + quotedPathList(planningPaths, 3) + ")." +
+		" Do not read `planning/` files again for this review, and do not repeat task.get, git.log, or broad workspace discovery just to restate the same context." +
+		" Continue bounded review from the current deliverables only. If more evidence is needed, inspect one or two existing deliverables instead of rereading companion planning files." +
+		" Then call flow.review_decision with flow_node_execution_id " + executionID.String() + " to approve or reject this review step." +
+		" Do not reply with a review plan or generic explanation."
+	return retryPrompt, true
+}
+
+func reviewTurnContainsRepeatedFileReadNotFoundStop(turnMessages []repo.ChatMessage) bool {
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		if strings.Contains(message.Content, reviewRepeatedFileReadNotFoundTurnStopSubstring) {
+			return true
+		}
+	}
+	return false
+}
+
+func reviewTurnDeliverableEvidence(turnMessages []repo.ChatMessage) (string, []string, bool) {
+	rootPath := ""
+	samplePaths := make([]string, 0, 3)
+	seen := map[string]struct{}{}
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || normalizeValidationFailureCode(errText) != "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "file.list":
+			path := normalizeWorkspaceRelativePath(anyString(output["path"]))
+			if path == "" || projectBootstrapRecoveryReadsPlanningPath(map[string]any{"path": path}) {
+				continue
+			}
+			entries, _ := output["entries"].([]any)
+			if len(entries) == 0 {
+				continue
+			}
+			if rootPath == "" {
+				rootPath = path
+			}
+			for _, rawEntry := range entries {
+				entry, _ := rawEntry.(map[string]any)
+				entryPath := normalizeWorkspaceRelativePath(anyString(entry["path"]))
+				if entryPath == "" {
+					continue
+				}
+				if projectBootstrapRecoveryReadsPlanningPath(map[string]any{"path": entryPath}) {
+					continue
+				}
+				if _, ok := seen[entryPath]; ok {
+					continue
+				}
+				seen[entryPath] = struct{}{}
+				samplePaths = append(samplePaths, entryPath)
+				if len(samplePaths) >= 3 {
+					break
+				}
+			}
+		case "file.read":
+			path := normalizeWorkspaceRelativePath(anyString(output["path"]))
+			if path == "" || projectBootstrapRecoveryReadsPlanningPath(map[string]any{"path": path}) || intValue(output["byte_size"]) <= 0 {
+				continue
+			}
+			if rootPath == "" {
+				rootPath = path
+			}
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			samplePaths = append(samplePaths, path)
+		}
+		if len(samplePaths) >= 3 && rootPath != "" {
+			break
+		}
+	}
+	if rootPath == "" && len(samplePaths) == 0 {
+		return "", nil, false
+	}
+	return rootPath, samplePaths, true
+}
+
+func reviewTurnPlannedPlanningReadPaths(turnMessages []repo.ChatMessage) []string {
+	paths := make([]string, 0, 3)
+	seen := map[string]struct{}{}
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "assistant") || len(message.Metadata) == 0 {
+			continue
+		}
+		var meta struct {
+			ToolCalls []storedAssistantToolCall `json:"tool_calls"`
+		}
+		if err := json.Unmarshal(message.Metadata, &meta); err != nil {
+			continue
+		}
+		for _, call := range meta.ToolCalls {
+			switch strings.ToLower(strings.TrimSpace(call.Name)) {
+			case "file.read", "file_read":
+			default:
+				continue
+			}
+			path := normalizeWorkspaceRelativePath(anyString(call.Arguments["path"]))
+			if path == "" || !projectBootstrapRecoveryReadsPlanningPath(map[string]any{"path": path}) {
+				continue
+			}
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+			if len(paths) >= 3 {
+				return paths
+			}
+		}
+	}
+	return paths
+}
+
+func quotedPathList(paths []string, limit int) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	if limit <= 0 || limit > len(paths) {
+		limit = len(paths)
+	}
+	parts := make([]string, 0, limit)
+	for _, path := range paths[:limit] {
+		normalized := normalizeWorkspaceRelativePath(path)
+		if normalized == "" {
+			continue
+		}
+		parts = append(parts, "`"+normalized+"`")
+	}
+	return strings.Join(parts, ", ")
 }
 
 func taskReviewRequiresTests(taskRecord repo.ProjectTask) bool {

@@ -32130,6 +32130,122 @@ func TestReviewApprovalRetryPromptRejectsMissingPreferredDeliverable(t *testing.
 	}
 }
 
+func TestReviewApprovalRetryPromptRedirectsMissingSecondaryPlanningArtifactsToDeliverables(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+	description := "Using the scraped post index, extract full content (title, body, date, tags) from each technonymous.org post and convert to markdown files with frontmatter. Commit to the Sam.blog repo under /content/posts/."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  10,
+				Title:       "Convert scraped technonymous.org posts to markdown",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"bootstrap_first_wave_selected": true,
+				}),
+			},
+		},
+	}
+
+	latestUser := repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session),
+	}
+	latestUser.Metadata = mustMarshalJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"synthetic_user_message": true,
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.messages.upsert(latestUser)
+
+	turnID := uuid.New()
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "I'll inspect the current deliverables, planning artifacts, and a few sample posts.",
+		Metadata: buildToolCallMetadata([]ModelToolCall{
+			{ID: "list-1", Name: "file.list", Arguments: map[string]any{"path": "content/posts", "recursive": true}},
+			{ID: "read-plan-1", Name: "file.read", Arguments: map[string]any{"path": "planning/prd-spec/oc-34-acceptance-criteria.md"}},
+			{ID: "read-plan-2", Name: "file.read", Arguments: map[string]any{"path": "planning/prd-spec/oc-34-prd.md"}},
+			{ID: "read-post-1", Name: "file.read", Arguments: map[string]any{"path": "content/posts/2025-07-29-hello-world.md"}},
+			{ID: "read-post-2", Name: "file.read", Arguments: map[string]any{"path": "content/posts/2026-02-03-stop-preparing-your-kids-for-jobs.md"}},
+		}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustMarshalJSON(t, map[string]any{
+			"tool_name": "file.list",
+			"output": map[string]any{
+				"path": "content/posts",
+				"entries": []map[string]any{
+					{"path": "content/posts/2025-07-29-hello-world.md", "type": "file"},
+					{"path": "content/posts/2025-10-21-three-stones.md", "type": "file"},
+					{"path": "content/posts/2026-02-03-stop-preparing-your-kids-for-jobs.md", "type": "file"},
+				},
+			},
+		})),
+	})
+	for i := 0; i < 2; i++ {
+		fixture.messages.create(repo.ChatMessage{
+			SessionID: fixture.session.ID,
+			TurnID:    &turnID,
+			Role:      "tool_result",
+			Status:    "final",
+			Content:   `{"tool_name":"file.read","output":{"error":"not_found"}}`,
+		})
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "system",
+		Status:    "final",
+		Content:   reviewRepeatedFileReadNotFoundTurnStopSubstring + " Ending the turn early so the next continuation can take a narrower step.]",
+	})
+
+	taskRecord, err := fixture.engine.tasks.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	retryPrompt, ok, err := fixture.engine.reviewApprovalRetryPrompt(context.Background(), fixture.session, taskRecord, &latestUser, &repo.ChatTurn{ID: turnID})
+	if err != nil {
+		t.Fatalf("reviewApprovalRetryPrompt: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected deliverable-focused review retry prompt")
+	}
+	if !strings.Contains(retryPrompt, "`content/posts`") {
+		t.Fatalf("retryPrompt = %q, want deliverable root guidance", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "`planning/prd-spec/oc-34-acceptance-criteria.md`") {
+		t.Fatalf("retryPrompt = %q, want missing planning path evidence", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "Do not read `planning/` files again") {
+		t.Fatalf("retryPrompt = %q, want no-planning reread guidance", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "`content/posts/2025-07-29-hello-world.md`") {
+		t.Fatalf("retryPrompt = %q, want concrete deliverable sample guidance", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "flow.review_decision") {
+		t.Fatalf("retryPrompt = %q, want explicit review-decision guidance", retryPrompt)
+	}
+}
+
 func TestReviewApprovalRetryPromptCarriesForwardOrchestrationParentSummaryEvidence(t *testing.T) {
 	t.Parallel()
 
