@@ -2141,6 +2141,40 @@ Why this matters:
 - it closes the remaining “shell script only” visibility gap for the most important live rerun diagnostics
 - when Anthropic quota opens again, the next canary window can be measured directly from product CLI output instead of ad hoc SQL plus the shell wrapper
 
+## Update 20:56 MDT
+
+I used the remaining offline window for one more operator-surface upgrade instead of guessing at another runtime cutoff.
+
+What changed:
+
+- [`cmd/ottercamp/main.go`](../cmd/ottercamp/main.go)
+  - `ottercamp db token-usage` now also includes:
+    - `repeated_package_installs`
+    - `shell_file_build_readback_churn`
+- [`cmd/ottercamp/main_db_integration_test.go`](../cmd/ottercamp/main_db_integration_test.go)
+  - the integration fixture now seeds:
+    - repeated `pip` / `python -m pip install` calls for the same package in one turn
+    - shell-based file build plus readback assistant calls on the same script path
+
+Focused verification:
+
+- `go test -tags=integration ./cmd/ottercamp -run 'TestDBTokenUsageJSONIncludesCacheReadsAndAttribution$' -count=1`
+
+Live smoke on the rebuilt CLI:
+
+- `set -a && source .env && set +a && ./bin/ottercamp db token-usage --output json --hours 6 --limit 3`
+- the JSON now includes:
+  - `repeated_package_installs`
+  - `shell_file_build_readback_churn`
+- live rows surfaced exactly the current high-burn families:
+  - turn `d40b49ee-a369-4f95-98d5-aa2b2ca08bbc` with `6` repeated `pyyaml` install attempts
+  - turn `bf2139fd-5b8a-46b8-93b9-5f1ab2709934` with `7` shell file builds and `4` readback checks
+
+Deployment status:
+
+- this slice is CLI/operator-only
+- I rebuilt `./bin/ottercamp` for local use, but did not restart tmux serve/worker because runtime behavior is unchanged
+
 ## Update 20:44 MDT
 
 I tightened one more package-install churn edge that showed up during offline review of the hot turn family.

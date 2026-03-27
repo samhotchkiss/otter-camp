@@ -550,6 +550,8 @@ Implemented so far in this spec:
   - provider connection health including persisted `health_rate_limited_until`
   - `provider_rate_limited` failures split into pre-routing vs post-routing
   - pending `agent_turn` backlog grouped by session with `current_turn_id`, pause state, stale-source detection, and derived `backlog_state`
+  - repeated package-install attempts grouped by turn with attempted specs
+  - shell file-build / readback churn grouped by turn with path hints
 - claim-time worker cleanup now retires project dispatches that were already permanently unclaimable under existing claim SQL:
   - inactive `project_bootstrap` dispatches
   - settled `project_execution_continuation` / `project_continuation_resume` dispatches with no unfinished tasks

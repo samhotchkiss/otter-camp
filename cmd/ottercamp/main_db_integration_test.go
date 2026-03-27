@@ -85,6 +85,7 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	providerRepo := repo.NewModelProviderRepo(pool)
 	connectionRepo := repo.NewProviderConnectionRepo(pool)
 	sessionRepo := repo.NewChatSessionRepo(pool)
+	messageRepo := repo.NewChatMessageRepo(pool)
 	turnRepo := repo.NewChatTurnRepo(pool)
 	agentRepo := repo.NewAgentRepo(pool)
 
@@ -196,6 +197,48 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	`, `{"session_id":"`+session.ID.String()+`"}`, createdAt.Add(5*time.Minute), createdAt); err != nil {
 		t.Fatalf("insert pending job: %v", err)
 	}
+	for idx, message := range []repo.ChatMessage{
+		{
+			SessionID: session.ID,
+			TurnID:    &turn.ID,
+			Role:      "assistant",
+			Status:    "final",
+			Content:   "Trying pip directly.",
+			Metadata:  json.RawMessage(`{"tool_calls":[{"id":"pkg-1","name":"cli_execute","arguments":{"command":"pip install pyyaml 2>&1 | tail -3"}}]}`),
+		},
+		{
+			SessionID: session.ID,
+			TurnID:    &turn.ID,
+			Role:      "assistant",
+			Status:    "final",
+			Content:   "Trying python -m pip.",
+			Metadata:  json.RawMessage(`{"tool_calls":[{"id":"pkg-2","name":"cli_execute","arguments":{"command":"python3 -m pip install --user pyyaml 2>&1 | tail -5"}}]}`),
+		},
+		{
+			SessionID: session.ID,
+			TurnID:    &turn.ID,
+			Role:      "assistant",
+			Status:    "final",
+			Content:   "Building the helper script.",
+			Metadata:  json.RawMessage(`{"tool_calls":[{"id":"build-1","name":"cli_execute","arguments":{"command":"cat > scripts/demo.sh <<'EOF'\necho ok\nEOF"}}]}`),
+		},
+		{
+			SessionID: session.ID,
+			TurnID:    &turn.ID,
+			Role:      "assistant",
+			Status:    "final",
+			Content:   "Reading the helper script back.",
+			Metadata:  json.RawMessage(`{"tool_calls":[{"id":"read-1","name":"cli_execute","arguments":{"command":"cat scripts/demo.sh"}}]}`),
+		},
+	} {
+		created, err := messageRepo.Create(ctx, message)
+		if err != nil {
+			t.Fatalf("create chat message %d: %v", idx, err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE chat_message SET created_at = $2, updated_at = $2 WHERE id = $1`, created.ID, createdAt.Add(time.Duration(idx+1)*time.Second)); err != nil {
+			t.Fatalf("stamp chat message %d: %v", idx, err)
+		}
+	}
 
 	code, stdout, stderr := captureCommandOutput(t, func() int {
 		return runDBTokenUsage([]string{"--output", "json", "--hours", "24", "--limit", "5", "--org", org.ID.String()})
@@ -229,5 +272,11 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	}
 	if !strings.Contains(stdout, `"pending_agent_turn_backlog"`) || !strings.Contains(stdout, `"backlog_state": "ready"`) {
 		t.Fatalf("db token-usage output missing pending backlog section: %q", stdout)
+	}
+	if !strings.Contains(stdout, `"repeated_package_installs"`) || !strings.Contains(stdout, `pyyaml`) {
+		t.Fatalf("db token-usage output missing repeated package installs section: %q", stdout)
+	}
+	if !strings.Contains(stdout, `"shell_file_build_readback_churn"`) || !strings.Contains(stdout, `scripts/demo.sh`) {
+		t.Fatalf("db token-usage output missing shell build/readback section: %q", stdout)
 	}
 }

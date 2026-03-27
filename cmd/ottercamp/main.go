@@ -2577,6 +2577,25 @@ type dbTokenUsageTurnRow struct {
 	LastSeen        time.Time `json:"last_seen"`
 }
 
+type dbTokenUsagePackageInstallRow struct {
+	TurnID          uuid.UUID `json:"turn_id"`
+	SessionID       uuid.UUID `json:"session_id"`
+	InstallAttempts int64     `json:"install_attempts"`
+	AttemptedSpecs  string    `json:"attempted_specs"`
+	FirstSeen       time.Time `json:"first_seen"`
+	LastSeen        time.Time `json:"last_seen"`
+}
+
+type dbTokenUsageShellChurnRow struct {
+	TurnID          uuid.UUID `json:"turn_id"`
+	SessionID       uuid.UUID `json:"session_id"`
+	ShellFileBuilds int64     `json:"shell_file_builds"`
+	ReadbackChecks  int64     `json:"readback_checks"`
+	PathHints       string    `json:"path_hints"`
+	FirstSeen       time.Time `json:"first_seen"`
+	LastSeen        time.Time `json:"last_seen"`
+}
+
 type dbTokenUsageStopReasonRow struct {
 	ScopeType            string    `json:"scope_type"`
 	Mode                 string    `json:"mode"`
@@ -2629,18 +2648,20 @@ type dbTokenUsageBacklogRow struct {
 }
 
 type dbTokenUsageReport struct {
-	WindowHours           int                             `json:"window_hours"`
-	Limit                 int                             `json:"limit"`
-	OrganizationID        *uuid.UUID                      `json:"organization_id,omitempty"`
-	Overview              dbTokenUsageOverview            `json:"overview"`
-	ByPurpose             []dbTokenUsagePurposeRow        `json:"by_purpose"`
-	TopSessions           []dbTokenUsageSessionRow        `json:"top_sessions"`
-	TopTurns              []dbTokenUsageTurnRow           `json:"top_turns"`
-	CompletedByStopReason []dbTokenUsageStopReasonRow     `json:"completed_by_stop_reason"`
-	Failures              []dbTokenUsageFailureRow        `json:"failures"`
-	ProviderHealth        []dbTokenUsageProviderHealthRow `json:"provider_health"`
-	RateLimitRoutingSplit []dbTokenUsageRoutingSplitRow   `json:"rate_limit_routing_split"`
-	PendingBacklog        []dbTokenUsageBacklogRow        `json:"pending_agent_turn_backlog"`
+	WindowHours                 int                             `json:"window_hours"`
+	Limit                       int                             `json:"limit"`
+	OrganizationID              *uuid.UUID                      `json:"organization_id,omitempty"`
+	Overview                    dbTokenUsageOverview            `json:"overview"`
+	ByPurpose                   []dbTokenUsagePurposeRow        `json:"by_purpose"`
+	TopSessions                 []dbTokenUsageSessionRow        `json:"top_sessions"`
+	TopTurns                    []dbTokenUsageTurnRow           `json:"top_turns"`
+	RepeatedPackageInstalls     []dbTokenUsagePackageInstallRow `json:"repeated_package_installs"`
+	ShellFileBuildReadbackChurn []dbTokenUsageShellChurnRow     `json:"shell_file_build_readback_churn"`
+	CompletedByStopReason       []dbTokenUsageStopReasonRow     `json:"completed_by_stop_reason"`
+	Failures                    []dbTokenUsageFailureRow        `json:"failures"`
+	ProviderHealth              []dbTokenUsageProviderHealthRow `json:"provider_health"`
+	RateLimitRoutingSplit       []dbTokenUsageRoutingSplitRow   `json:"rate_limit_routing_split"`
+	PendingBacklog              []dbTokenUsageBacklogRow        `json:"pending_agent_turn_backlog"`
 }
 
 func runDBTokenUsage(args []string) int {
@@ -2891,6 +2912,169 @@ func loadDBTokenUsageReport(ctx context.Context, pool *pgxpool.Pool, windowHours
 		report.TopTurns = append(report.TopTurns, row)
 	}
 	if err := turnRows.Err(); err != nil {
+		return nil, err
+	}
+
+	packageRows, err := pool.Query(ctx, `
+		WITH assistant_calls AS (
+			SELECT
+				cm.turn_id,
+				cm.session_id,
+				cm.created_at,
+				lower(COALESCE(call->'arguments'->>'command', '')) AS command
+			FROM chat_message cm
+			JOIN chat_session cs ON cs.id = cm.session_id
+			CROSS JOIN LATERAL jsonb_array_elements(COALESCE(cm.metadata::jsonb->'tool_calls', '[]'::jsonb)) AS call
+			WHERE cm.created_at >= $1
+			  AND cm.turn_id IS NOT NULL
+			  AND cm.role = 'assistant'
+			  AND cm.status = 'final'
+			  AND ($2::uuid IS NULL OR cs.organization_id = $2)
+		),
+		package_attempts AS (
+			SELECT
+				turn_id,
+				session_id,
+				trim(
+					regexp_replace(
+						regexp_replace(command, '^.*?\binstall\b\s+', '', 'i'),
+						'\s*(\||;|&&|2>&1).*$',
+						'',
+						'i'
+					)
+				) AS install_tail,
+				created_at
+			FROM assistant_calls
+			WHERE command ~ '(^|[[:space:]])(pip|pip3)[[:space:]]+install([[:space:]]|$)'
+			   OR command ~ '(^|[[:space:]])[^[:space:]]+[[:space:]]+-m[[:space:]]+pip[[:space:]]+install([[:space:]]|$)'
+		)
+		SELECT
+			turn_id,
+			session_id,
+			COUNT(*) AS install_attempts,
+			string_agg(DISTINCT left(install_tail, 120), ' | ') AS attempted_specs,
+			MIN(created_at) AS first_seen,
+			MAX(created_at) AS last_seen
+		FROM package_attempts
+		GROUP BY turn_id, session_id
+		HAVING COUNT(*) > 1
+		ORDER BY install_attempts DESC, last_seen DESC
+		LIMIT $3
+	`, sinceAt, orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer packageRows.Close()
+	for packageRows.Next() {
+		var row dbTokenUsagePackageInstallRow
+		if scanErr := packageRows.Scan(
+			&row.TurnID,
+			&row.SessionID,
+			&row.InstallAttempts,
+			&row.AttemptedSpecs,
+			&row.FirstSeen,
+			&row.LastSeen,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		report.RepeatedPackageInstalls = append(report.RepeatedPackageInstalls, row)
+	}
+	if err := packageRows.Err(); err != nil {
+		return nil, err
+	}
+
+	shellRows, err := pool.Query(ctx, `
+		WITH assistant_calls AS (
+			SELECT
+				cm.turn_id,
+				cm.session_id,
+				cm.created_at,
+				lower(COALESCE(call->'arguments'->>'command', '')) AS command,
+				substring(
+					lower(COALESCE(call->'arguments'->>'command', ''))
+					from '(scripts/[^[:space:];|&]+|config/[^[:space:];|&]+|results/[^[:space:];|&]+)'
+				) AS path_hint
+			FROM chat_message cm
+			JOIN chat_session cs ON cs.id = cm.session_id
+			CROSS JOIN LATERAL jsonb_array_elements(COALESCE(cm.metadata::jsonb->'tool_calls', '[]'::jsonb)) AS call
+			WHERE cm.created_at >= $1
+			  AND cm.turn_id IS NOT NULL
+			  AND cm.role = 'assistant'
+			  AND cm.status = 'final'
+			  AND ($2::uuid IS NULL OR cs.organization_id = $2)
+		),
+		turn_rollup AS (
+			SELECT
+				turn_id,
+				session_id,
+				COUNT(*) FILTER (
+					WHERE path_hint IS NOT NULL
+					  AND (
+						command LIKE '%>%scripts/%'
+						OR command LIKE '%>>%scripts/%'
+						OR command LIKE '%>%config/%'
+						OR command LIKE '%>>%config/%'
+						OR command LIKE '%>%results/%'
+						OR command LIKE '%>>%results/%'
+						OR command LIKE '%with open(''%scripts/%'
+						OR command LIKE '%with open(''%config/%'
+						OR command LIKE '%cat > scripts/%'
+						OR command LIKE '%cat > config/%'
+						OR command LIKE '%printf %scripts/%'
+						OR command LIKE '%printf %config/%'
+						OR command LIKE '%cp scripts/%'
+					  )
+				) AS shell_file_builds,
+				COUNT(*) FILTER (
+					WHERE path_hint IS NOT NULL
+					  AND (
+						command LIKE 'head %'
+						OR command LIKE 'tail %'
+						OR command LIKE 'wc %'
+						OR command LIKE 'cat %'
+						OR command LIKE 'grep %'
+					  )
+				) AS readback_checks,
+				COALESCE(string_agg(DISTINCT path_hint, ' | ') FILTER (WHERE path_hint IS NOT NULL), '∅') AS path_hints,
+				MIN(created_at) AS first_seen,
+				MAX(created_at) AS last_seen
+			FROM assistant_calls
+			GROUP BY turn_id, session_id
+		)
+		SELECT
+			turn_id,
+			session_id,
+			shell_file_builds,
+			readback_checks,
+			path_hints,
+			first_seen,
+			last_seen
+		FROM turn_rollup
+		WHERE shell_file_builds > 0
+		   OR readback_checks > 2
+		ORDER BY (shell_file_builds + readback_checks) DESC, last_seen DESC
+		LIMIT $3
+	`, sinceAt, orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer shellRows.Close()
+	for shellRows.Next() {
+		var row dbTokenUsageShellChurnRow
+		if scanErr := shellRows.Scan(
+			&row.TurnID,
+			&row.SessionID,
+			&row.ShellFileBuilds,
+			&row.ReadbackChecks,
+			&row.PathHints,
+			&row.FirstSeen,
+			&row.LastSeen,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		report.ShellFileBuildReadbackChurn = append(report.ShellFileBuildReadbackChurn, row)
+	}
+	if err := shellRows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -3265,6 +3449,37 @@ func printDBTokenUsageReportTable(w io.Writer, formatter clitools.OutputFormatte
 		})
 	}
 	_ = formatter.WriteTable([]string{"Turn", "Session", "Invocations", "Purposes", "Input", "Output", "Cache Read", "Total", "First Seen", "Last Seen"}, turnRows)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "== Repeated Package Install Attempts By Turn ==")
+	packageRows := make([][]string, 0, len(report.RepeatedPackageInstalls))
+	for _, row := range report.RepeatedPackageInstalls {
+		packageRows = append(packageRows, []string{
+			row.TurnID.String(),
+			row.SessionID.String(),
+			strconv.FormatInt(row.InstallAttempts, 10),
+			row.AttemptedSpecs,
+			row.FirstSeen.UTC().Format(time.RFC3339),
+			row.LastSeen.UTC().Format(time.RFC3339),
+		})
+	}
+	_ = formatter.WriteTable([]string{"Turn", "Session", "Install Attempts", "Attempted Specs", "First Seen", "Last Seen"}, packageRows)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "== Shell File Build / Readback Churn By Turn ==")
+	shellRows := make([][]string, 0, len(report.ShellFileBuildReadbackChurn))
+	for _, row := range report.ShellFileBuildReadbackChurn {
+		shellRows = append(shellRows, []string{
+			row.TurnID.String(),
+			row.SessionID.String(),
+			strconv.FormatInt(row.ShellFileBuilds, 10),
+			strconv.FormatInt(row.ReadbackChecks, 10),
+			row.PathHints,
+			row.FirstSeen.UTC().Format(time.RFC3339),
+			row.LastSeen.UTC().Format(time.RFC3339),
+		})
+	}
+	_ = formatter.WriteTable([]string{"Turn", "Session", "Shell Builds", "Readback Checks", "Path Hints", "First Seen", "Last Seen"}, shellRows)
 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "== Completed Turns By Stop Reason ==")
