@@ -4877,7 +4877,11 @@ func projectContinuationProducerTaskRefsForPath(
 			continue
 		}
 		activity := childActivity[task.ID]
-		if status == "draft" && activity.activeChildTaskCount == 0 && !projectTaskExecutionActive(task.WorkStatus) {
+		if status == "draft" {
+			if activity.activeChildTaskCount == 0 {
+				continue
+			}
+		} else if !projectTaskExecutionActive(task.WorkStatus) {
 			continue
 		}
 		hints := taskHintsByTask[task.ID]
