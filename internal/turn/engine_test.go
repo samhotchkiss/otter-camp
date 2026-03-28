@@ -32788,6 +32788,72 @@ func TestHandleTaskFileWriteWrongPathPrefersSessionDeliverableTargetOverInferred
 	}
 }
 
+func TestHandleTaskFileWriteWrongPathAllowsBatchWritesWithinPreferredDeliverableRoot(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+	description := "Read content/technonymous-index.json. For each of the next 12 URLs in the post_urls array (indices 12-23), use web_fetch to retrieve the page content, then save the article text as clean markdown files under content/posts/.\n\nDeliverable: 12 markdown files in content/posts/."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:          taskID,
+			TaskNumber:  62,
+			Title:       "Fetch posts 13-24 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+			Description: &description,
+			WorkStatus:  "in_progress",
+			Metadata: mustRawJSON(t, map[string]any{
+				"content_migration_checkpoint": map[string]any{
+					"version": 1,
+					"outputs": []map[string]any{
+						{"path": "content/posts/mister-rogers-and-the-forgotten-art.md"},
+						{"path": "content/posts/jenny-can-i-have-my-privacy-back.md"},
+					},
+				},
+				"recovery_file_write_checkpoint": map[string]any{
+					"target_path": "content/posts/mister-rogers-and-the-forgotten-art.md",
+				},
+			}),
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    "content/posts/discomfort-is-growth.md",
+			"content": "# Discomfort Is Growth\n",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWrongPath(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWrongPath: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["path"]); got != "content/posts/discomfort-is-growth.md" {
+		t.Fatalf("path = %q, want unchanged batch deliverable-root write", got)
+	}
+	if _, exists := call.Arguments["create_dirs"]; exists {
+		t.Fatalf("create_dirs = %v, want absent when rewrite is skipped", call.Arguments["create_dirs"])
+	}
+}
+
 func TestHandleTaskFileWriteWrongPathSkipsNonExecutionFirstTasks(t *testing.T) {
 	t.Parallel()
 

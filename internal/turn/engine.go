@@ -15109,6 +15109,11 @@ func (e *TurnEngine) handleTaskFileWriteWrongPath(ctx context.Context, rt *turnR
 	if attemptedPath == "" {
 		return false, false, nil
 	}
+	if preferredRoot := normalizeTurnWorkspacePath(preferredTaskDeliverableRoot(taskRecord)); preferredRoot != "" &&
+		taskAllowsWritesWithinPreferredDeliverableRoot(taskRecord) &&
+		sameOrNestedTurnWorkspacePath(attemptedPath, preferredRoot) {
+		return false, false, nil
+	}
 	if sameOrNestedTurnWorkspacePath(attemptedPath, targetPath) {
 		return false, false, nil
 	}
@@ -15175,6 +15180,28 @@ func shouldRewriteTaskFileWritePath(attemptedPath, targetPath string) bool {
 		return false
 	}
 	return true
+}
+
+func taskAllowsWritesWithinPreferredDeliverableRoot(taskRecord repo.ProjectTask) bool {
+	if strings.TrimSpace(explicitDeliverablePath(taskRecord)) != "" {
+		return false
+	}
+	root := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
+	if root == "" {
+		return false
+	}
+	if checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata); ok && len(checkpoint.Outputs) > 1 {
+		return true
+	}
+	text := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	if taskRecord.Description != nil {
+		text += " " + strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	if strings.Contains(text, "deliverable:") && strings.Contains(text, "files") {
+		return true
+	}
+	return strings.Contains(text, "for each") &&
+		containsAny(text, "markdown files", "save each", "save the markdown files", "under "+strings.ToLower(root), "in "+strings.ToLower(root))
 }
 
 func classifyTaskFileArtifactFamily(value string) string {

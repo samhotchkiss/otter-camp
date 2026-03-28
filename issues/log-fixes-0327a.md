@@ -1040,3 +1040,22 @@
   - result:
     - repo-state inspection is no longer part of the hot post-restart task-62 review path
     - the remaining efficiency seam is narrower now: too many named `file.read` calls before `flow.review_decision`
+- 2026-03-28 11:59:40 MDT - allow batch execution lanes to write anywhere inside their preferred deliverable root
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `handleTaskFileWriteWrongPath(...)` now skips single-target rewrites when the task is a multi-output deliverable-root task and the attempted `file.write.path` already stays inside that preferred root
+    - added `taskAllowsWritesWithinPreferredDeliverableRoot(...)` so batch tasks with contracts like `Deliverable: 12 markdown files in content/posts/` are recognized as multi-file root writers instead of being collapsed onto one checkpoint file
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleTaskFileWriteWrongPathAllowsBatchWritesWithinPreferredDeliverableRoot`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `go test ./internal/turn -run 'Test(SessionTaskDeliverablePathPrefersContentMigrationOutputOverStaleRecoveryCheckpoint|HandleTaskFileWriteWrongPath(AllowsBatchWritesWithinPreferredDeliverableRoot|PrefersSessionDeliverableTargetOverInferredReportPath|SkipsCrossArtifactFamilyRewrite|SkipsScriptToConfigRewrite|SkipsExtensionMismatchRewrite|SkipsNonExecutionFirstTasks|RewritesToInferredTestExecutionTarget|RewritesScenarioExecutionPlanToCanonicalTarget|RewritesValidationExecutionDocumentToCanonicalTarget|RewritesGenericDocumentPathToCanonicalTarget|RewritesToCheckpointTargetWhenPreferredUnknown))$' -count=1`
+  - deploy state:
+    - rebuilt and restarted tmux `codex-e2e-20260324`
+    - `./bin/ottercamp health --output json` returned `data.status=ok`
+  - fresh live proof on task `62` session `d5a6404a-f2fe-43d3-8059-a3f07a3c5774` after restart:
+    - the old pre-fix redirected-write churn is still visible at messages `97-102`
+    - the next post-restart continuation moved off the redirected `file.write` loop and started writing distinct batch files via `cli.execute`: `if-i-were-them-i-would-be-them.md` at message `105`, `practice-dont-own-things-you-have.md` at `109`, `discomfort-is-growth.md` at `111`, and `practice-think-twice-about-the-cost.md` at `113`
+    - the live lane is now advancing through different `content/posts/...` outputs instead of collapsing them all back onto `mister-rogers-and-the-forgotten-art.md`
+  - result:
+    - the single-file redirect trap is broken for this batch content-migration family
+    - the remaining execution seam is now downstream file-generation/completion work, not path-collapse churn
