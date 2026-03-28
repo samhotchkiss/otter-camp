@@ -579,3 +579,20 @@
   - deployed by rebuilding `./bin/ottercamp`, restarting tmux `codex-e2e-20260324`, and confirming `./bin/ottercamp health --output json` returned `status=ok`
   - live diagnosis behind the fix: Sam.blog PM turn `984d9f13-c56d-4a9f-ad71-581dfa0b0c95` kept halting on task `43` with `estimated 65 minutes > 60 minute limit` even though the brief names one concrete output file, `templates/template-08-replace.html`
   - fresh post-deploy production proof is still pending the next natural PM continuation for session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`
+- 2026-03-28 04:47:33 MDT - retry PM continuations after deploy and remove task-43 bounded-size false positives
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) and [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) so project-continuation metadata and suppression fingerprints now include `repo_version`, allowing a new binary to retry an otherwise identical PM continuation after deploy
+  - added focused coverage in:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): `TestProjectExecutionContinuationPromptFingerprintIncludesRepoVersion`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go): `TestJobWorkerEnsureProjectContinuationMessageAllowsRetryAfterRepoVersionChange`
+  - tightened [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go) to match broad-scope/tool-heavy/external signals as standalone terms instead of raw substrings, and capped matching narrow single-file deliverables at the bounded lane max so `professional personal hub` no longer trips the `persona` penalty
+  - refreshed the exact live-wording coverage in:
+    - [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go)
+    - [`internal/task/service_integration_test.go`](/Users/sam/dev/otter-camp/internal/task/service_integration_test.go)
+    - [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(ValidateBoundedTaskSizeAllowsSingleConcreteTemplateWithRequirements|PrepareQueueDecompositionSkipsSingleConcreteTemplateWithRequirements|PrepareQueueDecompositionSkipsConcreteDeliverableWithProceduralSections|ValidateBoundedTaskSizeRejectsBrandNarrativeStrategyTask)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/task -run 'TestTaskServiceIntegration(QueueAllowsSingleConcreteTemplateWithRequirements|QueueRejectsOversizedUnsplittableWork)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/tools/native -run 'TestIntegrationTaskUpdateQueue(AllowsSingleConcreteTemplateWithRequirements|KeepsDecomposedParentDraftAndQueuesChildren)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationPromptFingerprintIncludesRepoVersion|HandleCompletedProjectExecutionContinuationTurnSuppressesRepeatedRediscoveryBlockedRetry)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerEnsureProjectContinuationMessage(AllowsRetryAfterRepoVersionChange|SuppressesRepeatedConsumedRediscoveryBlockedContinuation)$' -count=1`
+  - fresh live proof: after the committed `3385` rebuild/restart, worker startup created continuation `1a3d5e8b-93f4-4dd3-982a-5711b04b633d` for PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`; turn `b2f8bb6d-1fa9-44a7-8a5d-fccab126428b` then called `task.update` successfully, moved task `43` to `in_progress`, and spawned active task session `0686f943-00df-4d20-ac56-9ea4edb0dee7`
