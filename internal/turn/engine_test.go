@@ -4264,6 +4264,85 @@ func TestMaybeRewriteDirtyWorkspaceReviewApprovalToolCalls(t *testing.T) {
 	}
 }
 
+func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsAddsMaxBytes(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `content/technonymous-index.json`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `content/technonymous-index.json` is missing.\n" +
+			"If `content/technonymous-index.json` may be large, start with `file.read` using `path=content/technonymous-index.json` and `max_bytes=8192` instead of an unconstrained full-file read. Use narrower follow-up inspection only if that bounded read is insufficient.\n" +
+			"If reading `content/technonymous-index.json` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.",
+	}
+	toolCalls := []ModelToolCall{
+		{
+			ID:   "read-target",
+			Name: "file_read",
+			Arguments: map[string]any{
+				"path": "content/technonymous-index.json",
+			},
+		},
+		{
+			ID:   "read-sibling",
+			Name: "file.read",
+			Arguments: map[string]any{
+				"path":      "planning/discovery-plan/oc-48-validation-plan.md",
+				"max_bytes": 2048,
+			},
+		},
+	}
+
+	rewritten, changed := maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(rt, toolCalls)
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	if len(rewritten) != 2 {
+		t.Fatalf("rewritten len = %d, want 2", len(rewritten))
+	}
+	if rewritten[0].Name != "file.read" {
+		t.Fatalf("tool name = %q, want normalized file.read", rewritten[0].Name)
+	}
+	if got := intValue(rewritten[0].Arguments["max_bytes"]); got != taskReviewPreferredDeliverableReadMaxBytes {
+		t.Fatalf("max_bytes = %d, want %d", got, taskReviewPreferredDeliverableReadMaxBytes)
+	}
+	if got := intValue(rewritten[1].Arguments["max_bytes"]); got != 2048 {
+		t.Fatalf("sibling max_bytes = %d, want 2048 unchanged", got)
+	}
+}
+
+func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsPreservesSmallerExplicitLimit(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `content/technonymous-index.json`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `content/technonymous-index.json` is missing.\n" +
+			"If `content/technonymous-index.json` may be large, start with `file.read` using `path=content/technonymous-index.json` and `max_bytes=8192` instead of an unconstrained full-file read. Use narrower follow-up inspection only if that bounded read is insufficient.\n" +
+			"If reading `content/technonymous-index.json` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.",
+	}
+	toolCalls := []ModelToolCall{{
+		ID:   "read-target",
+		Name: "file.read",
+		Arguments: map[string]any{
+			"path":      "content/technonymous-index.json",
+			"max_bytes": 1024,
+		},
+	}}
+
+	rewritten, changed := maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(rt, toolCalls)
+	if changed {
+		t.Fatal("changed = true, want false when a smaller explicit max_bytes is already present")
+	}
+	if len(rewritten) != 1 {
+		t.Fatalf("rewritten len = %d, want 1", len(rewritten))
+	}
+	if got := intValue(rewritten[0].Arguments["max_bytes"]); got != 1024 {
+		t.Fatalf("max_bytes = %d, want 1024 preserved", got)
+	}
+}
+
 func TestHandleCompletedProjectBootstrapGenericAssistantReplyRetriesWithFreshBootstrapPrompt(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	base := time.Unix(1700001000, 0).UTC()
@@ -34471,6 +34550,9 @@ func TestBuildTaskReviewActionPromptIncludesPreferredDeliverableTarget(t *testin
 	}
 	if !strings.Contains(prompt, "not_found") {
 		t.Fatalf("prompt = %q, want missing-deliverable rejection guidance", prompt)
+	}
+	if !strings.Contains(prompt, "max_bytes=8192") {
+		t.Fatalf("prompt = %q, want bounded preferred-deliverable read guidance", prompt)
 	}
 	if !strings.Contains(prompt, "Do not inspect planning artifacts or list the full repository tree") {
 		t.Fatalf("prompt = %q, want bounded review guidance", prompt)
