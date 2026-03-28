@@ -481,3 +481,23 @@
   - verified with `gofmt -w internal/turn/engine.go internal/turn/engine_test.go` and `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurn(RetriesMissingDependencyStopWithFreshMessage|SkipsMissingDependencyRetryWhenActiveReplacementExists|AutoQueuesMatchingMissingDependencyDraftInsteadOfUnrelatedDraft|RetriesGenericReplyWithFreshMessage|ConsumesBoundedSizeQueueFailure)|ShouldBlockProjectContinuationDependencyFocusedExternalTool|ShouldNotBlockProjectContinuationDependencyFocusedExternalToolWithoutChildWork|ShouldAppendSyntheticUserPrompt(SkipsDuplicatePendingSource|IgnoresDuplicateOnCompletedTurn|IgnoresOrphanPendingSyntheticPrompt)|ShouldBlockProjectContinuationDependencyFocusedTaskCreateBlocksUnrelatedTopLevelTask|ShouldNotBlockProjectContinuationDependencyFocusedTaskCreateForNamedParentTask|ProjectExecutionContinuationSnapshotForSummaryNarrowsToPriorityArtifactPath)$' -count=1`
   - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed the follow-up `./bin/ottercamp health --output json` returned `status=ok`
   - live note: fresh direct production proof is still pending; immediately after restart, the hot PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` showed `0` new `chat_turn` rows in the last 10 minutes, so the remaining gap is just the next natural continuation on the new binary
+- 2026-03-28 02:34:00 MDT - `35ae0237` `Ignore blocked producer tasks in PM recovery`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `projectContinuationProducerTaskRefsForPath(...)` only treats:
+    - non-draft producer tasks with execution-active work status
+    - draft parent tasks with active child work
+    as active replacement work
+  - this prevents already-`blocked` producer tasks like Sam.blog task `41` from suppressing the missing-dependency retry path
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - `TestHandleCompletedProjectExecutionContinuationTurnDoesNotTreatBlockedReplacementAsActiveWork`
+  - verified with `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurn(SkipsMissingDependencyRetryWhenActiveReplacementExists|DoesNotTreatBlockedReplacementAsActiveWork|RetriesMissingDependencyStopWithFreshMessage|AutoQueuesMatchingMissingDependencyDraftInsteadOfUnrelatedDraft))$' -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
+  - live proof: on Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, the bounded continuation at `3551-3558` no longer emitted the stale `already has active replacement work in the tree` message for blocked task `41`; the follow-up continuation then created replacement task `44`, proving blocked producer tasks no longer suppress PM recovery work
+- 2026-03-28 02:34:00 MDT - `892b2dbf` `Ignore procedural sections in queue decomposition`
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go) so `extractDeliverables(...)` tracks markdown section headings and skips instruction-only sections like `## Steps`, `## Important`, `## Notes`, and `## Requirements` when inferring child deliverables
+  - this keeps single concrete deliverable tasks from decomposing instruction bullets into sibling child tasks
+  - added focused coverage in [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go):
+    - `TestExtractDeliverablesIgnoresProceduralStepsAndImportantSections`
+    - `TestPrepareQueueDecompositionSkipsConcreteDeliverableWithProceduralSections`
+  - verified with `gofmt -w internal/taskdecomp/decomposition.go internal/taskdecomp/decomposition_test.go` and `GOFLAGS='' go test ./internal/taskdecomp -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
+  - live note: the malformed Sam.blog child tasks `45-48` remain as pre-fix artifacts from task `44`, and the first post-deploy PM continuation did not create another replacement task, so fresh production proof of the new parser branch is still pending the next natural decomposition attempt
