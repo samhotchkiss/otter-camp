@@ -9969,6 +9969,9 @@ func continuationSummaryLooksUnavailable(summary string) bool {
 		return true
 	}
 	if strings.Contains(normalized, "```") {
+		if continuationSummaryLooksLikePseudoToolCLI(normalized) {
+			return true
+		}
 		if strings.Contains(normalized, "claude-cli") ||
 			strings.Contains(normalized, "claude-code") ||
 			strings.Contains(normalized, "project:tasks:list") ||
@@ -10020,6 +10023,54 @@ func continuationSummaryLooksUnavailable(summary string) bool {
 	}
 	for _, pattern := range patterns {
 		if strings.Contains(normalized, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func continuationSummaryLooksLikePseudoToolCLI(normalized string) bool {
+	if !strings.Contains(normalized, "```") {
+		return false
+	}
+	toolHints := []string{
+		"task.get",
+		"task_get",
+		"task.list",
+		"task_list",
+		"session.list",
+		"session_list",
+		"file.list",
+		"file_list",
+		"flow.get_execution",
+		"flow_get_execution",
+		"project.get",
+		"project_get",
+	}
+	argHints := []string{
+		"--task_id",
+		"--project_id",
+		"--scope_id",
+		"--path",
+		"--flow_node_execution_id",
+		"task_id=",
+		"project_id=",
+		"scope_id=",
+		"path=",
+		"flow_node_execution_id=",
+	}
+	hasToolHint := false
+	for _, hint := range toolHints {
+		if strings.Contains(normalized, hint) {
+			hasToolHint = true
+			break
+		}
+	}
+	if !hasToolHint {
+		return false
+	}
+	for _, hint := range argHints {
+		if strings.Contains(normalized, hint) {
 			return true
 		}
 	}
@@ -24434,6 +24485,8 @@ func shouldBlockProjectContinuationSnapshotArtifactBrowse(path string, arguments
 	}
 	recursive, _ := boolValue(arguments["recursive"])
 	switch normalized {
+	case "content", "content/posts", "templates":
+		return true
 	case "results", "pipeline/fixtures":
 		return recursive
 	default:

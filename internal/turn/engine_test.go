@@ -9483,6 +9483,64 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksRootFileList
 	}
 }
 
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksContentPostsFileListForActiveTasks(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	activeTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:    "Active project id: " + projectID.String(),
+			ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 22 (Ship docs) id=" + activeTaskID.String() + " title=\"Ship docs\" work_status=in_progress assigned_agent_id=worker-1",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "file.list", map[string]any{
+		"path":      "content/posts",
+		"recursive": true,
+	})
+	if !blocked {
+		t.Fatal("expected project-lane content/posts file.list to be blocked once the continuation prompt already names active tasks")
+	}
+	if !strings.Contains(reason, "content/posts") {
+		t.Fatalf("reason = %q, want content/posts guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksTemplatesFileListForActiveTasks(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	activeTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:    "Active project id: " + projectID.String(),
+			ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 22 (Ship docs) id=" + activeTaskID.String() + " title=\"Ship docs\" work_status=in_progress assigned_agent_id=worker-1",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "file.list", map[string]any{
+		"path":      "templates",
+		"recursive": true,
+	})
+	if !blocked {
+		t.Fatal("expected project-lane templates file.list to be blocked once the continuation prompt already names active tasks")
+	}
+	if !strings.Contains(reason, "templates") {
+		t.Fatalf("reason = %q, want templates guidance", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksNamedTaskGet(t *testing.T) {
 	t.Parallel()
 
@@ -14778,6 +14836,21 @@ func TestContinuationTurnUsesTaskFallbackSummaryForSupervisorContextQuestionnair
 	}
 	if fixture.model.continuationSummaryCalls != 0 {
 		t.Fatalf("continuationSummaryCalls = %d, want 0 for supervisor recovery fallback", fixture.model.continuationSummaryCalls)
+	}
+}
+
+func TestContinuationSummaryLooksUnavailableRejectsPseudoToolCLITranscript(t *testing.T) {
+	t.Parallel()
+
+	summary := "I'll inspect the active tasks to identify the concrete blocker and continue execution directly.\n\n" +
+		"``` \n" +
+		"task.get --task_id=0bea72e2-63fe-4f7a-bb3f-3f5b0b61a627\n" +
+		"session.list --scope_id=0bea72e2-63fe-4f7a-bb3f-3f5b0b61a627 --scope_type=task\n" +
+		"file.list --path=content/posts --recursive=true\n" +
+		"```"
+
+	if !continuationSummaryLooksUnavailable(summary) {
+		t.Fatalf("continuationSummaryLooksUnavailable(%q) = false, want true", summary)
 	}
 }
 
