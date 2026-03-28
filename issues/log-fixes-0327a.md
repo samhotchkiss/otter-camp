@@ -1004,3 +1004,19 @@
     - task `59` session `760f56d5-9a3f-4cee-b8e7-2dbb9ff768bc` closed at `11:28:34 MDT` with the malformed-child halt
     - after a full supervisor window, task `59` was still `blocked` at `11:30:42 MDT`
     - no new `11:30` replacement session appeared, and pending/claimed `agent_turn` jobs for task `59` were `0`
+- 2026-03-28 11:46:00 MDT - make batch-review prompts recover task-owned output sets from the task worktree
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `buildTaskReviewActionPrompt(...)` now uses turn-engine method `reviewPromptCheckpointOutputPaths(...)` instead of reading checkpoint metadata directly
+    - that helper merges persisted checkpoint outputs with task-owned output files recovered from the task worktree via `contentMigrationTaskOwnedPaths(...)` and `taskcheckpoint.ScanSelectedWorkspace(...)`
+    - checkpoint-output prompt text now says `Treat that output set as authoritative for this batch` and explicitly tells the reviewer not to call `file.list` on the deliverable root just to rediscover membership
+    - `shouldBlockTaskReviewPreferredDeliverableRootFirstTool(...)` now blocks `file.list` / `file.search` on the deliverable root when the prompt already marks the checkpoint output set as authoritative
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldBlockTaskReviewPreferredDeliverableRootListWhenCheckpointOutputSetAuthoritative`
+    - added `TestBuildTaskReviewActionPromptRecoversTaskOwnedBatchOutputsFromWorktree`
+    - widened batch-review prompt expectations to include the new authoritative-output-set guidance
+  - verified with:
+    - `go test ./internal/turn -run 'Test(BuildTaskReviewActionPrompt(PrefersDeliverableRootForBatchContentMigrationOutputs|RecoversTaskOwnedBatchOutputsFromWorktree)|ShouldBlockTaskReviewPreferredDeliverableRoot(FirstTool|DependencyReadWithCheckpointOutputSet|ListWhenCheckpointOutputSetAuthoritative)|ReviewRetryPromptForRepeatedCheckpointOutputRereads|ShouldBlockTaskReviewRepeatedCheckpointOutputTool)$' -count=1`
+  - fresh live proof after rebuild/restart on task `62` session `4737d210-2039-40aa-bf6f-db9e55421454`:
+    - retry prompts `287`, `296`, `298`, and `299` now list the full recovered 8-path task-owned output set explicitly and include the authoritative wording
+    - assistant message `288` switched to reading the named output files directly from `content/posts`
+    - the post-restart tool batch `289-294` was named `file.read` on task-owned outputs only; the old `file.list(content/posts)` reopen step is gone on these retries

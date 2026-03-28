@@ -14377,6 +14377,31 @@ func TestShouldBlockTaskReviewPreferredDeliverableRootFirstTool(t *testing.T) {
 	}
 }
 
+func TestShouldBlockTaskReviewPreferredDeliverableRootListWhenCheckpointOutputSetAuthoritative(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable root `content/posts`. Inspect that output root directly before broad workspace discovery, and do not begin with task.get, git.log, or dependency-file reads outside `content/posts` unless `content/posts` itself is missing.\n" +
+			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/post-1.md`, `content/posts/post-2.md`, `content/posts/post-3.md`. Treat that output set as authoritative for this batch; read the named outputs directly and do not call `file.list` on `content/posts` or reread dependency artifacts outside `content/posts` just to rediscover which files belong to the batch.\n" +
+			"If listing or reading under `content/posts` returns `not_found`, stop broad inspection and call flow.review_decision reject using that missing deliverable-root evidence.\n" +
+			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
+	}
+
+	blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, "file.list", map[string]any{"path": "content/posts", "recursive": true})
+	if !blocked {
+		t.Fatal("expected preferred deliverable root file.list to be blocked once the checkpoint output set is authoritative")
+	}
+	if !strings.Contains(reason, "authoritative for the batch") {
+		t.Fatalf("guard reason = %q, want authoritative checkpoint output-set guidance", reason)
+	}
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, "file.read", map[string]any{"path": "content/posts/post-2.md"}); blocked {
+		t.Fatalf("expected named checkpoint output read to remain allowed, reason = %q", reason)
+	}
+}
+
 func TestShouldBlockTaskReviewPreferredDeliverableRootDependencyReadWithCheckpointOutputSet(t *testing.T) {
 	rt := &turnRuntime{
 		session: &chat.ChatSession{
@@ -36284,6 +36309,106 @@ func TestBuildTaskReviewActionPromptPrefersDeliverableRootForBatchContentMigrati
 	}
 	if strings.Contains(prompt, "Start with the preferred deliverable target `content/posts/practice-eliminating-streaming-video.md`") {
 		t.Fatalf("prompt = %q, did not want single-file target guidance for batch outputs", prompt)
+	}
+	if !strings.Contains(prompt, "Treat that output set as authoritative for this batch;") {
+		t.Fatalf("prompt = %q, want authoritative checkpoint output-set guidance", prompt)
+	}
+}
+
+func TestBuildTaskReviewActionPromptRecoversTaskOwnedBatchOutputsFromWorktree(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fixture := newUnitFixture(t, "async")
+	tempDataDir := t.TempDir()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	projectSlug := "review-batch-worktree"
+	projectRoot := filepath.Join(tempDataDir, "workspaces", projectSlug)
+	branchName := "task/63"
+	description := "Fetch posts 25-35 from technonymous-index.json and save the markdown files under content/posts/."
+	outputs := []string{
+		"content/posts/practice-eliminating-streaming-video.md",
+		"content/posts/practice-listen-to-albums.md",
+		"content/posts/hello-world.md",
+	}
+
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, string(out))
+		}
+	}
+
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll project root: %v", err)
+	}
+	run(projectRoot, "init", "-b", "main")
+	run(projectRoot, "config", "user.email", "test@example.com")
+	run(projectRoot, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(projectRoot, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile README: %v", err)
+	}
+	run(projectRoot, "add", "README.md")
+	run(projectRoot, "commit", "-m", "init")
+	run(projectRoot, "checkout", "-b", branchName)
+	for _, rel := range outputs {
+		abs := filepath.Join(projectRoot, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatalf("MkdirAll output dir: %v", err)
+		}
+		if err := os.WriteFile(abs, []byte("---\ntitle: test\n---\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", rel, err)
+		}
+	}
+	run(projectRoot, "add", "content/posts")
+	run(projectRoot, "commit", "-m", "task outputs")
+	run(projectRoot, "checkout", "main")
+
+	fixture.engine.dataDir = tempDataDir
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				Slug:           projectSlug,
+			},
+		},
+	}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				ProjectID:   projectID,
+				TaskNumber:  63,
+				Title:       "Fetch posts 25-35 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+				Description: &description,
+				WorkStatus:  "review",
+				BranchName:  &branchName,
+				Metadata: mustRawJSON(t, map[string]any{
+					"content_migration_checkpoint": map[string]any{
+						"version": 1,
+						"outputs": []map[string]any{
+							{"path": outputs[0]},
+							{"path": outputs[1]},
+						},
+					},
+				}),
+			},
+		},
+	}
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(ctx, fixture.session)
+	if !strings.Contains(prompt, outputs[2]) {
+		t.Fatalf("prompt = %q, want task-owned output recovered from worktree", prompt)
+	}
+	if !strings.Contains(prompt, "Treat that output set as authoritative for this batch;") {
+		t.Fatalf("prompt = %q, want authoritative checkpoint output-set guidance", prompt)
 	}
 }
 
