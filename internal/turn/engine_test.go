@@ -11544,6 +11544,136 @@ func TestHandleCompletedProjectExecutionContinuationTurnResumesBlockedReviewTask
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnSkipsNonResumableBlockedReviewTaskAndQueuesDraft(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	blockedReviewTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	reviewNodeID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:              completedTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      10,
+				Title:           "Validate review path continuation",
+				WorkStatus:      "done",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+			blockedReviewTaskID: {
+				ID:                blockedReviewTaskID,
+				ProjectID:         projectID,
+				TaskNumber:        65,
+				Title:             "Fetch posts 1-12",
+				WorkStatus:        "blocked",
+				CurrentFlowNodeID: &reviewNodeID,
+				AssignedAgentID:   uuidPtr(uuid.New()),
+				FlowTemplateID:    uuidPtr(uuid.New()),
+				Metadata: mustJSONRaw(map[string]any{
+					"agent_turn_validation_guard": map[string]any{
+						"tool_name":       "flow.review_decision",
+						"failure_class":   "tool_validation",
+						"failure_code":    "review_decision_required",
+						"failure_reason":  "review turn completed without calling flow.review_decision",
+						"count":           3,
+						"block_threshold": 3,
+						"blocked":         true,
+					},
+				}),
+			},
+			draftTaskID: {
+				ID:              draftTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      19,
+				Title:           "Ship docs",
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+		},
+	}
+	taskTransitions := &fakeTaskTransitionService{
+		repo: taskRepo,
+		resumeErr: tasksvc.TaskResumeBlockedStateError{
+			BlockerClass:  tasksvc.RecoveryBlockerClassFlowRejectionMaxVisits,
+			BlockerReason: "flow rejection max visits exceeded",
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = taskTransitions
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Already-active non-terminal tasks in the tree: task 65 (Fetch posts 1-12) id=" + blockedReviewTaskID.String(),
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "I should move the next bounded work forward.",
+		SequenceNumber: 11,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant}
+	completedTurn := &repo.ChatTurn{ID: turnID, SessionID: fixture.session.ID}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected non-resumable blocked review lane to fall through and queue the next runnable draft")
+	}
+	if len(taskTransitions.resumeCalls) != 1 || taskTransitions.resumeCalls[0].taskID != blockedReviewTaskID {
+		t.Fatalf("resumeCalls = %+v, want blocked review task resume attempt recorded", taskTransitions.resumeCalls)
+	}
+	if len(taskTransitions.transitionCalls) != 1 || taskTransitions.transitionCalls[0].taskID != draftTaskID {
+		t.Fatalf("transitionCalls = %+v, want runnable draft queued after non-resumable review lane", taskTransitions.transitionCalls)
+	}
+
+	updatedBlockedTask, err := taskRepo.GetByID(context.Background(), blockedReviewTaskID)
+	if err != nil {
+		t.Fatalf("GetByID blocked review task: %v", err)
+	}
+	if updatedBlockedTask.WorkStatus != "blocked" {
+		t.Fatalf("blocked review task work_status = %q, want blocked", updatedBlockedTask.WorkStatus)
+	}
+	updatedDraft, err := taskRepo.GetByID(context.Background(), draftTaskID)
+	if err != nil {
+		t.Fatalf("GetByID draft task: %v", err)
+	}
+	if updatedDraft.WorkStatus != "queued" {
+		t.Fatalf("draft task work_status = %q, want queued", updatedDraft.WorkStatus)
+	}
+	if !fixture.messages.containsContentSubstring("runtime resume is still blocked by flow_rejection_max_visits") {
+		t.Fatal("expected system message recording non-resumable review lane")
+	}
+	if !fixture.messages.containsContentSubstring("after a non-mutating continuation left runnable draft work untouched") {
+		t.Fatal("expected follow-on queue system message for runnable draft")
+	}
+}
+
 func TestNextResumableBlockedProjectTaskSkipsMalformedBlockedReviewTask(t *testing.T) {
 	t.Parallel()
 
@@ -32292,6 +32422,7 @@ type fakeTaskTransitionService struct {
 	transitionCalls []transitionTaskCall
 	resumeCalls     []resumeTaskCall
 	err             error
+	resumeErr       error
 }
 
 type blockedTaskCall struct {
@@ -32365,13 +32496,16 @@ func (f *fakeTaskTransitionService) MarkBlocked(_ context.Context, taskID uuid.U
 }
 
 func (f *fakeTaskTransitionService) ResumeValidationBlockedTask(_ context.Context, taskID uuid.UUID, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
 	f.resumeCalls = append(f.resumeCalls, resumeTaskCall{
 		taskID: taskID,
 		actor:  actor,
 	})
+	if f.resumeErr != nil {
+		return nil, f.resumeErr
+	}
+	if f.err != nil {
+		return nil, f.err
+	}
 	targetStatus := "queued"
 	if f.repo != nil {
 		taskRecord, err := f.repo.GetByID(context.Background(), taskID)

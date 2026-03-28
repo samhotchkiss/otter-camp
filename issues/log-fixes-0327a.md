@@ -1584,3 +1584,22 @@
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(IgnoresCancelledChildren|IgnoresMalformedNoDecomposeChildren|IgnoresMalformedProceduralChildren|PromotesBlockedChildParentsToReplacementWork)$' -count=1`
   - next proof target after deploy:
     - Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` should stop surfacing cancelled task `69` as the focused bounded step and instead expose the live parent draft / current bounded task on the next fresh continuation turn
+- 2026-03-28 17:35:24 MDT - Finished: treat non-resumable blocked review lanes as continuation fallthrough instead of consumer failure.
+  - live diagnosis:
+    - after the cancelled-child fix, the PM prompt correctly focused task `55`, but `turn-engine.turn-completed` kept replaying seq `380850` because blocked review task `65` still matched `resume_review_decision`
+    - runtime resume returned `tasksvc.TaskResumeBlockedStateError{BlockerClass: flow_rejection_max_visits}`, and the completion handler treated that as fatal instead of moving on to the next bounded task
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `handleCompletedProjectExecutionContinuationTurn(...)` now catches `TaskResumeBlockedStateError`, appends a system correction naming the blocker class/reason, leaves that review lane blocked, and continues into the normal next-runnable-draft queue path
+    - `nextRunnableDraftProjectTaskForPriorityPaths(...)` now skips dependency SQL when `e.pool == nil`, so unit tests can exercise the same fallthrough without needing a database pool
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleCompletedProjectExecutionContinuationTurnSkipsNonResumableBlockedReviewTaskAndQueuesDraft`
+    - updated the fake transition service so attempted resumes are still recorded even when the fake returns `resumeErr`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3455`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurn(ResumesBlockedReviewTaskBeforeQueueingDraft|SkipsNonResumableBlockedReviewTaskAndQueuesDraft)$' -count=1`
+  - deploy status:
+    - rebuilt/restarted tmux `codex-e2e-20260324`; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+  - fresh production proof:
+    - new PM continuation turn `c943a2c5-aae1-467a-b161-5b84935d0c7c` on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` emitted system message `4749` documenting the non-resumable `flow_rejection_max_visits` stop and then created/queued replacement task `70` for batch `1-12`
+    - the old `consumer handler failed` replay for seq `380850` did not recur on the new binary

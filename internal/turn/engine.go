@@ -4775,21 +4775,45 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 	} else if ok {
 		resumed, resumeErr := e.taskTransitions.ResumeValidationBlockedTask(ctx, blockedReviewTask.ID, tasksvc.Actor{Type: "system"})
 		if resumeErr != nil {
-			return false, resumeErr
-		}
-		resumedLabel := projectBootstrapTaskLabel(blockedReviewTask)
-		if resumed != nil && resumed.ID != uuid.Nil {
-			if resumed.TaskNumber > 0 || strings.TrimSpace(resumed.Title) != "" {
-				resumedLabel = projectBootstrapTaskLabel(repo.ProjectTask(*resumed))
+			var stateErr tasksvc.TaskResumeBlockedStateError
+			if !errors.As(resumeErr, &stateErr) {
+				return false, resumeErr
 			}
+			blockerClass := strings.TrimSpace(stateErr.BlockerClass)
+			if blockerClass == "" {
+				blockerClass = tasksvc.RecoveryBlockerClassBlockedWithoutResumableState
+			}
+			blockerReason := strings.TrimSpace(stateErr.BlockerReason)
+			if blockerReason != "" {
+				_, _ = e.appendSystemMessage(
+					ctx,
+					completedTurn.ID,
+					session.ID,
+					fmt.Sprintf("[Project continuation found blocked review lane %s but runtime resume is still blocked by %s: %s. Leave that lane blocked and continue with the next bounded task instead.]", projectBootstrapTaskLabel(blockedReviewTask), blockerClass, blockerReason),
+				)
+			} else {
+				_, _ = e.appendSystemMessage(
+					ctx,
+					completedTurn.ID,
+					session.ID,
+					fmt.Sprintf("[Project continuation found blocked review lane %s but runtime resume is still blocked by %s. Leave that lane blocked and continue with the next bounded task instead.]", projectBootstrapTaskLabel(blockedReviewTask), blockerClass),
+				)
+			}
+		} else {
+			resumedLabel := projectBootstrapTaskLabel(blockedReviewTask)
+			if resumed != nil && resumed.ID != uuid.Nil {
+				if resumed.TaskNumber > 0 || strings.TrimSpace(resumed.Title) != "" {
+					resumedLabel = projectBootstrapTaskLabel(repo.ProjectTask(*resumed))
+				}
+			}
+			_, _ = e.appendSystemMessage(
+				ctx,
+				completedTurn.ID,
+				session.ID,
+				fmt.Sprintf("[Project continuation resumed blocked review lane %s so it can complete flow.review_decision instead of creating replacement work.]", resumedLabel),
+			)
+			return true, nil
 		}
-		_, _ = e.appendSystemMessage(
-			ctx,
-			completedTurn.ID,
-			session.ID,
-			fmt.Sprintf("[Project continuation resumed blocked review lane %s so it can complete flow.review_decision instead of creating replacement work.]", resumedLabel),
-		)
-		return true, nil
 	}
 	nextTask, ok, err := e.nextRunnableDraftProjectTask(ctx, session.ScopeID)
 	if err != nil {
@@ -5295,7 +5319,7 @@ func (e *TurnEngine) nextRunnableDraftProjectTask(ctx context.Context, projectID
 }
 
 func (e *TurnEngine) nextRunnableDraftProjectTaskForPriorityPaths(ctx context.Context, projectID uuid.UUID, priorityPaths map[string]struct{}) (repo.ProjectTask, bool, error) {
-	if e == nil || e.tasks == nil || e.pool == nil || projectID == uuid.Nil {
+	if e == nil || e.tasks == nil || projectID == uuid.Nil {
 		return repo.ProjectTask{}, false, nil
 	}
 	projectTasks, err := e.tasks.ListByProject(ctx, projectID)
@@ -5328,14 +5352,16 @@ func (e *TurnEngine) nextRunnableDraftProjectTaskForPriorityPaths(ctx context.Co
 			continue
 		}
 		var unmetDependencies int
-		if err := e.pool.QueryRow(ctx, `
-			SELECT COUNT(*)
-			FROM project_task_dependency d
-			JOIN project_task prereq ON prereq.id = d.depends_on_id
-			WHERE d.source_id = $1
-			  AND lower(trim(prereq.work_status)) NOT IN ('done', 'cancelled')
-		`, task.ID).Scan(&unmetDependencies); err != nil {
-			return repo.ProjectTask{}, false, err
+		if e.pool != nil {
+			if err := e.pool.QueryRow(ctx, `
+				SELECT COUNT(*)
+				FROM project_task_dependency d
+				JOIN project_task prereq ON prereq.id = d.depends_on_id
+				WHERE d.source_id = $1
+				  AND lower(trim(prereq.work_status)) NOT IN ('done', 'cancelled')
+			`, task.ID).Scan(&unmetDependencies); err != nil {
+				return repo.ProjectTask{}, false, err
+			}
 		}
 		if unmetDependencies > 0 {
 			continue
