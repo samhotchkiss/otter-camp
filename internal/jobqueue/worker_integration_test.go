@@ -866,6 +866,142 @@ func TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionSkipsP
 	}
 }
 
+func TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionClosesRejectedExecution(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "close-blocked-task-session-rejected-execution",
+		DisplayName: "Close Blocked Task Session Rejected Execution",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "close-blocked-task-session-rejected-" + uuid.NewString()[:8],
+		DisplayName:    "Close Blocked Task Session Rejected Execution",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Blocked Session Rejected Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Handle stale blocked task session cleanup.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "close-blocked-task-session-rejected-template",
+		DisplayName:    "Close Blocked Task Session Rejected Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Blocked task session with rejected execution",
+		WorkStatus:      "blocked",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+		Metadata:        json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE flow_node_execution
+		SET status = 'rejected',
+		    completed_at = now(),
+		    runtime_substate = NULL
+		WHERE id = $1
+	`, execution.ID); err != nil {
+		t.Fatalf("reject flow execution: %v", err)
+	}
+
+	closed, err := worker.CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ctx)
+	if err != nil {
+		t.Fatalf("CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution: %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("closed sessions = %d, want 1", closed)
+	}
+
+	var (
+		sessionStatus string
+		closedAt      *time.Time
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, closed_at
+		FROM chat_session
+		WHERE id = $1
+	`, session.ID).Scan(&sessionStatus, &closedAt); err != nil {
+		t.Fatalf("query session: %v", err)
+	}
+	if sessionStatus != "closed" {
+		t.Fatalf("session status = %q, want closed", sessionStatus)
+	}
+	if closedAt == nil {
+		t.Fatal("closed_at is nil")
+	}
+}
+
 func TestJobWorkerRetireClosedAsyncSessionRunsCompletesDoneTaskRuns(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

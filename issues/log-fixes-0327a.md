@@ -424,3 +424,14 @@
   - verified with `gofmt -w internal/jobqueue/worker.go internal/jobqueue/worker_integration_test.go` and `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(SkipsPendingAgentTurn)?|RequeueActiveExecutionSessionsWithoutTurns(ForTaskQueueKickoff|CreatesMissingTaskQueueKickoff)|RetireClosedAsyncSessionRuns(FailsNonTerminalTaskRuns|CompletesDoneTaskRuns))$' -count=1`
   - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
   - live proof: on the new runtime, Sam.blog task `40` session `bcbc53cd-99fa-476f-a50c-b4ba26dd0b7e` and task `41` session `1e7d7f89-27b7-4170-b585-7f7dadcd9868` both closed at `2026-03-28 01:37:45 MDT`; each still points at an owned `flow_node_execution` with `status='abandoned'`, so the cleanup now retires those dead async task sessions instead of leaving them active indefinitely
+- 2026-03-28 01:41:43 MDT - `pending` `Close blocked task sessions after rejected execution ownership`
+  - widened [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) so `CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(...)` now treats session-owned `flow_node_execution.status IN ('abandoned', 'rejected')` as non-live execution ownership
+  - kept the same safety boundaries:
+    - task must already be `blocked`
+    - no session-owned `flow_node_execution.status='active'`
+    - no pending/claimed `agent_turn` job for the session
+  - added focused integration coverage in [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - `TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionClosesRejectedExecution`
+  - verified with `gofmt -w internal/jobqueue/worker.go internal/jobqueue/worker_integration_test.go` and `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ClosesRejectedExecution|SkipsPendingAgentTurn)?|RequeueActiveExecutionSessionsWithoutTurns(ForTaskQueueKickoff|CreatesMissingTaskQueueKickoff)|RetireClosedAsyncSessionRuns(FailsNonTerminalTaskRuns|CompletesDoneTaskRuns))$' -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
+  - live proof: on the new runtime, the remaining `11` blocked/rejected Sam.blog task sessions (`11`, `16`, `17`, `18`, `19`, `20`, `22`, `23`, `24`, `30`, `37`) all closed at `2026-03-28 01:41:43 MDT`, removing the rest of the dead blocked-task session noise from the active async pool

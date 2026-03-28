@@ -302,7 +302,7 @@ func (w *Worker) Start(ctx context.Context) error {
 	}
 	if repaired, err := w.CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(runCtx); err != nil {
 		if runCtx.Err() == nil {
-			w.logger.Error("startup blocked project_task abandoned session cleanup failed", "error", err)
+			w.logger.Error("startup blocked project_task non-live execution session cleanup failed", "error", err)
 		}
 	} else if repaired > 0 {
 		w.logger.Info("job queue: closed blocked project_task async sessions without live execution on startup", "count", repaired)
@@ -4616,9 +4616,9 @@ func (w *Worker) CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ctx co
 			  AND pt.work_status = 'blocked'
 			  AND EXISTS (
 			    SELECT 1
-			    FROM flow_node_execution fne_abandoned
-			    WHERE fne_abandoned.session_id = cs.id
-			      AND fne_abandoned.status = 'abandoned'
+			    FROM flow_node_execution fne_terminal
+			    WHERE fne_terminal.session_id = cs.id
+			      AND fne_terminal.status IN ('abandoned', 'rejected')
 			  )
 			  AND NOT EXISTS (
 			    SELECT 1
@@ -4652,9 +4652,9 @@ func (w *Worker) CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ctx co
 		  AND pt.work_status = 'blocked'
 		  AND EXISTS (
 		    SELECT 1
-		    FROM flow_node_execution fne_abandoned
-		    WHERE fne_abandoned.session_id = cs.id
-		      AND fne_abandoned.status = 'abandoned'
+		    FROM flow_node_execution fne_terminal
+		    WHERE fne_terminal.session_id = cs.id
+		      AND fne_terminal.status IN ('abandoned', 'rejected')
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1
@@ -6138,7 +6138,7 @@ func (w *Worker) runStaleClaimRecovery(ctx context.Context) {
 				w.logger.Info("job queue: closed terminal project_task async sessions", "count", repaired)
 			}
 			if repaired, err := w.CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ctx); err != nil && ctx.Err() == nil {
-				w.logger.Error("blocked project_task abandoned session cleanup failed", "error", err)
+				w.logger.Error("blocked project_task non-live execution session cleanup failed", "error", err)
 			} else if repaired > 0 {
 				w.logger.Info("job queue: closed blocked project_task async sessions without live execution", "count", repaired)
 			}
