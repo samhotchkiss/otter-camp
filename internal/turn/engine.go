@@ -24449,6 +24449,11 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 		return true, buildProjectContinuationSnapshotSessionRediscoveryGuardError(toolName)
 	case "git.log", "git.status":
 		return true, buildProjectContinuationSnapshotGitRediscoveryGuardError(toolName)
+	case "flow.list_templates", "flow_list_templates":
+		if strings.Contains(initialMessage, "flow_template_id=missing") {
+			return false, ""
+		}
+		return true, buildProjectContinuationSnapshotFlowTemplateRediscoveryGuardError(toolName)
 	case "task.list":
 		if strings.TrimSpace(stringValue(arguments["parent_task_id"])) != "" {
 			return false, ""
@@ -24525,6 +24530,10 @@ func buildProjectContinuationSnapshotSessionRediscoveryGuardError(toolName strin
 
 func buildProjectContinuationSnapshotGitRediscoveryGuardError(toolName string) string {
 	return fmt.Sprintf("project continuation already has named active tasks in the continuation prompt. Do not reread repo history or status with %s just to rediscover current work; act on the named tasks directly or inspect only an exact deliverable path required for the next project action.", toolName)
+}
+
+func buildProjectContinuationSnapshotFlowTemplateRediscoveryGuardError(toolName string) string {
+	return fmt.Sprintf("project continuation already has named active or draft tasks in the continuation prompt and no draft task is currently blocked on flow_template_id=missing. Do not reread the template catalog with %s first; act on the named tasks directly or repair another explicit prerequisite blocker already named in the prompt.", toolName)
 }
 
 func shouldBlockProjectContinuationSnapshotArtifactBrowse(path string, arguments map[string]any) bool {

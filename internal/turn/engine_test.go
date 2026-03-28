@@ -9457,6 +9457,55 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksGitLogForAct
 	}
 }
 
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksFlowListTemplatesWithoutMissingTemplateBlocker(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	activeTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:    "Active project id: " + projectID.String(),
+			ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 22 (Ship docs) id=" + activeTaskID.String() + " title=\"Ship docs\" work_status=in_progress assigned_agent_id=worker-1",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "flow_list_templates", map[string]any{})
+	if !blocked {
+		t.Fatal("expected project-lane flow.list_templates to be blocked once the continuation prompt already names active tasks and no flow-template blocker is present")
+	}
+	if !strings.Contains(reason, "template catalog") {
+		t.Fatalf("reason = %q, want template-catalog guidance", reason)
+	}
+}
+
+func TestShouldNotBlockProjectContinuationSnapshotRediscoveryToolFlowListTemplatesWhenTemplateMissing(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	draftTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:   "Active project id: " + projectID.String(),
+			DraftTaskLine: "Actionable draft tasks already in the tree: task 22 (Produce final project close-out report) id=" + draftTaskID.String() + " title=\"Produce final project close-out report\" work_status=draft assigned_agent_id=worker-1 flow_template_id=missing",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "flow.list_templates", map[string]any{})
+	if blocked {
+		t.Fatalf("expected flow.list_templates to remain available when the continuation prompt explicitly names flow_template_id=missing, got %q", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksRootFileListForActiveTasks(t *testing.T) {
 	t.Parallel()
 
