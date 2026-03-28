@@ -15961,6 +15961,7 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 			return true, nil
 		}
 		if actionMessage != nil {
+			applySyntheticContinuationActionPrompt(rt, actionMessage)
 			rt.historyStartID = &actionMessage.ID
 			if err := e.persistTurnHistoryStart(ctx, rt, actionMessage.ID); err != nil {
 				return false, err
@@ -15999,6 +16000,7 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 		return true, nil
 	}
 	if actionMessage != nil {
+		applySyntheticContinuationActionPrompt(rt, actionMessage)
 		rt.historyStartID = &actionMessage.ID
 		if err := e.persistTurnHistoryStart(ctx, rt, actionMessage.ID); err != nil {
 			return false, err

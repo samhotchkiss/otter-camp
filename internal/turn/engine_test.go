@@ -2989,6 +2989,100 @@ func TestAppendRecoveryResumeStateSkipsReviewTasks(t *testing.T) {
 	}
 }
 
+func TestAppendRecoveryResumeStateUpdatesInitialPromptToSyntheticRecoveryMessage(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	orgID := fixture.session.OrganizationID
+	projectSlug := "recovery-resume-prompt"
+	orgSlug := "test-org"
+	targetPath := "docs/content-strategy.md"
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				TaskNumber:     15,
+				Title:          "Define content strategy",
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				WorkStatus:     "blocked",
+				Metadata: mustRawJSON(t, map[string]any{
+					"recovery_file_write_checkpoint": map[string]any{
+						"version":        1,
+						"blocker_class":  "durable_recovery_checkpoint",
+						"target_path":    targetPath,
+						"failure_reason": "repeated non-substantive recovery drafts",
+					},
+				}),
+			},
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: orgID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		orgID: {ID: orgID, Slug: orgSlug},
+	}}
+
+	targetAbs := filepath.Join(dataDir, "workspaces", projectSlug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte("# Content Strategy\n\nConcrete recovery draft.\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	turn := &chat.ChatTurn{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   fixture.chat.participants[0].ParticipantID,
+		Status:         "in_progress",
+	}
+	fixture.chat.turns[turn.ID] = turn
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turn.ID)
+
+	rt := &turnRuntime{
+		session:            fixture.session,
+		turn:               turn,
+		initialMessageID:   fixture.userMessageID,
+		initialMessageText: "supervisor recovery: resume task",
+		recoveryTurn:       true,
+	}
+
+	appended, err := fixture.engine.appendRecoveryResumeState(context.Background(), rt, false)
+	if err != nil {
+		t.Fatalf("appendRecoveryResumeState: %v", err)
+	}
+	if !appended {
+		t.Fatal("appendRecoveryResumeState = false, want true")
+	}
+	if rt.historyStartID == nil {
+		t.Fatal("historyStartID = nil, want synthetic recovery action message")
+	}
+	if rt.initialMessageID != *rt.historyStartID {
+		t.Fatalf("initialMessageID = %v, want %v", rt.initialMessageID, *rt.historyStartID)
+	}
+	message, getErr := fixture.messages.GetByID(context.Background(), *rt.historyStartID)
+	if getErr != nil {
+		t.Fatalf("GetByID historyStartID: %v", getErr)
+	}
+	if !strings.Contains(rt.initialMessageText, "A substantive durable draft is already available above") {
+		t.Fatalf("initialMessageText = %q, want synthetic recovery action prompt", rt.initialMessageText)
+	}
+	if rt.initialMessageText != strings.TrimSpace(message.Content) {
+		t.Fatalf("initialMessageText = %q, want %q", rt.initialMessageText, strings.TrimSpace(message.Content))
+	}
+}
+
 func TestHandleTurnCompletedEventRetriesReviewTurnWithoutDecision(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	base := time.Unix(1700000000, 0).UTC()
