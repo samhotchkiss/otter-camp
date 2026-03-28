@@ -333,6 +333,88 @@ func TestProjectTaskEventRepoRecordAndListByTaskOrder(t *testing.T) {
 	}
 }
 
+func TestProjectTaskEventRepoLatestBlockedReasonsByTask(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskRepoOrgProject(t, ctx, pool)
+	taskRepo := NewProjectTaskRepo(pool)
+	eventRepo := NewProjectTaskEventRepo(pool)
+
+	blockedTask, err := taskRepo.Create(ctx, ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Blocked task",
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("Create blocked task: %v", err)
+	}
+	rejectedTask, err := taskRepo.Create(ctx, ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Rejected task",
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("Create rejected task: %v", err)
+	}
+	emptyTask, err := taskRepo.Create(ctx, ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Plain task",
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("Create empty task: %v", err)
+	}
+
+	if _, err := eventRepo.Record(ctx, ProjectTaskEvent{
+		TaskID:    blockedTask.ID,
+		ProjectID: project.ID,
+		EventType: "status.changed",
+		ActorType: "system",
+		Payload:   json.RawMessage(`{"to_status":"blocked","blocker_reason":"review turn repeatedly hit file.read not_found"}`),
+	}); err != nil {
+		t.Fatalf("Record blocked event: %v", err)
+	}
+	if _, err := eventRepo.Record(ctx, ProjectTaskEvent{
+		TaskID:    rejectedTask.ID,
+		ProjectID: project.ID,
+		EventType: "status.changed",
+		ActorType: "system",
+		Payload:   json.RawMessage(`{"to_status":"blocked","blocker_reason":""}`),
+	}); err != nil {
+		t.Fatalf("Record initial rejected blocked event: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if _, err := eventRepo.Record(ctx, ProjectTaskEvent{
+		TaskID:    rejectedTask.ID,
+		ProjectID: project.ID,
+		EventType: "flow.rejected",
+		ActorType: "system",
+		Payload:   json.RawMessage(`{"blocked_reason":"flow rejection max visits exceeded"}`),
+	}); err != nil {
+		t.Fatalf("Record flow.rejected event: %v", err)
+	}
+
+	reasons, err := eventRepo.LatestBlockedReasonsByTask(ctx, []uuid.UUID{blockedTask.ID, rejectedTask.ID, emptyTask.ID})
+	if err != nil {
+		t.Fatalf("LatestBlockedReasonsByTask: %v", err)
+	}
+	if got := reasons[blockedTask.ID]; got != "review turn repeatedly hit file.read not_found" {
+		t.Fatalf("blockedTask reason = %q, want blocked reason", got)
+	}
+	if got := reasons[rejectedTask.ID]; got != "flow rejection max visits exceeded" {
+		t.Fatalf("rejectedTask reason = %q, want flow rejection reason", got)
+	}
+	if _, ok := reasons[emptyTask.ID]; ok {
+		t.Fatalf("emptyTask reason unexpectedly present: %q", reasons[emptyTask.ID])
+	}
+}
+
 func TestInboxItemRepoExpireDueAndListForUserExcludesActedByDefault(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

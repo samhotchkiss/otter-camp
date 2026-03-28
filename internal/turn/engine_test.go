@@ -16095,7 +16095,7 @@ func TestTaskExecutionRetryPromptForRecoveryTargetFocusSkipsWhenTargetAlreadyWri
 func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	prompt := buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
 		ProjectLine:          "Active project id: 123",
-		ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 16 (Validate API) id=aaa title=\"Validate API\" work_status=in_progress assigned_agent_id=worker-1",
+		ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 16 (Validate API) id=aaa title=\"Validate API\" work_status=blocked assigned_agent_id=worker-1 blocker=\"review turn repeatedly hit file.read not_found across 3 consecutive turns\"",
 		DraftTaskLine:        "Actionable draft tasks already in the tree: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft assigned_agent_id=missing flow_template_id=missing",
 		ChildActiveDraftLine: "Draft parent tasks already have child work: task 21 (Theme rollout) id=ccc title=\"Theme rollout\" work_status=draft assigned_agent_id=missing flow_template_id=missing active_child_tasks=2",
 		FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft assigned_agent_id=missing flow_template_id=missing",
@@ -16130,6 +16130,9 @@ func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Do not begin with session.list, task.list, task.get, file.list on the workspace root, git.log, or git.status") {
 		t.Fatalf("prompt = %q, want active-task anti-rediscovery guidance", prompt)
+	}
+	if !strings.Contains(prompt, "act directly on that blocker summary") {
+		t.Fatalf("prompt = %q, want blocker reuse guidance", prompt)
 	}
 	if !strings.Contains(prompt, "Actionable draft tasks already in the tree:") {
 		t.Fatalf("prompt = %q, want draft-task snapshot", prompt)
@@ -16321,6 +16324,23 @@ func TestProjectExecutionContinuationSnapshotSkipsDraftParentWithBlockedChildren
 	}
 	if !strings.Contains(snapshot.FocusTaskLine, "task 19 (Ship docs)") {
 		t.Fatalf("FocusTaskLine = %q, want standalone actionable draft", snapshot.FocusTaskLine)
+	}
+}
+
+func TestProjectExecutionContinuationTaskRefIncludesBlockedReasonExcerpt(t *testing.T) {
+	task := repo.ProjectTask{
+		ID:         uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+		TaskNumber: 38,
+		Title:      "Import batch review",
+		WorkStatus: "blocked",
+	}
+
+	ref := projectExecutionContinuationTaskRef(task, projectContinuationChildActivity{}, "review turn repeatedly hit file.read not_found across 3 consecutive turns while inspecting planning/import-batch.json and content/posts")
+	if !strings.Contains(ref, "blocker=") {
+		t.Fatalf("ref = %q, want blocker excerpt", ref)
+	}
+	if !strings.Contains(ref, "review turn repeatedly hit file.read not_found") {
+		t.Fatalf("ref = %q, want blocker excerpt content", ref)
 	}
 }
 

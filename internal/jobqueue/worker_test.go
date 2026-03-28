@@ -1,6 +1,7 @@
 package jobqueue
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -41,5 +42,16 @@ func TestRejitteredRateLimitedRunAfterClampsOversizedRunAfter(t *testing.T) {
 	want := now.Add(agentTurnRateLimitBackoffCap)
 	if !got.Equal(want) {
 		t.Fatalf("rejitteredRateLimitedRunAfter oversized = %v, want %v", got, want)
+	}
+}
+
+func TestBuildProjectExecutionContinuationPromptForWorkerIncludesBlockerReuseGuidance(t *testing.T) {
+	prompt := buildProjectExecutionContinuationPromptForWorker(38, "Import batch review", 0, projectExecutionContinuationSnapshotForWorker{
+		ProjectLine:    "Active project id: 123",
+		ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 38 (Import batch review) id=aaa title=\"Import batch review\" work_status=blocked blocker=\"review turn repeatedly hit file.read not_found across 3 consecutive turns\"",
+	})
+
+	if !strings.Contains(prompt, "act directly on that blocker summary") {
+		t.Fatalf("prompt = %q, want blocker reuse guidance", prompt)
 	}
 }

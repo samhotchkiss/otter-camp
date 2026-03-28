@@ -2432,6 +2432,8 @@ type projectExecutionContinuationSnapshotForWorker struct {
 	FocusTaskLine        string
 }
 
+const projectContinuationBlockerExcerptLimitForWorker = 120
+
 type projectContinuationChildActivityForWorker struct {
 	childTaskCount       int
 	activeChildTaskCount int
@@ -2451,6 +2453,10 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 	if err != nil {
 		return snapshot, err
 	}
+	blockerReasons, err := w.projectContinuationBlockedReasonsByTask(ctx, projectTasks)
+	if err != nil {
+		return snapshot, err
+	}
 	childActivity := projectContinuationChildTaskActivityForWorker(projectTasks)
 	activeTasks := make([]string, 0, 4)
 	draftTasks := make([]string, 0, 4)
@@ -2462,7 +2468,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 			continue
 		}
 		activity := childActivity[task.ID]
-		taskRef := projectExecutionContinuationTaskRefForWorker(task, activity)
+		taskRef := projectExecutionContinuationTaskRefForWorker(task, activity, blockerReasons[task.ID])
 		if isActionableProjectDraftTaskForWorker(task) {
 			if activity.childTaskCount > 0 {
 				if len(childActiveDraftTasks) < 4 {
@@ -2495,6 +2501,24 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 		snapshot.FocusTaskLine = "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: " + focusTask
 	}
 	return snapshot, nil
+}
+
+func (w *Worker) projectContinuationBlockedReasonsByTask(ctx context.Context, tasks []repo.ProjectTask) (map[uuid.UUID]string, error) {
+	reasons := make(map[uuid.UUID]string)
+	if w == nil || w.pool == nil || len(tasks) == 0 {
+		return reasons, nil
+	}
+
+	blockedTaskIDs := make([]uuid.UUID, 0, len(tasks))
+	for _, task := range tasks {
+		if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
+			blockedTaskIDs = append(blockedTaskIDs, task.ID)
+		}
+	}
+	if len(blockedTaskIDs) == 0 {
+		return reasons, nil
+	}
+	return repo.NewProjectTaskEventRepo(w.pool).LatestBlockedReasonsByTask(ctx, blockedTaskIDs)
 }
 
 func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask) map[uuid.UUID]projectContinuationChildActivityForWorker {
@@ -2532,7 +2556,7 @@ func projectTaskExecutionActiveForWorker(status string) bool {
 	}
 }
 
-func projectExecutionContinuationTaskRefForWorker(task repo.ProjectTask, activity projectContinuationChildActivityForWorker) string {
+func projectExecutionContinuationTaskRefForWorker(task repo.ProjectTask, activity projectContinuationChildActivityForWorker, blockedReason string) string {
 	parts := []string{projectTaskLabelForWorker(task), "id=" + task.ID.String()}
 	if title := strings.TrimSpace(task.Title); title != "" && task.TaskNumber > 0 {
 		parts = append(parts, "title="+strconv.Quote(title))
@@ -2553,12 +2577,36 @@ func projectExecutionContinuationTaskRefForWorker(task repo.ProjectTask, activit
 	if task.RequiresHumanReview {
 		parts = append(parts, "requires_human_review=true")
 	}
+	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
+		if excerpt := projectContinuationBlockedReasonExcerptForWorker(blockedReason); excerpt != "" {
+			parts = append(parts, "blocker="+strconv.Quote(excerpt))
+		}
+	}
 	if activity.activeChildTaskCount > 0 {
 		parts = append(parts, "active_child_tasks="+strconv.Itoa(activity.activeChildTaskCount))
 	} else if activity.childTaskCount > 0 {
 		parts = append(parts, "child_tasks="+strconv.Itoa(activity.childTaskCount))
 	}
 	return strings.Join(parts, " ")
+}
+
+func projectContinuationBlockedReasonExcerptForWorker(reason string) string {
+	normalized := strings.Join(strings.Fields(strings.TrimSpace(reason)), " ")
+	if normalized == "" {
+		return ""
+	}
+	runes := []rune(normalized)
+	if len(runes) <= projectContinuationBlockerExcerptLimitForWorker {
+		return normalized
+	}
+	cut := strings.TrimSpace(string(runes[:projectContinuationBlockerExcerptLimitForWorker]))
+	if idx := strings.LastIndexAny(cut, " ,.;:"); idx >= projectContinuationBlockerExcerptLimitForWorker/2 {
+		cut = strings.TrimSpace(cut[:idx])
+	}
+	if cut == "" {
+		cut = strings.TrimSpace(string(runes[:projectContinuationBlockerExcerptLimitForWorker]))
+	}
+	return cut + "..."
 }
 
 func projectTaskLabelForWorker(task repo.ProjectTask) string {
@@ -2600,6 +2648,9 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 	if activeLine := strings.TrimSpace(snapshot.ActiveTaskLine); activeLine != "" {
 		lines = append(lines, activeLine)
 		lines = append(lines, "Do not begin with session.list, task.list, task.get, file.list on the workspace root, git.log, or git.status just to rediscover what the named active tasks are already doing.")
+		if strings.Contains(activeLine, "blocker=") {
+			lines = append(lines, "If a named active task above already includes blocker=..., act directly on that blocker summary instead of rereading task.get just to rediscover the same reason.")
+		}
 	}
 	if draftLine := strings.TrimSpace(snapshot.DraftTaskLine); draftLine != "" {
 		lines = append(lines, draftLine)

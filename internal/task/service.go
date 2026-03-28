@@ -1027,46 +1027,11 @@ func (s *service) loadLatestBlockedTaskReason(ctx context.Context, taskID uuid.U
 		return ""
 	}
 
-	var reason string
-	err := s.pool.QueryRow(ctx, `
-		WITH latest_blocked AS (
-			SELECT id, created_at, payload
-			FROM project_task_event
-			WHERE task_id = $1
-			  AND event_type = 'status.changed'
-			  AND COALESCE(payload->>'to_status', '') = 'blocked'
-			ORDER BY created_at DESC, id DESC
-			LIMIT 1
-		),
-		latest_flow_rejected AS (
-			SELECT id, created_at, payload
-			FROM project_task_event
-			WHERE task_id = $1
-			  AND event_type = 'flow.rejected'
-			ORDER BY created_at DESC, id DESC
-			LIMIT 1
-		)
-		SELECT COALESCE(
-			NULLIF(TRIM(BOTH FROM latest_blocked.payload->>'blocker_reason'), ''),
-			CASE
-				WHEN latest_flow_rejected.created_at IS NOT NULL
-				 AND (latest_blocked.created_at IS NULL OR latest_flow_rejected.created_at >= latest_blocked.created_at)
-				THEN NULLIF(TRIM(BOTH FROM latest_flow_rejected.payload->>'blocked_reason'), '')
-				ELSE ''
-			END,
-			''
-		)
-		FROM latest_blocked
-		FULL OUTER JOIN latest_flow_rejected ON TRUE
-		LIMIT 1
-	`, taskID).Scan(&reason)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ""
-	}
+	reasons, err := repo.NewProjectTaskEventRepo(s.pool).LatestBlockedReasonsByTask(ctx, []uuid.UUID{taskID})
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(reason)
+	return strings.TrimSpace(reasons[taskID])
 }
 
 type queueDecompositionResult struct {

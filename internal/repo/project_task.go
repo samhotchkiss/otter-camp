@@ -763,6 +763,76 @@ func (r *ProjectTaskEventRepo) ListByProject(ctx context.Context, projectID uuid
 	return events, nil
 }
 
+func (r *ProjectTaskEventRepo) LatestBlockedReasonsByTask(ctx context.Context, taskIDs []uuid.UUID) (map[uuid.UUID]string, error) {
+	reasons := make(map[uuid.UUID]string)
+	if r == nil || r.pool == nil || len(taskIDs) == 0 {
+		return reasons, nil
+	}
+
+	rows, err := r.pool.Query(ctx, `
+		WITH requested_task_ids AS (
+			SELECT DISTINCT UNNEST($1::uuid[]) AS task_id
+		),
+		latest_blocked AS (
+			SELECT DISTINCT ON (e.task_id)
+				e.task_id,
+				e.created_at,
+				NULLIF(TRIM(BOTH FROM e.payload->>'blocker_reason'), '') AS blocker_reason
+			FROM project_task_event e
+			JOIN requested_task_ids t ON t.task_id = e.task_id
+			WHERE e.event_type = 'status.changed'
+			  AND COALESCE(e.payload->>'to_status', '') = 'blocked'
+			ORDER BY e.task_id, e.created_at DESC, e.id DESC
+		),
+		latest_flow_rejected AS (
+			SELECT DISTINCT ON (e.task_id)
+				e.task_id,
+				e.created_at,
+				NULLIF(TRIM(BOTH FROM e.payload->>'blocked_reason'), '') AS blocked_reason
+			FROM project_task_event e
+			JOIN requested_task_ids t ON t.task_id = e.task_id
+			WHERE e.event_type = 'flow.rejected'
+			ORDER BY e.task_id, e.created_at DESC, e.id DESC
+		)
+		SELECT
+			t.task_id,
+			COALESCE(
+				lb.blocker_reason,
+				CASE
+					WHEN lfr.created_at IS NOT NULL
+					 AND (lb.created_at IS NULL OR lfr.created_at >= lb.created_at)
+					THEN COALESCE(lfr.blocked_reason, '')
+					ELSE ''
+				END,
+				''
+			) AS blocker_reason
+		FROM requested_task_ids t
+		LEFT JOIN latest_blocked lb USING (task_id)
+		LEFT JOIN latest_flow_rejected lfr USING (task_id)
+	`, taskIDs)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var taskID uuid.UUID
+		var reason string
+		if scanErr := rows.Scan(&taskID, &reason); scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		reason = strings.TrimSpace(reason)
+		if reason == "" {
+			continue
+		}
+		reasons[taskID] = reason
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return reasons, nil
+}
+
 type InboxItemRepo struct {
 	pool *pgxpool.Pool
 }
