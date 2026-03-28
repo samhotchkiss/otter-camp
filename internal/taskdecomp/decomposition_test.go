@@ -429,6 +429,47 @@ func TestExtractDeliverablesIgnoresDesignGuidanceAndProcessCompanionLines(t *tes
 	}
 }
 
+func TestExtractDeliverablesIgnoresProceduralStepsAndImportantSections(t *testing.T) {
+	description := strings.Join([]string{
+		"## Objective",
+		"Crawl technonymous.org and produce a JSON index file at `content/technonymous-index.json`.",
+		"",
+		"## Deliverable",
+		"A single file: `content/technonymous-index.json`",
+		"",
+		"## Steps",
+		"1. Use browser tools to navigate to https://technonymous.org",
+		"2. Extract all blog post URLs, titles, dates, and any summary/excerpt available from the site's archive/index pages",
+		"3. If the site has pagination, follow all pages to get the complete list",
+		"4. Write the result as a JSON array to `content/technonymous-index.json`",
+		"5. Commit the file",
+		"",
+		"## Important",
+		"- This is a CONCRETE DELIVERABLE task. The output is a JSON file, not a planning document.",
+		"- Use browser_navigate, browser_extract_text, browser_click to crawl the site",
+		"- Use cli_execute with python3 to write the file if file_write is intercepted",
+		"- Do NOT produce planning artifacts — produce the JSON file directly",
+		"- The file MUST be at exactly `content/technonymous-index.json`",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	if len(items) >= 2 {
+		t.Fatalf("extractDeliverables len = %d, want < 2 so procedural sections do not trigger decomposition: %v", len(items), items)
+	}
+	for _, unexpected := range []string{
+		"Use browser tools to navigate to https://technonymous.org",
+		"Use browser_navigate, browser_extract_text, browser_click to crawl the site",
+		"Use cli_execute with python3 to write the file if file_write is intercepted",
+		"Do NOT produce planning artifacts — produce the JSON file directly",
+	} {
+		for _, item := range items {
+			if item == unexpected {
+				t.Fatalf("procedural guidance leaked into deliverables: %q", item)
+			}
+		}
+	}
+}
+
 func TestPrepareQueueDecompositionSkipsWhenAlreadyDecomposed(t *testing.T) {
 	description := strings.Join([]string{
 		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",
@@ -599,6 +640,46 @@ func TestPrepareQueueDecompositionAutoAppliesForStrategySynthesisWorkstream(t *t
 	}
 	if len(result.ChildDrafts) < 3 {
 		t.Fatalf("ChildDrafts len = %d, want >= 3", len(result.ChildDrafts))
+	}
+}
+
+func TestPrepareQueueDecompositionSkipsConcreteDeliverableWithProceduralSections(t *testing.T) {
+	description := strings.Join([]string{
+		"## Objective",
+		"Crawl technonymous.org and produce a JSON index file at `content/technonymous-index.json`.",
+		"",
+		"## Deliverable",
+		"A single file: `content/technonymous-index.json`",
+		"",
+		"## Steps",
+		"1. Use browser tools to navigate to https://technonymous.org",
+		"2. Extract all blog post URLs, titles, dates, and any summary/excerpt available from the site's archive/index pages",
+		"3. If the site has pagination, follow all pages to get the complete list",
+		"4. Write the result as a JSON array to `content/technonymous-index.json` with this structure:",
+		"5. Commit the file",
+		"",
+		"## Important",
+		"- This is a CONCRETE DELIVERABLE task. The output is a JSON file, not a planning document.",
+		"- Use browser_navigate, browser_extract_text, browser_click to crawl the site",
+		"- Use cli_execute with python3 to write the file if file_write is intercepted",
+		"- Do NOT produce planning artifacts — produce the JSON file directly",
+		"- The file MUST be at exactly `content/technonymous-index.json`",
+	}, "\n")
+
+	result, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        "Produce content/technonymous-index.json by crawling technonymous.org",
+		Description:  &description,
+		Metadata:     json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("PrepareQueueDecomposition: %v", err)
+	}
+	if result.Applied {
+		t.Fatalf("Applied = true, want false for single concrete deliverable with procedural sections: %+v", result)
+	}
+	if len(result.ChildDrafts) != 0 {
+		t.Fatalf("ChildDrafts len = %d, want 0", len(result.ChildDrafts))
 	}
 }
 

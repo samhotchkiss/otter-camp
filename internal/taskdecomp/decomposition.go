@@ -674,7 +674,15 @@ func extractDeliverables(description string) []string {
 	// Prefer explicit list-like authoring first.
 	lines := strings.Split(description, "\n")
 	if len(lines) > 1 {
+		currentSection := ""
 		for _, line := range lines {
+			if heading, ok := descriptionSectionHeading(line); ok {
+				currentSection = heading
+				continue
+			}
+			if sectionSkipsDeliverables(currentSection) {
+				continue
+			}
 			item := cleanSegment(line)
 			if item != "" {
 				candidates = append(candidates, item)
@@ -714,6 +722,42 @@ func extractDeliverables(description string) []string {
 		}
 	}
 	return deduped
+}
+
+func descriptionSectionHeading(raw string) (string, bool) {
+	normalized := normalizeDescriptionSectionHeading(raw)
+	switch normalized {
+	case "objective", "deliverable", "deliverables", "output", "outputs",
+		"step", "steps", "instruction", "instructions", "process", "procedure",
+		"implementation", "important", "note", "notes", "requirements", "constraints":
+		return normalized, true
+	default:
+		return "", false
+	}
+}
+
+func normalizeDescriptionSectionHeading(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.TrimLeft(trimmed, "#")
+	trimmed = strings.TrimSpace(trimmed)
+	trimmed = strings.Trim(trimmed, "*")
+	trimmed = strings.TrimSpace(trimmed)
+	trimmed = strings.TrimSuffix(trimmed, ":")
+	trimmed = strings.TrimSpace(trimmed)
+	return strings.ToLower(trimmed)
+}
+
+func sectionSkipsDeliverables(section string) bool {
+	switch section {
+	case "step", "steps", "instruction", "instructions", "process", "procedure",
+		"implementation", "important", "note", "notes", "requirements", "constraints":
+		return true
+	default:
+		return false
+	}
 }
 
 func isInstructionOnlyDeliverable(normalized string) bool {
