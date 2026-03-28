@@ -1376,6 +1376,55 @@ func (s *service) ListMessages(ctx context.Context, sessionID uuid.UUID, filter 
 	return result, nil
 }
 
+func (s *service) ListMessagesByRunID(ctx context.Context, sessionID, runID uuid.UUID) ([]*ChatMessage, error) {
+	if runID == uuid.Nil {
+		return nil, nil
+	}
+	session, err := s.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	messages, err := s.messages.ListBySession(ctx, session.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*ChatMessage, 0, 2)
+	for i := range messages {
+		message := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") || len(message.Metadata) == 0 {
+			continue
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(message.Metadata, &metadata); err != nil {
+			continue
+		}
+		if strings.TrimSpace(metadataString(metadata["source"])) != "task_queue_processor" {
+			continue
+		}
+		if strings.TrimSpace(metadataString(metadata["run_id"])) != runID.String() {
+			continue
+		}
+		copyItem := message
+		result = append(result, &copyItem)
+	}
+	return result, nil
+}
+
+func metadataString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		if value == nil {
+			return ""
+		}
+		return fmt.Sprint(value)
+	}
+}
+
 func (s *service) CreateTurn(ctx context.Context, sessionID, agentID uuid.UUID) (*ChatTurn, error) {
 	session, err := s.GetSession(ctx, sessionID)
 	if err != nil {

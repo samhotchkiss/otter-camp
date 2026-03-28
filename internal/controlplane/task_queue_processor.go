@@ -17,6 +17,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -114,6 +115,10 @@ type taskQueueChatService interface {
 	UpdateMessageStatus(ctx context.Context, messageID uuid.UUID, newStatus, errorMsg string) error
 }
 
+type taskQueueKickoffMessageLister interface {
+	ListMessagesByRunID(ctx context.Context, sessionID, runID uuid.UUID) ([]*chat.ChatMessage, error)
+}
+
 type taskQueueSessionRepository interface {
 	GetByScopeAndMode(ctx context.Context, scopeType string, scopeID uuid.UUID, mode string) (*repo.ChatSession, error)
 }
@@ -144,6 +149,7 @@ type TaskQueueProcessor struct {
 	runs           taskQueueRunStarter
 	chats          taskQueueChatService
 	sessions       taskQueueSessionRepository
+	kickoffGroup   singleflight.Group
 }
 
 func NewTaskQueueProcessor(opts TaskQueueProcessorOptions) (*TaskQueueProcessor, error) {
@@ -912,7 +918,15 @@ func (p *TaskQueueProcessor) sessionHasKickoffMessage(ctx context.Context, sessi
 }
 
 func (p *TaskQueueProcessor) reconcileWakeupKickoffMessages(ctx context.Context, sessionID, runID uuid.UUID) (bool, []uuid.UUID, error) {
-	messages, err := p.chats.ListMessages(ctx, sessionID, chat.MessageFilter{Limit: 200})
+	var (
+		messages []*chat.ChatMessage
+		err      error
+	)
+	if lister, ok := p.chats.(taskQueueKickoffMessageLister); ok {
+		messages, err = lister.ListMessagesByRunID(ctx, sessionID, runID)
+	} else {
+		messages, err = p.chats.ListMessages(ctx, sessionID, chat.MessageFilter{Limit: 200})
+	}
 	if err != nil {
 		return false, nil, err
 	}
@@ -1182,28 +1196,38 @@ func (p *TaskQueueProcessor) appendWakeupKickoff(ctx context.Context, runRecord 
 	if sessionID == uuid.Nil {
 		return nil
 	}
-	if runRecord.PrincipalType == "agent" && runRecord.PrincipalID != uuid.Nil {
-		if _, err := p.chats.AddParticipant(ctx, sessionID, "agent", runRecord.PrincipalID, "responder"); err != nil && !errors.Is(err, chat.ErrAlreadyParticipant) {
-			return err
-		}
-	}
-	hasKickoffMessage, duplicateKickoffs, err := p.reconcileWakeupKickoffMessages(ctx, sessionID, runRecord.ID)
-	if err != nil {
-		return err
-	}
-	if hasKickoffMessage {
-		for _, duplicateMessageID := range duplicateKickoffs {
-			if err := p.chats.UpdateMessageStatus(ctx, duplicateMessageID, "final", ""); err != nil && !errors.Is(err, repo.ErrNotFound) {
+	appendOnce := func() error {
+		if runRecord.PrincipalType == "agent" && runRecord.PrincipalID != uuid.Nil {
+			if _, err := p.chats.AddParticipant(ctx, sessionID, "agent", runRecord.PrincipalID, "responder"); err != nil && !errors.Is(err, chat.ErrAlreadyParticipant) {
 				return err
 			}
 		}
-		return nil
+		hasKickoffMessage, duplicateKickoffs, err := p.reconcileWakeupKickoffMessages(ctx, sessionID, runRecord.ID)
+		if err != nil {
+			return err
+		}
+		if hasKickoffMessage {
+			for _, duplicateMessageID := range duplicateKickoffs {
+				if err := p.chats.UpdateMessageStatus(ctx, duplicateMessageID, "final", ""); err != nil && !errors.Is(err, repo.ErrNotFound) {
+					return err
+				}
+			}
+			return nil
+		}
+		_, err = p.chats.AppendMessage(ctx, chat.AppendMessageInput{
+			SessionID: sessionID,
+			Role:      "user",
+			Content:   content,
+			Metadata:  metadata,
+		})
+		return err
 	}
-	_, err = p.chats.AppendMessage(ctx, chat.AppendMessageInput{
-		SessionID: sessionID,
-		Role:      "user",
-		Content:   content,
-		Metadata:  metadata,
+	if runRecord.ID == uuid.Nil {
+		return appendOnce()
+	}
+	key := fmt.Sprintf("wakeup-kickoff:%s:%s", sessionID, runRecord.ID)
+	_, err, _ := p.kickoffGroup.Do(key, func() (any, error) {
+		return nil, appendOnce()
 	})
 	return err
 }

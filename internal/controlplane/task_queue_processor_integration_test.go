@@ -2005,6 +2005,108 @@ func TestTaskQueueProcessorIntegrationAssignedWakeupIgnoresProjectScopedRunSessi
 	}
 }
 
+func TestTaskQueueProcessorAppendWakeupKickoffDoesNotDuplicateRunBeyondListLimit(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Kickoff dedupe beyond list limit",
+		Description:     stringPtr("Ensure task_queue_processor wakeups do not duplicate once a task session already has a long message history."),
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	session, err := repo.NewChatSessionRepo(fx.pool).Create(ctx, repo.ChatSession{
+		OrganizationID: fx.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        created.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	messageRepo := repo.NewChatMessageRepo(fx.pool)
+	for i := 0; i < 220; i++ {
+		if _, err := messageRepo.Create(ctx, repo.ChatMessage{
+			SessionID: session.ID,
+			Role:      "user",
+			Content:   fmt.Sprintf("historical message %03d", i),
+			Status:    "final",
+			Metadata:  json.RawMessage(`{"source":"task_queue_processor_integration_test"}`),
+		}); err != nil {
+			t.Fatalf("seed historical message %d: %v", i, err)
+		}
+	}
+
+	runID := uuid.New()
+	executionID := uuid.New()
+	messageMetadata, err := json.Marshal(map[string]any{
+		"source":                 "task_queue_processor",
+		"run_id":                 runID.String(),
+		"task_id":                created.ID.String(),
+		"flow_node_execution_id": executionID.String(),
+		"flow_event_type":        "flow.rejected",
+	})
+	if err != nil {
+		t.Fatalf("marshal kickoff metadata: %v", err)
+	}
+	runRecord := Run{
+		ID:             runID,
+		OrganizationID: fx.org.ID,
+		ProjectID:      &fx.project.ID,
+		TaskID:         &created.ID,
+		SessionID:      &session.ID,
+		PrincipalType:  "agent",
+		PrincipalID:    fx.agent.ID,
+		Status:         "in_progress",
+		TriggerType:    taskQueueTriggerType,
+	}
+
+	if err := fx.processor.appendWakeupKickoff(ctx, runRecord, session.ID, "Start work on task: Kickoff dedupe beyond list limit", messageMetadata); err != nil {
+		t.Fatalf("appendWakeupKickoff first call: %v", err)
+	}
+	if err := fx.processor.appendWakeupKickoff(ctx, runRecord, session.ID, "Start work on task: Kickoff dedupe beyond list limit", messageMetadata); err != nil {
+		t.Fatalf("appendWakeupKickoff second call: %v", err)
+	}
+
+	messages, err := messageRepo.ListBySession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var kickoffCount int
+	for _, message := range messages {
+		if strings.TrimSpace(message.Role) != "user" || len(message.Metadata) == 0 {
+			continue
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(message.Metadata, &metadata); err != nil {
+			continue
+		}
+		if metadata["source"] != "task_queue_processor" {
+			continue
+		}
+		if valueAsString(metadata["run_id"]) != runID.String() {
+			continue
+		}
+		kickoffCount++
+	}
+	if kickoffCount != 1 {
+		t.Fatalf("kickoff messages for run %s = %d, want 1 even after >200 historical messages", runID, kickoffCount)
+	}
+}
+
 func TestTaskQueueProcessorIntegrationRepeatedInProgressEventsReuseTaskSession(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
@@ -2321,6 +2323,64 @@ func TestDispatchTaskQueueWakeupFlowTransitionUsesExecutionSession(t *testing.T)
 	}
 }
 
+func TestAppendWakeupKickoffSuppressesConcurrentDuplicateRunKickoffs(t *testing.T) {
+	ctx := context.Background()
+	sessionID := uuid.New()
+	runID := uuid.New()
+	agentID := uuid.New()
+	chatService := &fakeTaskQueueChatService{
+		session: &chat.ChatSession{
+			ID:     sessionID,
+			Status: "active",
+			Mode:   "async",
+		},
+		appendMessageDelay: 25 * time.Millisecond,
+	}
+	processor := &TaskQueueProcessor{
+		chats: chatService,
+	}
+	metadata, err := json.Marshal(map[string]any{
+		"source": "task_queue_processor",
+		"run_id": runID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	runRecord := Run{
+		ID:            runID,
+		PrincipalType: "agent",
+		PrincipalID:   agentID,
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- processor.appendWakeupKickoff(ctx, runRecord, sessionID, "Start work on task: Duplicate kickoff", metadata)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("appendWakeupKickoff: %v", err)
+		}
+	}
+
+	if len(chatService.addParticipantCalls) != 1 {
+		t.Fatalf("addParticipant calls = %d, want 1", len(chatService.addParticipantCalls))
+	}
+	if len(chatService.appendMessages) != 1 {
+		t.Fatalf("appendMessage calls = %d, want 1", len(chatService.appendMessages))
+	}
+	if len(chatService.listMessages) != 1 {
+		t.Fatalf("session messages = %d, want 1", len(chatService.listMessages))
+	}
+}
+
 func TestDispatchTaskQueueWakeupFlowTransitionSkipsTerminalExecution(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
@@ -3332,6 +3392,7 @@ type fakeTaskQueueChatService struct {
 	onCreateSession          func(*chat.ChatSession)
 	addParticipantCalls      []addParticipantCall
 	addParticipantErr        error
+	appendMessageDelay       time.Duration
 	appendMessageErr         error
 	appendMessages           []chat.AppendMessageInput
 	listMessages             []*chat.ChatMessage
@@ -3483,6 +3544,9 @@ func (f *fakeTaskQueueChatService) AddParticipant(_ context.Context, sessionID u
 func (f *fakeTaskQueueChatService) AppendMessage(_ context.Context, input chat.AppendMessageInput) (*chat.ChatMessage, error) {
 	f.calls = append(f.calls, "append_message")
 	f.appendMessages = append(f.appendMessages, input)
+	if f.appendMessageDelay > 0 {
+		time.Sleep(f.appendMessageDelay)
+	}
 	if f.appendMessageErr != nil {
 		return nil, f.appendMessageErr
 	}
@@ -3502,6 +3566,33 @@ func (f *fakeTaskQueueChatService) ListMessages(context.Context, uuid.UUID, chat
 		return nil, f.listMessagesErr
 	}
 	return f.listMessages, nil
+}
+
+func (f *fakeTaskQueueChatService) ListMessagesByRunID(_ context.Context, _ uuid.UUID, runID uuid.UUID) ([]*chat.ChatMessage, error) {
+	if f.listMessagesErr != nil {
+		return nil, f.listMessagesErr
+	}
+	if runID == uuid.Nil {
+		return nil, nil
+	}
+	filtered := make([]*chat.ChatMessage, 0, 2)
+	for _, message := range f.listMessages {
+		if message == nil || strings.TrimSpace(message.Role) != "user" || len(message.Metadata) == 0 {
+			continue
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(message.Metadata, &metadata); err != nil {
+			continue
+		}
+		if strings.TrimSpace(valueAsString(metadata["source"])) != "task_queue_processor" {
+			continue
+		}
+		if strings.TrimSpace(valueAsString(metadata["run_id"])) != runID.String() {
+			continue
+		}
+		filtered = append(filtered, message)
+	}
+	return filtered, nil
 }
 
 func (f *fakeTaskQueueChatService) UpdateMessageStatus(_ context.Context, messageID uuid.UUID, newStatus, errorMsg string) error {

@@ -1,5 +1,12 @@
 # 0327a Fix Log
 
+- 2026-03-27 21:55:53 MDT - `pending` `Deduplicate long-history task wakeup kickoffs`
+  - changed [`internal/controlplane/task_queue_processor.go`](/Users/sam/dev/otter-camp/internal/controlplane/task_queue_processor.go) so kickoff reconciliation now prefers a run-scoped lookup and still uses a per-session/per-run singleflight key before appending a new wakeup message
+  - changed [`internal/chat/service.go`](/Users/sam/dev/otter-camp/internal/chat/service.go) to expose `ListMessagesByRunID(...)`, allowing controlplane dedupe to inspect the exact recent run history instead of the oldest 200-message session slice
+  - added focused concurrency coverage in [`internal/controlplane/task_queue_processor_test.go`](/Users/sam/dev/otter-camp/internal/controlplane/task_queue_processor_test.go) and a long-history integration regression in [`internal/controlplane/task_queue_processor_integration_test.go`](/Users/sam/dev/otter-camp/internal/controlplane/task_queue_processor_integration_test.go)
+  - verified with `go test ./internal/controlplane -run 'Test(AppendWakeupKickoffSuppressesConcurrentDuplicateRunKickoffs|DispatchTaskQueueWakeupFlowTransitionUsesExecutionSession|DispatchTaskQueueWakeupFlowCurrentUsesExecutionSession)$' -count=1`, `go test -tags=integration ./internal/controlplane -run 'Test(TaskQueueProcessorAppendWakeupKickoffDoesNotDuplicateRunBeyondListLimit|TaskQueueProcessorIntegrationAssignedWakeupIgnoresProjectScopedRunSessionEX294)$' -count=1`, and `go test ./internal/chat -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
+  - live proof: after restart, there were 16 fresh `task_queue_processor` user messages in the last five minutes across Sam.blog tasks 17, 18, 19, 20, 21, 22, 23, and 30, and the post-restart duplicate query for same-session / same-`run_id` kickoff messages returned zero rows
 - 2026-03-27 10:44:10 MDT - `158fdb5d` `Fix restart smoke coverage and kickoff retry churn`
   - tightened org-scope kickoff handling in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so blocked duplicate `project.create` results stop the kickoff turn instead of paying for another model round
   - repaired stale restart-smoke integration coverage in [`internal/turn/engine_integration_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_integration_test.go)
