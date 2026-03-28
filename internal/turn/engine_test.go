@@ -11085,6 +11085,7 @@ func TestHandleCompletedProjectExecutionContinuationTurnResumesBlockedReviewTask
 
 	projectID := uuid.New()
 	completedTaskID := uuid.New()
+	olderBlockedReviewTaskID := uuid.New()
 	blockedReviewTaskID := uuid.New()
 	draftTaskID := uuid.New()
 	reviewNodeID := uuid.New()
@@ -11104,6 +11105,27 @@ func TestHandleCompletedProjectExecutionContinuationTurnResumesBlockedReviewTask
 				WorkStatus:      "done",
 				AssignedAgentID: uuidPtr(uuid.New()),
 				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+			olderBlockedReviewTaskID: {
+				ID:                olderBlockedReviewTaskID,
+				ProjectID:         projectID,
+				TaskNumber:        10,
+				Title:             "Older blocked review lane",
+				WorkStatus:        "blocked",
+				CurrentFlowNodeID: &reviewNodeID,
+				AssignedAgentID:   uuidPtr(uuid.New()),
+				FlowTemplateID:    uuidPtr(uuid.New()),
+				Metadata: mustJSONRaw(map[string]any{
+					"agent_turn_validation_guard": map[string]any{
+						"tool_name":       "flow.review_decision",
+						"failure_class":   "tool_validation",
+						"failure_code":    "review_decision_required",
+						"failure_reason":  "review turn completed without calling flow.review_decision",
+						"count":           3,
+						"block_threshold": 3,
+						"blocked":         true,
+					},
+				}),
 			},
 			blockedReviewTaskID: {
 				ID:                blockedReviewTaskID,
@@ -11149,6 +11171,7 @@ func TestHandleCompletedProjectExecutionContinuationTurnResumesBlockedReviewTask
 		Role:           "user",
 		Status:         "pending",
 		SequenceNumber: 10,
+		Content:        "Already-active non-terminal tasks in the tree: task 61 (Fetch posts 1-12) id=" + blockedReviewTaskID.String(),
 		Metadata: mustJSONRaw(map[string]any{
 			"source":            projectExecutionContinuationSource,
 			"auto_continue":     true,

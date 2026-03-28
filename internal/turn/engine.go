@@ -4647,7 +4647,8 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 	if missingPath, found := projectContinuationMissingDependencyStopPath(messages, completedTurn.ID); found {
 		return e.retryProjectExecutionContinuationForMissingDependency(ctx, session, completedTurn, latestUser, missingPath)
 	}
-	if blockedReviewTask, ok, err := e.nextResumableBlockedProjectTask(ctx, session.ScopeID); err != nil {
+	preferredResumeTaskIDs := projectContinuationPromptNamedTaskIDs(strings.TrimSpace(latestUser.Content))
+	if blockedReviewTask, ok, err := e.nextResumableBlockedProjectTask(ctx, session.ScopeID, preferredResumeTaskIDs); err != nil {
 		return false, err
 	} else if ok {
 		resumed, resumeErr := e.taskTransitions.ResumeValidationBlockedTask(ctx, blockedReviewTask.ID, tasksvc.Actor{Type: "system"})
@@ -17643,7 +17644,7 @@ func (e *TurnEngine) projectContinuationBlockedReasonsByTask(ctx context.Context
 	return repo.NewProjectTaskEventRepo(e.pool).LatestBlockedReasonsByTask(ctx, blockedTaskIDs)
 }
 
-func (e *TurnEngine) nextResumableBlockedProjectTask(ctx context.Context, projectID uuid.UUID) (repo.ProjectTask, bool, error) {
+func (e *TurnEngine) nextResumableBlockedProjectTask(ctx context.Context, projectID uuid.UUID, preferredTaskIDs map[uuid.UUID]struct{}) (repo.ProjectTask, bool, error) {
 	if e == nil || e.tasks == nil || projectID == uuid.Nil {
 		return repo.ProjectTask{}, false, nil
 	}
@@ -17661,10 +17662,18 @@ func (e *TurnEngine) nextResumableBlockedProjectTask(ctx context.Context, projec
 		if !projectContinuationTaskNeedsReviewResume(task, blockedReasons[task.ID]) {
 			continue
 		}
+		if len(preferredTaskIDs) > 0 {
+			if _, ok := preferredTaskIDs[task.ID]; !ok {
+				continue
+			}
+		}
 		if !found || task.TaskNumber < selected.TaskNumber || (task.TaskNumber == selected.TaskNumber && task.ID.String() < selected.ID.String()) {
 			selected = task
 			found = true
 		}
+	}
+	if !found && len(preferredTaskIDs) > 0 {
+		return e.nextResumableBlockedProjectTask(ctx, projectID, nil)
 	}
 	return selected, found, nil
 }
