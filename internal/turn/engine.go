@@ -4717,9 +4717,10 @@ func (e *TurnEngine) countProjectDraftTasks(ctx context.Context, projectID uuid.
 	if err != nil {
 		return 0, err
 	}
+	childActivity := projectContinuationChildTaskActivity(projectTasks)
 	count := 0
 	for _, task := range projectTasks {
-		if isActionableProjectDraftTask(task) {
+		if isProjectContinuationActionableDraftTask(task, childActivity[task.ID]) {
 			count++
 		}
 	}
@@ -6885,6 +6886,11 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 	if draftLine := strings.TrimSpace(snapshot.DraftTaskLine); draftLine != "" {
 		lines = append(lines, draftLine)
 		lines = append(lines, "Do not begin with broad project.get, task.list, task.get, or flow.get_execution rediscovery when the actionable draft tasks above already identify the remaining bounded work.")
+		lines = append(lines, "If a named draft task above shows assigned_agent_id=missing, flow_template_id=missing, or requires_human_review=true, repair that exact prerequisite before trying to queue it.")
+	}
+	if parentLine := strings.TrimSpace(snapshot.ChildActiveDraftLine); parentLine != "" {
+		lines = append(lines, parentLine)
+		lines = append(lines, "Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while their child executions are already active. Let the child lanes continue, or inspect only that parent's direct children with parent_task_id if a concrete blocker must be verified.")
 	}
 	if focusLine := strings.TrimSpace(snapshot.FocusTaskLine); focusLine != "" {
 		lines = append(lines, focusLine)
@@ -16291,10 +16297,11 @@ func buildTaskContinuationActionPrompt(summary string) string {
 }
 
 type projectExecutionContinuationSnapshot struct {
-	ProjectLine    string
-	ActiveTaskLine string
-	DraftTaskLine  string
-	FocusTaskLine  string
+	ProjectLine          string
+	ActiveTaskLine       string
+	DraftTaskLine        string
+	ChildActiveDraftLine string
+	FocusTaskLine        string
 }
 
 func (e *TurnEngine) projectExecutionContinuationSnapshot(ctx context.Context, projectID uuid.UUID) (projectExecutionContinuationSnapshot, error) {
@@ -16312,14 +16319,23 @@ func (e *TurnEngine) projectExecutionContinuationSnapshot(ctx context.Context, p
 	}
 	activeTasks := make([]string, 0, 4)
 	draftTasks := make([]string, 0, 4)
+	childActiveDraftTasks := make([]string, 0, 4)
+	childActivity := projectContinuationChildTaskActivity(projectTasks)
 	focusTask := ""
 	for _, task := range projectTasks {
 		status := strings.ToLower(strings.TrimSpace(task.WorkStatus))
 		if status == "" || status == "done" || status == "cancelled" {
 			continue
 		}
-		taskRef := projectExecutionContinuationTaskRef(task)
+		activity := childActivity[task.ID]
+		taskRef := projectExecutionContinuationTaskRef(task, activity)
 		if isActionableProjectDraftTask(task) {
+			if activity.activeChildTaskCount > 0 {
+				if len(childActiveDraftTasks) < 4 {
+					childActiveDraftTasks = append(childActiveDraftTasks, taskRef)
+				}
+				continue
+			}
 			if len(draftTasks) < 4 {
 				draftTasks = append(draftTasks, taskRef)
 			}
@@ -16338,13 +16354,52 @@ func (e *TurnEngine) projectExecutionContinuationSnapshot(ctx context.Context, p
 	if len(draftTasks) > 0 {
 		snapshot.DraftTaskLine = "Actionable draft tasks already in the tree: " + strings.Join(draftTasks, "; ")
 	}
+	if len(childActiveDraftTasks) > 0 {
+		snapshot.ChildActiveDraftLine = "Draft parent tasks already have active child work: " + strings.Join(childActiveDraftTasks, "; ")
+	}
 	if focusTask != "" {
 		snapshot.FocusTaskLine = "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: " + focusTask
 	}
 	return snapshot, nil
 }
 
-func projectExecutionContinuationTaskRef(task repo.ProjectTask) string {
+type projectContinuationChildActivity struct {
+	childTaskCount       int
+	activeChildTaskCount int
+}
+
+func projectContinuationChildTaskActivity(tasks []repo.ProjectTask) map[uuid.UUID]projectContinuationChildActivity {
+	activityByParentID := make(map[uuid.UUID]projectContinuationChildActivity)
+	for _, task := range tasks {
+		metadata := messageMetadataMap(task.Metadata)
+		parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+		if !ok || parentID == uuid.Nil {
+			continue
+		}
+		activity := activityByParentID[parentID]
+		activity.childTaskCount++
+		if projectTaskExecutionActive(task.WorkStatus) {
+			activity.activeChildTaskCount++
+		}
+		activityByParentID[parentID] = activity
+	}
+	return activityByParentID
+}
+
+func isProjectContinuationActionableDraftTask(task repo.ProjectTask, activity projectContinuationChildActivity) bool {
+	return isActionableProjectDraftTask(task) && activity.activeChildTaskCount == 0
+}
+
+func projectTaskExecutionActive(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "queued", "in_progress", "review":
+		return true
+	default:
+		return false
+	}
+}
+
+func projectExecutionContinuationTaskRef(task repo.ProjectTask, activity projectContinuationChildActivity) string {
 	parts := []string{projectBootstrapTaskLabel(task), "id=" + task.ID.String()}
 	if title := strings.TrimSpace(task.Title); title != "" && task.TaskNumber > 0 {
 		parts = append(parts, "title="+strconv.Quote(title))
@@ -16354,6 +16409,21 @@ func projectExecutionContinuationTaskRef(task repo.ProjectTask) string {
 	}
 	if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
 		parts = append(parts, "assigned_agent_id="+task.AssignedAgentID.String())
+	} else if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+		parts = append(parts, "assigned_agent_id=missing")
+	}
+	if task.FlowTemplateID != nil && *task.FlowTemplateID != uuid.Nil {
+		parts = append(parts, "flow_template_id="+task.FlowTemplateID.String())
+	} else if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+		parts = append(parts, "flow_template_id=missing")
+	}
+	if task.RequiresHumanReview {
+		parts = append(parts, "requires_human_review=true")
+	}
+	if activity.activeChildTaskCount > 0 {
+		parts = append(parts, "active_child_tasks="+strconv.Itoa(activity.activeChildTaskCount))
+	} else if activity.childTaskCount > 0 {
+		parts = append(parts, "child_tasks="+strconv.Itoa(activity.childTaskCount))
 	}
 	return strings.Join(parts, " ")
 }
