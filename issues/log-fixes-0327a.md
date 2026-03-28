@@ -940,3 +940,36 @@
     - rebuilt and restarted tmux `codex-e2e-20260324`
     - `./bin/ottercamp health --output json` returned `data.status=ok`
     - fresh live proof for the exact ambient-sibling approval filter is still pending because task-62, the only known hot reproduction lane, had already closed before the new binary came up
+- 2026-03-28 10:47:54 MDT - resume review-blocked PM child lanes instead of creating replacement work
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - blocked child tasks carrying `agent_turn_validation_guard.failure_code=review_decision_required` now stay in the existing-child-work bucket with `resume_policy=resume_review_decision`
+    - `handleCompletedProjectExecutionContinuationTurn(...)` now prefers `ResumeValidationBlockedTask(...)` before creating replacement work
+    - added `nextResumableBlockedProjectTask(...)`
+    - added `projectContinuationTaskNeedsReviewResume(...)`
+    - extended the turn-engine transition interface with `ResumeValidationBlockedTask(...)`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - worker-authored PM continuation snapshots now frame blocked review children with the same `resume_policy=resume_review_decision`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added/updated `TestHandleCompletedProjectExecutionContinuationTurnResumesBlockedReviewTaskBeforeQueueingDraft`
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - updated the PM snapshot integration slice to keep review-decision-blocked children in existing child work instead of replacement work
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurn(AutoQueuesRunnableDraft|AutoQueuesAfterReadOnlyToolResults|ResumesBlockedReviewTaskBeforeQueueingDraft|SkipsMissingDependencyRetryWhenActiveReplacementExists|DoesNotTreatBlockedReplacementAsActiveWork|AutoQueuesMatchingMissingDependencyDraftInsteadOfUnrelatedDraft)|TestProjectExecutionContinuationSnapshot(KeepsReviewDecisionBlockedChildrenAsExistingChildWork|SkipsDraftParentWithBlockedChildren)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(KeepsReviewDecisionBlockedChildrenAsExistingChildWork|PromotesBlockedChildParentsToReplacementWork)$' -count=1`
+  - first live proof after restart on PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, turn `376`:
+    - assistant message `4108` recognized tasks `61`, `62`, and `63` with `resume_policy=resume_review_decision`
+    - messages `4111-4113` show the existing named-task rediscovery guard blocking `task.get` rereads on those tasks
+    - the turn still ended early on the rediscovery-only stop, which exposed one remaining selector bug rather than a prompt/snapshot bug
+- 2026-03-28 10:52:54 MDT - target PM blocked-review resumes to the named child lanes
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `handleCompletedProjectExecutionContinuationTurn(...)` now extracts `preferredResumeTaskIDs` from `projectContinuationPromptNamedTaskIDs(...)`
+    - `nextResumableBlockedProjectTask(...)` now prefers named blocked-review tasks before falling back to a broader project scan
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - widened `TestHandleCompletedProjectExecutionContinuationTurnResumesBlockedReviewTaskBeforeQueueingDraft` so an older unrelated blocked review task is present and the test asserts the named task is resumed instead
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurnResumesBlockedReviewTaskBeforeQueueingDraft$' -count=1`
+  - fresh end-to-end live proof after restart on the same PM session:
+    - turn `378` completed with system message `4135`, which resumed the correct named blocked review lane `task 61`
+    - task `61` moved from `blocked` to `review` at `10:54:00 MDT`
+    - new task session `bbce4cab-c9d9-4c1d-91e4-4934735dfa25` opened for task `61`
+    - that session immediately started turn `6` (`dbe62b3f-9f11-48f8-86e7-1917e691e352`) at `10:54:00 MDT`
