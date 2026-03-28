@@ -10417,6 +10417,149 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesGenericReplyWithF
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnSuppressesRepeatedRediscoveryBlockedRetry(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	draftTaskID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 25,
+				Title:      "Write layout template comparison README",
+				WorkStatus: "done",
+			},
+			draftTaskID: {
+				ID:         draftTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 34,
+				Title:      "Template comparison synthesis",
+				WorkStatus: "draft",
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "Sure! Could you please specify which function you would like to use and provide the necessary arguments?",
+		SequenceNumber: 11,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   1,
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	remainingDraftTasks, err := fixture.engine.countProjectDraftTasks(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("countProjectDraftTasks: %v", err)
+	}
+	retryPrompt := buildProjectExecutionContinuationPrompt(taskRepo.items[completedTaskID], remainingDraftTasks, snapshot) +
+		" Your last continuation turn returned a generic non-action reply instead of advancing the project." +
+		" Do not ask which function to call, do not offer to format JSON or tool calls, and do not ask the user for more parameters." +
+		" Your next assistant action must either emit the concrete tool calls that advance the project or report one concrete blocker sentence."
+	fingerprint := projectExecutionContinuationPromptFingerprint(completedTaskID, retryPrompt)
+
+	priorTurn, err := fixture.chat.CreateTurn(context.Background(), fixture.session.ID, fixture.chat.participants[0].ParticipantID)
+	if err != nil {
+		t.Fatalf("CreateTurn prior: %v", err)
+	}
+	if err := fixture.chat.StartTurn(context.Background(), priorTurn.ID); err != nil {
+		t.Fatalf("StartTurn prior: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	if _, err := fixture.chat.SetStopReason(context.Background(), priorTurn.ID, &stopReason); err != nil {
+		t.Fatalf("SetStopReason prior: %v", err)
+	}
+	if err := fixture.chat.FailTurn(context.Background(), priorTurn.ID, "rediscovery blocked"); err != nil {
+		t.Fatalf("FailTurn prior: %v", err)
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurn.ID,
+		Role:      "user",
+		Status:    "failed",
+		Content:   retryPrompt,
+		Metadata: mustJSONRaw(map[string]any{
+			"source":                            projectExecutionContinuationSource,
+			"auto_continue":                     true,
+			"completed_task_id":                 completedTaskID.String(),
+			"continuation_snapshot_fingerprint": fingerprint,
+		}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurn.ID,
+		Role:      "system",
+		Status:    "final",
+		Content:   "[Project continuation rediscovery guard blocked only broad rereads. Ending this turn early so the next continuation can act directly on the named tasks instead of repeating blocked PM discovery.]",
+	})
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected repeated generic project continuation to be handled")
+	}
+	if len(fixture.enqueuer.jobs) != 0 {
+		t.Fatalf("enqueued jobs = %d, want 0 when identical rediscovery-blocked retry is suppressed", len(fixture.enqueuer.jobs))
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var retryCount int
+	for _, msg := range storedMessages {
+		metadata := messageMetadataMap(msg.Metadata)
+		if strings.EqualFold(strings.TrimSpace(msg.Role), "user") &&
+			strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), projectExecutionContinuationSource) &&
+			strings.TrimSpace(stringValue(metadata["continuation_snapshot_fingerprint"])) == fingerprint {
+			retryCount++
+		}
+	}
+	if retryCount != 1 {
+		t.Fatalf("project continuation messages with fingerprint %s = %d, want 1", fingerprint, retryCount)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnRetriesDependencyErrorCoachingReplyWithFreshMessage(t *testing.T) {
 	t.Parallel()
 

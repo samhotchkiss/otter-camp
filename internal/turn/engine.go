@@ -171,6 +171,7 @@ var explicitDeliverablePathPatterns = []*regexp.Regexp{
 }
 
 const reviewRepeatedFileReadNotFoundTurnStopSubstring = "[Repeated identical file.read validation failure in this turn (2/3): not_found."
+const projectContinuationRediscoveryGuardPrefix = "[Project continuation rediscovery guard blocked only broad rereads."
 
 var errTurnBranchAttachedToMainWorktree = errors.New("branch attached to main worktree")
 
@@ -3507,6 +3508,9 @@ func (e *TurnEngine) maybeContinueProjectExecutionAfterTaskCompletion(ctx contex
 	if err != nil {
 		return err
 	}
+	if message == nil {
+		return nil
+	}
 
 	payload := AgentTurnPayload{
 		SessionID: session.ID,
@@ -4695,6 +4699,9 @@ func (e *TurnEngine) retryGenericProjectExecutionContinuation(
 	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
 	if err != nil {
 		return false, err
+	}
+	if retryMessage == nil {
+		return true, nil
 	}
 	nextPayload := AgentTurnPayload{
 		SessionID:  session.ID,
@@ -6841,9 +6848,16 @@ func (e *TurnEngine) appendProjectExecutionContinuationMessage(ctx context.Conte
 	if e == nil || sessionID == uuid.Nil {
 		return nil, repo.ErrNotFound
 	}
+	fingerprint := projectExecutionContinuationPromptFingerprint(completedTaskID, content)
+	if suppress, err := e.shouldSuppressRepeatedProjectExecutionContinuation(ctx, sessionID, completedTaskID, fingerprint); err != nil {
+		return nil, err
+	} else if suppress {
+		return nil, nil
+	}
 	metadataMap := map[string]any{
-		"source":        projectExecutionContinuationSource,
-		"auto_continue": true,
+		"source":                            projectExecutionContinuationSource,
+		"auto_continue":                     true,
+		"continuation_snapshot_fingerprint": fingerprint,
 	}
 	if completedTaskID != uuid.Nil {
 		metadataMap["completed_task_id"] = completedTaskID.String()
@@ -6867,6 +6881,65 @@ func (e *TurnEngine) appendProjectExecutionContinuationMessage(ctx context.Conte
 		Content:    content,
 		Metadata:   metadata,
 	})
+}
+
+func projectExecutionContinuationPromptFingerprint(completedTaskID uuid.UUID, content string) string {
+	hasher := fnv.New64a()
+	parts := []string{
+		completedTaskID.String(),
+		strings.TrimSpace(content),
+	}
+	for _, part := range parts {
+		_, _ = hasher.Write([]byte(part))
+		_, _ = hasher.Write([]byte{0})
+	}
+	return strconv.FormatUint(hasher.Sum64(), 16)
+}
+
+func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx context.Context, sessionID, completedTaskID uuid.UUID, fingerprint string) (bool, error) {
+	if e == nil || e.messages == nil || e.chat == nil || sessionID == uuid.Nil || strings.TrimSpace(fingerprint) == "" {
+		return false, nil
+	}
+	messages, err := e.messages.ListBySession(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			continue
+		}
+		metadata := messageMetadataMap(message.Metadata)
+		if !strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), projectExecutionContinuationSource) {
+			continue
+		}
+		if strings.TrimSpace(stringValue(metadata["continuation_snapshot_fingerprint"])) != strings.TrimSpace(fingerprint) {
+			continue
+		}
+		priorCompletedTaskID, _ := parseUUIDAny(metadata["completed_task_id"])
+		if completedTaskID != uuid.Nil && priorCompletedTaskID != completedTaskID {
+			continue
+		}
+		if message.TurnID == nil || *message.TurnID == uuid.Nil {
+			continue
+		}
+		turn, getErr := e.chat.GetTurn(ctx, *message.TurnID)
+		if getErr != nil || turn == nil || !isTerminalTurnStatus(turn.Status) {
+			continue
+		}
+		if turn.StopReason == nil || !strings.EqualFold(strings.TrimSpace(*turn.StopReason), "validation_loop_blocked") {
+			continue
+		}
+		for _, turnMessage := range messagesForTurn(messages, *message.TurnID) {
+			if !strings.EqualFold(strings.TrimSpace(turnMessage.Role), "system") {
+				continue
+			}
+			if strings.HasPrefix(strings.TrimSpace(turnMessage.Content), projectContinuationRediscoveryGuardPrefix) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func buildProjectBootstrapContinuationPrompt(autoTurnCount int) string {

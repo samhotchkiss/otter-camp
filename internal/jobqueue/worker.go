@@ -1702,6 +1702,15 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 			return repaired, fmt.Errorf("scan active project session without turn: %w", err)
 		}
 		bootstrapActive := strings.EqualFold(strings.TrimSpace(projectBootstrapStatus), "active")
+		if strings.EqualFold(strings.TrimSpace(source), "project_bootstrap") && !bootstrapActive {
+			if err := w.failPendingProjectBootstrapMessages(ctx, sessionID, "project bootstrap already complete; continuing project execution"); err != nil {
+				return repaired, fmt.Errorf("retire stale project bootstrap messages for session %s: %w", sessionID, err)
+			}
+			if openTaskCount == 0 {
+				repaired++
+				continue
+			}
+		}
 		if strings.EqualFold(strings.TrimSpace(source), "project_execution_continuation") && openTaskCount == 0 && !bootstrapActive {
 			retired, err := w.retireSettledProjectContinuationMessage(ctx, sessionID, messageID)
 			if err != nil {
@@ -1783,6 +1792,25 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 		return repaired, fmt.Errorf("iterate active project sessions without turns: %w", err)
 	}
 	return repaired, nil
+}
+
+func (w *Worker) failPendingProjectBootstrapMessages(ctx context.Context, sessionID uuid.UUID, reason string) error {
+	if w == nil || w.pool == nil || sessionID == uuid.Nil {
+		return nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "project bootstrap already complete"
+	}
+	_, err := w.pool.Exec(ctx, `
+		UPDATE chat_message
+		SET status = 'failed',
+		    error_message = $2
+		WHERE session_id = $1
+		  AND role = 'user'
+		  AND status = 'pending'
+		  AND COALESCE(metadata->>'source', '') = 'project_bootstrap'
+	`, sessionID, reason)
+	return err
 }
 
 func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID uuid.UUID) (uuid.UUID, error) {
@@ -1877,6 +1905,32 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			metadataMap["completed_task_id"] = expectedCompletedTaskID
 			metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
 			content = buildProjectExecutionContinuationPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot)
+		}
+	}
+
+	if source == "project_execution_continuation" && expectedCompletedTaskID != "" && expectedSnapshotFingerprint != "" {
+		var latestMatchingMessageID uuid.UUID
+		err := w.pool.QueryRow(ctx, `
+			SELECT id
+			FROM chat_message
+			WHERE session_id = $1
+			  AND role = 'user'
+			  AND COALESCE(metadata->>'source', '') = $2
+			  AND COALESCE(metadata->>'completed_task_id', '') = $3
+			  AND COALESCE(metadata->>$4, '') = $5
+			ORDER BY created_at DESC, id DESC
+			LIMIT 1
+		`, sessionID, source, expectedCompletedTaskID, projectContinuationSnapshotFingerprintKey, expectedSnapshotFingerprint).Scan(&latestMatchingMessageID)
+		if err == nil {
+			suppressed, suppressErr := w.suppressRepeatedIdenticalProjectContinuation(ctx, latestMatchingMessageID)
+			if suppressErr != nil {
+				return uuid.Nil, false, fmt.Errorf("check repeated project continuation suppression: %w", suppressErr)
+			}
+			if suppressed {
+				return uuid.Nil, true, nil
+			}
+		} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, fmt.Errorf("query latest matching project continuation message: %w", err)
 		}
 	}
 

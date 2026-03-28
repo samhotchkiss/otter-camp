@@ -16813,7 +16813,7 @@ func TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedRedi
 	}
 }
 
-func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedConsumedRediscoveryBlockedContinuation(t *testing.T) {
+func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
 		PollInterval:         time.Hour,
@@ -16932,7 +16932,7 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedCons
 		SessionID: session.ID,
 		Role:      "user",
 		Content:   "Continue the active project execution now.",
-		Status:    "pending",
+		Status:    "failed",
 		Metadata:  metadata,
 	})
 	if err != nil {
@@ -16961,6 +16961,16 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedCons
 	}); err != nil {
 		t.Fatalf("create continuation rediscovery guard message: %v", err)
 	}
+	bootstrapMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project bootstrap from the persisted state above.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_bootstrap","synthetic_user_message":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create stale bootstrap continuation message: %v", err)
+	}
 
 	repaired, err := worker.RequeueActiveProjectSessionsWithoutTurns(ctx)
 	if err != nil {
@@ -16971,23 +16981,23 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedCons
 	}
 
 	var (
-		status          string
-		errorMessage    string
-		pendingMessages int
-		pendingJobs     int
+		bootstrapStatus       string
+		bootstrapErrorMessage string
+		pendingMessages       int
+		pendingJobs           int
 	)
 	if err := pool.QueryRow(ctx, `
 		SELECT status, COALESCE(error_message, '')
 		FROM chat_message
 		WHERE id = $1
-	`, staleMessage.ID).Scan(&status, &errorMessage); err != nil {
-		t.Fatalf("query stale continuation message: %v", err)
+	`, bootstrapMessage.ID).Scan(&bootstrapStatus, &bootstrapErrorMessage); err != nil {
+		t.Fatalf("query stale bootstrap continuation message: %v", err)
 	}
-	if status != "failed" {
-		t.Fatalf("stale continuation status = %q, want failed", status)
+	if bootstrapStatus != "failed" {
+		t.Fatalf("stale bootstrap status = %q, want failed", bootstrapStatus)
 	}
-	if !strings.Contains(errorMessage, "suppressed repeated identical project continuation") {
-		t.Fatalf("stale continuation error = %q, want repeated rediscovery suppression", errorMessage)
+	if !strings.Contains(bootstrapErrorMessage, "project bootstrap already complete") {
+		t.Fatalf("stale bootstrap error = %q, want bootstrap completion retirement", bootstrapErrorMessage)
 	}
 	if err := pool.QueryRow(ctx, `
 		SELECT COUNT(*)
