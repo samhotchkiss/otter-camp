@@ -1,5 +1,12 @@
 # 0327a Fix Log
 
+- 2026-03-28 00:40:17 MDT - `86be5296` `Skip PM dependency retries when replacements are active`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so the missing-dependency retry path now inspects the current project tree for non-terminal producer/replacement tasks for the exact missing artifact before enqueueing a follow-up PM continuation
+  - when active replacement work already exists, the same file now appends a system note and suppresses the duplicate PM follow-up instead of rearming another `project_execution_continuation`
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) for the active-replacement suppression path, alongside the existing fresh-retry and repeated-retry suppression cases
+  - verified with `go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurn(RetriesMissingDependencyStopWithFreshMessage|SkipsMissingDependencyRetryWhenActiveReplacementExists|SuppressesRepeatedMissingDependencyRetry|RetriesGenericReplyWithFreshMessage|SuppressesRepeatedRediscoveryBlockedRetry|RetriesDependencyErrorCoachingReplyWithFreshMessage)|MissingProjectContinuationDependencyArtifactPath|MissingProjectContinuationDependencyArtifactPathIgnoresNonDependencyReadMiss)$' -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
+  - live validation attempt: replayed the hot PM session after deploy, but older already-pending PM continuation rows polluted the resulting `3353+` stream, so the deployment is test-green and live, while a clean isolated proof of the suppression branch still needs the next quieter PM dependency-miss window
 - 2026-03-28 00:30:16 MDT - `1fabaa38` `Retry PM dependency-miss follow-up continuations`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so completed `project_continuation_resume` turns that end on the exact missing-prerequisite system stop now enqueue one bounded `project_execution_continuation` retry instead of idling, and repeated identical missing-dependency retries are suppressed alongside the existing rediscovery-block suppression
   - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) for both the fresh missing-dependency retry path and the repeated identical suppression path
