@@ -374,3 +374,18 @@
   - verified with `gofmt -w internal/jobqueue/worker.go internal/jobqueue/worker_integration_test.go` and `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(EnsureProjectContinuationMessageSuppressesRepeatedConsumed(RediscoveryBlocked|ActiveReplacementContinuation)|RequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailed(RediscoveryBlockedContinuation|ActiveReplacementContinuation))$' -count=1`
   - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
   - live status: the clean pre-fix failure shape is preserved in Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` at messages `3420-3422`, where the engine appended the active-replacement stop and the worker immediately rearmed a fresh `project_execution_continuation`; after the worker patch, the session is drained again with `0` pending `project_execution_continuation` messages and `0` pending/claimed `agent_turn` jobs, so the replay family is no longer keeping the PM lane alive
+- 2026-03-28 01:07:11 MDT - `pending` `Carry decomposed child-task contracts into continuations`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so task continuation roots now carry a compact child-task snapshot:
+    - the current task line with deliverable/blocker hints
+    - the parent task contract excerpt from decomposition metadata
+    - sibling child-task ownership lines
+  - fed that snapshot into both ordinary continuation compression and the continuation-depth retry root so decomposed child lanes no longer resume from a generic `Task execution is already underway` fallback alone
+  - widened explicit deliverable-path extraction to recognize natural `write|create|produce ... to PATH` phrasing, which lets child write lanes like task `41` surface `deliverable_path=content/technonymous-index.json` directly from their own task brief
+  - added a narrow write-lane blocker in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go): async decomposed child tasks that already own a concrete deliverable path now block `browser.navigate` and `web.fetch` when a sibling child task already owns discovery/navigation work
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) for:
+    - child-task snapshot assembly
+    - child-task continuation prompt guidance
+    - write-lane sibling-responsibility blocking
+  - verified with `gofmt -w internal/turn/engine.go internal/turn/engine_test.go` and `go test ./internal/turn -run 'Test(ShouldBlockTaskExecutionSiblingResponsibilityToolForWriteFocusedChildLane|ShouldNotBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChildLane|BuildTaskContinuationActionPromptTreatsDocumentSummaryAsDraft|BuildTaskContinuationActionPromptIncludesChildTaskSnapshotGuidance|TaskExecutionContinuationSnapshotIncludesParentContractAndSiblingHints|TaskContinuationRootMessageStartsAssemblyAtTriggerMessage|ContinuationTurnNormalizesGenericNoContextSummary|ShouldBlockTaskExecutionBroadContextTool|ShouldBlockTaskExecutionBroadContextToolAllowsOrchestrationValidationContextReads)$' -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `data.status=ok`
+  - live status: deployed on the new runtime, but fresh production proof is still pending because the hot Sam.blog task sessions `bcbc53cd-99fa-476f-a50c-b4ba26dd0b7e` (task `40`) and `1e7d7f89-27b7-4170-b585-7f7dadcd9868` (task `41`) did not replay on the post-restart binary; both sessions stayed active with no pending/claimed `agent_turn` jobs during the immediate watch window
