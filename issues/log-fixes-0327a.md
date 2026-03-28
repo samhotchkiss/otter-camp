@@ -682,3 +682,55 @@
     - `GOFLAGS='' go test ./internal/jobqueue -run 'TestBuildProjectExecutionContinuationPromptForWorkerIncludes(BlockerReuseGuidance|LeafTaskGuidance)$' -count=1`
   - live diagnosis behind the fix: Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` was still spending a tool call on `task.list(parent_task_id=task56)` even though the continuation prompt already knew task `56` was the active leaf lane
   - fresh post-deploy production proof is pending the next PM continuation turn on the new binary
+- 2026-03-28 07:07:48 MDT - wire delivery workers to a real workspace-aware git adapter
+  - added [`internal/delivery/workspace_git_service.go`](/Users/sam/dev/otter-camp/internal/delivery/workspace_git_service.go), which now:
+    - resolves the active bound project repo path and target branch from `project_environment`
+    - merges completed task branches into the parent project workspace
+    - pushes the active target branch when a remote exists
+    - validates rollback target commits with `git cat-file -e`
+  - changed [`internal/worker/worker.go`](/Users/sam/dev/otter-camp/internal/worker/worker.go) so merge and push jobs both use `WorkspaceGitService` instead of `delivery.UnavailableGitService{}`
+  - changed [`internal/delivery/merge_worker.go`](/Users/sam/dev/otter-camp/internal/delivery/merge_worker.go) so successful merges now skip push enqueue cleanly when no default remote exists, instead of rolling back the merge queue state
+  - added focused coverage in:
+    - [`internal/delivery/workspace_git_service_test.go`](/Users/sam/dev/otter-camp/internal/delivery/workspace_git_service_test.go)
+    - [`internal/delivery/workers_integration_test.go`](/Users/sam/dev/otter-camp/internal/delivery/workers_integration_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/delivery -run 'TestWorkspaceGitService|TestMergeWorkerAdvisoryLock' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/delivery -run 'TestMergeWorkerIntegration(AdvisoryLockReenqueue|WorkspaceGitServiceMergesWithoutRemote)$' -count=1`
+    - `GOFLAGS='' go test ./internal/delivery ./internal/worker -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/delivery -count=1`
+  - live diagnosis behind the fix: the active Sam.blog environment already had `repo_path=/Users/sam/otter-data/workspaces/sam-blog-rebuild-restart-12` and `target_branch=main`, but no remote; completed task output needed to land in that parent workspace anyway, and the old worker wiring guaranteed it never would
+- 2026-03-28 07:52:00 MDT - enqueue merge work for autonomous task completion and repair stranded finished branches
+  - changed [`internal/task/service.go`](/Users/sam/dev/otter-camp/internal/task/service.go) so:
+    - non-transactional `done` transitions now call `EnqueueForMerge(...)`
+    - `EnqueueForMerge(...)` deduplicates existing active merge entries per task
+    - new merge entries immediately enqueue the first `merge_execute` job
+  - changed [`internal/flow/execution_service.go`](/Users/sam/dev/otter-camp/internal/flow/execution_service.go) so terminal runtime-owned flow completion enqueues merge work immediately after commit
+  - changed [`internal/worker/worker.go`](/Users/sam/dev/otter-camp/internal/worker/worker.go) so startup cleanup backfills missing merge queue entries and `merge_execute` jobs for completed branched tasks on active projects
+  - added focused coverage in:
+    - [`internal/task/service_test.go`](/Users/sam/dev/otter-camp/internal/task/service_test.go)
+    - [`internal/task/service_integration_test.go`](/Users/sam/dev/otter-camp/internal/task/service_integration_test.go)
+    - [`internal/flow/execution_service_integration_test.go`](/Users/sam/dev/otter-camp/internal/flow/execution_service_integration_test.go)
+    - [`internal/worker/worker_test.go`](/Users/sam/dev/otter-camp/internal/worker/worker_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/worker ./internal/task ./internal/flow ./internal/delivery -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/task -run 'TestTaskServiceIntegration(DoneTransitionEnqueuesInitialMergeExecute|MergeQueueOrderingAndDequeue)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/flow -run 'TestFlowExecutionService(TerminalAdvanceEnqueuesMergeForBranchedTask|AdvanceThroughTerminalNode)$' -count=1`
+  - live diagnosis behind the fix: Sam.blog already had many `done` task branches with zero merge queue entries, so even a working merge worker could not promote output until the runtime actually enqueued merge work
+- 2026-03-28 07:29:14 MDT - handle empty parent workspaces and rearm queued merge entries after dead-letter
+  - changed [`internal/delivery/workspace_git_service.go`](/Users/sam/dev/otter-camp/internal/delivery/workspace_git_service.go) so merge now:
+    - seeds an unborn target branch directly from the task branch with `git checkout -f -B target source`
+    - retries with `--allow-unrelated-histories` when task branches have no merge base with the parent branch
+  - changed [`internal/worker/worker.go`](/Users/sam/dev/otter-camp/internal/worker/worker.go) so startup cleanup also rearms queued `merge_queue_entry` rows that no longer have any pending or claimed `merge_execute` job
+  - added focused coverage in:
+    - [`internal/delivery/workspace_git_service_test.go`](/Users/sam/dev/otter-camp/internal/delivery/workspace_git_service_test.go)
+    - [`internal/worker/worker_test.go`](/Users/sam/dev/otter-camp/internal/worker/worker_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/delivery ./internal/worker ./internal/task ./internal/flow -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/delivery -run 'TestMergeWorkerIntegration(AdvisoryLockReenqueue|WorkspaceGitServiceMergesWithoutRemote)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/task -run 'TestTaskServiceIntegration(DoneTransitionEnqueuesInitialMergeExecute|MergeQueueOrderingAndDequeue)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/flow -run 'TestFlowExecutionService(TerminalAdvanceEnqueuesMergeForBranchedTask|AdvanceThroughTerminalNode)$' -count=1`
+  - live diagnosis behind the fix: Sam.blog merge jobs were now running, but the bound parent workspace still had `No commits yet on main`, the task branches were unrelated root histories, and dead-lettered `merge_execute` jobs left queued merge entries with no runnable retry
+  - fresh production proof after redeploy:
+    - the parent workspace `/Users/sam/otter-data/workspaces/sam-blog-rebuild-restart-12` now has real `main` history with merge commits for tasks `9`, `15`, `25`, `27`, `28`, `29`, `31`, `32`, `42`, and `53`
+    - `/Users/sam/otter-data/workspaces/sam-blog-rebuild-restart-12/content/technonymous-index.json` now exists directly in the parent workspace on `main`
+    - the remaining non-merged tasks (`14`, `47`, `48`, `50`) failed as explicit merge conflicts and raised `system_alert` inbox items instead of silently stalling

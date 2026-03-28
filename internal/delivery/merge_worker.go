@@ -191,21 +191,28 @@ func (w *MergeWorker) executeWithProjectLock(ctx context.Context, tx pgx.Tx, pay
 		return err
 	}
 
-	remoteRecord, err := w.remotes.GetDefault(ctx, entry.ProjectID)
-	if err != nil {
-		return err
-	}
-	pushPayload := pushJobPayload{
-		ProjectID:         entry.ProjectID,
-		RemoteID:          remoteRecord.ID,
-		CommitSHA:         stringValue(entry.CommitSHA),
-		Attempt:           1,
-		TriggeredByTaskID: entry.TaskID,
-		DeliveryMode:      projectRecord.DeliveryMode,
-		MergeQueueEntryID: entry.ID,
-	}
-	if _, err := w.enqueuer.Enqueue(ctx, tx, pushExecuteJobType, deliveryDefaultPriority, pushPayload, nil); err != nil {
-		return err
+	if remoteRecord, err := w.remotes.GetDefault(ctx, entry.ProjectID); err != nil {
+		if !errors.Is(err, repo.ErrNotFound) {
+			return err
+		}
+		w.logger.Info("merge completed without default remote; skipping push enqueue",
+			"project_id", entry.ProjectID,
+			"merge_queue_entry_id", entry.ID,
+			"task_id", entry.TaskID,
+		)
+	} else {
+		pushPayload := pushJobPayload{
+			ProjectID:         entry.ProjectID,
+			RemoteID:          remoteRecord.ID,
+			CommitSHA:         stringValue(entry.CommitSHA),
+			Attempt:           1,
+			TriggeredByTaskID: entry.TaskID,
+			DeliveryMode:      projectRecord.DeliveryMode,
+			MergeQueueEntryID: entry.ID,
+		}
+		if _, err := w.enqueuer.Enqueue(ctx, tx, pushExecuteJobType, deliveryDefaultPriority, pushPayload, nil); err != nil {
+			return err
+		}
 	}
 
 	if w.events != nil {

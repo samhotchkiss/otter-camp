@@ -8,7 +8,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/db"
+	"github.com/samhotchkiss/otter-camp/internal/delivery"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
@@ -267,9 +269,211 @@ func TestStartupCleanupProjectDraftsSkipsSatisfiedDraftWithoutFlowTemplate(t *te
 	}
 }
 
+func TestRepairMissingMergeQueueEntriesForActiveProjectsEnqueuesMergeJobs(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "merge-repair-org",
+		DisplayName: "Merge Repair Org",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "merge-repair-project",
+		DisplayName:    "Merge Repair Project",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "merge-repair-template",
+		DisplayName:    "Merge Repair Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	branch := "task/" + uuid.NewString()[:8]
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Completed task awaiting merge",
+		WorkStatus:     "done",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    uuidPtr(uuid.New()),
+		BranchName:     &branch,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	if _, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	}); err != nil {
+		t.Fatalf("create chat session: %v", err)
+	}
+
+	bus := eventbus.New(pool, nil, eventbus.Config{})
+	tasks, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     pool,
+		EventBus: bus,
+	})
+	if err != nil {
+		t.Fatalf("task service: %v", err)
+	}
+
+	repaired, err := repairMissingMergeQueueEntriesForActiveProjects(ctx, pool, tasks)
+	if err != nil {
+		t.Fatalf("repairMissingMergeQueueEntriesForActiveProjects: %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired = %d, want 1", repaired)
+	}
+
+	entry, err := repo.NewMergeQueueEntryRepo(pool).GetByTask(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByTask merge entry: %v", err)
+	}
+	if entry.Status != "queued" {
+		t.Fatalf("merge entry status = %q, want queued", entry.Status)
+	}
+
+	var jobCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'merge_execute'
+		  AND payload->>'merge_queue_entry_id' = $1
+		  AND payload->>'project_id' = $2
+	`, entry.ID.String(), project.ID.String()).Scan(&jobCount); err != nil {
+		t.Fatalf("count merge_execute jobs: %v", err)
+	}
+	if jobCount != 1 {
+		t.Fatalf("merge_execute jobs = %d, want 1", jobCount)
+	}
+}
+
+func TestRearmQueuedMergeExecuteJobsForActiveProjectsEnqueuesReplacementJob(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "merge-rearm-org",
+		DisplayName: "Merge Rearm Org",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "merge-rearm-project",
+		DisplayName:    "Merge Rearm Project",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "merge-rearm-template",
+		DisplayName:    "Merge Rearm Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	branch := "task/" + uuid.NewString()[:8]
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Completed task with dead-letter merge job",
+		WorkStatus:     "done",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    uuidPtr(uuid.New()),
+		BranchName:     &branch,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	entry, err := repo.NewMergeQueueEntryRepo(pool).Enqueue(ctx, repo.MergeQueueEntry{
+		ProjectID:  project.ID,
+		TaskID:     taskRecord.ID,
+		BranchName: branch,
+		Status:     "queued",
+	})
+	if err != nil {
+		t.Fatalf("enqueue merge entry: %v", err)
+	}
+	if _, err := jobqueue.New(pool, nil, jobqueue.Config{}).Enqueue(ctx, nil, delivery.MergeExecuteJobType, 100, map[string]any{
+		"merge_queue_entry_id": entry.ID,
+		"project_id":           project.ID,
+	}, nil); err != nil {
+		t.Fatalf("enqueue merge job: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE job_queue
+		SET status = 'dead_letter', attempts = max_attempts, last_error = 'forced dead-letter for test'
+		WHERE job_type = 'merge_execute'
+		  AND payload->>'merge_queue_entry_id' = $1
+	`, entry.ID.String()); err != nil {
+		t.Fatalf("dead-letter merge job: %v", err)
+	}
+
+	rearmed, err := rearmQueuedMergeExecuteJobsForActiveProjects(ctx, pool)
+	if err != nil {
+		t.Fatalf("rearmQueuedMergeExecuteJobsForActiveProjects: %v", err)
+	}
+	if rearmed != 1 {
+		t.Fatalf("rearmed = %d, want 1", rearmed)
+	}
+
+	var pendingCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'merge_execute'
+		  AND status = 'pending'
+		  AND payload->>'merge_queue_entry_id' = $1
+	`, entry.ID.String()).Scan(&pendingCount); err != nil {
+		t.Fatalf("count pending merge jobs: %v", err)
+	}
+	if pendingCount != 1 {
+		t.Fatalf("pending merge_execute jobs = %d, want 1", pendingCount)
+	}
+}
+
 func mustTime(t *testing.T) (now time.Time) {
 	t.Helper()
 	return time.Unix(1700000000, 0).UTC()
+}
+
+func uuidPtr(id uuid.UUID) *uuid.UUID {
+	return &id
 }
 
 func maxInt32(a, b int32) int32 {

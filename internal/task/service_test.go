@@ -1861,6 +1861,47 @@ func TestEnqueueForMergeUsesSequentialPosition(t *testing.T) {
 	}
 }
 
+func TestEnqueueForMergeEnqueuesInitialMergeExecuteJob(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	branch := "feature/a"
+
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {ID: taskID, ProjectID: projectID, BranchName: &branch},
+		},
+	}
+	queueRepo := &fakeQueueRepo{}
+	enqueuer := &fakeMergeJobEnqueuer{}
+	svc := newUnitService(taskRepo)
+	svc.queue = queueRepo
+	svc.enqueuer = enqueuer
+
+	entry, err := svc.EnqueueForMerge(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("EnqueueForMerge: %v", err)
+	}
+	if len(enqueuer.jobs) != 1 {
+		t.Fatalf("merge jobs = %d, want 1", len(enqueuer.jobs))
+	}
+	if enqueuer.jobs[0].jobType != mergeExecuteJobType {
+		t.Fatalf("job type = %q, want %q", enqueuer.jobs[0].jobType, mergeExecuteJobType)
+	}
+	if enqueuer.jobs[0].priority != mergeExecutePriority {
+		t.Fatalf("job priority = %d, want %d", enqueuer.jobs[0].priority, mergeExecutePriority)
+	}
+	payload, ok := enqueuer.jobs[0].payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type = %T, want map[string]any", enqueuer.jobs[0].payload)
+	}
+	if got, ok := payload["merge_queue_entry_id"].(uuid.UUID); !ok || got != entry.ID {
+		t.Fatalf("payload merge_queue_entry_id = %v, want %s", payload["merge_queue_entry_id"], entry.ID)
+	}
+	if got, ok := payload["project_id"].(uuid.UUID); !ok || got != projectID {
+		t.Fatalf("payload project_id = %v, want %s", payload["project_id"], projectID)
+	}
+}
+
 func TestActOnInboxItemTaskReviewApproveAdvancesFlowAndMarksActed(t *testing.T) {
 	taskID := uuid.New()
 	userID := uuid.New()
@@ -2223,6 +2264,17 @@ type fakeQueueRepo struct {
 	entries []repo.MergeQueueEntry
 }
 
+type fakeMergeJobEnqueuer struct {
+	jobs []fakeMergeJob
+}
+
+type fakeMergeJob struct {
+	jobType  string
+	priority int
+	payload  any
+	runAfter *time.Time
+}
+
 type fakeFlowExecutionRepo struct {
 	byTask map[uuid.UUID][]repo.FlowNodeExecution
 }
@@ -2389,6 +2441,17 @@ func (f *fakeQueueRepo) Archive(_ context.Context, id uuid.UUID, archivedAt time
 		return f.entries[i], nil
 	}
 	return repo.MergeQueueEntry{}, repo.ErrNotFound
+}
+
+func (f *fakeMergeJobEnqueuer) Enqueue(_ context.Context, _ pgx.Tx, jobType string, priority int, payload any, runAfter *time.Time) (uuid.UUID, error) {
+	id := uuid.New()
+	f.jobs = append(f.jobs, fakeMergeJob{
+		jobType:  jobType,
+		priority: priority,
+		payload:  payload,
+		runAfter: runAfter,
+	})
+	return id, nil
 }
 
 type fakeProjectRepo struct {

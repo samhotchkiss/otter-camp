@@ -2075,6 +2075,65 @@ func TestTaskServiceIntegrationMergeQueueOrderingAndDequeue(t *testing.T) {
 	}
 }
 
+func TestTaskServiceIntegrationDoneTransitionEnqueuesInitialMergeExecute(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Merge-ready task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	branch := "task/" + uuid.NewString()[:8]
+	if _, err := taskRepo.SetBranch(ctx, created.ID, &branch); err != nil {
+		t.Fatalf("SetBranch: %v", err)
+	}
+
+	if _, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "in_progress", Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+		t.Fatalf("TransitionStatus in_progress: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "done", Actor{Type: "system", AllowDoneBypass: true}); err != nil {
+		t.Fatalf("TransitionStatus done: %v", err)
+	}
+
+	entry, err := repo.NewMergeQueueEntryRepo(pool).GetByTask(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByTask merge entry: %v", err)
+	}
+	if entry.Status != "queued" {
+		t.Fatalf("merge entry status = %q, want queued", entry.Status)
+	}
+	if entry.BranchName != branch {
+		t.Fatalf("merge entry branch_name = %q, want %q", entry.BranchName, branch)
+	}
+
+	var jobCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'merge_execute'
+		  AND payload->>'merge_queue_entry_id' = $1
+		  AND payload->>'project_id' = $2
+	`, entry.ID.String(), project.ID.String()).Scan(&jobCount); err != nil {
+		t.Fatalf("count merge_execute jobs: %v", err)
+	}
+	if jobCount != 1 {
+		t.Fatalf("merge_execute jobs = %d, want 1", jobCount)
+	}
+}
+
 func TestTaskServiceIntegrationQueueRequiresPMWhenProjectConfigured(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -16,11 +17,17 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/flowpolicy"
+	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
+)
+
+const (
+	mergeExecuteJobType  = "merge_execute"
+	mergeExecutePriority = 100
 )
 
 var (
@@ -312,6 +319,10 @@ type mergeQueueRepository interface {
 	Archive(ctx context.Context, id uuid.UUID, archivedAt time.Time) (repo.MergeQueueEntry, error)
 }
 
+type mergeJobEnqueuer interface {
+	Enqueue(ctx context.Context, tx pgx.Tx, jobType string, priority int, payload any, runAfter *time.Time) (uuid.UUID, error)
+}
+
 type projectRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.Project, error)
 }
@@ -372,6 +383,7 @@ type Options struct {
 	Executions    flowExecutionRepository
 	FlowNodes     flowNodeRepository
 	FlowTemplates flowTemplateRepository
+	Enqueuer      mergeJobEnqueuer
 
 	EventBus eventPublisher
 	Clock    clock.Clock
@@ -395,6 +407,7 @@ type service struct {
 	executions    flowExecutionRepository
 	flowNodes     flowNodeRepository
 	flowTemplates flowTemplateRepository
+	enqueuer      mergeJobEnqueuer
 
 	eventBus eventPublisher
 	clock    clock.Clock
@@ -476,6 +489,11 @@ func NewService(opts Options) (TaskService, error) {
 		svc.flowTemplates = opts.FlowTemplates
 	} else {
 		svc.flowTemplates = repo.NewFlowTemplateRepo(opts.Pool)
+	}
+	if opts.Enqueuer != nil {
+		svc.enqueuer = opts.Enqueuer
+	} else {
+		svc.enqueuer = jobqueue.New(opts.Pool, slog.Default(), jobqueue.Config{})
 	}
 
 	return svc, nil
@@ -877,6 +895,11 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 	}
 	if err := s.publishTaskDomainEventTx(ctx, tx, updated.OrganizationID, "task.status_changed", actorType, actorID, payload); err != nil {
 		return nil, err
+	}
+	if tx == nil && target == "done" {
+		if _, err := s.EnqueueForMerge(ctx, updated.ID); err != nil && !errors.Is(err, ErrNoTaskBranch) {
+			return nil, err
+		}
 	}
 
 	return &updated, nil
@@ -2143,6 +2166,15 @@ func (s *service) EnqueueForMerge(ctx context.Context, taskID uuid.UUID) (*Merge
 	if taskRecord.BranchName == nil || strings.TrimSpace(*taskRecord.BranchName) == "" {
 		return nil, ErrNoTaskBranch
 	}
+	activeEntries, err := s.queue.ListActive(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range activeEntries {
+		if entry.TaskID == taskRecord.ID {
+			return &entry, nil
+		}
+	}
 
 	created, err := s.queue.Enqueue(ctx, repo.MergeQueueEntry{
 		ProjectID:  taskRecord.ProjectID,
@@ -2153,6 +2185,15 @@ func (s *service) EnqueueForMerge(ctx context.Context, taskID uuid.UUID) (*Merge
 	})
 	if err != nil {
 		return nil, err
+	}
+	if s.enqueuer != nil {
+		payload := map[string]any{
+			"merge_queue_entry_id": created.ID,
+			"project_id":           taskRecord.ProjectID,
+		}
+		if _, err := s.enqueuer.Enqueue(ctx, nil, mergeExecuteJobType, mergeExecutePriority, payload, nil); err != nil {
+			return nil, err
+		}
 	}
 	return &created, nil
 }

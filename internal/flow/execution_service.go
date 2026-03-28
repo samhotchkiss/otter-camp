@@ -71,6 +71,10 @@ type taskCoordinator interface {
 	MarkBlocked(ctx context.Context, taskID uuid.UUID, reason string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
 }
 
+type taskMergeQueueEnqueuer interface {
+	EnqueueForMerge(ctx context.Context, taskID uuid.UUID) (*tasksvc.MergeQueueEntry, error)
+}
+
 type taskCoordinatorTx interface {
 	TransitionStatusWithPayloadTx(ctx context.Context, tx pgx.Tx, taskRecord repo.ProjectTask, toStatus string, actor tasksvc.Actor, extraPayload map[string]any) (*tasksvc.ProjectTask, error)
 }
@@ -649,6 +653,11 @@ func (s *service) advanceTerminalFlowTx(ctx context.Context, taskRecord repo.Pro
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
+	}
+	if mergeEnqueuer, ok := s.taskService.(taskMergeQueueEnqueuer); ok {
+		if _, err := mergeEnqueuer.EnqueueForMerge(ctx, taskRecord.ID); err != nil && !errors.Is(err, tasksvc.ErrNoTaskBranch) {
+			return nil, err
+		}
 	}
 	s.activateDraftOrchestrationParentAfterChildDone(ctx, taskRecord.ID)
 	s.activateDraftDependentsAfterTaskDone(ctx, taskRecord.ID)

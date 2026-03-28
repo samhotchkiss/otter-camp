@@ -124,6 +124,57 @@ func TestFlowExecutionServiceAdvanceThroughTerminalNode(t *testing.T) {
 	}
 }
 
+func TestFlowExecutionServiceTerminalAdvanceEnqueuesMergeForBranchedTask(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, _ := seedLinearTemplate(t, ctx, fixture, false, 5)
+	taskRecord := seedFlowTask(t, ctx, fixture, "Flow task with merge branch", "in_progress", &template.ID)
+	branch := "task/" + uuid.NewString()[:8]
+	if _, err := fixture.taskRepo.SetBranch(ctx, taskRecord.ID, &branch); err != nil {
+		t.Fatalf("SetBranch: %v", err)
+	}
+
+	if _, err := fixture.service.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow step 1: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.reviewerAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow step 2: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.reviewerAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow terminal step: %v", err)
+	}
+
+	entry, err := repo.NewMergeQueueEntryRepo(pool).GetByTask(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByTask merge entry: %v", err)
+	}
+	if entry.Status != "queued" {
+		t.Fatalf("merge entry status = %q, want queued", entry.Status)
+	}
+	if entry.BranchName != branch {
+		t.Fatalf("merge entry branch_name = %q, want %q", entry.BranchName, branch)
+	}
+
+	var jobCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'merge_execute'
+		  AND payload->>'merge_queue_entry_id' = $1
+		  AND payload->>'project_id' = $2
+	`, entry.ID.String(), fixture.project.ID.String()).Scan(&jobCount); err != nil {
+		t.Fatalf("count merge_execute jobs: %v", err)
+	}
+	if jobCount != 1 {
+		t.Fatalf("merge_execute jobs = %d, want 1", jobCount)
+	}
+}
+
 func TestFlowExecutionServiceTerminalAdvanceActivatesDraftOrchestrationParent(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

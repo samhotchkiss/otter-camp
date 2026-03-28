@@ -158,6 +158,100 @@ func TestMergeWorkerIntegrationAdvisoryLockReenqueue(t *testing.T) {
 	}
 }
 
+func TestMergeWorkerIntegrationWorkspaceGitServiceMergesWithoutRemote(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedDeliveryOrgProject(t, ctx, pool)
+	repoRoot := t.TempDir()
+	initWorkspaceGitRepo(t, ctx, repoRoot)
+
+	writeWorkspaceGitFile(t, repoRoot, "content/posts/example.md", "base\n")
+	workspaceGitCmd(t, ctx, repoRoot, "add", "-A")
+	workspaceGitCmd(t, ctx, repoRoot, "commit", "-m", "base")
+	workspaceGitCmd(t, ctx, repoRoot, "checkout", "-b", "task/21")
+	writeWorkspaceGitFile(t, repoRoot, "content/posts/example.md", "merged from task\n")
+	workspaceGitCmd(t, ctx, repoRoot, "add", "-A")
+	workspaceGitCmd(t, ctx, repoRoot, "commit", "-m", "task output")
+	workspaceGitCmd(t, ctx, repoRoot, "checkout", "main")
+
+	environmentRepo := repo.NewProjectEnvironmentRepo(pool)
+	if _, err := environmentRepo.Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    project.ID,
+		Name:         "workspace",
+		DeliveryMode: "gated",
+		RepoPath:     workspaceGitStringPointer(repoRoot),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create workspace environment: %v", err)
+	}
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "merge-source",
+		WorkStatus:     "done",
+		FlowTemplateID: project.DeployFlowTemplateID,
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{"task_type":"work"}`),
+		BranchName:     stringPtr("task/21"),
+	})
+	if err != nil {
+		t.Fatalf("create source task: %v", err)
+	}
+
+	entry, err := repo.NewMergeQueueEntryRepo(pool).Enqueue(ctx, repo.MergeQueueEntry{
+		ProjectID:  project.ID,
+		TaskID:     taskRecord.ID,
+		BranchName: "task/21",
+		Status:     "queued",
+	})
+	if err != nil {
+		t.Fatalf("enqueue merge entry: %v", err)
+	}
+
+	gitService, err := NewWorkspaceGitService(WorkspaceGitServiceOptions{Pool: pool})
+	if err != nil {
+		t.Fatalf("NewWorkspaceGitService: %v", err)
+	}
+	worker, err := NewMergeWorker(MergeWorkerOptions{
+		Pool: pool,
+		Git:  gitService,
+	})
+	if err != nil {
+		t.Fatalf("NewMergeWorker: %v", err)
+	}
+
+	payload, _ := json.Marshal(mergeExecutePayload{MergeQueueEntryID: entry.ID, ProjectID: project.ID})
+	if err := worker.Execute(ctx, jobqueue.Job{Payload: payload}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	stored, err := repo.NewMergeQueueEntryRepo(pool).GetByTask(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("load merge entry: %v", err)
+	}
+	if stored.Status != "merged" {
+		t.Fatalf("merge status = %q, want merged", stored.Status)
+	}
+	if stored.MergedAt == nil {
+		t.Fatal("merged_at not set")
+	}
+
+	got := readWorkspaceGitFile(t, repoRoot+"/content/posts/example.md")
+	if got != "merged from task\n" {
+		t.Fatalf("workspace file content = %q, want %q", got, "merged from task\n")
+	}
+
+	var pushJobs int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM job_queue WHERE job_type = 'push_execute'`).Scan(&pushJobs); err != nil {
+		t.Fatalf("count push_execute jobs: %v", err)
+	}
+	if pushJobs != 0 {
+		t.Fatalf("push_execute jobs = %d, want 0 without remote", pushJobs)
+	}
+}
+
 func TestEnvUpdaterIntegrationDeployCompletionCascade(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

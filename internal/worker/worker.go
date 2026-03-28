@@ -123,7 +123,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	if err != nil {
 		return fmt.Errorf("worker task service setup: %w", err)
 	}
-	if parentRepaired, draftSettled, gatesCancelled, pausesCleared, err := startupProjectCleanup(ctx, pool.Raw(), tasks); err != nil {
+	if parentRepaired, draftSettled, gatesCancelled, pausesCleared, mergeQueued, err := startupProjectCleanup(ctx, pool.Raw(), tasks); err != nil {
 		return fmt.Errorf("worker startup project cleanup: %w", err)
 	} else {
 		if parentRepaired > 0 {
@@ -137,6 +137,9 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		}
 		if pausesCleared > 0 {
 			logger.Info("worker startup: cleared stale bootstrap pauses", "count", pausesCleared)
+		}
+		if mergeQueued > 0 {
+			logger.Info("worker startup: enqueued missing merge jobs for completed tasks", "count", mergeQueued)
 		}
 	}
 
@@ -177,9 +180,16 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		return fmt.Errorf("worker trace partition job setup: %w", err)
 	}
 	tracePartitionJob.RegisterJobs(jqWorker)
+	workspaceGit, err := delivery.NewWorkspaceGitService(delivery.WorkspaceGitServiceOptions{
+		Pool:    pool.Raw(),
+		DataDir: strings.TrimSpace(os.Getenv("OTTERCAMP_DATA_DIR")),
+	})
+	if err != nil {
+		return fmt.Errorf("worker workspace git setup: %w", err)
+	}
 	mergeWorker, err := delivery.NewMergeWorker(delivery.MergeWorkerOptions{
 		Pool:   pool.Raw(),
-		Git:    delivery.UnavailableGitService{},
+		Git:    workspaceGit,
 		Events: bus,
 		Logger: logger,
 	})
@@ -188,7 +198,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	}
 	pushWorker, err := delivery.NewPushWorker(delivery.PushWorkerOptions{
 		Pool:   pool.Raw(),
-		Git:    delivery.UnavailableGitService{},
+		Git:    workspaceGit,
 		Events: bus,
 		Logger: logger,
 	})
@@ -712,9 +722,9 @@ func (deterministicQueryEmbedder) Embed(_ context.Context, _ uuid.UUID, _ string
 	return vectors, nil
 }
 
-func startupProjectCleanup(ctx context.Context, pool *pgxpool.Pool, tasks tasksvc.TaskService) (int, int, int, int, error) {
+func startupProjectCleanup(ctx context.Context, pool *pgxpool.Pool, tasks tasksvc.TaskService) (int, int, int, int, int, error) {
 	if pool == nil || tasks == nil {
-		return 0, 0, 0, 0, nil
+		return 0, 0, 0, 0, 0, nil
 	}
 	orgRepo := repo.NewOrgRepo(pool)
 	projectRepo := repo.NewProjectRepo(pool)
@@ -722,35 +732,136 @@ func startupProjectCleanup(ctx context.Context, pool *pgxpool.Pool, tasks tasksv
 
 	orgs, err := orgRepo.List(ctx)
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, 0, 0, 0, err
 	}
 	parentRepaired := 0
 	draftSettled := 0
 	gatesCancelled := 0
 	pausesCleared := 0
+	mergeQueued := 0
 	for _, org := range orgs {
 		projects, err := projectRepo.List(ctx, org.ID)
 		if err != nil {
-			return parentRepaired, draftSettled, gatesCancelled, pausesCleared, err
+			return parentRepaired, draftSettled, gatesCancelled, pausesCleared, mergeQueued, err
 		}
 		for _, project := range projects {
 			cleared, err := clearStaleBootstrapPauseForQueuedFirstWave(ctx, pool, projectRepo, taskRepo, project)
 			if err != nil {
-				return parentRepaired, draftSettled, gatesCancelled, pausesCleared, err
+				return parentRepaired, draftSettled, gatesCancelled, pausesCleared, mergeQueued, err
 			}
 			if cleared {
 				pausesCleared++
 			}
 			repaired, settled, cancelled, err := startupCleanupProjectDrafts(ctx, taskRepo, tasks, project.ID)
 			if err != nil {
-				return parentRepaired, draftSettled, gatesCancelled, pausesCleared, err
+				return parentRepaired, draftSettled, gatesCancelled, pausesCleared, mergeQueued, err
 			}
 			parentRepaired += repaired
 			draftSettled += settled
 			gatesCancelled += cancelled
 		}
 	}
-	return parentRepaired, draftSettled, gatesCancelled, pausesCleared, nil
+	enqueued, err := repairMissingMergeQueueEntriesForActiveProjects(ctx, pool, tasks)
+	if err != nil {
+		return parentRepaired, draftSettled, gatesCancelled, pausesCleared, mergeQueued, err
+	}
+	mergeQueued += enqueued
+	rearmed, err := rearmQueuedMergeExecuteJobsForActiveProjects(ctx, pool)
+	if err != nil {
+		return parentRepaired, draftSettled, gatesCancelled, pausesCleared, mergeQueued, err
+	}
+	mergeQueued += rearmed
+	return parentRepaired, draftSettled, gatesCancelled, pausesCleared, mergeQueued, nil
+}
+
+func repairMissingMergeQueueEntriesForActiveProjects(ctx context.Context, pool *pgxpool.Pool, tasks tasksvc.TaskService) (int, error) {
+	if pool == nil || tasks == nil {
+		return 0, nil
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT t.id
+		FROM project_task t
+		JOIN project p ON p.id = t.project_id
+		WHERE t.work_status = 'done'
+		  AND COALESCE(t.branch_name, '') <> ''
+		  AND p.status = 'active'
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM merge_queue_entry m
+		    WHERE m.task_id = t.id
+		  )
+		ORDER BY t.task_number ASC, t.id ASC
+	`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	repaired := 0
+	for rows.Next() {
+		var taskID uuid.UUID
+		if err := rows.Scan(&taskID); err != nil {
+			return repaired, err
+		}
+		if _, err := tasks.EnqueueForMerge(ctx, taskID); err != nil {
+			return repaired, err
+		}
+		repaired++
+	}
+	if err := rows.Err(); err != nil {
+		return repaired, err
+	}
+	return repaired, nil
+}
+
+func rearmQueuedMergeExecuteJobsForActiveProjects(ctx context.Context, pool *pgxpool.Pool) (int, error) {
+	if pool == nil {
+		return 0, nil
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT m.id, m.project_id
+		FROM merge_queue_entry m
+		JOIN project p ON p.id = m.project_id
+		WHERE m.status = 'queued'
+		  AND m.archived_at IS NULL
+		  AND p.status = 'active'
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = $1
+		      AND jq.status IN ('pending', 'claimed')
+		      AND jq.payload->>'merge_queue_entry_id' = m.id::text
+		  )
+		ORDER BY m.position ASC, m.id ASC
+	`, delivery.MergeExecuteJobType)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	enqueuer := jobqueue.New(pool, slog.Default(), jobqueue.Config{})
+	rearmed := 0
+	for rows.Next() {
+		var entryID uuid.UUID
+		var projectID uuid.UUID
+		if err := rows.Scan(&entryID, &projectID); err != nil {
+			return rearmed, err
+		}
+		payload := map[string]any{
+			"merge_queue_entry_id": entryID,
+			"project_id":           projectID,
+		}
+		if _, err := enqueuer.Enqueue(ctx, nil, delivery.MergeExecuteJobType, 100, payload, nil); err != nil {
+			return rearmed, err
+		}
+		rearmed++
+	}
+	if err := rows.Err(); err != nil {
+		return rearmed, err
+	}
+	return rearmed, nil
 }
 
 func clearStaleBootstrapPauseForQueuedFirstWave(ctx context.Context, pool *pgxpool.Pool, projectRepo *repo.ProjectRepo, taskRepo *repo.ProjectTaskRepo, project repo.Project) (bool, error) {
