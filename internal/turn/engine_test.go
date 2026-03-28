@@ -14265,6 +14265,38 @@ func TestShouldBlockTaskReviewPreferredDeliverableSiblingReadTool(t *testing.T) 
 	}
 }
 
+func TestShouldNotBlockTaskReviewSiblingReadWithinAuthoritativeCheckpointOutputSet(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `content/posts/practice-one-screen-at-a-time.md`.\n" +
+			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/practice-one-screen-at-a-time.md`, `content/posts/discomfort-is-growth.md`.\n" +
+			"Treat that output set as authoritative for this batch; read the named outputs directly and do not call `file.list` on `content/posts` or reread dependency artifacts outside `content/posts` just to rediscover which files belong to the batch.\n" +
+			"Use flow.review_decision with the active flow_node_execution_id to approve or reject this review step.",
+	}
+	calls := []ModelToolCall{
+		{
+			Name: "file.read",
+			Arguments: map[string]any{
+				"path": "content/posts/practice-one-screen-at-a-time.md",
+			},
+		},
+		{
+			Name: "file.read",
+			Arguments: map[string]any{
+				"path": "content/posts/discomfort-is-growth.md",
+			},
+		},
+	}
+
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, "file.read", map[string]any{"path": "content/posts/discomfort-is-growth.md"}); blocked {
+		t.Fatalf("expected same-root checkpoint output read to remain allowed, reason = %q", reason)
+	}
+}
+
 func TestShouldBlockTaskReviewRepeatedCheckpointOutputTool(t *testing.T) {
 	rt := &turnRuntime{
 		session: &chat.ChatSession{
@@ -37114,6 +37146,59 @@ func TestBuildTaskReviewActionPromptPrefersDeliverableRootForBatchContentMigrati
 	}
 	if !strings.Contains(prompt, "Treat that output set as authoritative for this batch;") {
 		t.Fatalf("prompt = %q, want authoritative checkpoint output-set guidance", prompt)
+	}
+}
+
+func TestBuildTaskReviewActionPromptIncludesCheckpointOutputSetWhenPreferredTargetExists(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := strings.TrimSpace(`
+Replacement task for blocked OC-62. Fetch posts 13-24 (0-indexed) from content/technonymous-index.json via web_fetch and save each as a markdown file under content/posts/.
+
+Posts to fetch:
+1. https://www.technonymous.org/p/the-arithmetic-of-dying -> content/posts/the-arithmetic-of-dying.md
+2. https://www.technonymous.org/p/the-next-thing-will-be-better -> content/posts/the-next-thing-will-be-better.md
+3. https://www.technonymous.org/p/practice-one-screen-at-a-time -> content/posts/practice-one-screen-at-a-time.md
+4. https://www.technonymous.org/p/discomfort-is-growth -> content/posts/discomfort-is-growth.md
+`)
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  64,
+				Title:       "Fetch posts 25-35 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"recovery_file_write_checkpoint": map[string]any{
+						"version":     1,
+						"target_path": "content/posts/practice-one-screen-at-a-time.md",
+					},
+				}),
+			},
+		},
+	}
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "Start with the preferred deliverable target `content/posts/practice-one-screen-at-a-time.md`") {
+		t.Fatalf("prompt = %q, want preferred deliverable target guidance", prompt)
+	}
+	if !strings.Contains(prompt, "The checkpoint already identifies the task-owned outputs under `content/posts`") {
+		t.Fatalf("prompt = %q, want checkpoint output-set guidance from explicit description outputs", prompt)
+	}
+	if !strings.Contains(prompt, "Treat that output set as authoritative for this batch;") {
+		t.Fatalf("prompt = %q, want authoritative output-set guidance", prompt)
+	}
+	if !strings.Contains(prompt, "`content/posts/discomfort-is-growth.md`") {
+		t.Fatalf("prompt = %q, want sibling output path in checkpoint summary", prompt)
+	}
+	if !strings.Contains(prompt, "`content/posts/the-next-thing-will-be-better.md`") {
+		t.Fatalf("prompt = %q, want additional enumerated output path in checkpoint summary", prompt)
 	}
 }
 

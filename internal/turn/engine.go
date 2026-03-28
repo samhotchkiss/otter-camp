@@ -182,6 +182,8 @@ var preferredDeliverableRootPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:under|in)\s+/?((?:content(?:/[A-Za-z0-9._-]+)+)/?)`),
 }
 
+var reviewPromptDescriptionOutputPathPattern = regexp.MustCompile(`(?i)\b(content(?:/[A-Za-z0-9._-]+)+\.(?:md|markdown|html|txt|json|ya?ml))\b`)
+
 const reviewRepeatedFileReadNotFoundTurnStopSubstring = "[Repeated identical file.read validation failure in this turn (2/3): not_found."
 const projectContinuationRediscoveryGuardPrefix = "[Project continuation rediscovery guard blocked only broad rereads."
 const projectContinuationMissingDependencyGuardPrefix = "[Project continuation found that prerequisite artifact `"
@@ -16766,7 +16768,7 @@ func preferredTaskDeliverablePath(taskRecord repo.ProjectTask) string {
 
 func preferredTaskDeliverableRoot(taskRecord repo.ProjectTask) string {
 	if taskRecord.Description == nil {
-		return ""
+		return preferredTaskDeliverableRootFromCheckpoint(taskRecord)
 	}
 	description := strings.TrimSpace(*taskRecord.Description)
 	for _, pattern := range preferredDeliverableRootPatterns {
@@ -16782,7 +16784,37 @@ func preferredTaskDeliverableRoot(taskRecord repo.ProjectTask) string {
 			return root
 		}
 	}
-	return ""
+	return preferredTaskDeliverableRootFromCheckpoint(taskRecord)
+}
+
+func preferredTaskDeliverableRootFromCheckpoint(taskRecord repo.ProjectTask) string {
+	checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata)
+	if !ok || len(checkpoint.Outputs) < 2 {
+		return ""
+	}
+	commonRoot := ""
+	for _, output := range checkpoint.Outputs {
+		outputPath := normalizeWorkspaceRelativePath(output.Path)
+		if outputPath == "" {
+			continue
+		}
+		dir := normalizeWorkspaceRelativePath(path.Dir(outputPath))
+		if dir == "" || dir == "." {
+			return ""
+		}
+		if commonRoot == "" {
+			commonRoot = dir
+			continue
+		}
+		if sameWorkspaceRelativePath(commonRoot, dir) {
+			continue
+		}
+		return ""
+	}
+	if !looksLikePreferredDeliverableRootPath(commonRoot) {
+		return ""
+	}
+	return commonRoot
 }
 
 func shouldReuseHistoricalDeliverableTargetForTask(taskRecord repo.ProjectTask, candidate string) bool {
@@ -19439,6 +19471,67 @@ func reviewPromptCheckpointOutputPathsFromMetadata(taskRecord repo.ProjectTask) 
 	return paths
 }
 
+func reviewPromptCheckpointOutputPathsFromDescription(taskRecord repo.ProjectTask) []string {
+	if taskRecord.Description == nil {
+		return nil
+	}
+	description := strings.TrimSpace(*taskRecord.Description)
+	if description == "" {
+		return nil
+	}
+	root := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
+	matches := reviewPromptDescriptionOutputPathPattern.FindAllString(description, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(matches))
+	paths := make([]string, 0, len(matches))
+	for _, match := range matches {
+		targetPath := normalizeWorkspaceRelativePath(match)
+		if targetPath == "" {
+			continue
+		}
+		if !deliverableTargetMatchesTaskContract(taskRecord, targetPath) {
+			continue
+		}
+		if root != "" && !workspacePathWithinRoot(targetPath, root) {
+			continue
+		}
+		if _, ok := seen[targetPath]; ok {
+			continue
+		}
+		seen[targetPath] = struct{}{}
+		paths = append(paths, targetPath)
+	}
+	return paths
+}
+
+func mergeReviewPromptCheckpointPathGroups(root string, groups ...[]string) []string {
+	root = strings.TrimSpace(root)
+	seen := map[string]struct{}{}
+	merged := make([]string, 0)
+	for _, group := range groups {
+		for _, path := range group {
+			normalized := normalizeWorkspaceRelativePath(path)
+			if normalized == "" {
+				continue
+			}
+			if root != "" && !workspacePathWithinRoot(normalized, root) {
+				continue
+			}
+			if _, ok := seen[normalized]; ok {
+				continue
+			}
+			seen[normalized] = struct{}{}
+			merged = append(merged, normalized)
+		}
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
+}
+
 func mergeReviewPromptCheckpointOutputPaths(paths []string, root string, outputs []taskcheckpoint.WorkspaceFile) []string {
 	root = strings.TrimSpace(root)
 	if len(outputs) == 0 {
@@ -19484,7 +19577,12 @@ func mergeReviewPromptCheckpointOutputPaths(paths []string, root string, outputs
 }
 
 func (e *TurnEngine) reviewPromptCheckpointOutputPaths(ctx context.Context, taskRecord repo.ProjectTask) []string {
-	paths := reviewPromptCheckpointOutputPathsFromMetadata(taskRecord)
+	root := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
+	paths := mergeReviewPromptCheckpointPathGroups(
+		root,
+		reviewPromptCheckpointOutputPathsFromMetadata(taskRecord),
+		reviewPromptCheckpointOutputPathsFromDescription(taskRecord),
+	)
 	if len(paths) == 0 {
 		return paths
 	}
@@ -19503,7 +19601,7 @@ func (e *TurnEngine) reviewPromptCheckpointOutputPaths(ctx context.Context, task
 	if err != nil {
 		return paths
 	}
-	return mergeReviewPromptCheckpointOutputPaths(paths, preferredTaskDeliverableRoot(taskRecord), ownedSnapshot.Outputs)
+	return mergeReviewPromptCheckpointOutputPaths(paths, root, ownedSnapshot.Outputs)
 }
 
 func summarizeReviewPromptOutputPaths(paths []string, limit int) string {
@@ -24311,6 +24409,9 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 			lines = append(lines, fmt.Sprintf("If `%s` may be large, start with `file.read` using `path=%s` and `max_bytes=%d` instead of an unconstrained full-file read. Use narrower follow-up inspection only if that bounded read is insufficient.", targetPath, targetPath, taskReviewPreferredDeliverableReadMaxBytes))
 			lines = append(lines, fmt.Sprintf("If that first bounded read is truncated and you need the tail, use a follow-up `file.read` on `%s` with `offset_bytes` near `byte_size-%d` instead of rereading from byte 0.", targetPath, taskReviewPreferredDeliverableReadMaxBytes))
 			lines = append(lines, fmt.Sprintf("If reading `%s` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.", targetPath))
+			if rootPath != "" && len(checkpointOutputs) > 1 {
+				lines = append(lines, fmt.Sprintf("The checkpoint already identifies the task-owned outputs under `%s`: %s. Treat that output set as authoritative for this batch; after inspecting `%s`, read any additional evidence directly from those named outputs and do not call `file.list` on `%s` or reread dependency artifacts outside `%s` just to rediscover which files belong to the batch.", rootPath, summarizeReviewPromptOutputPaths(checkpointOutputs, reviewPromptCheckpointOutputSummaryLimit(checkpointOutputs)), targetPath, rootPath, rootPath))
+			}
 		} else if rootPath != "" {
 			lines = append(lines, fmt.Sprintf("Start with the preferred deliverable root `%s`. Inspect that output root directly before broad workspace discovery, and do not begin with task.get, git.log, or dependency-file reads outside `%s` unless `%s` itself is missing.", rootPath, rootPath, rootPath))
 			if len(checkpointOutputs) > 1 {
@@ -26623,6 +26724,15 @@ func shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt *turnRuntime, c
 	}
 	path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
 	if path == "" || sameWorkspaceRelativePath(path, targetPath) {
+		return false, ""
+	}
+	rootPath := taskReviewPreferredDeliverableRoot(rt)
+	if rootPath == "" {
+		rootPath = normalizeWorkspaceRelativePath(filepath.ToSlash(filepath.Dir(targetPath)))
+	}
+	if rootPath != "" &&
+		taskReviewPromptTreatsCheckpointOutputSetAsAuthoritative(rt, rootPath) &&
+		workspacePathWithinRoot(path, rootPath) {
 		return false, ""
 	}
 	return true, buildTaskReviewPreferredDeliverableBatchReadGuardError(targetPath)

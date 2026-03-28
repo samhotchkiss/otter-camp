@@ -1263,3 +1263,23 @@
   - expected result after deploy:
     - content-migration task sessions stop immediately once the only remaining dirt is the runtime-owned checkpoint file
     - those lanes no longer spend extra turns re-reading posts or planning `git.commit` just to clean up checkpoint timestamps
+- 2026-03-28 14:05:12 MDT - `Recover batch review output sets from task briefs`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `reviewPromptCheckpointOutputPaths(...)` now merges task-owned output paths from checkpoint metadata and explicit deliverable paths enumerated in the task description
+    - batch review prompts now emit authoritative checkpoint-output-set guidance even when the multi-output contract comes only from the task brief plus a single recovery target
+    - `preferredTaskDeliverableRoot(...)` now also falls back to `content_migration_checkpoint.outputs` when multiple task-owned outputs share the same `content/...` directory
+    - retained the same-root sibling-read allowance for review prompts that already mark the checkpoint output set as authoritative
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestBuildTaskReviewActionPromptIncludesCheckpointOutputSetWhenPreferredTargetExists`
+    - kept the sibling-read / repeated-output guard coverage green for the authoritative-output-set path
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildTaskReviewActionPromptIncludesCheckpointOutputSetWhenPreferredTargetExists|ShouldBlockTaskReviewPreferredDeliverableSiblingReadTool|ShouldNotBlockTaskReviewSiblingReadWithinAuthoritativeCheckpointOutputSet|ShouldBlockTaskReviewRepeatedCheckpointOutputTool|BuildTaskReviewActionPromptPrefersDeliverableRootForBatchContentMigrationOutputs|BuildTaskReviewActionPromptIgnoresHistoricalInputArtifactOutsidePreferredDeliverableRoot|BuildTaskReviewActionPromptIgnoresHistoricalInputArtifactInsidePreferredDeliverableRootForMarkdownBatch|PreferredTaskDeliverableRootSkipsDependencyArtifactAndUsesOutputRoot)$' -count=1`
+  - live proof before the fix:
+    - task `64` review session `5a0c5569-b5f0-4ac9-ac55-c73eea9aea73` kept reopening with target-only prompts, then burning sibling-read guard errors immediately after the first successful read of `content/posts/practice-one-screen-at-a-time.md`
+  - deploy status:
+    - rebuilt and restarted tmux `codex-e2e-20260324`; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+    - direct post-deploy proof is still pending because task-64 is still consuming stale pending target-only prompts created before the latest restart; the next freshly generated review prompt on this binary is the first one that can show the authoritative output-set guidance in production
+  - expected result after deploy:
+    - batch review prompts recover the authoritative output set from explicit deliverable paths in the task brief even when checkpoint metadata only points at one file
+    - multi-output review lanes stop getting trapped in one-file-first sibling-read guard loops and instead review the authoritative batch under the shared root
