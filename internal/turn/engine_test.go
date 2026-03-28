@@ -15543,12 +15543,15 @@ func TestAppendContinuationSummaryAndActionRootsProjectContinuationAtSyntheticUs
 	fixture.chat.turns[turn.ID] = turn
 	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turn.ID)
 	parentDraftID := uuid.New()
+	activeTask35ID := uuid.New()
+	activeTask36ID := uuid.New()
+	childTask37ID := uuid.New()
 	assigneeID := uuid.New()
 	flowTemplateID := uuid.New()
 	fixture.engine.tasks = &fakeTaskRepo{
 		items: map[uuid.UUID]repo.ProjectTask{
-			uuid.New(): {
-				ID:              uuid.New(),
+			activeTask35ID: {
+				ID:              activeTask35ID,
 				ProjectID:       projectID,
 				TaskNumber:      35,
 				Title:           "Scrape batch 1",
@@ -15556,8 +15559,8 @@ func TestAppendContinuationSummaryAndActionRootsProjectContinuationAtSyntheticUs
 				AssignedAgentID: &assigneeID,
 				FlowTemplateID:  &flowTemplateID,
 			},
-			uuid.New(): {
-				ID:              uuid.New(),
+			activeTask36ID: {
+				ID:              activeTask36ID,
 				ProjectID:       projectID,
 				TaskNumber:      36,
 				Title:           "Scrape batch 2",
@@ -15573,8 +15576,8 @@ func TestAppendContinuationSummaryAndActionRootsProjectContinuationAtSyntheticUs
 				WorkStatus:     "draft",
 				FlowTemplateID: &flowTemplateID,
 			},
-			uuid.New(): {
-				ID:         uuid.New(),
+			childTask37ID: {
+				ID:         childTask37ID,
 				ProjectID:  projectID,
 				TaskNumber: 37,
 				Title:      "Child scrape 1",
@@ -15601,6 +15604,12 @@ func TestAppendContinuationSummaryAndActionRootsProjectContinuationAtSyntheticUs
 	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
 		t.Fatalf("historyStart role = %q, want user", message.Role)
 	}
+	if rt.initialMessageID != message.ID {
+		t.Fatalf("initialMessageID = %s, want %s", rt.initialMessageID, message.ID)
+	}
+	if strings.TrimSpace(rt.initialMessageText) != strings.TrimSpace(message.Content) {
+		t.Fatalf("initialMessageText = %q, want synthetic prompt content %q", rt.initialMessageText, message.Content)
+	}
 	if got := strings.TrimSpace(stringValue(messageMetadataMap(message.Metadata)["source"])); got != "project_continuation_resume" {
 		t.Fatalf("historyStart source = %q, want project_continuation_resume", got)
 	}
@@ -15609,6 +15618,16 @@ func TestAppendContinuationSummaryAndActionRootsProjectContinuationAtSyntheticUs
 	}
 	if !strings.Contains(message.Content, "Do not queue, re-decompose, or broadly rediscover those parent draft tasks again") {
 		t.Fatalf("historyStart content = %q, want parent-draft anti-rediscovery guidance", message.Content)
+	}
+	if blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "session.list", nil); !blocked {
+		t.Fatal("expected synthetic project continuation prompt to block session.list in the same turn")
+	} else if !strings.Contains(reason, "session.list") {
+		t.Fatalf("session.list guard reason = %q, want session.list context", reason)
+	}
+	if blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "task.get", map[string]any{"task_id": activeTask35ID.String()}); !blocked {
+		t.Fatal("expected synthetic project continuation prompt to block task.get on a named active task in the same turn")
+	} else if !strings.Contains(reason, activeTask35ID.String()) {
+		t.Fatalf("task.get guard reason = %q, want named task id", reason)
 	}
 }
 

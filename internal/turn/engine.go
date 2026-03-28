@@ -9800,6 +9800,7 @@ func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt 
 				if err != nil {
 					return err
 				}
+				applySyntheticContinuationActionPrompt(rt, actionMessage)
 				historyStartID = actionMessage.ID
 			}
 			rt.historyStartID = &historyStartID
@@ -9820,6 +9821,7 @@ func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt 
 			if err != nil {
 				return err
 			}
+			applySyntheticContinuationActionPrompt(rt, actionMessage)
 			historyStartID = actionMessage.ID
 		}
 	}
@@ -9843,6 +9845,7 @@ func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt 
 			if err != nil {
 				return err
 			}
+			applySyntheticContinuationActionPrompt(rt, actionMessage)
 			historyStartID = actionMessage.ID
 		}
 	}
@@ -9862,6 +9865,7 @@ func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt 
 			if err != nil {
 				return err
 			}
+			applySyntheticContinuationActionPrompt(rt, actionMessage)
 			historyStartID = actionMessage.ID
 		}
 	}
@@ -9870,6 +9874,14 @@ func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt 
 		return err
 	}
 	return nil
+}
+
+func applySyntheticContinuationActionPrompt(rt *turnRuntime, message *chat.ChatMessage) {
+	if rt == nil || message == nil || message.ID == uuid.Nil {
+		return
+	}
+	rt.initialMessageID = message.ID
+	rt.initialMessageText = strings.TrimSpace(message.Content)
 }
 
 func (e *TurnEngine) taskReviewContinuationActionPrompt(ctx context.Context, rt *turnRuntime, previousTurn *repo.ChatTurn) (string, json.RawMessage, bool, error) {
