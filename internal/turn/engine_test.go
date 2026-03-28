@@ -25920,10 +25920,11 @@ func TestShouldBlockTaskRecoveryReadScopeTool(t *testing.T) {
 	}
 
 	cases := []struct {
-		name      string
-		toolName  string
-		path      string
-		wantBlock bool
+		name               string
+		toolName           string
+		path               string
+		initialMessageText string
+		wantBlock          bool
 	}{
 		{
 			name:      "allows target file",
@@ -25932,10 +25933,17 @@ func TestShouldBlockTaskRecoveryReadScopeTool(t *testing.T) {
 			wantBlock: false,
 		},
 		{
-			name:      "allows same-task planning artifact",
+			name:      "allows same-task planning artifact before durable draft prompt",
 			toolName:  "file.read",
 			path:      "planning/discovery-plan/oc-13-validation-plan.md",
 			wantBlock: false,
+		},
+		{
+			name:               "blocks same-task planning artifact once durable draft is already present",
+			toolName:           "file.read",
+			path:               "planning/discovery-plan/oc-13-validation-plan.md",
+			initialMessageText: "Continue the active task recovery now.\nA substantive durable draft is already available above. Reuse that draft body directly instead of introducing yourself, summarizing the task, or describing what you are about to do.\nDo not reread strategy artifacts, planning files, or workspace listings before writing when the substantive draft is already present above.",
+			wantBlock:          true,
 		},
 		{
 			name:      "allows matching recovery artifact path",
@@ -25965,6 +25973,7 @@ func TestShouldBlockTaskRecoveryReadScopeTool(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			rt.initialMessageText = tc.initialMessageText
 			got := shouldBlockTaskRecoveryReadScopeTool(rt, tc.toolName, map[string]any{"path": tc.path})
 			if got != tc.wantBlock {
 				t.Fatalf("shouldBlockTaskRecoveryReadScopeTool(%q, %q) = %v, want %v", tc.toolName, tc.path, got, tc.wantBlock)

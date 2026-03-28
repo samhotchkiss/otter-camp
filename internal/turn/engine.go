@@ -24243,6 +24243,9 @@ func shouldBlockTaskRecoveryReadScopeTool(rt *turnRuntime, toolName string, argu
 		return false
 	}
 	if taskRecoveryReadPathMatchesTask(path, taskNumber) {
+		if recoveryPromptHasDurableDraftInstruction(rt) && projectBootstrapRecoveryReadsPlanningPath(map[string]any{"path": path}) {
+			return true
+		}
 		return false
 	}
 	return true
@@ -24343,6 +24346,18 @@ func taskReviewPreferredDeliverableTarget(rt *turnRuntime) string {
 		return ""
 	}
 	return parsePromptDeliverableTarget(strings.TrimSpace(rt.initialMessageText))
+}
+
+func recoveryPromptHasDurableDraftInstruction(rt *turnRuntime) bool {
+	if rt == nil {
+		return false
+	}
+	initialMessage := strings.ToLower(strings.TrimSpace(rt.initialMessageText))
+	if initialMessage == "" {
+		return false
+	}
+	return strings.Contains(initialMessage, "a substantive durable draft is already available above") ||
+		strings.Contains(initialMessage, "the substantive draft is already present above")
 }
 
 func taskReviewBatchIncludesPreferredDeliverableRead(calls []ModelToolCall, targetPath string) bool {
@@ -24890,6 +24905,15 @@ func buildTaskRecoveryReadScopeToolGuardError(rt *turnRuntime, arguments map[str
 		target = strings.TrimSpace(rt.recoveryTargetPath)
 	}
 	path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+	if recoveryPromptHasDurableDraftInstruction(rt) && projectBootstrapRecoveryReadsPlanningPath(map[string]any{"path": path}) {
+		if target == "" {
+			return "task recovery already includes a substantive durable draft in the prompt. Do not reread planning artifacts now; write the target deliverable directly, or use only the matching recovery artifact if the target still needs repair."
+		}
+		if path == "" {
+			return fmt.Sprintf("task recovery for `%s` already includes a substantive durable draft in the prompt. Do not reread planning artifacts now; write `%s` directly, or use only the matching recovery artifact if `%s` still needs repair.", target, target, target)
+		}
+		return fmt.Sprintf("task recovery for `%s` already includes a substantive durable draft in the prompt. Do not reread planning artifact `%s` now; write `%s` directly, or use only the matching recovery artifact if `%s` still needs repair.", target, path, target, target)
+	}
 	if target == "" {
 		return "task recovery should not reread unrelated workspace artifacts. Continue from the current task deliverable, same-task planning artifacts, or the named recovery artifact only."
 	}
