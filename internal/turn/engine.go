@@ -4752,6 +4752,27 @@ func (e *TurnEngine) retryProjectExecutionContinuationForMissingDependency(
 			completedTask = taskRecord
 		}
 	}
+	projectTasks, err := e.tasks.ListByProject(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	taskHintsByTask, err := e.projectContinuationTaskHintsByTask(ctx, projectTasks)
+	if err != nil {
+		return false, err
+	}
+	if activeProducerRefs := projectContinuationProducerTaskRefsForPath(projectTasks, taskHintsByTask, missingPath); len(activeProducerRefs) > 0 {
+		_, _ = e.appendSystemMessage(
+			ctx,
+			latestCompleted.ID,
+			session.ID,
+			fmt.Sprintf(
+				"[Project continuation found that prerequisite artifact `%s` already has active replacement work in the tree: %s. Let those active task lanes continue instead of reopening duplicate PM follow-up work.]",
+				missingPath,
+				strings.Join(activeProducerRefs, "; "),
+			),
+		)
+		return true, nil
+	}
 	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
 	if err != nil {
 		return false, err
@@ -4800,6 +4821,76 @@ func buildProjectExecutionContinuationMissingDependencyRetryPrompt(
 		fmt.Sprintf(" Your last continuation turn confirmed prerequisite artifact `%s` is still missing.", missingPath) +
 		fmt.Sprintf(" Do not browse external sources, do not reread broad project or workspace context, and do not write `%s` from the project session.", missingPath) +
 		fmt.Sprintf(" Your next assistant action must create, queue, or advance the smallest bounded replacement task that produces `%s`, or report one concrete blocker sentence if that handoff is impossible.", missingPath)
+}
+
+func projectContinuationProducerTaskRefsForPath(
+	tasks []repo.ProjectTask,
+	taskHintsByTask map[uuid.UUID]projectContinuationTaskHints,
+	path string,
+) []string {
+	normalizedPath := strings.ToLower(strings.TrimSpace(path))
+	if normalizedPath == "" || len(tasks) == 0 {
+		return nil
+	}
+	refs := make([]string, 0, 3)
+	childActivity := projectContinuationChildTaskActivity(tasks)
+	for _, task := range tasks {
+		status := strings.ToLower(strings.TrimSpace(task.WorkStatus))
+		if status == "" || status == "done" || status == "cancelled" {
+			continue
+		}
+		activity := childActivity[task.ID]
+		if status == "draft" && activity.activeChildTaskCount == 0 && !projectTaskExecutionActive(task.WorkStatus) {
+			continue
+		}
+		hints := taskHintsByTask[task.ID]
+		if !projectContinuationTaskLikelyProducesPath(task, hints, normalizedPath) {
+			continue
+		}
+		refs = append(refs, projectExecutionContinuationTaskRef(task, activity, hints))
+		if len(refs) >= 3 {
+			break
+		}
+	}
+	return refs
+}
+
+func projectContinuationTaskLikelyProducesPath(task repo.ProjectTask, hints projectContinuationTaskHints, normalizedPath string) bool {
+	if normalizedPath == "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(hints.DeliverablePath), normalizedPath) {
+		return true
+	}
+	var description string
+	if task.Description != nil {
+		description = *task.Description
+	}
+	text := strings.ToLower(strings.Join([]string{
+		strings.TrimSpace(task.Title),
+		strings.TrimSpace(description),
+		strings.TrimSpace(string(task.Metadata)),
+	}, " "))
+	if !strings.Contains(text, normalizedPath) {
+		return false
+	}
+	producerSignals := []string{
+		"output ",
+		"write ",
+		"produce ",
+		"create ",
+		"save ",
+		"replacement",
+		"primary_deliverable",
+		"source_description",
+		"deliverables",
+	}
+	for _, signal := range producerSignals {
+		if strings.Contains(text, signal) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *TurnEngine) countProjectDraftTasks(ctx context.Context, projectID uuid.UUID) (int, error) {

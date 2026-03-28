@@ -10771,6 +10771,125 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesMissingDependency
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnSkipsMissingDependencyRetryWhenActiveReplacementExists(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	activeReplacementTaskID := uuid.New()
+	turnID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	replacementDescription := "Write the results to content/technonymous-index.json"
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 34,
+				Title:      "Coordinate Technonymous import recovery",
+				WorkStatus: "done",
+			},
+			activeReplacementTaskID: {
+				ID:          activeReplacementTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  41,
+				Title:       "Write the results to content/technonymous-index.json",
+				Description: &replacementDescription,
+				WorkStatus:  "in_progress",
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "I need to confirm whether `content/technonymous-index.json` exists before I queue the next recovery step.",
+		SequenceNumber: 11,
+	}
+	toolResult := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "tool_result",
+		Status:         "final",
+		Content:        `{"tool_name":"file.read","output":{"error":"not_found"}}`,
+		SequenceNumber: 12,
+	}
+	systemMessage := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "system",
+		Status:         "final",
+		Content:        "[Project continuation found that prerequisite artifact `content/technonymous-index.json` is still missing. Queue or advance the smallest replacement task that produces it instead of browsing external sources or writing the file from the project session.]",
+		SequenceNumber: 13,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant, *toolResult, *systemMessage}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected active replacement work to handle the missing-dependency stop")
+	}
+	if len(fixture.enqueuer.jobs) != 0 {
+		t.Fatalf("enqueued jobs = %d, want 0 when active replacement work already exists", len(fixture.enqueuer.jobs))
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var sawCoverageMessage bool
+	for _, msg := range storedMessages {
+		if msg.TurnID == nil || *msg.TurnID != turnID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "system") {
+			continue
+		}
+		if strings.Contains(msg.Content, "already has active replacement work in the tree") &&
+			strings.Contains(msg.Content, "task 41") {
+			sawCoverageMessage = true
+			break
+		}
+	}
+	if !sawCoverageMessage {
+		t.Fatal("expected system message noting active replacement work for missing dependency")
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnSuppressesRepeatedMissingDependencyRetry(t *testing.T) {
 	t.Parallel()
 
