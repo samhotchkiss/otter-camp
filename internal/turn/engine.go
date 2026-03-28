@@ -19495,6 +19495,14 @@ func (e *TurnEngine) recoveryTargetPathForSession(ctx context.Context, session *
 				if target := metadataPreferredRecoveryTargetPathForTask(taskRecord); target != "" {
 					return target
 				}
+				if session.ID != uuid.Nil {
+					if target := normalizeWorkspaceRelativePath(e.latestRecoveryTargetPathForSession(ctx, session.ID)); target != "" &&
+						shouldReuseHistoricalDeliverableTargetForTask(taskRecord, target) &&
+						looksLikeExplicitDeliverablePath(target, target) {
+						return target
+					}
+				}
+				return ""
 			}
 		}
 	}

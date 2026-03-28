@@ -1522,3 +1522,24 @@
       - PM no longer created another duplicate `25-35` replacement; it created and queued only task `68` for the still-missing `1-12` batch at `4619-4623`
   - expected result after deploy:
     - PM continuations stop reopening already-completed sibling batches and instead narrow onto the one remaining unresolved batch or exact review-resume lane
+- 2026-03-28 16:47:32 MDT - `Filter batch-task recovery targets through deliverable contracts`
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `latestRecoveryTargetPathForSession(...)` now only reuses session-history fallback targets for `project_task` executions when the candidate still satisfies `deliverableTargetMatchesTaskContract(...)`
+    - this prevents dependency-artifact `file.read` history like `content/technonymous-index.json` from poisoning batch markdown tasks whose real outputs live under `content/posts/`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `recoveryTargetPathForSession(...)` now applies the same task-contract filter before converting historical session targets into recovery continuations
+    - result: recovery turns no longer inherit a bad dependency path just because it was the most recent `file.read`
+  - changed [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go):
+    - added `TestLatestRecoveryTargetPathForSessionIgnoresDependencyArtifactHistoryForMarkdownBatchWithoutMetadata`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestRecoveryTargetPathForSessionIgnoresDependencyArtifactHistoryForMarkdownBatchWithoutMetadata`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3449`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(LatestRecoveryTargetPathForSession(FallsBackToRecentToolResult|PrefersMetadataBatchOutputOverDependencyArtifactHistory|IgnoresDependencyArtifactHistoryForMarkdownBatchWithoutMetadata)|FileReadAllowsBatchOutputWhenMetadataRecoveryTargetOverridesDependencyArtifactHistory)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(RecoveryTargetPathForSession(PrefersTaskMetadataOverCheckpointArtifactHistory|IgnoresDependencyArtifactHistoryForMarkdownBatchWithoutMetadata)|SessionTaskDeliverablePathPrefersContentMigrationOutputOverStaleRecoveryCheckpoint|SessionTaskDeliverablePathRejectsSameRootDependencyArtifactFromPromptHistoryForMarkdownBatch)$' -count=1`
+  - deploy status:
+    - rebuilt/restarted tmux `codex-e2e-20260324`; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+    - direct production proof for task `68` is still pending because its pre-fix recovery session had already closed blocked before restart
+  - expected result after deploy:
+    - fresh batch-post recovery/task continuations should stop inheriting `content/technonymous-index.json` as the recovery target and either keep the target empty until a real output is named or focus on an actual `content/posts/*.md` deliverable once one exists

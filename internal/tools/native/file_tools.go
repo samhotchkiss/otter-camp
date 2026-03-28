@@ -514,6 +514,10 @@ func (e *NativeToolExecutor) latestRecoveryTargetPathForSession(ctx context.Cont
 			if target := preferredRecoveryTargetForTask(taskRecord); target != "" {
 				return target
 			}
+			if target := e.sessionRecoveryState(ctx, scope).targetPath; target != "" && deliverableTargetMatchesTaskContract(taskRecord, target) {
+				return target
+			}
+			return ""
 		}
 	}
 	return e.sessionRecoveryState(ctx, scope).targetPath

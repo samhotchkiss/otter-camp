@@ -33399,6 +33399,36 @@ func TestRecoveryTargetPathForSessionPrefersTaskMetadataOverCheckpointArtifactHi
 	}
 }
 
+func TestRecoveryTargetPathForSessionIgnoresDependencyArtifactHistoryForMarkdownBatchWithoutMetadata(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Read content/technonymous-index.json. For each of the first 12 URLs in the post_urls array, save the article text as clean markdown files under content/posts/."
+	taskRecord := repo.ProjectTask{
+		ID:          taskID,
+		TaskNumber:  68,
+		Title:       "Fetch posts 1-12 from technonymous index and save as markdown",
+		Description: &description,
+	}
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks.(*fakeTaskRepo).items = map[uuid.UUID]repo.ProjectTask{
+		taskID: taskRecord,
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"file.read","output":{"path":"content/technonymous-index.json"}}`,
+	})
+
+	if got := fixture.engine.recoveryTargetPathForSession(context.Background(), fixture.session); got != "" {
+		t.Fatalf("recoveryTargetPathForSession(...) = %q, want empty because dependency artifact reads should not become recovery targets for markdown batch tasks", got)
+	}
+}
+
 func TestSessionTaskDeliverablePathPrefersCheckpointTargetOverInferredReportPath(t *testing.T) {
 	t.Parallel()
 

@@ -165,6 +165,42 @@ func TestLatestRecoveryTargetPathForSessionPrefersMetadataBatchOutputOverDepende
 	}
 }
 
+func TestLatestRecoveryTargetPathForSessionIgnoresDependencyArtifactHistoryForMarkdownBatchWithoutMetadata(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+
+	description := "Read content/technonymous-index.json. For each of the first 12 URLs in the post_urls array, save the article text as clean markdown files under content/posts/."
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Fetch posts 1-12 from technonymous index and save as markdown",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "tool_result",
+				Content:   `{"tool_name":"file.read","output":{"path":"content/technonymous-index.json"}}`,
+			},
+		},
+	}
+
+	got := executor.latestRecoveryTargetPathForSession(context.Background(), workspaceScope{sessionID: &sessionID, taskID: &taskID})
+	if got != "" {
+		t.Fatalf("latestRecoveryTargetPathForSession(...) = %q, want empty because dependency artifact reads should not poison markdown batch recovery", got)
+	}
+}
+
 func TestFileListAllowsReviewDeliverableRootInspectionWithinRecoveryTargetRoot(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()
