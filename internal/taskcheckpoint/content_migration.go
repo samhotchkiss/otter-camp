@@ -166,6 +166,66 @@ func ScanWorkspace(root string) (ContentMigrationSnapshot, error) {
 	return snapshot, nil
 }
 
+func ScanSelectedWorkspace(root string, allowedPaths []string) (ContentMigrationSnapshot, error) {
+	trimmedRoot := strings.TrimSpace(root)
+	if trimmedRoot == "" {
+		return ContentMigrationSnapshot{}, nil
+	}
+	if _, err := os.Stat(trimmedRoot); err != nil {
+		if errorsIsNotExist(err) {
+			return ContentMigrationSnapshot{}, nil
+		}
+		return ContentMigrationSnapshot{}, err
+	}
+
+	seen := map[string]struct{}{}
+	snapshot := ContentMigrationSnapshot{}
+	for _, raw := range allowedPaths {
+		rel := filepath.ToSlash(filepath.Clean(filepath.FromSlash(strings.TrimSpace(raw))))
+		if rel == "" || rel == "." {
+			continue
+		}
+		if _, ok := seen[rel]; ok {
+			continue
+		}
+		seen[rel] = struct{}{}
+		if skipTrackedMigrationPath(rel) {
+			continue
+		}
+
+		abs := filepath.Join(trimmedRoot, filepath.FromSlash(rel))
+		info, err := os.Stat(abs)
+		if err != nil {
+			if errorsIsNotExist(err) {
+				continue
+			}
+			return ContentMigrationSnapshot{}, err
+		}
+		if info.IsDir() {
+			continue
+		}
+
+		item := WorkspaceFile{
+			Path:       rel,
+			ByteSize:   info.Size(),
+			ModifiedAt: info.ModTime().UTC().Format(time.RFC3339Nano),
+		}
+		switch {
+		case isScriptPath(rel):
+			snapshot.Scripts = append(snapshot.Scripts, item)
+		case isArtifactPath(rel):
+			snapshot.Artifacts = append(snapshot.Artifacts, item)
+		case isOutputPath(rel):
+			snapshot.Outputs = append(snapshot.Outputs, item)
+		}
+	}
+
+	snapshot.Artifacts = normalizeTrackedFiles(snapshot.Artifacts)
+	snapshot.Scripts = normalizeTrackedFiles(snapshot.Scripts)
+	snapshot.Outputs = normalizeTrackedFiles(snapshot.Outputs)
+	return snapshot, nil
+}
+
 func ParseContentMigrationCheckpoint(metadata json.RawMessage) (ContentMigrationCheckpoint, bool) {
 	if len(metadata) == 0 || !json.Valid(metadata) {
 		return ContentMigrationCheckpoint{}, false
@@ -357,6 +417,13 @@ func renderCheckpointSection(title string, items []WorkspaceFile) []string {
 		lines = append(lines, line)
 	}
 	return lines
+}
+
+func skipTrackedMigrationPath(rel string) bool {
+	lower := strings.ToLower(filepath.ToSlash(rel))
+	return lower == ".git" || strings.HasPrefix(lower, ".git/") ||
+		lower == ".ottercamp" || strings.HasPrefix(lower, ".ottercamp/") ||
+		lower == "node_modules" || strings.HasPrefix(lower, "node_modules/")
 }
 
 func summarizeFiles(label string, items []WorkspaceFile, limit int) string {

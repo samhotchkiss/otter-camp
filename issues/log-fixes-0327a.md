@@ -846,3 +846,23 @@
   - current live state after redeploy:
     - fresh task-63 session `08b56f02-a02e-4329-bd15-cb24eacef05d` is back in bounded execution on the new runtime and wrote outputs like `content/posts/why-privacy-matters-part-2-what-to.md`, `content/posts/how-to-cook-a-steak-and-why-it-matters.md`, and `content/posts/the-water-is-nearing-a-boil.md`
     - fresh direct proof of the rewritten checkpoint system message is still pending the next continuation turn on that session
+- 2026-03-28 09:26:36 MDT - stat exact task-owned migration paths when building checkpoints
+  - changed [`internal/taskcheckpoint/content_migration.go`](/Users/sam/dev/otter-camp/internal/taskcheckpoint/content_migration.go):
+    - added `ScanSelectedWorkspace(...)`, which classifies only the exact relative paths the caller names instead of walking the full tree and trimming later
+    - this preserves output classification for clean task branches and is cheaper than scanning the entire worktree when we already know the task-owned path set
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `appendContentMigrationCheckpoint(...)` now uses `taskcheckpoint.ScanSelectedWorkspace(...)` for task-owned `Scripts` / `Outputs` instead of full-scan-plus-filter
+    - artifacts still come from the broader workspace scan, so the checkpoint keeps the upstream manifest/index context while outputs stay task-owned
+  - changed tests:
+    - [`internal/taskcheckpoint/content_migration_test.go`](/Users/sam/dev/otter-camp/internal/taskcheckpoint/content_migration_test.go)
+      - added `TestScanSelectedWorkspaceKeepsTrackedOutputs`
+    - [`internal/turn/engine_integration_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_integration_test.go)
+      - strengthened `TestTurnEngineIntegrationContentMigrationCheckpointPushesFirstOutputBeforeMoreScaffolding` so the post-write continuation must name the new output and must not keep claiming `no migrated output files are on disk yet`
+      - the same integration test now also asserts the persisted `content_migration_checkpoint.outputs` metadata contains the written output path
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskcheckpoint -run 'Test(ScanWorkspaceClassifiesAndSkipsDirectories|ScanSelectedWorkspaceKeepsTrackedOutputs)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestSessionTaskDeliverablePath(PrefersCheckpointTargetOverInferredReportPath|PrefersContentMigrationOutputOverStaleRecoveryCheckpoint)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationContentMigration(ContinuationUsesWorkspaceCheckpoint|ResumeUsesPersistedCheckpointState|CheckpointPushesFirstOutputBeforeMoreScaffolding)$' -count=1`
+  - live diagnosis behind the fix:
+    - task-63 checkpoint messages `47`, `95`, and `124` still said `no migrated output files are on disk yet`
+    - the checkpoint file on disk under `task-63/.ottercamp/checkpoints/oc-63-content-migration.md` showed `## Outputs (none)` even though the written markdown files already existed and predated that checkpoint

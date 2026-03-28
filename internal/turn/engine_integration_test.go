@@ -20277,6 +20277,12 @@ func TestTurnEngineIntegrationContentMigrationCheckpointPushesFirstOutputBeforeM
 				},
 			}}}, nil
 		default:
+			if !strings.Contains(flattened, outputRel) {
+				t.Fatalf("post-write continuation prompt missing migrated output path %q:\n%s", outputRel, flattened)
+			}
+			if strings.Contains(flattened, "no migrated output files are on disk yet") {
+				t.Fatalf("post-write continuation prompt still claims outputs are missing:\n%s", flattened)
+			}
 			return ModelResponse{Content: "migration resumed from the checkpoint and emitted the first output"}, nil
 		}
 	}
@@ -20351,6 +20357,24 @@ func TestTurnEngineIntegrationContentMigrationCheckpointPushesFirstOutputBeforeM
 	}
 	if _, err := os.Stat(filepath.Join(taskWorkspaceRoot, filepath.FromSlash(outputRel))); err != nil {
 		t.Fatalf("expected migrated output file on disk: %v", err)
+	}
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected persisted content migration checkpoint metadata")
+	}
+	foundOutput := false
+	for _, item := range checkpoint.Outputs {
+		if item.Path == outputRel {
+			foundOutput = true
+			break
+		}
+	}
+	if !foundOutput {
+		t.Fatalf("persisted checkpoint outputs = %#v, want %q", checkpoint.Outputs, outputRel)
 	}
 }
 

@@ -201,6 +201,39 @@ func TestScanWorkspaceClassifiesAndSkipsDirectories(t *testing.T) {
 	}
 }
 
+func TestScanSelectedWorkspaceKeepsTrackedOutputs(t *testing.T) {
+	root := t.TempDir()
+	baseTime := time.Date(2026, 3, 6, 12, 0, 0, 0, time.UTC)
+
+	writeFileWithTime(t, root, "content/technonymous-index.json", "{}", baseTime.Add(1*time.Minute))
+	writeFileWithTime(t, root, "scripts/migrate.py", "print('ok')", baseTime.Add(2*time.Minute))
+	writeFileWithTime(t, root, "content/posts/post-1.md", "# Post 1", baseTime.Add(3*time.Minute))
+	writeFileWithTime(t, root, "content/posts/post-2.md", "# Post 2", baseTime.Add(4*time.Minute))
+	writeFileWithTime(t, root, ".ottercamp/checkpoints/ignored.md", "ignored", baseTime.Add(5*time.Minute))
+
+	snapshot, err := ScanSelectedWorkspace(root, []string{
+		"content/technonymous-index.json",
+		"scripts/migrate.py",
+		"content/posts/post-1.md",
+		"content/posts/post-2.md",
+		".ottercamp/checkpoints/ignored.md",
+	})
+	if err != nil {
+		t.Fatalf("ScanSelectedWorkspace: %v", err)
+	}
+
+	assertPathsEqual(t, snapshot.Artifacts, []string{
+		"content/technonymous-index.json",
+	})
+	assertPathsEqual(t, snapshot.Scripts, []string{
+		"scripts/migrate.py",
+	})
+	assertPathsEqual(t, snapshot.Outputs, []string{
+		"content/posts/post-2.md",
+		"content/posts/post-1.md",
+	})
+}
+
 func TestNormalizeTrackedFilesSortsAndTruncates(t *testing.T) {
 	baseTime := time.Date(2026, 3, 6, 12, 0, 0, 0, time.UTC)
 	items := []WorkspaceFile{

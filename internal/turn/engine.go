@@ -11929,8 +11929,17 @@ func (e *TurnEngine) appendContentMigrationCheckpoint(ctx context.Context, rt *t
 		return false, err
 	}
 	if taskOwnedPaths, pathErr := contentMigrationTaskOwnedPaths(ctx, workspaceRoot); pathErr == nil {
-		snapshot.Scripts = filterContentMigrationWorkspaceFiles(snapshot.Scripts, taskOwnedPaths)
-		snapshot.Outputs = filterContentMigrationWorkspaceFiles(snapshot.Outputs, taskOwnedPaths)
+		if len(taskOwnedPaths) == 0 {
+			snapshot.Scripts = nil
+			snapshot.Outputs = nil
+		} else {
+			ownedSnapshot, ownedErr := taskcheckpoint.ScanSelectedWorkspace(workspaceRoot, sortedContentMigrationOwnedPaths(taskOwnedPaths))
+			if ownedErr != nil {
+				return false, ownedErr
+			}
+			snapshot.Scripts = ownedSnapshot.Scripts
+			snapshot.Outputs = ownedSnapshot.Outputs
+		}
 	} else if e.logger != nil {
 		e.logger.Warn("content migration checkpoint falling back to full worktree scan",
 			"session_id", rt.session.ID,
@@ -12029,6 +12038,22 @@ func filterContentMigrationWorkspaceFiles(items []taskcheckpoint.WorkspaceFile, 
 		return nil
 	}
 	return filtered
+}
+
+func sortedContentMigrationOwnedPaths(allowed map[string]struct{}) []string {
+	if len(allowed) == 0 {
+		return nil
+	}
+	paths := make([]string, 0, len(allowed))
+	for path := range allowed {
+		normalized := normalizeWorkspaceRelativePath(path)
+		if normalized == "" {
+			continue
+		}
+		paths = append(paths, normalized)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 func buildTaskLabel(task repo.ProjectTask) string {
