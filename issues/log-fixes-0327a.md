@@ -435,7 +435,7 @@
   - verified with `gofmt -w internal/jobqueue/worker.go internal/jobqueue/worker_integration_test.go` and `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ClosesRejectedExecution|SkipsPendingAgentTurn)?|RequeueActiveExecutionSessionsWithoutTurns(ForTaskQueueKickoff|CreatesMissingTaskQueueKickoff)|RetireClosedAsyncSessionRuns(FailsNonTerminalTaskRuns|CompletesDoneTaskRuns))$' -count=1`
   - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
   - live proof: on the new runtime, the remaining `11` blocked/rejected Sam.blog task sessions (`11`, `16`, `17`, `18`, `19`, `20`, `22`, `23`, `24`, `30`, `37`) all closed at `2026-03-28 01:41:43 MDT`, removing the rest of the dead blocked-task session noise from the active async pool
-- 2026-03-28 02:04:12 MDT - `pending` `Unstick compressed PM continuation prompts`
+- 2026-03-28 02:04:12 MDT - `22705bec` `Unstick compressed PM continuation prompts`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `shouldAppendSyntheticUserPrompt(...)` ignores orphan pending synthetic prompts that have no `turn_id`
   - kept the existing protections intact:
     - a duplicate pending synthetic prompt on a live non-terminal turn still suppresses a second copy
@@ -447,7 +447,7 @@
   - verified with `gofmt -w internal/turn/engine.go internal/turn/engine_test.go` and `go test ./internal/turn -run 'TestShouldAppendSyntheticUserPrompt(SkipsDuplicatePendingSource|IgnoresDuplicateOnCompletedTurn|IgnoresOrphanPendingSyntheticPrompt)$' -count=1`
   - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
   - live proof: after restart, Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` appended fresh synthetic `project_continuation_resume` prompts at sequences `3481` and `3497` instead of repeating the old generic `I'm ready to help` fallback
-- 2026-03-28 02:04:12 MDT - `pending` `Keep PM continuation focus on the named dependency artifact`
+- 2026-03-28 02:04:12 MDT - `22705bec` `Keep PM continuation focus on the named dependency artifact`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so async project continuations now:
     - block unrelated top-level `task.create` work when the active continuation prompt is already focused on a named dependency artifact path
     - extract explicit workspace-relative artifact paths from the active project request / continuation summary
@@ -460,7 +460,7 @@
   - verified with `gofmt -w internal/turn/engine.go internal/turn/engine_test.go` and `go test ./internal/turn -run 'Test(ShouldAppendSyntheticUserPrompt(SkipsDuplicatePendingSource|IgnoresDuplicateOnCompletedTurn|IgnoresOrphanPendingSyntheticPrompt)|ShouldBlockProjectContinuationDependencyFocusedTaskCreateBlocksUnrelatedTopLevelTask|ShouldNotBlockProjectContinuationDependencyFocusedTaskCreateForNamedParentTask|ProjectExecutionContinuationSnapshot(ForSummaryNarrowsToPriorityArtifactPath|SummarizesProjectState)|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocks(BroadTaskList|NamedTaskGet))$' -count=1`
   - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
   - live proof: post-restart continuation prompt `3526` on Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` no longer surfaced unrelated task `43`; it stayed focused on the technonymous index path and matching tasks (`41`, `35`, `36`, `39`, `34`)
-- 2026-03-28 02:10:42 MDT - `pending` `Block PM external fetches when replacement child work already exists`
+- 2026-03-28 02:10:42 MDT - `bac55917` `Block PM external fetches when replacement child work already exists`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so async project continuations now block `browser.navigate` / `web.fetch` when:
     - the continuation prompt is already focused on named dependency artifact path(s), and
     - the prompt already names matching replacement child work under `Draft parent tasks already have child work:`
@@ -471,7 +471,7 @@
   - verified with `gofmt -w internal/turn/engine.go internal/turn/engine_test.go` and `go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationDependencyFocusedExternalTool|ShouldNotBlockProjectContinuationDependencyFocusedExternalToolWithoutChildWork|ShouldAppendSyntheticUserPrompt(SkipsDuplicatePendingSource|IgnoresDuplicateOnCompletedTurn|IgnoresOrphanPendingSyntheticPrompt)|ShouldBlockProjectContinuationDependencyFocusedTaskCreateBlocksUnrelatedTopLevelTask|ShouldNotBlockProjectContinuationDependencyFocusedTaskCreateForNamedParentTask|ProjectExecutionContinuationSnapshotForSummaryNarrowsToPriorityArtifactPath)$' -count=1`
   - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
   - live proof: on Sam.blog PM turn `d1aaf03e-6d39-4ddf-a471-d85cd181c4b1`, the first attempted `web.fetch` was blocked at message `3541`, then the turn fell through to the existing `file.read(content/technonymous-index.json) -> not_found` path and ended with the missing-dependency stop at `3545` instead of reopening the external crawl loop
-- 2026-03-28 02:17:44 MDT - `pending` `Honor missing-dependency PM continuations before unrelated draft auto-queue`
+- 2026-03-28 02:17:44 MDT - `ee33c284` `Honor missing-dependency PM continuations before unrelated draft auto-queue`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so project-continuation completion now checks the recorded missing-dependency stop before generic draft auto-queue selection
   - added a priority-path-aware draft selector in the same file, and the missing-dependency repair path now auto-queues the smallest matching draft producer when one exists instead of reopening unrelated draft work or forcing another model turn
   - strengthened focused continuation coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
