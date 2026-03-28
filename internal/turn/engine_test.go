@@ -25874,6 +25874,14 @@ This document defines archive, results, and related-post wireframes.`,
 			targetPath: "Work/OC-18-VALIDATE-PIPELINE-OUTPUT-FORMAT-AND-DELIVERY.md",
 			want:       "described intent to write the deliverable instead of the file body",
 		},
+		{
+			name: "rejects root-cause troubleshooting narration",
+			content: "Now I understand the root cause — the file currently contains the assistant's prose text, not HTML. " +
+				"The `file.write` calls without `content` have been writing empty/chat text. " +
+				"I'll use the CLI to write the full template directly:",
+			targetPath: "templates/template-07-dark-mode-developer.html",
+			want:       "tool-recovery troubleshooting",
+		},
 	}
 
 	for _, tc := range cases {
@@ -28235,6 +28243,43 @@ Real file body content that should be reused for the write fallback.
 	}
 
 	got := latestSubstantiveAssistantFinalForTurn(messages, turnID, "docs/target.md")
+	if got == nil {
+		t.Fatal("expected substantive assistant draft")
+	}
+	if got.SequenceNumber != 10 {
+		t.Fatalf("sequence_number = %d, want 10", got.SequenceNumber)
+	}
+}
+
+func TestLatestSubstantiveAssistantFinalForTurnSkipsLaterToolTroubleshootingNarration(t *testing.T) {
+	t.Parallel()
+
+	turnID := uuid.New()
+	messages := []repo.ChatMessage{
+		{
+			ID:             uuid.New(),
+			TurnID:         &turnID,
+			Role:           "assistant",
+			Status:         "final",
+			SequenceNumber: 10,
+			Content: strings.TrimSpace(`<!DOCTYPE html>
+<html>
+  <body>
+    <main>Recovered template body</main>
+  </body>
+</html>`),
+		},
+		{
+			ID:             uuid.New(),
+			TurnID:         &turnID,
+			Role:           "assistant",
+			Status:         "final",
+			SequenceNumber: 11,
+			Content:        "Now I understand the root cause — the file currently contains the assistant's prose text, not HTML. The `file.write` calls without `content` have been writing empty/chat text. I'll use the CLI to write the full template directly:",
+		},
+	}
+
+	got := latestSubstantiveAssistantFinalForTurn(messages, turnID, "templates/template-07-dark-mode-developer.html")
 	if got == nil {
 		t.Fatal("expected substantive assistant draft")
 	}

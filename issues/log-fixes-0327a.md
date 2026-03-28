@@ -1,5 +1,11 @@
 # 0327a Fix Log
 
+- 2026-03-27 22:08:07 MDT - `pending` `Reject root-cause prose draft rewrites`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so task/recovery draft rejection now explicitly catches the root-cause troubleshooting narration family that was being recycled into deliverable writes (`assistant's prose text`, ``file.write` calls without `content``, `writing empty/chat text`)
+  - added focused unit coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) proving both the reject matcher and `latestSubstantiveAssistantFinalForTurn(...)` skip that later troubleshooting narration in favor of a real file body
+  - verified with `go test ./internal/turn -run 'Test(RecoveryFileWriteDraftRejectReasonRejectsRootCauseTroubleshootingNarration|LatestSubstantiveAssistantFinalForTurnSkipsLaterToolTroubleshootingNarration|LatestSubstantiveAssistantFinalForTurnSkipsLaterIntentPlaceholder)$' -count=1` and `go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationNonRecoveryEmptyCLIExecuteStopsEarlyAfterCorrectionEX311$' -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
+  - live proof: after `22:04 MDT`, the post-restart `tool_execution` query returned zero fresh rows whose `input` still contained `assistant's prose text`, and task 37’s fresh session `a80aa505-f06a-4e2c-a959-c482d7a54dd7` moved to direct deliverable-context checks instead of replaying the old prose-write loop
 - 2026-03-27 21:55:53 MDT - `pending` `Deduplicate long-history task wakeup kickoffs`
   - changed [`internal/controlplane/task_queue_processor.go`](/Users/sam/dev/otter-camp/internal/controlplane/task_queue_processor.go) so kickoff reconciliation now prefers a run-scoped lookup and still uses a per-session/per-run singleflight key before appending a new wakeup message
   - changed [`internal/chat/service.go`](/Users/sam/dev/otter-camp/internal/chat/service.go) to expose `ListMessagesByRunID(...)`, allowing controlplane dedupe to inspect the exact recent run history instead of the oldest 200-message session slice
