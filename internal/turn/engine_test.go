@@ -10873,6 +10873,7 @@ func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnTaskLaneBoundary
 	cases := []ToolResult{
 		{Name: "task.update", Error: "task_lane_owned_by_project_task_session: active execution lane exists"},
 		{Name: "file.write", Error: "task_execution_required: executable project tasks already exist"},
+		{Name: "file.write", Output: map[string]any{"error": "task_execution_required", "message": "Executable project tasks already exist for this project. Do not write deliverable files like `content/technonymous-index.json` from the project session."}},
 		{Name: "task.update", Error: "flow_owned_status_blocked: this task is flow-owned"},
 		{Name: "file.write", Error: "deliverable_path_required: continue the concrete deliverable instead"},
 		{Name: "task.update", Error: "task must remain orchestration-only while executable child tasks exist"},
@@ -10882,6 +10883,25 @@ func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnTaskLaneBoundary
 		if !shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, []ToolResult{result}) {
 			t.Fatalf("expected %q to stop project execution turn", result.Error)
 		}
+	}
+}
+
+func TestProjectExecutionBlockedMutationStopMessageOnTaskExecutionRequired(t *testing.T) {
+	t.Parallel()
+
+	message := projectExecutionBlockedMutationStopMessage([]ToolResult{{
+		Name: "file.write",
+		Output: map[string]any{
+			"error":   "task_execution_required",
+			"message": "Executable project tasks already exist for this project. Do not write deliverable files like `content/technonymous-index.json` from the project session. Queue or advance the specific task and let the bound project_task session write the deliverable.",
+		},
+	}})
+
+	if !strings.Contains(message, "content/technonymous-index.json") {
+		t.Fatalf("message = %q, want deliverable path from task_execution_required detail", message)
+	}
+	if !strings.Contains(message, "Queue or advance the specific task") {
+		t.Fatalf("message = %q, want queue-or-advance guidance", message)
 	}
 }
 

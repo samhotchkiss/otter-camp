@@ -12632,6 +12632,10 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return true, nil
 		}
 		if shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, blockedCalls) {
+			rt.stopReason = stopReasonValidationBlocked
+			if message := projectExecutionBlockedMutationStopMessage(blockedCalls); message != "" {
+				_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, message)
+			}
 			return true, nil
 		}
 		if shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt, blockedBootstrapRecoveryReread) {
@@ -12687,6 +12691,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return false, err
 		}
 		if shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, results) {
+			rt.stopReason = stopReasonValidationBlocked
 			if message := projectExecutionBlockedMutationStopMessage(results); message != "" {
 				_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, message)
 			}
@@ -12855,6 +12860,10 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return false, err
 		}
 		if shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, []ToolResult{result}) {
+			rt.stopReason = stopReasonValidationBlocked
+			if message := projectExecutionBlockedMutationStopMessage([]ToolResult{result}); message != "" {
+				_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, message)
+			}
 			return true, nil
 		}
 		if rt.recoveryTurn && rt.recoveryWriteDone {
@@ -23630,6 +23639,13 @@ func projectExecutionBlockedMutationStopMessage(results []ToolResult) string {
 		errText := strings.ToLower(strings.TrimSpace(toolResultErrorCode(result)))
 		if strings.Contains(errText, "bounded size policy") || strings.Contains(errText, "bounded task-size policy") {
 			return "[Project continuation found that the remaining draft work still violates the bounded size policy. Split it into smaller reviewable child tasks instead of trying to queue the broad parent again.]"
+		}
+		if strings.Contains(errText, "task_execution_required") {
+			detail := strings.TrimSpace(anyString(result.Output["message"]))
+			if detail == "" {
+				return "[Project continuation found that executable task work already owns the deliverable write. Queue or advance the specific task instead of writing the file from the project session.]"
+			}
+			return fmt.Sprintf("[Project continuation write blocked: %s]", detail)
 		}
 	}
 	return ""
