@@ -11978,6 +11978,161 @@ func TestJobWorkerEnsureProjectContinuationMessageSupersedesStalePendingContinua
 	}
 }
 
+func TestJobWorkerEnsureProjectContinuationMessageIncludesSnapshotGuidance(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        fmt.Sprintf("continuation-snapshot-%s", strings.ToLower(uuid.NewString()[:8])),
+		DisplayName: "Continuation Snapshot Org",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           fmt.Sprintf("continuation-snapshot-project-%s", strings.ToLower(uuid.NewString()[:8])),
+		DisplayName:    "Continuation Snapshot Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Continuation Snapshot Worker",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You keep project continuations moving.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           fmt.Sprintf("continuation-snapshot-template-%s", strings.ToLower(uuid.NewString()[:8])),
+		DisplayName:    "Continuation Snapshot Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	doneTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     25,
+		Title:          "Write layout template comparison README",
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      37,
+		Title:           "Build HTML template 7",
+		WorkStatus:      "in_progress",
+		BlocksScope:     "task",
+		AssignedAgentID: &agent.ID,
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	}); err != nil {
+		t.Fatalf("create active task: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     34,
+		Title:          "Scrape and import technonymous.org posts from URL index",
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	}); err != nil {
+		t.Fatalf("create draft task: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE project_task
+		SET updated_at = CASE
+			WHEN id = $1 THEN now()
+			ELSE updated_at
+		END
+		WHERE id = $1
+	`, doneTask.ID); err != nil {
+		t.Fatalf("order completed task by updated_at: %v", err)
+	}
+
+	messageID, err := worker.ensureProjectContinuationMessage(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ensureProjectContinuationMessage: %v", err)
+	}
+	if messageID == uuid.Nil {
+		t.Fatal("messageID = nil, want synthesized continuation")
+	}
+
+	var content string
+	if err := pool.QueryRow(ctx, `
+		SELECT content
+		FROM chat_message
+		WHERE id = $1
+	`, messageID).Scan(&content); err != nil {
+		t.Fatalf("query continuation message: %v", err)
+	}
+	if !strings.Contains(content, "Active project id: "+project.ID.String()) {
+		t.Fatalf("continuation content missing project snapshot: %q", content)
+	}
+	if !strings.Contains(content, "Already-active non-terminal tasks in the tree:") {
+		t.Fatalf("continuation content missing active-task snapshot: %q", content)
+	}
+	if !strings.Contains(content, "Actionable draft tasks already in the tree:") {
+		t.Fatalf("continuation content missing draft-task snapshot: %q", content)
+	}
+	if !strings.Contains(content, "Do not begin with session.list, task.list, task.get") {
+		t.Fatalf("continuation content missing active-task anti-rediscovery guidance: %q", content)
+	}
+	if !strings.Contains(content, "Do not begin with broad project.get, task.list, task.get, or flow.get_execution rediscovery") {
+		t.Fatalf("continuation content missing draft-task anti-rediscovery guidance: %q", content)
+	}
+	if !strings.Contains(content, "Start from this existing actionable draft before broad rediscovery") {
+		t.Fatalf("continuation content missing focus-task guidance: %q", content)
+	}
+}
+
 func TestJobWorkerResolveStaleTriggeredRetryMessageIDSwitchesProjectExecutionToBootstrapWhileBootstrapActive(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

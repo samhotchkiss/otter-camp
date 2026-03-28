@@ -1851,8 +1851,12 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 			return uuid.Nil, fmt.Errorf("count actionable draft project tasks: %w", err)
 		}
 		if completedTaskID != uuid.Nil {
+			snapshot, snapshotErr := w.projectExecutionContinuationSnapshot(ctx, projectID)
+			if snapshotErr != nil {
+				return uuid.Nil, fmt.Errorf("build project continuation snapshot: %w", snapshotErr)
+			}
 			metadataMap["completed_task_id"] = completedTaskID.String()
-			content = buildProjectExecutionContinuationPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts)
+			content = buildProjectExecutionContinuationPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot)
 		}
 	}
 
@@ -2297,7 +2301,177 @@ func looksLikeProjectContinuationMetaDraftForWorker(title string, description *s
 	return false
 }
 
-func buildProjectExecutionContinuationPromptForWorker(completedTaskNumber int, completedTaskTitle string, remainingDraftTasks int) string {
+type projectExecutionContinuationSnapshotForWorker struct {
+	ProjectLine          string
+	ActiveTaskLine       string
+	DraftTaskLine        string
+	ChildActiveDraftLine string
+	FocusTaskLine        string
+}
+
+type projectContinuationChildActivityForWorker struct {
+	childTaskCount       int
+	activeChildTaskCount int
+}
+
+func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, projectID uuid.UUID) (projectExecutionContinuationSnapshotForWorker, error) {
+	snapshot := projectExecutionContinuationSnapshotForWorker{}
+	if w == nil || w.pool == nil || projectID == uuid.Nil {
+		return snapshot, nil
+	}
+	snapshot.ProjectLine = "Active project id: " + projectID.String()
+	projectTasks, err := repo.NewProjectTaskRepo(w.pool).ListByProject(ctx, projectID)
+	if err != nil {
+		return snapshot, err
+	}
+	childActivity := projectContinuationChildTaskActivityForWorker(projectTasks)
+	activeTasks := make([]string, 0, 4)
+	draftTasks := make([]string, 0, 4)
+	childActiveDraftTasks := make([]string, 0, 4)
+	focusTask := ""
+	for _, task := range projectTasks {
+		status := strings.ToLower(strings.TrimSpace(task.WorkStatus))
+		if status == "" || status == "done" || status == "cancelled" {
+			continue
+		}
+		activity := childActivity[task.ID]
+		taskRef := projectExecutionContinuationTaskRefForWorker(task, activity)
+		if isActionableProjectDraftTaskForWorker(task) {
+			if activity.activeChildTaskCount > 0 {
+				if len(childActiveDraftTasks) < 4 {
+					childActiveDraftTasks = append(childActiveDraftTasks, taskRef)
+				}
+				continue
+			}
+			if len(draftTasks) < 4 {
+				draftTasks = append(draftTasks, taskRef)
+			}
+			if focusTask == "" {
+				focusTask = taskRef
+			}
+			continue
+		}
+		if len(activeTasks) < 4 {
+			activeTasks = append(activeTasks, taskRef)
+		}
+	}
+	if len(activeTasks) > 0 {
+		snapshot.ActiveTaskLine = "Already-active non-terminal tasks in the tree: " + strings.Join(activeTasks, "; ")
+	}
+	if len(draftTasks) > 0 {
+		snapshot.DraftTaskLine = "Actionable draft tasks already in the tree: " + strings.Join(draftTasks, "; ")
+	}
+	if len(childActiveDraftTasks) > 0 {
+		snapshot.ChildActiveDraftLine = "Draft parent tasks already have active child work: " + strings.Join(childActiveDraftTasks, "; ")
+	}
+	if focusTask != "" {
+		snapshot.FocusTaskLine = "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: " + focusTask
+	}
+	return snapshot, nil
+}
+
+func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask) map[uuid.UUID]projectContinuationChildActivityForWorker {
+	activityByParentID := make(map[uuid.UUID]projectContinuationChildActivityForWorker)
+	for _, task := range tasks {
+		var metadata map[string]any
+		if err := json.Unmarshal(task.Metadata, &metadata); err != nil {
+			continue
+		}
+		rawParentID, ok := metadata["decomposition_parent_task_id"]
+		if !ok {
+			continue
+		}
+		parentIDText := strings.TrimSpace(fmt.Sprint(rawParentID))
+		parentID, err := uuid.Parse(parentIDText)
+		if err != nil || parentID == uuid.Nil {
+			continue
+		}
+		activity := activityByParentID[parentID]
+		activity.childTaskCount++
+		if projectTaskExecutionActiveForWorker(task.WorkStatus) {
+			activity.activeChildTaskCount++
+		}
+		activityByParentID[parentID] = activity
+	}
+	return activityByParentID
+}
+
+func projectTaskExecutionActiveForWorker(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "queued", "in_progress", "review":
+		return true
+	default:
+		return false
+	}
+}
+
+func projectExecutionContinuationTaskRefForWorker(task repo.ProjectTask, activity projectContinuationChildActivityForWorker) string {
+	parts := []string{projectTaskLabelForWorker(task), "id=" + task.ID.String()}
+	if title := strings.TrimSpace(task.Title); title != "" && task.TaskNumber > 0 {
+		parts = append(parts, "title="+strconv.Quote(title))
+	}
+	if status := strings.TrimSpace(task.WorkStatus); status != "" {
+		parts = append(parts, "work_status="+status)
+	}
+	if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
+		parts = append(parts, "assigned_agent_id="+task.AssignedAgentID.String())
+	} else if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+		parts = append(parts, "assigned_agent_id=missing")
+	}
+	if task.FlowTemplateID != nil && *task.FlowTemplateID != uuid.Nil {
+		parts = append(parts, "flow_template_id="+task.FlowTemplateID.String())
+	} else if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+		parts = append(parts, "flow_template_id=missing")
+	}
+	if task.RequiresHumanReview {
+		parts = append(parts, "requires_human_review=true")
+	}
+	if activity.activeChildTaskCount > 0 {
+		parts = append(parts, "active_child_tasks="+strconv.Itoa(activity.activeChildTaskCount))
+	} else if activity.childTaskCount > 0 {
+		parts = append(parts, "child_tasks="+strconv.Itoa(activity.childTaskCount))
+	}
+	return strings.Join(parts, " ")
+}
+
+func projectTaskLabelForWorker(task repo.ProjectTask) string {
+	title := strings.TrimSpace(task.Title)
+	switch {
+	case task.TaskNumber > 0 && title != "":
+		return fmt.Sprintf("task %d (%s)", task.TaskNumber, title)
+	case task.TaskNumber > 0:
+		return fmt.Sprintf("task %d", task.TaskNumber)
+	case title != "":
+		return title
+	default:
+		return task.ID.String()
+	}
+}
+
+func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot projectExecutionContinuationSnapshotForWorker) []string {
+	if projectLine := strings.TrimSpace(snapshot.ProjectLine); projectLine != "" {
+		lines = append(lines, projectLine)
+	}
+	if activeLine := strings.TrimSpace(snapshot.ActiveTaskLine); activeLine != "" {
+		lines = append(lines, activeLine)
+		lines = append(lines, "Do not begin with session.list, task.list, task.get, file.list on the workspace root, git.log, or git.status just to rediscover what the named active tasks are already doing.")
+	}
+	if draftLine := strings.TrimSpace(snapshot.DraftTaskLine); draftLine != "" {
+		lines = append(lines, draftLine)
+		lines = append(lines, "Do not begin with broad project.get, task.list, task.get, or flow.get_execution rediscovery when the actionable draft tasks above already identify the remaining bounded work.")
+		lines = append(lines, "If a named draft task above shows assigned_agent_id=missing, flow_template_id=missing, or requires_human_review=true, repair that exact prerequisite before trying to queue it.")
+	}
+	if parentLine := strings.TrimSpace(snapshot.ChildActiveDraftLine); parentLine != "" {
+		lines = append(lines, parentLine)
+		lines = append(lines, "Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while their child executions are already active. Let the child lanes continue, or inspect only that parent's direct children with parent_task_id if a concrete blocker must be verified.")
+	}
+	if focusLine := strings.TrimSpace(snapshot.FocusTaskLine); focusLine != "" {
+		lines = append(lines, focusLine)
+	}
+	return lines
+}
+
+func buildProjectExecutionContinuationPromptForWorker(completedTaskNumber int, completedTaskTitle string, remainingDraftTasks int, snapshot projectExecutionContinuationSnapshotForWorker) string {
 	lines := []string{
 		"Continue the active project execution now.",
 		"Recently completed work may have unlocked the next wave of bounded tasks.",
@@ -2317,11 +2491,14 @@ func buildProjectExecutionContinuationPromptForWorker(completedTaskNumber int, c
 	lines = append(lines,
 		"Your next response must take direct project action instead of generic chat.",
 		"Do not ask what to do next, do not restate the project, and do not reread broad context before acting.",
+		"Do not ask which function to call, do not offer to format JSON or tool calls, and do not ask the user for parameters that are already in the project session.",
+		"This project already exists. Do not call project.create again unless the user explicitly asks to start a different new project.",
 		"Inspect the current task tree and immediately move the next bounded work forward by selecting, decomposing, assigning, or queueing the correct tasks.",
 		"Do not treat a completed gate-review or sign-off task as proof that the whole project is complete while any draft tasks still remain.",
 		"Do not use task.update to mark untouched draft tasks done; queue or otherwise advance the next runnable task instead.",
 		"If the remaining work is blocked on a concrete prerequisite, report that blocker in one sentence instead of narrating intent.",
 	)
+	lines = appendProjectExecutionSnapshotGuidanceForWorker(lines, snapshot)
 	return strings.Join(lines, " ")
 }
 
