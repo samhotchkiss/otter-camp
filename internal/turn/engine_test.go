@@ -9373,6 +9373,83 @@ func TestShouldNotBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChildLi
 	}
 }
 
+func TestShouldNotBlockTaskExecutionSiblingResponsibilityToolForMixedFetchWriteBatchTask(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentID := uuid.New()
+	currentID := uuid.New()
+	siblingOneID := uuid.New()
+	siblingTwoID := uuid.New()
+	malformedSiblingID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+	flowTemplateID := uuid.New()
+	currentDescription := "Read content/technonymous-index.json. For each of the first 12 URLs in the post_urls array, use web_fetch to retrieve the page content, then save the article text as markdown under content/posts/."
+	siblingDescription := "Read content/technonymous-index.json. For each of the next 12 URLs in the post_urls array, use web_fetch to retrieve the page content, then save the article text as markdown under content/posts/."
+	malformedSiblingDescription := "Use web_fetch to retrieve the page content as plain text"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = currentID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			currentID: {
+				ID:              currentID,
+				ProjectID:       projectID,
+				TaskNumber:      61,
+				Title:           "Fetch posts 1-12 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+				Description:     &currentDescription,
+				WorkStatus:      "in_progress",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+				Metadata:        mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentID.String()}),
+			},
+			siblingOneID: {
+				ID:              siblingOneID,
+				ProjectID:       projectID,
+				TaskNumber:      62,
+				Title:           "Fetch posts 13-24 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+				Description:     &siblingDescription,
+				WorkStatus:      "draft",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+				Metadata:        mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentID.String()}),
+			},
+			siblingTwoID: {
+				ID:              siblingTwoID,
+				ProjectID:       projectID,
+				TaskNumber:      63,
+				Title:           "Fetch posts 25-35 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+				Description:     &siblingDescription,
+				WorkStatus:      "draft",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+				Metadata:        mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentID.String()}),
+			},
+			malformedSiblingID: {
+				ID:              malformedSiblingID,
+				ProjectID:       projectID,
+				TaskNumber:      59,
+				Title:           "Use web_fetch to retrieve the page content as plain text",
+				Description:     &malformedSiblingDescription,
+				WorkStatus:      "blocked",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+				Metadata:        mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentID.String()}),
+			},
+		},
+	}
+
+	rt := &turnRuntime{session: fixture.session}
+	blocked, reason := fixture.engine.shouldBlockTaskExecutionSiblingResponsibilityTool(context.Background(), rt, "web.fetch", map[string]any{
+		"url": "https://www.technonymous.org/p/stop-preparing-your-kids-for-jobs",
+	})
+	if blocked {
+		t.Fatalf("blocked = true, want false for mixed fetch-and-write batch task: %q", reason)
+	}
+}
+
 func TestShouldStopAfterBlockedTaskExecutionSiblingMutation(t *testing.T) {
 	rt := &turnRuntime{
 		session: &chat.ChatSession{

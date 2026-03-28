@@ -813,3 +813,16 @@
       - task `58` remained the draft orchestration parent
       - stale malformed children `59` / `60` remained blocked
       - fresh child `61` moved to `in_progress`
+- 2026-03-28 08:57:20 MDT - allow mixed fetch-and-write batch child lanes to own their full bounded execution
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `shouldBlockTaskExecutionSiblingResponsibilityTool(...)` now immediately allows child tasks that are clearly mixed fetch-and-write batch work instead of forcing them into the old discovery-vs-write split
+    - malformed procedural siblings and sibling tasks that are themselves mixed fetch-and-write batch lanes are ignored when computing discovery/write sibling ownership
+    - added `taskExecutionMixedFetchWriteChildTask(...)` so the heuristic recognizes batch tasks like `Fetch posts 1-12 ... via web_fetch and save as markdown under content/posts/`
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShould(Block|NotBlock)TaskExecutionSiblingResponsibilityTool.*' -count=1`
+  - fresh live proof after restart:
+    - pre-fix task `61` session `cea885e7-0b88-4e0d-a251-8a5f8f029da7` hit repeated sibling-lane blocks at messages `6-17` and `39-40`
+    - post-restart, the same session never emitted those errors again after sequence `40`
+    - the fresh retry window `41-77` fetched the entire `1-12` post batch, validated the generated markdown files, and finished execution
+    - resulting state: task `61` is now `review` and its task session is closed

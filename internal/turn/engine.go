@@ -25432,9 +25432,16 @@ func (e *TurnEngine) shouldBlockTaskExecutionSiblingResponsibilityTool(ctx conte
 	if err != nil {
 		return false, ""
 	}
+	if taskExecutionMixedFetchWriteChildTask(taskRecord) {
+		return false, ""
+	}
 	discoverySiblings := make([]repo.ProjectTask, 0, len(siblings))
 	writeSiblings := make([]repo.ProjectTask, 0, len(siblings))
 	for _, sibling := range siblings {
+		if taskdecomp.TaskLooksProceduralInstructionArtifact(sibling.Title, sibling.Description) ||
+			taskExecutionMixedFetchWriteChildTask(sibling) {
+			continue
+		}
 		if taskExecutionDiscoveryFocusedChildTask(sibling) {
 			discoverySiblings = append(discoverySiblings, sibling)
 		}
@@ -25506,6 +25513,27 @@ func taskExecutionWriteFocusedChildTask(taskRecord repo.ProjectTask) bool {
 		"produce ",
 		"results to ",
 	)
+}
+
+func taskExecutionMixedFetchWriteChildTask(taskRecord repo.ProjectTask) bool {
+	text := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	if taskRecord.Description != nil {
+		text += " " + strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	fetchesContent := containsAny(text,
+		"web_fetch",
+		"fetch ",
+		"retrieve ",
+		"scrape ",
+	)
+	writesDeliverable := containsAny(text,
+		"save ",
+		"markdown",
+		".md",
+		"content/posts",
+		"content/",
+	)
+	return fetchesContent && writesDeliverable
 }
 
 func taskExecutionDiscoveryFocusedChildTask(taskRecord repo.ProjectTask) bool {
