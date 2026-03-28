@@ -501,7 +501,7 @@
   - verified with `gofmt -w internal/taskdecomp/decomposition.go internal/taskdecomp/decomposition_test.go` and `GOFLAGS='' go test ./internal/taskdecomp -count=1`
   - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
   - live note: the malformed Sam.blog child tasks `45-48` remain as pre-fix artifacts from task `44`, and the first post-deploy PM continuation did not create another replacement task, so fresh production proof of the new parser branch is still pending the next natural decomposition attempt
-- 2026-03-28 02:56:00 MDT - `pending` `Suppress repeated PM bounded-size continuation replays`
+- 2026-03-28 02:56:00 MDT - `b27b67ce` `Suppress repeated PM bounded-size continuation replays`
   - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) so repeated project-continuation suppression now recognizes the bounded-size PM stop family in addition to rediscovery-only and active-replacement validation blocks
   - tightened the same worker path so suppression keys off the latest consumed matching continuation, which lets it fail a newer identical pending duplicate instead of being shadowed by that duplicate
   - added focused integration coverage in [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
