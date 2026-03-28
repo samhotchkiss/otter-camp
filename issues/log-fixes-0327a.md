@@ -1543,3 +1543,23 @@
     - direct production proof for task `68` is still pending because its pre-fix recovery session had already closed blocked before restart
   - expected result after deploy:
     - fresh batch-post recovery/task continuations should stop inheriting `content/technonymous-index.json` as the recovery target and either keep the target empty until a real output is named or focus on an actual `content/posts/*.md` deliverable once one exists
+- 2026-03-28 17:09:00 MDT - `Collapse consumed PM continuation resumes into deterministic continuations`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `RequeueActiveProjectSessionsWithoutTurns(...)` now treats consumed `project_continuation_resume` messages differently from untouched ones
+    - untouched pending resumes still requeue directly, but once a resume already has a completed turn the worker now fails stale pending resume siblings, refreshes the lane through `ensureProjectContinuationMessageDecision(...)`, and dispatches a fresh deterministic `project_execution_continuation`
+    - `retireSettledProjectContinuationMessage(...)` now also retires settled `project_continuation_resume` messages when all project tasks are settled
+    - added `failPendingProjectContinuationResumeMessages(...)` to collapse stale pending synthetic resume rows instead of leaving them pending forever
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - updated `TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsRequeuesPendingProjectContinuationResume` to cover the untouched/no-turn case
+    - added `TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsRefreshesConsumedProjectContinuationResume`
+    - added `TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsRetiresSettledContinuationResumeProjects`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3451`
+  - verified with:
+    - `gofmt -w internal/jobqueue/worker.go internal/jobqueue/worker_integration_test.go`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RequeueActiveProjectSessionsWithoutTurns(RequeuesPendingProjectContinuationResume|RefreshesConsumedProjectContinuationResume|RetiresSettledContinuationResumeProjects|SupersedesStalePendingContinuation|RetiresSettledContinuationProjects)|RequeueActiveProjectSessionsMissingContinuationIgnoresPendingProjectContinuationResume)$' -count=1`
+  - deploy status:
+    - rebuilt/restarted tmux `codex-e2e-20260324`; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+    - fresh production proof is still pending because Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` is currently on pre-restart in-flight turn `522cf931-41db-4e36-a89f-71ca2e90301c` for old resume message `dad175ba-f0c6-4f00-8b41-f4f6f8d1ad31`
+  - expected result after deploy:
+    - idle PM sessions stop accumulating consumed pending resume messages and instead collapse to either one fresh project continuation or a fully drained/suppressed continuation state

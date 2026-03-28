@@ -1294,8 +1294,10 @@ func (w *Worker) retireSettledProjectContinuationMessage(ctx context.Context, se
 		}
 		return false, err
 	}
+	normalizedSource := strings.TrimSpace(source)
 	if !strings.EqualFold(strings.TrimSpace(scopeType), "project") ||
-		!strings.EqualFold(strings.TrimSpace(source), "project_execution_continuation") ||
+		(!strings.EqualFold(normalizedSource, "project_execution_continuation") &&
+			!strings.EqualFold(normalizedSource, "project_continuation_resume")) ||
 		openTaskCount > 0 {
 		return false, nil
 	}
@@ -1322,11 +1324,36 @@ func (w *Worker) retireSettledProjectContinuationMessage(ctx context.Context, se
 		  AND session_id = $2
 		  AND role = 'user'
 		  AND status = 'pending'
-		  AND COALESCE(metadata->>'source', '') = 'project_execution_continuation'
+		  AND COALESCE(metadata->>'source', '') IN ('project_execution_continuation', 'project_continuation_resume')
 	`, messageID, sessionID); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func (w *Worker) failPendingProjectContinuationResumeMessages(ctx context.Context, sessionID, keepMessageID uuid.UUID, reason string) error {
+	if w == nil || w.pool == nil || sessionID == uuid.Nil {
+		return nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "superseded by newer project continuation resume"
+	}
+	query := `
+		UPDATE chat_message
+		SET status = 'failed',
+		    error_message = $2
+		WHERE session_id = $1
+		  AND role = 'user'
+		  AND status = 'pending'
+		  AND COALESCE(metadata->>'source', '') = 'project_continuation_resume'
+	`
+	args := []any{sessionID, reason}
+	if keepMessageID != uuid.Nil {
+		query += " AND id <> $3"
+		args = append(args, keepMessageID)
+	}
+	_, err := w.pool.Exec(ctx, query, args...)
+	return err
 }
 
 func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context) (int64, error) {
@@ -1691,7 +1718,7 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 		  AND cm.role = 'user'
 		  AND cm.status = 'pending'
 		  AND COALESCE(cm.metadata->'agent_turn_dispatch'->>'cancelled_at', '') = ''
-		  AND COALESCE(cm.metadata->>'source', '') IN ('project_execution_continuation', 'project_bootstrap')
+		  AND COALESCE(cm.metadata->>'source', '') IN ('project_execution_continuation', 'project_continuation_resume', 'project_bootstrap')
 		  AND NOT EXISTS (
 		    SELECT 1
 		    FROM chat_turn ct
@@ -1740,8 +1767,9 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 		if err := rows.Scan(&sessionID, &messageID, &source, &projectBootstrapStatus, &openTaskCount, &retryCount, &latestTurnError, &latestTurnCompletedAt); err != nil {
 			return repaired, fmt.Errorf("scan active project session without turn: %w", err)
 		}
+		trimmedSource := strings.TrimSpace(source)
 		bootstrapActive := strings.EqualFold(strings.TrimSpace(projectBootstrapStatus), "active")
-		if strings.EqualFold(strings.TrimSpace(source), "project_bootstrap") && !bootstrapActive {
+		if strings.EqualFold(trimmedSource, "project_bootstrap") && !bootstrapActive {
 			if err := w.failPendingProjectBootstrapMessages(ctx, sessionID, "project bootstrap already complete; continuing project execution"); err != nil {
 				return repaired, fmt.Errorf("retire stale project bootstrap messages for session %s: %w", sessionID, err)
 			}
@@ -1750,7 +1778,8 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 				continue
 			}
 		}
-		if strings.EqualFold(strings.TrimSpace(source), "project_execution_continuation") && openTaskCount == 0 && !bootstrapActive {
+		if (strings.EqualFold(trimmedSource, "project_execution_continuation") ||
+			strings.EqualFold(trimmedSource, "project_continuation_resume")) && openTaskCount == 0 && !bootstrapActive {
 			retired, err := w.retireSettledProjectContinuationMessage(ctx, sessionID, messageID)
 			if err != nil {
 				return repaired, fmt.Errorf("retire settled project continuation message for session %s: %w", sessionID, err)
@@ -1761,8 +1790,32 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 			repaired++
 			continue
 		}
-		shouldRefreshContinuation := strings.EqualFold(strings.TrimSpace(source), "project_execution_continuation") ||
-			(strings.EqualFold(strings.TrimSpace(source), "project_bootstrap") && openTaskCount > 0)
+		if strings.EqualFold(trimmedSource, "project_continuation_resume") {
+			if retryCount > 0 {
+				if err := w.failPendingProjectContinuationResumeMessages(ctx, sessionID, uuid.Nil, "superseded after prior continuation resume turn completed"); err != nil {
+					return repaired, fmt.Errorf("retire consumed project continuation resume messages for session %s: %w", sessionID, err)
+				}
+				synthMessageID, suppressed, err := w.ensureProjectContinuationMessageDecision(ctx, sessionID)
+				if err != nil {
+					return repaired, fmt.Errorf("refresh project continuation after resume for session %s: %w", sessionID, err)
+				}
+				if suppressed {
+					repaired++
+					continue
+				}
+				if synthMessageID == uuid.Nil {
+					repaired++
+					continue
+				}
+				messageID = synthMessageID
+				retryCount = 0
+				trimmedSource = "project_execution_continuation"
+			} else if err := w.failPendingProjectContinuationResumeMessages(ctx, sessionID, messageID, "superseded by newer project continuation resume"); err != nil {
+				return repaired, fmt.Errorf("collapse stale project continuation resume messages for session %s: %w", sessionID, err)
+			}
+		}
+		shouldRefreshContinuation := strings.EqualFold(trimmedSource, "project_execution_continuation") ||
+			(strings.EqualFold(trimmedSource, "project_bootstrap") && openTaskCount > 0)
 		if shouldRefreshContinuation {
 			synthMessageID, suppressed, err := w.ensureProjectContinuationMessageDecision(ctx, sessionID)
 			if err != nil {
@@ -1890,7 +1943,7 @@ func (w *Worker) RequeueActiveProjectSessionsMissingContinuation(ctx context.Con
 		    WHERE cm.session_id = cs.id
 		      AND cm.role = 'user'
 		      AND cm.status = 'pending'
-		      AND COALESCE(cm.metadata->>'source', '') IN ('project_execution_continuation', 'project_bootstrap')
+		      AND COALESCE(cm.metadata->>'source', '') IN ('project_execution_continuation', 'project_continuation_resume', 'project_bootstrap')
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1
