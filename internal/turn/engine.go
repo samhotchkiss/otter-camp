@@ -22122,10 +22122,12 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 	blockedNow := false
 	repeatedRecoveryFocusStop := false
 	repeatedTurnStop := false
+	checkpointOnlyDirtyTaskGitCommitStop := false
 	immediateTaskGitCommitStop := false
 	var blockedFailure *toolValidationFailure
 	var repeatedRecoveryFailure *toolValidationFailure
 	var repeatedFailure *toolValidationFailure
+	var checkpointOnlyDirtyTaskGitCommitFailure *toolValidationFailure
 	var immediateTaskGitCommitFailure *toolValidationFailure
 	for _, failure := range failures {
 		previous := next
@@ -22153,6 +22155,12 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 			repeatedTurnStop = true
 			failureCopy := failure
 			repeatedFailure = &failureCopy
+			break
+		}
+		if shouldStopTurnAfterCheckpointOnlyDirtyTaskGitCommit(rt, taskRecord, failure) {
+			checkpointOnlyDirtyTaskGitCommitStop = true
+			failureCopy := failure
+			checkpointOnlyDirtyTaskGitCommitFailure = &failureCopy
 			break
 		}
 		if shouldStopTurnAfterBlockedTaskGitCommitAfterMutation(rt, failure, fileMutationThisTurn) {
@@ -22227,6 +22235,20 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 				}
 			}
 			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildValidationLoopTurnStopSystemMessage(next)); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+		if checkpointOnlyDirtyTaskGitCommitStop {
+			rt.stopReason = stopReasonValidationBlocked
+			if checkpointOnlyDirtyTaskGitCommitFailure != nil {
+				if targetPath := strings.TrimSpace(checkpointOnlyDirtyTaskGitCommitFailure.DeliverablePath); targetPath != "" {
+					if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, "", checkpointOnlyDirtyTaskGitCommitFailure.FailureReason, rt.initialMessageID); checkpointErr != nil {
+						return false, checkpointErr
+					}
+				}
+			}
+			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskCheckpointOnlyDirtyGitCommitTurnStopSystemMessage(taskRecord)); err != nil {
 				return false, err
 			}
 			return true, nil
@@ -23282,8 +23304,31 @@ func shouldStopTurnAfterBlockedTaskGitCommitAfterMutation(rt *turnRuntime, failu
 		strings.EqualFold(strings.TrimSpace(failure.FailureCode), "task_git_commit_blocked")
 }
 
+func shouldStopTurnAfterCheckpointOnlyDirtyTaskGitCommit(rt *turnRuntime, taskRecord repo.ProjectTask, failure toolValidationFailure) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	if !taskcheckpoint.IsContentMigrationTask(taskRecord.Title, taskRecord.Description) {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(failure.ToolName), "git.commit") &&
+		strings.EqualFold(strings.TrimSpace(failure.FailureCode), "task_git_commit_blocked_checkpoint_only_dirty")
+}
+
 func buildTaskGitCommitAfterMutationTurnStopSystemMessage() string {
 	return "[Task deliverable was already mutated this turn. git.commit is runtime-owned for task sessions, so ending the turn now instead of spending more tool calls on commit handoff.]"
+}
+
+func buildTaskCheckpointOnlyDirtyGitCommitTurnStopSystemMessage(taskRecord repo.ProjectTask) string {
+	checkpointPath := normalizeWorkspaceRelativePath(taskcheckpoint.CheckpointRelativePath(taskRecord.TaskNumber, taskRecord.ID))
+	if checkpointPath == "" {
+		return "[Only a runtime-owned content-migration checkpoint file is dirty. Do not inspect repo state, reread posts, or retry git.commit from the task session. The runtime owns checkpoint cleanup and commit/flow completion.]"
+	}
+	return fmt.Sprintf("[Only runtime-owned checkpoint file `%s` is dirty for this content-migration task. Do not inspect repo state, reread posts, or retry git.commit from the task session. The runtime owns checkpoint cleanup and commit/flow completion. Continue only if a concrete post body still needs mutation.]", checkpointPath)
 }
 
 func shouldSuppressFocusReadValidationFailure(failure toolValidationFailure) bool {
@@ -23388,6 +23433,16 @@ func classifyDeterministicToolResultFailure(toolName, normalizedErrorCode, rawEr
 			reason = "task_git_commit_blocked"
 		}
 		return "task_git_commit_blocked", reason, true
+	}
+	if normalizedToolName == "git.commit" && normalizedErrorCode == "task_git_commit_blocked_checkpoint_only_dirty" {
+		reason := strings.TrimSpace(rawErrorCode)
+		if reason == "" {
+			reason = strings.TrimSpace(rawReason)
+		}
+		if reason == "" {
+			reason = "task_git_commit_blocked_checkpoint_only_dirty"
+		}
+		return "task_git_commit_blocked_checkpoint_only_dirty", reason, true
 	}
 	if normalizedToolName == "file.read" && normalizedErrorCode == "mismatched_deliverable_context" {
 		reason := strings.TrimSpace(rawErrorCode)

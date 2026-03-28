@@ -870,10 +870,57 @@ func (e *NativeToolExecutor) taskSessionGitCommitBlocked(ctx context.Context, sc
 		}
 		return nil, false, err
 	}
+	if checkpointPath, ok, checkpointErr := e.taskSessionContentMigrationCheckpointOnlyDirtyPath(ctx, taskRecord); checkpointErr != nil {
+		return nil, false, checkpointErr
+	} else if ok {
+		return map[string]any{
+			"error":           "task_git_commit_blocked_checkpoint_only_dirty",
+			"checkpoint_path": checkpointPath,
+			"message":         fmt.Sprintf("Only runtime-owned checkpoint file `%s` is dirty for task `%s`. Do not call git.commit from the task session, and do not spend more turns revalidating repo state just to clean up this checkpoint. The runtime owns checkpoint cleanup and commit/flow completion.", checkpointPath, strings.TrimSpace(taskRecord.Title)),
+		}, true, nil
+	}
 	return map[string]any{
 		"error":   "task_git_commit_blocked",
 		"message": fmt.Sprintf("Task `%s` must not call git.commit directly. Write the concrete deliverable files only and let the runtime own commit/flow completion.", strings.TrimSpace(taskRecord.Title)),
 	}, true, nil
+}
+
+func (e *NativeToolExecutor) taskSessionContentMigrationCheckpointOnlyDirtyPath(ctx context.Context, taskRecord repo.ProjectTask) (string, bool, error) {
+	if e == nil {
+		return "", false, nil
+	}
+	if !taskcheckpoint.IsContentMigrationTask(taskRecord.Title, taskRecord.Description) {
+		return "", false, nil
+	}
+	root, err := e.taskWorkspaceRoot(ctx, taskRecord)
+	if err != nil {
+		return "", false, err
+	}
+	entries, err := gitStatusEntries(ctx, root)
+	if err != nil {
+		return "", false, err
+	}
+	if len(entries) == 0 {
+		return "", false, nil
+	}
+	checkpointPath := normalizeWorkspacePath(taskcheckpoint.CheckpointRelativePath(taskRecord.TaskNumber, taskRecord.ID))
+	if checkpointPath == "" {
+		return "", false, nil
+	}
+	seenDirty := false
+	for _, entry := range entries {
+		if entry.Path == "" {
+			continue
+		}
+		seenDirty = true
+		if normalizeWorkspacePath(entry.Path) != checkpointPath {
+			return "", false, nil
+		}
+	}
+	if !seenDirty {
+		return "", false, nil
+	}
+	return checkpointPath, true, nil
 }
 
 func (e *NativeToolExecutor) taskSessionDirectStatusBlocked(ctx context.Context, scope workspaceScope, taskRecord repo.ProjectTask, desiredStatus string) (map[string]any, bool, error) {

@@ -25572,6 +25572,75 @@ func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitW
 	}
 }
 
+func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterCheckpointOnlyDirtyTaskGitCommit(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	description := "Fetch posts 1-35 from technonymous-index.json via web_fetch and save the markdown files under content/posts/."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				TaskNumber:     10,
+				Title:          "Convert scraped technonymous.org posts to markdown",
+				Description:    &description,
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{
+		ID:        "commit-1",
+		Name:      "git.commit",
+		Arguments: map[string]any{"message": "checkpoint cleanup"},
+	}}
+	results := []ToolResult{{
+		ToolCallID: "commit-1",
+		Name:       "git.commit",
+		Output: map[string]any{
+			"error": "task_git_commit_blocked_checkpoint_only_dirty",
+		},
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	if !fixture.messages.containsContentSubstring("Only runtime-owned checkpoint file `.ottercamp/checkpoints/oc-10-content-migration.md` is dirty") {
+		t.Fatal("expected checkpoint-only dirty git.commit stop message")
+	}
+}
+
 func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalTaskListBroadContextFailureInSameTurn(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

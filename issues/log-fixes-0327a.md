@@ -1239,3 +1239,27 @@
   - expected result after deploy:
     - batch execution recovery can inspect sibling markdown deliverables inside the shared root with native `file.list` / `file.read`
     - those lanes stop burning shell turns just to recover frontmatter/body format from files already under the right deliverable root
+- 2026-03-28 13:43:29 MDT - `Stop checkpoint-only task git.commit cleanup churn`
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - `taskSessionGitCommitBlocked(...)` now returns `task_git_commit_blocked_checkpoint_only_dirty` plus `checkpoint_path` when the only dirty entry in the task worktree is the current content-migration checkpoint file
+    - added `taskSessionContentMigrationCheckpointOnlyDirtyPath(...)` to detect that exact shape from `git status --porcelain`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - classify the new `git.commit` validation code
+    - stop async task turns immediately on `task_git_commit_blocked_checkpoint_only_dirty`, even without a same-turn deliverable mutation
+    - emit a path-aware system message telling the model not to re-verify posts or retry `git.commit` from the task session
+  - changed [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go):
+    - added `TestGitCommitRejectsTaskSessionWhenOnlyCurrentCheckpointFileIsDirty`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleToolValidationResultsStopsAsyncTaskTurnAfterCheckpointOnlyDirtyTaskGitCommit`
+  - verified with:
+    - `gofmt -w internal/tools/native/mutation_tools.go internal/tools/native/mutation_tools_test.go internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'TestGitCommitRejectsTaskSession(WhenOnlyCurrentCheckpointFileIsDirty)?$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleToolValidationResultsStopsAsyncTaskTurnAfter(BlockedTaskGitCommitWhenDeliverableAlreadyMutated|CheckpointOnlyDirtyTaskGitCommit|SecondIdenticalTaskGitCommitBlockedInSameTurn)$' -count=1`
+  - live proof before the fix:
+    - task `10` session `8017151b-7eb2-4e20-88f9-851b3ad80cb9` proved only `.ottercamp/checkpoints/oc-10-content-migration.md` was dirty, then still spent multiple assistant/tool hops re-validating posts and planning a final `git.commit`
+  - deploy status:
+    - rebuilt and restarted tmux `codex-e2e-20260324`; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+    - direct post-deploy proof is still pending because the hot task-10 session rolled into a different single-file recovery branch and closed before another checkpoint-only `git.commit` attempt occurred on the new binary
+  - expected result after deploy:
+    - content-migration task sessions stop immediately once the only remaining dirt is the runtime-owned checkpoint file
+    - those lanes no longer spend extra turns re-reading posts or planning `git.commit` just to clean up checkpoint timestamps

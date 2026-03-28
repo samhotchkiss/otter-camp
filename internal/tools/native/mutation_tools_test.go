@@ -1741,6 +1741,109 @@ func TestGitCommitRejectsTaskSession(t *testing.T) {
 	}
 }
 
+func TestGitCommitRejectsTaskSessionWhenOnlyCurrentCheckpointFileIsDirty(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+	for _, args := range [][]string{
+		{"init", "-b", "main"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "Otter Camp Test"},
+	} {
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v output=%s", args, err, strings.TrimSpace(string(output)))
+		}
+	}
+
+	taskID := uuid.New()
+	checkpointPath := filepath.Join(root, ".ottercamp", "checkpoints", "oc-10-content-migration.md")
+	if err := os.MkdirAll(filepath.Dir(checkpointPath), 0o755); err != nil {
+		t.Fatalf("mkdir checkpoint dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("mkdir content/posts: %v", err)
+	}
+	if err := os.WriteFile(checkpointPath, []byte("# Content Migration Checkpoint\n\nGenerated: 2026-03-28T19:32:08Z\n"), 0o644); err != nil {
+		t.Fatalf("write checkpoint: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "content", "posts", "hello-world.md"), []byte("# Hello World\n"), 0o644); err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+	for _, args := range [][]string{
+		{"add", "."},
+		{"commit", "-m", "initial"},
+	} {
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v output=%s", args, err, strings.TrimSpace(string(output)))
+		}
+	}
+	if err := os.WriteFile(checkpointPath, []byte("# Content Migration Checkpoint\n\nGenerated: 2026-03-28T19:32:52Z\n"), 0o644); err != nil {
+		t.Fatalf("rewrite checkpoint: %v", err)
+	}
+
+	orgID := uuid.New()
+	projectID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+	description := "Fetch posts 1-35 from technonymous-index.json via web_fetch and save the markdown files under content/posts/."
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.projects = &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				Slug:           "content-migration",
+			},
+		},
+	}
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			TaskNumber:     10,
+			Title:          "Convert scraped technonymous.org posts to markdown",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project_task",
+				ScopeID:        taskID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+
+	execCtx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(execCtx, "git.commit", map[string]any{"message": "final cleanup"})
+	if err != nil {
+		t.Fatalf("git.commit: %v", err)
+	}
+	if out["error"] != "task_git_commit_blocked_checkpoint_only_dirty" {
+		t.Fatalf("error = %v, want task_git_commit_blocked_checkpoint_only_dirty", out["error"])
+	}
+	if got := fmt.Sprintf("%v", out["checkpoint_path"]); got != ".ottercamp/checkpoints/oc-10-content-migration.md" {
+		t.Fatalf("checkpoint_path = %q, want current task checkpoint path", got)
+	}
+	if !strings.Contains(fmt.Sprintf("%v", out["message"]), "runtime owns checkpoint cleanup") {
+		t.Fatalf("message = %v, want checkpoint cleanup handoff guidance", out["message"])
+	}
+}
+
 func TestLooksLikeNarratedTaskFileWritePlaceholderTaskRequiresMeVariant(t *testing.T) {
 	content := `Now I have the context. This is **OC-11: Execute Happy-Path Validation Test**. The task requires me to:
 
