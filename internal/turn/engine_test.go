@@ -14402,6 +14402,27 @@ func TestShouldBlockTaskReviewPreferredDeliverableRootListWhenCheckpointOutputSe
 	}
 }
 
+func TestShouldBlockTaskReviewAuthoritativeCheckpointOutputRepoStateTool(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable root `content/posts`.\n" +
+			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/post-1.md`, `content/posts/post-2.md`, `content/posts/post-3.md`. Treat that output set as authoritative for this batch; read the named outputs directly and do not call `file.list` on `content/posts` or reread dependency artifacts outside `content/posts` just to rediscover which files belong to the batch.\n" +
+			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
+	}
+
+	blocked, reason := shouldBlockTaskReviewAuthoritativeCheckpointOutputTool(rt, "git.status", nil)
+	if !blocked {
+		t.Fatal("expected git.status to be blocked once the checkpoint output set is authoritative")
+	}
+	if !strings.Contains(reason, "Do not inspect repo state with git.status now") {
+		t.Fatalf("guard reason = %q, want repo-state authoritative output guidance", reason)
+	}
+}
+
 func TestShouldBlockTaskReviewPreferredDeliverableRootDependencyReadWithCheckpointOutputSet(t *testing.T) {
 	rt := &turnRuntime{
 		session: &chat.ChatSession{

@@ -13463,6 +13463,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := shouldBlockTaskReviewAuthoritativeCheckpointOutputTool(rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if blocked, reason := shouldBlockTaskReviewPreferredDeliverableFirstTool(rt, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -26359,6 +26367,19 @@ func shouldBlockTaskReviewRepeatedCheckpointOutputTool(rt *turnRuntime, toolName
 	return false, ""
 }
 
+func shouldBlockTaskReviewAuthoritativeCheckpointOutputTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	rootPath := taskReviewPreferredDeliverableRoot(rt)
+	if !taskReviewPromptTreatsCheckpointOutputSetAsAuthoritative(rt, rootPath) {
+		return false, ""
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "git.status", "git_status", "git.diff", "git_diff", "git.log", "git_log":
+		return true, buildTaskReviewCheckpointOutputSetAuthoritativeRepoStateGuardError(rootPath, toolName)
+	default:
+		return false, ""
+	}
+}
+
 func (e *TurnEngine) maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(ctx context.Context, rt *turnRuntime, toolCalls []ModelToolCall) ([]ModelToolCall, bool, error) {
 	if !taskReviewPreferredDeliverableFirstApplies(rt) || len(toolCalls) == 0 {
 		return toolCalls, false, nil
@@ -27755,6 +27776,14 @@ func buildTaskReviewCheckpointOutputSetAuthoritativeGuardError(rootPath, toolNam
 		return fmt.Sprintf("this review prompt already names the full checkpoint output set for the batch. Do not use %s to rediscover membership; read the named outputs directly and call flow.review_decision once you have enough evidence.", toolName)
 	}
 	return fmt.Sprintf("this review prompt already names the task-owned checkpoint output set under `%s` and says it is authoritative for the batch. Do not use %s on `%s` to rediscover membership; read the named outputs directly and call flow.review_decision once you have enough evidence.", rootPath, toolName, rootPath)
+}
+
+func buildTaskReviewCheckpointOutputSetAuthoritativeRepoStateGuardError(rootPath, toolName string) string {
+	rootPath = normalizeWorkspaceRelativePath(rootPath)
+	if rootPath == "" {
+		return fmt.Sprintf("this review prompt already names the authoritative checkpoint output set for the batch. Do not inspect repo state with %s now; read the named outputs directly and call flow.review_decision once you have enough evidence.", toolName)
+	}
+	return fmt.Sprintf("this review prompt already names the task-owned checkpoint output set under `%s` and says it is authoritative for the batch. Do not inspect repo state with %s now; read the named outputs directly and call flow.review_decision once you have enough evidence.", rootPath, toolName)
 }
 
 func buildTaskReviewRepeatedCheckpointOutputGuardError(rootPath, path, toolName string) string {

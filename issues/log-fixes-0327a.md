@@ -1020,3 +1020,23 @@
     - retry prompts `287`, `296`, `298`, and `299` now list the full recovered 8-path task-owned output set explicitly and include the authoritative wording
     - assistant message `288` switched to reading the named output files directly from `content/posts`
     - the post-restart tool batch `289-294` was named `file.read` on task-owned outputs only; the old `file.list(content/posts)` reopen step is gone on these retries
+- 2026-03-28 11:51:43 MDT - block review repo-state churn after authoritative checkpoint-output recovery
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `dispatchTools(...)` now runs a new `shouldBlockTaskReviewAuthoritativeCheckpointOutputTool(...)` guard before the older preferred-root first-tool guard
+    - the new helper blocks `git.status`, `git.diff`, and `git.log` during async task review once the prompt already says the task-owned checkpoint output set under the preferred deliverable root is authoritative for the batch
+    - added `buildTaskReviewCheckpointOutputSetAuthoritativeRepoStateGuardError(...)` so the correction message points the reviewer back to the named outputs and `flow.review_decision` instead of repo-state narration
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldBlockTaskReviewAuthoritativeCheckpointOutputRepoStateTool`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `go test ./internal/turn -run 'Test(BuildTaskReviewActionPrompt(PrefersDeliverableRootForBatchContentMigrationOutputs|RecoversTaskOwnedBatchOutputsFromWorktree)|ShouldBlockTaskReview(AuthoritativeCheckpointOutputRepoStateTool|PreferredDeliverableRoot(FirstTool|DependencyReadWithCheckpointOutputSet|ListWhenCheckpointOutputSetAuthoritative))|ReviewRetryPromptForRepeatedCheckpointOutputRereads|ShouldBlockTaskReviewRepeatedCheckpointOutputTool)$' -count=1`
+  - deploy state:
+    - rebuilt and restarted tmux `codex-e2e-20260324`
+    - `./bin/ottercamp health --output json` returned `data.status=ok`
+  - fresh live state on task `62` session `4737d210-2039-40aa-bf6f-db9e55421454` after restart:
+    - the carried-forward pre-fix system stop at sequence `295` still names `git.status` as the old churn family
+    - the next retry turn `300-307` did not reopen repo-state inspection; it stayed on named `file.read` calls for checkpoint outputs only and then hit `max_tool_calls`
+    - there was no fresh `git.status` reopen step on the post-restart retry path
+  - result:
+    - repo-state inspection is no longer part of the hot post-restart task-62 review path
+    - the remaining efficiency seam is narrower now: too many named `file.read` calls before `flow.review_decision`
