@@ -59,8 +59,10 @@ const (
 	legacyRateLimitJitterMax        = 30 * time.Second
 	maxInFlightProjectContinuations = 4
 
-	projectContinuationSnapshotFingerprintKey = "continuation_snapshot_fingerprint"
-	projectContinuationRediscoveryGuardPrefix = "[Project continuation rediscovery guard blocked only broad rereads."
+	projectContinuationSnapshotFingerprintKey  = "continuation_snapshot_fingerprint"
+	projectContinuationRediscoveryGuardPrefix  = "[Project continuation rediscovery guard blocked only broad rereads."
+	projectContinuationActiveReplacementPrefix = "[Project continuation found that prerequisite artifact `"
+	projectContinuationActiveReplacementMarker = "already has active replacement work in the tree:"
 )
 
 var explicitDeliverablePathPatternsForWorker = []*regexp.Regexp{
@@ -2058,9 +2060,12 @@ func (w *Worker) suppressRepeatedIdenticalProjectContinuation(ctx context.Contex
 			  ON sm.turn_id = lt.id
 			 AND sm.role = 'system'
 			WHERE lt.stop_reason = 'validation_loop_blocked'
-			  AND sm.content LIKE $2
+			  AND (
+			       sm.content LIKE $2
+			    OR sm.content LIKE $3
+			  )
 		)
-	`, messageID, projectContinuationRediscoveryGuardPrefix+"%").Scan(&blocked); err != nil {
+	`, messageID, projectContinuationRediscoveryGuardPrefix+"%", projectContinuationActiveReplacementPrefix+"%"+projectContinuationActiveReplacementMarker+"%").Scan(&blocked); err != nil {
 		return false, err
 	}
 	if !blocked {
