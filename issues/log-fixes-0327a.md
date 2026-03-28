@@ -1,5 +1,18 @@
 # 0327a Fix Log
 
+- 2026-03-28 01:16:56 MDT - `pending` `Block discovery child lanes from fetching full article bodies`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so the existing sibling-responsibility guard now covers both child-lane directions:
+    - write-focused child lanes still cannot browse external sources when a sibling already owns discovery/navigation work
+    - discovery/listing child lanes now also block `browser.navigate` / `web.fetch` on `/p/...` detail pages when a sibling already owns the write/output lane
+  - kept root/homepage and `/archive` listing fetches allowed, so the discovery child can still collect URLs/titles and prerequisite evidence without paying for full post-body crawls
+  - kept an escape hatch for genuine full-body crawls by allowing detail-page fetches when the current child brief explicitly asks for full content/body extraction
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) for:
+    - the existing write-lane browse block
+    - the new discovery-lane `/p/...` detail-fetch block
+    - the still-allowed discovery-lane `/archive` listing fetch
+  - verified with `gofmt -w internal/turn/engine.go internal/turn/engine_test.go` and `go test ./internal/turn -run 'Test(ShouldBlockTaskExecutionSiblingResponsibilityToolForWriteFocusedChildLane|ShouldBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChildDetailFetch|ShouldNotBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChildListingFetch|BuildTaskContinuationActionPromptTreatsDocumentSummaryAsDraft|BuildTaskContinuationActionPromptIncludesChildTaskSnapshotGuidance|TaskExecutionContinuationSnapshotIncludesParentContractAndSiblingHints|TaskContinuationRootMessageStartsAssemblyAtTriggerMessage|ContinuationTurnNormalizesGenericNoContextSummary|ShouldBlockTaskExecutionBroadContextTool|ShouldBlockTaskExecutionBroadContextToolAllowsOrchestrationValidationContextReads)$' -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `data.status=ok`
+  - live status: deployed on the new runtime, but direct production proof is still pending because the hot Sam.blog child sessions `bcbc53cd-99fa-476f-a50c-b4ba26dd0b7e` (task `40`) and `1e7d7f89-27b7-4170-b585-7f7dadcd9868` (task `41`) did not replay in the immediate post-restart watch window
 - 2026-03-28 00:40:17 MDT - `86be5296` `Skip PM dependency retries when replacements are active`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so the missing-dependency retry path now inspects the current project tree for non-terminal producer/replacement tasks for the exact missing artifact before enqueueing a follow-up PM continuation
   - when active replacement work already exists, the same file now appends a system note and suppresses the duplicate PM follow-up instead of rearming another `project_execution_continuation`
