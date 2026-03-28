@@ -16095,10 +16095,10 @@ func TestTaskExecutionRetryPromptForRecoveryTargetFocusSkipsWhenTargetAlreadyWri
 func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	prompt := buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
 		ProjectLine:          "Active project id: 123",
-		ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 16 (Validate API) id=aaa title=\"Validate API\" work_status=blocked assigned_agent_id=worker-1 resume_policy=needs_replacement_work blocker=\"review turn repeatedly hit file.read not_found across 3 consecutive turns\"",
-		DraftTaskLine:        "Actionable draft tasks already in the tree: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft assigned_agent_id=missing flow_template_id=missing",
-		ChildActiveDraftLine: "Draft parent tasks already have child work: task 21 (Theme rollout) id=ccc title=\"Theme rollout\" work_status=draft assigned_agent_id=missing flow_template_id=missing active_child_tasks=2",
-		FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft assigned_agent_id=missing flow_template_id=missing",
+		ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 16 (Validate API) id=aaa title=\"Validate API\" work_status=blocked deliverable_root=content/posts depends_on_path=content/technonymous-index.json assigned_agent_id=worker-1 resume_policy=needs_replacement_work blocker=\"review turn repeatedly hit file.read not_found across 3 consecutive turns\"",
+		DraftTaskLine:        "Actionable draft tasks already in the tree: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft deliverable_path=content/ship-docs.md assigned_agent_id=missing flow_template_id=missing",
+		ChildActiveDraftLine: "Draft parent tasks already have child work: task 21 (Theme rollout) id=ccc title=\"Theme rollout\" work_status=draft deliverable_root=content/theme assigned_agent_id=missing flow_template_id=missing active_child_tasks=2",
+		FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft deliverable_path=content/ship-docs.md depends_on_path=content/technonymous-index.json assigned_agent_id=missing flow_template_id=missing",
 	})
 
 	if !strings.Contains(prompt, "Continue the active project execution now from the continuation summary above.") {
@@ -16140,6 +16140,15 @@ func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "create or queue the smallest replacement or follow-on work needed to recover it") {
 		t.Fatalf("prompt = %q, want replacement-work guidance", prompt)
 	}
+	if !strings.Contains(prompt, "deliverable_root=content/posts") || !strings.Contains(prompt, "depends_on_path=content/technonymous-index.json") {
+		t.Fatalf("prompt = %q, want active task path hints", prompt)
+	}
+	if !strings.Contains(prompt, "inspect that prerequisite artifact first instead of broad search") {
+		t.Fatalf("prompt = %q, want dependency-path guidance", prompt)
+	}
+	if !strings.Contains(prompt, "stay inside that exact root instead of broad content, templates, or planning rediscovery") {
+		t.Fatalf("prompt = %q, want deliverable-root guidance", prompt)
+	}
 	if !strings.Contains(prompt, "Actionable draft tasks already in the tree:") {
 		t.Fatalf("prompt = %q, want draft-task snapshot", prompt)
 	}
@@ -16152,6 +16161,12 @@ func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "repair that exact prerequisite before trying to queue it") {
 		t.Fatalf("prompt = %q, want prerequisite repair guidance", prompt)
 	}
+	if !strings.Contains(prompt, "deliverable_path=content/ship-docs.md") {
+		t.Fatalf("prompt = %q, want draft deliverable-path hint", prompt)
+	}
+	if !strings.Contains(prompt, "inspect or write that exact path instead of reopening broad workspace context") {
+		t.Fatalf("prompt = %q, want draft deliverable-path guidance", prompt)
+	}
 	if !strings.Contains(prompt, "Draft parent tasks already have child work:") {
 		t.Fatalf("prompt = %q, want child-active draft snapshot", prompt)
 	}
@@ -16160,6 +16175,9 @@ func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Start from this existing actionable draft before broad rediscovery") {
 		t.Fatalf("prompt = %q, want focus-task guidance", prompt)
+	}
+	if !strings.Contains(prompt, "When the focus task already includes exact deliverable or dependency hints, use those paths directly before any broader workspace search.") {
+		t.Fatalf("prompt = %q, want focus-task path hint guidance", prompt)
 	}
 }
 
@@ -16341,7 +16359,10 @@ func TestProjectExecutionContinuationTaskRefIncludesBlockedReasonExcerpt(t *test
 		WorkStatus: "blocked",
 	}
 
-	ref := projectExecutionContinuationTaskRef(task, projectContinuationChildActivity{}, "review turn repeatedly hit file.read not_found across 3 consecutive turns while inspecting planning/import-batch.json and content/posts")
+	ref := projectExecutionContinuationTaskRef(task, projectContinuationChildActivity{}, projectContinuationTaskHints{
+		BlockedReason: "review turn repeatedly hit file.read not_found across 3 consecutive turns while inspecting planning/import-batch.json and content/posts",
+		ResumePolicy:  "needs_replacement_work",
+	})
 	if !strings.Contains(ref, "blocker=") {
 		t.Fatalf("ref = %q, want blocker excerpt", ref)
 	}
@@ -16361,9 +16382,65 @@ func TestProjectExecutionContinuationTaskRefIncludesTerminalResumePolicy(t *test
 		WorkStatus: "blocked",
 	}
 
-	ref := projectExecutionContinuationTaskRef(task, projectContinuationChildActivity{}, "flow rejection max visits exceeded")
+	ref := projectExecutionContinuationTaskRef(task, projectContinuationChildActivity{}, projectContinuationTaskHints{
+		BlockedReason: "flow rejection max visits exceeded",
+		ResumePolicy:  "terminal_keep_blocked",
+	})
 	if !strings.Contains(ref, "resume_policy=terminal_keep_blocked") {
 		t.Fatalf("ref = %q, want terminal keep blocked policy", ref)
+	}
+}
+
+func TestBuildProjectContinuationTaskHintsIncludesDeliverableAndDependencyHints(t *testing.T) {
+	indexDescription := "Crawl technonymous.org archive pages and build post URL index. Output a JSON index at content/technonymous-index.json with title, URL, and date for each post."
+	scrapeDescription := "Scrape and import technonymous.org posts from the URL index under content/posts/"
+	parentDescription := "Save as results/review-path-validation-summary.md"
+	parentID := uuid.New()
+	childID := uuid.New()
+	scrapeID := uuid.New()
+	tasks := []repo.ProjectTask{
+		{
+			ID:          uuid.New(),
+			TaskNumber:  14,
+			Title:       "Build post URL index",
+			WorkStatus:  "done",
+			Description: &indexDescription,
+		},
+		{
+			ID:          scrapeID,
+			TaskNumber:  35,
+			Title:       "Scrape batch 1",
+			WorkStatus:  "blocked",
+			Description: &scrapeDescription,
+		},
+		{
+			ID:          parentID,
+			TaskNumber:  37,
+			Title:       "Validate review path summary",
+			WorkStatus:  "blocked",
+			Description: &parentDescription,
+		},
+		{
+			ID:         childID,
+			TaskNumber: 38,
+			Title:      "Repair review path summary",
+			WorkStatus: "draft",
+			Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentID.String())),
+		},
+	}
+
+	hints := buildProjectContinuationTaskHints(tasks, map[uuid.UUID]string{
+		scrapeID: "review turn repeatedly hit file.read not_found across 3 consecutive turns",
+	})
+
+	if got := hints[scrapeID].DeliverableRoot; got != "content/posts" {
+		t.Fatalf("scrape deliverable root = %q, want content/posts", got)
+	}
+	if got := hints[scrapeID].DependsOnPath; got != "content/technonymous-index.json" {
+		t.Fatalf("scrape dependency path = %q, want content/technonymous-index.json", got)
+	}
+	if got := hints[childID].DeliverablePath; got != "results/review-path-validation-summary.md" {
+		t.Fatalf("child deliverable path = %q, want inherited parent deliverable path", got)
 	}
 }
 

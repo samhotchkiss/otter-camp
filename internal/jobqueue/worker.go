@@ -8,6 +8,8 @@ import (
 	"hash/fnv"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -60,6 +62,16 @@ const (
 	projectContinuationSnapshotFingerprintKey = "continuation_snapshot_fingerprint"
 	projectContinuationRediscoveryGuardPrefix = "[Project continuation rediscovery guard blocked only broad rereads."
 )
+
+var explicitDeliverablePathPatternsForWorker = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`),
+	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
+	regexp.MustCompile(`(?i)\bsave\s+as\s+([^\s,;]+)`),
+}
+
+var preferredDeliverableRootPatternsForWorker = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(?:under|in)\s+/?((?:content(?:/[A-Za-z0-9._-]+)+)/?)`),
+}
 
 func staleTriggeredTurnThreshold(scopeType string) time.Duration {
 	if strings.EqualFold(strings.TrimSpace(scopeType), "project_task") {
@@ -2432,6 +2444,14 @@ type projectExecutionContinuationSnapshotForWorker struct {
 	FocusTaskLine        string
 }
 
+type projectContinuationTaskHintsForWorker struct {
+	BlockedReason   string
+	ResumePolicy    string
+	DeliverablePath string
+	DeliverableRoot string
+	DependsOnPath   string
+}
+
 const projectContinuationBlockerExcerptLimitForWorker = 120
 
 type projectContinuationChildActivityForWorker struct {
@@ -2453,7 +2473,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 	if err != nil {
 		return snapshot, err
 	}
-	blockerReasons, err := w.projectContinuationBlockedReasonsByTask(ctx, projectTasks)
+	taskHintsByTask, err := w.projectContinuationTaskHintsByTask(ctx, projectTasks)
 	if err != nil {
 		return snapshot, err
 	}
@@ -2468,7 +2488,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 			continue
 		}
 		activity := childActivity[task.ID]
-		taskRef := projectExecutionContinuationTaskRefForWorker(task, activity, blockerReasons[task.ID])
+		taskRef := projectExecutionContinuationTaskRefForWorker(task, activity, taskHintsByTask[task.ID])
 		if isActionableProjectDraftTaskForWorker(task) {
 			if activity.childTaskCount > 0 {
 				if len(childActiveDraftTasks) < 4 {
@@ -2503,6 +2523,14 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 	return snapshot, nil
 }
 
+func (w *Worker) projectContinuationTaskHintsByTask(ctx context.Context, tasks []repo.ProjectTask) (map[uuid.UUID]projectContinuationTaskHintsForWorker, error) {
+	blockedReasons, err := w.projectContinuationBlockedReasonsByTask(ctx, tasks)
+	if err != nil {
+		return nil, err
+	}
+	return buildProjectContinuationTaskHintsForWorker(tasks, blockedReasons), nil
+}
+
 func (w *Worker) projectContinuationBlockedReasonsByTask(ctx context.Context, tasks []repo.ProjectTask) (map[uuid.UUID]string, error) {
 	reasons := make(map[uuid.UUID]string)
 	if w == nil || w.pool == nil || len(tasks) == 0 {
@@ -2519,6 +2547,83 @@ func (w *Worker) projectContinuationBlockedReasonsByTask(ctx context.Context, ta
 		return reasons, nil
 	}
 	return repo.NewProjectTaskEventRepo(w.pool).LatestBlockedReasonsByTask(ctx, blockedTaskIDs)
+}
+
+func buildProjectContinuationTaskHintsForWorker(tasks []repo.ProjectTask, blockedReasons map[uuid.UUID]string) map[uuid.UUID]projectContinuationTaskHintsForWorker {
+	hintsByTask := make(map[uuid.UUID]projectContinuationTaskHintsForWorker, len(tasks))
+	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(tasks))
+	for _, task := range tasks {
+		tasksByID[task.ID] = task
+	}
+	for _, task := range tasks {
+		blockedReason := strings.TrimSpace(blockedReasons[task.ID])
+		deliverablePath, deliverableRoot := projectContinuationTaskDeliverableHintsForWorker(task, tasksByID)
+		hintsByTask[task.ID] = projectContinuationTaskHintsForWorker{
+			BlockedReason:   blockedReason,
+			ResumePolicy:    projectContinuationBlockedTaskResumePolicyForWorker(blockedReason),
+			DeliverablePath: deliverablePath,
+			DeliverableRoot: deliverableRoot,
+			DependsOnPath:   projectContinuationTaskDependencyHintPathForWorker(task, tasks),
+		}
+	}
+	return hintsByTask
+}
+
+func projectContinuationTaskDeliverableHintsForWorker(task repo.ProjectTask, tasksByID map[uuid.UUID]repo.ProjectTask) (string, string) {
+	if explicit := strings.TrimSpace(explicitDeliverablePathForWorker(task)); explicit != "" {
+		return explicit, ""
+	}
+	if root := strings.TrimSpace(preferredTaskDeliverableRootForWorker(task)); root != "" {
+		return "", root
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(task.Metadata, &metadata); err != nil {
+		return "", ""
+	}
+	parentIDText := strings.TrimSpace(fmt.Sprint(metadata["decomposition_parent_task_id"]))
+	parentID, err := uuid.Parse(parentIDText)
+	if err != nil || parentID == uuid.Nil {
+		return "", ""
+	}
+	parentTask, ok := tasksByID[parentID]
+	if !ok {
+		return "", ""
+	}
+	if explicit := strings.TrimSpace(explicitDeliverablePathForWorker(parentTask)); explicit != "" {
+		return explicit, ""
+	}
+	if root := strings.TrimSpace(preferredTaskDeliverableRootForWorker(parentTask)); root != "" {
+		return "", root
+	}
+	return "", ""
+}
+
+func projectContinuationTaskDependencyHintPathForWorker(task repo.ProjectTask, tasks []repo.ProjectTask) string {
+	if !projectContinuationTaskReferencesURLIndexForWorker(task) {
+		return ""
+	}
+	for _, candidate := range tasks {
+		if candidate.ID == task.ID {
+			continue
+		}
+		explicit := strings.TrimSpace(explicitDeliverablePathForWorker(candidate))
+		if explicit == "" {
+			continue
+		}
+		if !projectContinuationTaskReferencesURLIndexForWorker(candidate) && !strings.Contains(strings.ToLower(explicit), "index") {
+			continue
+		}
+		return explicit
+	}
+	return ""
+}
+
+func projectContinuationTaskReferencesURLIndexForWorker(task repo.ProjectTask) bool {
+	text := strings.ToLower(strings.TrimSpace(task.Title))
+	if task.Description != nil {
+		text += " " + strings.ToLower(strings.TrimSpace(*task.Description))
+	}
+	return strings.Contains(text, "url index") || strings.Contains(text, "technonymous-index.json")
 }
 
 func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask) map[uuid.UUID]projectContinuationChildActivityForWorker {
@@ -2556,13 +2661,22 @@ func projectTaskExecutionActiveForWorker(status string) bool {
 	}
 }
 
-func projectExecutionContinuationTaskRefForWorker(task repo.ProjectTask, activity projectContinuationChildActivityForWorker, blockedReason string) string {
+func projectExecutionContinuationTaskRefForWorker(task repo.ProjectTask, activity projectContinuationChildActivityForWorker, hints projectContinuationTaskHintsForWorker) string {
 	parts := []string{projectTaskLabelForWorker(task), "id=" + task.ID.String()}
 	if title := strings.TrimSpace(task.Title); title != "" && task.TaskNumber > 0 {
 		parts = append(parts, "title="+strconv.Quote(title))
 	}
 	if status := strings.TrimSpace(task.WorkStatus); status != "" {
 		parts = append(parts, "work_status="+status)
+	}
+	if deliverablePath := strings.TrimSpace(hints.DeliverablePath); deliverablePath != "" {
+		parts = append(parts, "deliverable_path="+deliverablePath)
+	} else if deliverableRoot := strings.TrimSpace(hints.DeliverableRoot); deliverableRoot != "" {
+		parts = append(parts, "deliverable_root="+deliverableRoot)
+	}
+	if dependsOnPath := strings.TrimSpace(hints.DependsOnPath); dependsOnPath != "" &&
+		(strings.TrimSpace(hints.DeliverablePath) == "" || !sameWorkspaceRelativePathForWorker(dependsOnPath, hints.DeliverablePath)) {
+		parts = append(parts, "depends_on_path="+dependsOnPath)
 	}
 	if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
 		parts = append(parts, "assigned_agent_id="+task.AssignedAgentID.String())
@@ -2578,10 +2692,10 @@ func projectExecutionContinuationTaskRefForWorker(task repo.ProjectTask, activit
 		parts = append(parts, "requires_human_review=true")
 	}
 	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
-		if resumePolicy := projectContinuationBlockedTaskResumePolicyForWorker(blockedReason); resumePolicy != "" {
-			parts = append(parts, "resume_policy="+resumePolicy)
+		if hints.ResumePolicy != "" {
+			parts = append(parts, "resume_policy="+hints.ResumePolicy)
 		}
-		if excerpt := projectContinuationBlockedReasonExcerptForWorker(blockedReason); excerpt != "" {
+		if excerpt := projectContinuationBlockedReasonExcerptForWorker(hints.BlockedReason); excerpt != "" {
 			parts = append(parts, "blocker="+strconv.Quote(excerpt))
 		}
 	}
@@ -2625,6 +2739,97 @@ func projectContinuationBlockedTaskResumePolicyForWorker(reason string) string {
 	default:
 		return ""
 	}
+}
+
+func explicitDeliverablePathForWorker(task repo.ProjectTask) string {
+	if task.Description == nil {
+		return ""
+	}
+	description := strings.TrimSpace(*task.Description)
+	for _, pattern := range explicitDeliverablePathPatternsForWorker {
+		matches := pattern.FindStringSubmatch(description)
+		if len(matches) < 2 {
+			continue
+		}
+		rawCandidate := strings.TrimSpace(matches[1])
+		candidate := normalizeExplicitDeliverablePathCandidateForWorker(rawCandidate)
+		if !looksLikeExplicitDeliverablePathForWorker(candidate, rawCandidate) {
+			continue
+		}
+		return candidate
+	}
+	return ""
+}
+
+func preferredTaskDeliverableRootForWorker(task repo.ProjectTask) string {
+	if task.Description == nil {
+		return ""
+	}
+	description := strings.TrimSpace(*task.Description)
+	for _, pattern := range preferredDeliverableRootPatternsForWorker {
+		matches := pattern.FindStringSubmatch(description)
+		if len(matches) < 2 {
+			continue
+		}
+		root := normalizeExplicitDeliverablePathCandidateForWorker(matches[1])
+		if !looksLikePreferredDeliverableRootPathForWorker(root) {
+			continue
+		}
+		return root
+	}
+	return ""
+}
+
+func normalizeExplicitDeliverablePathCandidateForWorker(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	trimmed = strings.Trim(trimmed, "`'\"“”‘’()[]{}")
+	trimmed = strings.TrimRight(trimmed, ".,:;!?")
+	trimmed = strings.Trim(trimmed, "`'\"“”‘’()[]{}")
+	return normalizeWorkspaceRelativePathForWorker(trimmed)
+}
+
+func looksLikeExplicitDeliverablePathForWorker(normalized, raw string) bool {
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "/") || strings.Contains(filepath.Base(normalized), ".") {
+		return true
+	}
+	trimmedRaw := strings.TrimSpace(raw)
+	if trimmedRaw == "" {
+		return false
+	}
+	for _, r := range trimmedRaw {
+		if r >= 'A' && r <= 'Z' {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikePreferredDeliverableRootPathForWorker(normalized string) bool {
+	normalized = normalizeWorkspaceRelativePathForWorker(normalized)
+	if normalized == "" {
+		return false
+	}
+	if !strings.HasPrefix(strings.ToLower(normalized), "content/") {
+		return false
+	}
+	return !strings.Contains(filepath.Base(normalized), ".")
+}
+
+func normalizeWorkspaceRelativePathForWorker(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(trimmed)))
+}
+
+func sameWorkspaceRelativePathForWorker(left, right string) bool {
+	left = normalizeWorkspaceRelativePathForWorker(left)
+	right = normalizeWorkspaceRelativePathForWorker(right)
+	return left != "" && right != "" && left == right
 }
 
 func projectTaskLabelForWorker(task repo.ProjectTask) string {
@@ -2678,11 +2883,29 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 		if strings.Contains(activeLine, "resume_policy=manual_recovery_repair") {
 			lines = append(lines, "If a named blocked task above already shows resume_policy=manual_recovery_repair, queue only the targeted manual repair needed for that deliverable instead of broader session or project listing.")
 		}
+		if strings.Contains(activeLine, "deliverable_path=") {
+			lines = append(lines, "If a named active task above already shows deliverable_path=..., inspect or write that exact path instead of broad workspace-root or artifact-root browsing.")
+		}
+		if strings.Contains(activeLine, "deliverable_root=") {
+			lines = append(lines, "If a named active task above already shows deliverable_root=..., stay inside that exact root instead of broad content, templates, or planning rediscovery.")
+		}
+		if strings.Contains(activeLine, "depends_on_path=") {
+			lines = append(lines, "If a named active task above already shows depends_on_path=..., inspect that prerequisite artifact first instead of broad search.")
+		}
 	}
 	if draftLine := strings.TrimSpace(snapshot.DraftTaskLine); draftLine != "" {
 		lines = append(lines, draftLine)
 		lines = append(lines, "Do not begin with broad project.get, task.list, task.get, or flow.get_execution rediscovery when the actionable draft tasks above already identify the remaining bounded work.")
 		lines = append(lines, "If a named draft task above shows assigned_agent_id=missing, flow_template_id=missing, or requires_human_review=true, repair that exact prerequisite before trying to queue it.")
+		if strings.Contains(draftLine, "deliverable_path=") {
+			lines = append(lines, "If a named draft task above already shows deliverable_path=..., inspect or write that exact path instead of reopening broad workspace context.")
+		}
+		if strings.Contains(draftLine, "deliverable_root=") {
+			lines = append(lines, "If a named draft task above already shows deliverable_root=..., stay inside that exact root instead of broad content or template browsing.")
+		}
+		if strings.Contains(draftLine, "depends_on_path=") {
+			lines = append(lines, "If a named draft task above already shows depends_on_path=..., inspect that prerequisite artifact before broader search.")
+		}
 	}
 	if parentLine := strings.TrimSpace(snapshot.ChildActiveDraftLine); parentLine != "" {
 		lines = append(lines, parentLine)
@@ -2692,6 +2915,9 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 		lines = append(lines, focusLine)
 		if strings.Contains(focusLine, "child_tasks=") && strings.TrimSpace(snapshot.ActiveTaskLine) != "" {
 			lines = append(lines, "If that focus draft already has child tasks and the active-task snapshot above already names those child lanes, do not reread the parent or child task records first. Queue the draft only if it is still runnable as-is, split it directly into smaller reviewable work if bounded-size policy still blocks it, or report one concrete blocker sentence.")
+		}
+		if strings.Contains(focusLine, "deliverable_path=") || strings.Contains(focusLine, "deliverable_root=") || strings.Contains(focusLine, "depends_on_path=") {
+			lines = append(lines, "When the focus task already includes exact deliverable or dependency hints, use those paths directly before any broader workspace search.")
 		}
 	}
 	return lines

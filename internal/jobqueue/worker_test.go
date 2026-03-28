@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
 func TestClaimHeartbeatIntervalClampsAgentTurnToHeartbeatGrace(t *testing.T) {
@@ -48,7 +49,7 @@ func TestRejitteredRateLimitedRunAfterClampsOversizedRunAfter(t *testing.T) {
 func TestBuildProjectExecutionContinuationPromptForWorkerIncludesBlockerReuseGuidance(t *testing.T) {
 	prompt := buildProjectExecutionContinuationPromptForWorker(38, "Import batch review", 0, projectExecutionContinuationSnapshotForWorker{
 		ProjectLine:    "Active project id: 123",
-		ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 38 (Import batch review) id=aaa title=\"Import batch review\" work_status=blocked resume_policy=needs_replacement_work blocker=\"review turn repeatedly hit file.read not_found across 3 consecutive turns\"",
+		ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 38 (Import batch review) id=aaa title=\"Import batch review\" work_status=blocked deliverable_root=content/posts depends_on_path=content/technonymous-index.json resume_policy=needs_replacement_work blocker=\"review turn repeatedly hit file.read not_found across 3 consecutive turns\"",
 	})
 
 	if !strings.Contains(prompt, "act directly on that blocker summary") {
@@ -56,5 +57,64 @@ func TestBuildProjectExecutionContinuationPromptForWorkerIncludesBlockerReuseGui
 	}
 	if !strings.Contains(prompt, "create or queue the smallest replacement or follow-on work needed to recover it") {
 		t.Fatalf("prompt = %q, want replacement-work guidance", prompt)
+	}
+	if !strings.Contains(prompt, "stay inside that exact root instead of broad content, templates, or planning rediscovery") {
+		t.Fatalf("prompt = %q, want deliverable-root guidance", prompt)
+	}
+	if !strings.Contains(prompt, "inspect that prerequisite artifact first instead of broad search") {
+		t.Fatalf("prompt = %q, want dependency-path guidance", prompt)
+	}
+}
+
+func TestBuildProjectContinuationTaskHintsForWorkerIncludesDeliverableAndDependencyHints(t *testing.T) {
+	indexDescription := "Crawl technonymous.org archive pages and build post URL index. Output a JSON index at content/technonymous-index.json with title, URL, and date for each post."
+	scrapeDescription := "Scrape and import technonymous.org posts from the URL index under content/posts/"
+	parentDescription := "Save as results/review-path-validation-summary.md"
+	parentID := uuid.New()
+	childID := uuid.New()
+	scrapeID := uuid.New()
+	tasks := []repo.ProjectTask{
+		{
+			ID:          uuid.New(),
+			TaskNumber:  14,
+			Title:       "Build post URL index",
+			WorkStatus:  "done",
+			Description: &indexDescription,
+		},
+		{
+			ID:          scrapeID,
+			TaskNumber:  35,
+			Title:       "Scrape batch 1",
+			WorkStatus:  "blocked",
+			Description: &scrapeDescription,
+		},
+		{
+			ID:          parentID,
+			TaskNumber:  37,
+			Title:       "Validate review path summary",
+			WorkStatus:  "blocked",
+			Description: &parentDescription,
+		},
+		{
+			ID:         childID,
+			TaskNumber: 38,
+			Title:      "Repair review path summary",
+			WorkStatus: "draft",
+			Metadata:   []byte(`{"decomposition_parent_task_id":"` + parentID.String() + `"}`),
+		},
+	}
+
+	hints := buildProjectContinuationTaskHintsForWorker(tasks, map[uuid.UUID]string{
+		scrapeID: "review turn repeatedly hit file.read not_found across 3 consecutive turns",
+	})
+
+	if got := hints[scrapeID].DeliverableRoot; got != "content/posts" {
+		t.Fatalf("scrape deliverable root = %q, want content/posts", got)
+	}
+	if got := hints[scrapeID].DependsOnPath; got != "content/technonymous-index.json" {
+		t.Fatalf("scrape dependency path = %q, want content/technonymous-index.json", got)
+	}
+	if got := hints[childID].DeliverablePath; got != "results/review-path-validation-summary.md" {
+		t.Fatalf("child deliverable path = %q, want inherited parent deliverable path", got)
 	}
 }

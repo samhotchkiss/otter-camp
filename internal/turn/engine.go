@@ -167,6 +167,7 @@ const (
 var projectContinuationPromptTaskIDPattern = regexp.MustCompile(`id=([0-9a-fA-F-]{36})`)
 var explicitDeliverablePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`),
+	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\bsave\s+as\s+([^\s,;]+)`),
 }
 var preferredDeliverableRootPatterns = []*regexp.Regexp{
@@ -6971,11 +6972,29 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		if strings.Contains(activeLine, "resume_policy=manual_recovery_repair") {
 			lines = append(lines, "If a named blocked task above already shows resume_policy=manual_recovery_repair, queue only the targeted manual repair needed for that deliverable instead of broader session or project listing.")
 		}
+		if strings.Contains(activeLine, "deliverable_path=") {
+			lines = append(lines, "If a named active task above already shows deliverable_path=..., inspect or write that exact path instead of broad workspace-root or artifact-root browsing.")
+		}
+		if strings.Contains(activeLine, "deliverable_root=") {
+			lines = append(lines, "If a named active task above already shows deliverable_root=..., stay inside that exact root instead of broad content, templates, or planning rediscovery.")
+		}
+		if strings.Contains(activeLine, "depends_on_path=") {
+			lines = append(lines, "If a named active task above already shows depends_on_path=..., inspect that prerequisite artifact first instead of broad search.")
+		}
 	}
 	if draftLine := strings.TrimSpace(snapshot.DraftTaskLine); draftLine != "" {
 		lines = append(lines, draftLine)
 		lines = append(lines, "Do not begin with broad project.get, task.list, task.get, or flow.get_execution rediscovery when the actionable draft tasks above already identify the remaining bounded work.")
 		lines = append(lines, "If a named draft task above shows assigned_agent_id=missing, flow_template_id=missing, or requires_human_review=true, repair that exact prerequisite before trying to queue it.")
+		if strings.Contains(draftLine, "deliverable_path=") {
+			lines = append(lines, "If a named draft task above already shows deliverable_path=..., inspect or write that exact path instead of reopening broad workspace context.")
+		}
+		if strings.Contains(draftLine, "deliverable_root=") {
+			lines = append(lines, "If a named draft task above already shows deliverable_root=..., stay inside that exact root instead of broad content or template browsing.")
+		}
+		if strings.Contains(draftLine, "depends_on_path=") {
+			lines = append(lines, "If a named draft task above already shows depends_on_path=..., inspect that prerequisite artifact before broader search.")
+		}
 	}
 	if parentLine := strings.TrimSpace(snapshot.ChildActiveDraftLine); parentLine != "" {
 		lines = append(lines, parentLine)
@@ -6985,6 +7004,9 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		lines = append(lines, focusLine)
 		if strings.Contains(focusLine, "child_tasks=") && strings.TrimSpace(snapshot.ActiveTaskLine) != "" {
 			lines = append(lines, "If that focus draft already has child tasks and the active-task snapshot above already names those child lanes, do not reread the parent or child task records first. Queue the draft only if it is still runnable as-is, split it directly into smaller reviewable work if bounded-size policy still blocks it, or report one concrete blocker sentence.")
+		}
+		if strings.Contains(focusLine, "deliverable_path=") || strings.Contains(focusLine, "deliverable_root=") || strings.Contains(focusLine, "depends_on_path=") {
+			lines = append(lines, "When the focus task already includes exact deliverable or dependency hints, use those paths directly before any broader workspace search.")
 		}
 	}
 	return lines
@@ -16590,6 +16612,14 @@ type projectExecutionContinuationSnapshot struct {
 	FocusTaskLine        string
 }
 
+type projectContinuationTaskHints struct {
+	BlockedReason   string
+	ResumePolicy    string
+	DeliverablePath string
+	DeliverableRoot string
+	DependsOnPath   string
+}
+
 const projectContinuationBlockerExcerptLimit = 120
 
 func (e *TurnEngine) projectExecutionContinuationSnapshot(ctx context.Context, projectID uuid.UUID) (projectExecutionContinuationSnapshot, error) {
@@ -16605,7 +16635,7 @@ func (e *TurnEngine) projectExecutionContinuationSnapshot(ctx context.Context, p
 	if err != nil {
 		return snapshot, err
 	}
-	blockerReasons, err := e.projectContinuationBlockedReasonsByTask(ctx, projectTasks)
+	taskHintsByTask, err := e.projectContinuationTaskHintsByTask(ctx, projectTasks)
 	if err != nil {
 		return snapshot, err
 	}
@@ -16620,7 +16650,7 @@ func (e *TurnEngine) projectExecutionContinuationSnapshot(ctx context.Context, p
 			continue
 		}
 		activity := childActivity[task.ID]
-		taskRef := projectExecutionContinuationTaskRef(task, activity, blockerReasons[task.ID])
+		taskRef := projectExecutionContinuationTaskRef(task, activity, taskHintsByTask[task.ID])
 		if isActionableProjectDraftTask(task) {
 			if activity.childTaskCount > 0 {
 				if len(childActiveDraftTasks) < 4 {
@@ -16655,6 +16685,14 @@ func (e *TurnEngine) projectExecutionContinuationSnapshot(ctx context.Context, p
 	return snapshot, nil
 }
 
+func (e *TurnEngine) projectContinuationTaskHintsByTask(ctx context.Context, tasks []repo.ProjectTask) (map[uuid.UUID]projectContinuationTaskHints, error) {
+	blockedReasons, err := e.projectContinuationBlockedReasonsByTask(ctx, tasks)
+	if err != nil {
+		return nil, err
+	}
+	return buildProjectContinuationTaskHints(tasks, blockedReasons), nil
+}
+
 func (e *TurnEngine) projectContinuationBlockedReasonsByTask(ctx context.Context, tasks []repo.ProjectTask) (map[uuid.UUID]string, error) {
 	reasons := make(map[uuid.UUID]string)
 	if e == nil || e.pool == nil || len(tasks) == 0 {
@@ -16671,6 +16709,79 @@ func (e *TurnEngine) projectContinuationBlockedReasonsByTask(ctx context.Context
 		return reasons, nil
 	}
 	return repo.NewProjectTaskEventRepo(e.pool).LatestBlockedReasonsByTask(ctx, blockedTaskIDs)
+}
+
+func buildProjectContinuationTaskHints(tasks []repo.ProjectTask, blockedReasons map[uuid.UUID]string) map[uuid.UUID]projectContinuationTaskHints {
+	hintsByTask := make(map[uuid.UUID]projectContinuationTaskHints, len(tasks))
+	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(tasks))
+	for _, task := range tasks {
+		tasksByID[task.ID] = task
+	}
+	for _, task := range tasks {
+		blockedReason := strings.TrimSpace(blockedReasons[task.ID])
+		deliverablePath, deliverableRoot := projectContinuationTaskDeliverableHints(task, tasksByID)
+		hintsByTask[task.ID] = projectContinuationTaskHints{
+			BlockedReason:   blockedReason,
+			ResumePolicy:    projectContinuationBlockedTaskResumePolicy(blockedReason),
+			DeliverablePath: deliverablePath,
+			DeliverableRoot: deliverableRoot,
+			DependsOnPath:   projectContinuationTaskDependencyHintPath(task, tasks),
+		}
+	}
+	return hintsByTask
+}
+
+func projectContinuationTaskDeliverableHints(task repo.ProjectTask, tasksByID map[uuid.UUID]repo.ProjectTask) (string, string) {
+	if explicit := strings.TrimSpace(explicitDeliverablePath(task)); explicit != "" {
+		return explicit, ""
+	}
+	if root := strings.TrimSpace(preferredTaskDeliverableRoot(task)); root != "" {
+		return "", root
+	}
+	metadata := messageMetadataMap(task.Metadata)
+	parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+	if !ok || parentID == uuid.Nil {
+		return "", ""
+	}
+	parentTask, ok := tasksByID[parentID]
+	if !ok {
+		return "", ""
+	}
+	if explicit := strings.TrimSpace(explicitDeliverablePath(parentTask)); explicit != "" {
+		return explicit, ""
+	}
+	if root := strings.TrimSpace(preferredTaskDeliverableRoot(parentTask)); root != "" {
+		return "", root
+	}
+	return "", ""
+}
+
+func projectContinuationTaskDependencyHintPath(task repo.ProjectTask, tasks []repo.ProjectTask) string {
+	if !projectContinuationTaskReferencesURLIndex(task) {
+		return ""
+	}
+	for _, candidate := range tasks {
+		if candidate.ID == task.ID {
+			continue
+		}
+		explicit := strings.TrimSpace(explicitDeliverablePath(candidate))
+		if explicit == "" {
+			continue
+		}
+		if !projectContinuationTaskReferencesURLIndex(candidate) && !strings.Contains(strings.ToLower(explicit), "index") {
+			continue
+		}
+		return explicit
+	}
+	return ""
+}
+
+func projectContinuationTaskReferencesURLIndex(task repo.ProjectTask) bool {
+	text := strings.ToLower(strings.TrimSpace(task.Title))
+	if task.Description != nil {
+		text += " " + strings.ToLower(strings.TrimSpace(*task.Description))
+	}
+	return strings.Contains(text, "url index") || strings.Contains(text, "technonymous-index.json")
 }
 
 type projectContinuationChildActivity struct {
@@ -16709,13 +16820,22 @@ func projectTaskExecutionActive(status string) bool {
 	}
 }
 
-func projectExecutionContinuationTaskRef(task repo.ProjectTask, activity projectContinuationChildActivity, blockedReason string) string {
+func projectExecutionContinuationTaskRef(task repo.ProjectTask, activity projectContinuationChildActivity, hints projectContinuationTaskHints) string {
 	parts := []string{projectBootstrapTaskLabel(task), "id=" + task.ID.String()}
 	if title := strings.TrimSpace(task.Title); title != "" && task.TaskNumber > 0 {
 		parts = append(parts, "title="+strconv.Quote(title))
 	}
 	if status := strings.TrimSpace(task.WorkStatus); status != "" {
 		parts = append(parts, "work_status="+status)
+	}
+	if deliverablePath := strings.TrimSpace(hints.DeliverablePath); deliverablePath != "" {
+		parts = append(parts, "deliverable_path="+deliverablePath)
+	} else if deliverableRoot := strings.TrimSpace(hints.DeliverableRoot); deliverableRoot != "" {
+		parts = append(parts, "deliverable_root="+deliverableRoot)
+	}
+	if dependsOnPath := strings.TrimSpace(hints.DependsOnPath); dependsOnPath != "" &&
+		(strings.TrimSpace(hints.DeliverablePath) == "" || !sameWorkspaceRelativePath(dependsOnPath, hints.DeliverablePath)) {
+		parts = append(parts, "depends_on_path="+dependsOnPath)
 	}
 	if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
 		parts = append(parts, "assigned_agent_id="+task.AssignedAgentID.String())
@@ -16731,10 +16851,10 @@ func projectExecutionContinuationTaskRef(task repo.ProjectTask, activity project
 		parts = append(parts, "requires_human_review=true")
 	}
 	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
-		if resumePolicy := projectContinuationBlockedTaskResumePolicy(blockedReason); resumePolicy != "" {
-			parts = append(parts, "resume_policy="+resumePolicy)
+		if hints.ResumePolicy != "" {
+			parts = append(parts, "resume_policy="+hints.ResumePolicy)
 		}
-		if excerpt := projectContinuationBlockedReasonExcerpt(blockedReason); excerpt != "" {
+		if excerpt := projectContinuationBlockedReasonExcerpt(hints.BlockedReason); excerpt != "" {
 			parts = append(parts, "blocker="+strconv.Quote(excerpt))
 		}
 	}
