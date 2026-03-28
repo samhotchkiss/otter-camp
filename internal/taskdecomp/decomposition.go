@@ -22,9 +22,9 @@ const (
 var ErrBoundedTaskTooLarge = errors.New("task exceeds bounded size policy and must be split before queueing")
 
 var (
-	enumeratedBatchTitlePattern  = regexp.MustCompile(`\b(?:generate|create|draft|write|produce|compile|research|collect|design|build)\s+\d+\b`)
-	enumeratedActionCountPattern = regexp.MustCompile(`(?i)^(generate|create|draft|write|produce|compile|research|collect|design|build)\s+(\d+)\s+(.+)$`)
-	actionVerbPattern            = regexp.MustCompile(`^(?:generate|create|draft|write|produce|compile|research|collect|design|build)\b`)
+	enumeratedBatchTitlePattern  = regexp.MustCompile(`\b(?:generate|create|draft|write|produce|compile|research|collect|design|build|fetch|scrape|crawl|import)\s+(?:all\s+)?\d+\b`)
+	enumeratedActionCountPattern = regexp.MustCompile(`(?i)^(generate|create|draft|write|produce|compile|research|collect|design|build|fetch|scrape|crawl|import)\s+(?:all\s+)?(\d+)\s+(.+)$`)
+	actionVerbPattern            = regexp.MustCompile(`^(?:generate|create|draft|write|produce|compile|research|collect|design|build|fetch|scrape|crawl|import)\b`)
 	leadingTaskActionPattern     = regexp.MustCompile(`(?i)^(?:use|visit|navigate|discover|identify|build|rebuild|create|design|define|draft|write|produce|compile|research|collect|implement|migrate|import|validate|review|compare|synthesize|map|prepare|develop|generate|outline|audit|document|wire|configure|run|test|scrape|store|rewrite|establish|include)\b`)
 	labelledTaskPattern          = regexp.MustCompile(`(?i)^(?:ws\d+(?:\.\d+[a-z]?)?|template\s+\d+|option\s+\d+|phase\s+\d+|wave\s+\d+|task\s+\d+)[:\-]`)
 	timingOnlyPattern            = regexp.MustCompile(`(?i)^~?\s*\d+\s*(?:-|to\s+)?\d*\s*(?:min|mins|minute|minutes|hr|hrs|hour|hours)\b(?:[[:punct:]\s].*)?$`)
@@ -163,6 +163,9 @@ func titleSuggestsCompoundBoundedWork(title string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(title))
 	if normalized == "" {
 		return false
+	}
+	if matches := enumeratedActionCountPattern.FindStringSubmatch(normalized); len(matches) == 4 && atoiSafe(matches[2]) > 1 {
+		return true
 	}
 	if enumeratedBatchTitlePattern.MatchString(normalized) && strings.Contains(normalized, " and ") {
 		if _, ok := splitCompoundActionTitle(title); ok {
@@ -830,6 +833,15 @@ func DescriptionForbidsDecomposition(raw string) bool {
 	return descriptionForbidsDecomposition(raw)
 }
 
+func TaskLooksProceduralInstructionArtifact(title string, description *string) bool {
+	normalizedTitle := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(title)), " "))
+	if normalizedTitle == "" || !isInstructionOnlyDeliverable(normalizedTitle) {
+		return false
+	}
+	normalizedDescription := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(deref(description))), " "))
+	return normalizedDescription == "" || normalizedDescription == normalizedTitle || isInstructionOnlyDeliverable(normalizedDescription)
+}
+
 func isInstructionOnlyDeliverable(normalized string) bool {
 	for _, prefix := range []string{
 		"this is ",
@@ -862,6 +874,21 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 	}
 	if strings.Contains(normalized, "gallery-style") || strings.Contains(normalized, "given prominence") {
 		return true
+	}
+	if strings.HasPrefix(normalized, "use ") {
+		for _, marker := range []string{
+			"web_fetch",
+			"cli_execute",
+			"browser_",
+			"file_write",
+			"file.write",
+			"shell scripting",
+			"agent loop",
+		} {
+			if strings.Contains(normalized, marker) {
+				return true
+			}
+		}
 	}
 	if !(strings.HasPrefix(normalized, "each ") || strings.HasPrefix(normalized, "every ")) {
 		return false

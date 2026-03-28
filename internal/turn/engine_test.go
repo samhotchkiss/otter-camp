@@ -18006,6 +18006,25 @@ func TestBuildProjectContinuationActionPromptAddsChildWorkGuidanceForDecomposedP
 	}
 }
 
+func TestBuildProjectContinuationActionPromptAddsReplacementChildGuidanceForBlockedParent(t *testing.T) {
+	prompt := buildProjectContinuationActionPrompt("Active project request: restore content/technonymous-index.json", projectExecutionContinuationSnapshot{
+		ProjectLine:          "Active project id: 123",
+		ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 56 (Scrape all 35 technonymous.org posts listed in content/technonymous-index.json and save each as a clean Markdown file under content/posts/.) id=aaa title=\"Scrape all 35 technonymous.org posts listed in content/technonymous-index.json and save each as a clean Markdown file under content/posts/.\" work_status=blocked depends_on_path=content/technonymous-index.json assigned_agent_id=worker-1 flow_template_id=ft-1 resume_policy=terminal_keep_blocked blocker=\"flow rejection max visits exceeded\"",
+		ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 55 (Scrape all 35 technonymous.org posts to markdown using web_fetch) id=bbb title=\"Scrape all 35 technonymous.org posts to markdown using web_fetch\" work_status=draft depends_on_path=content/technonymous-index.json assigned_agent_id=worker-1 flow_template_id=ft-1 child_tasks=2 replaceable_blocked_child_tasks=2",
+		FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 55 (Scrape all 35 technonymous.org posts to markdown using web_fetch) id=bbb title=\"Scrape all 35 technonymous.org posts to markdown using web_fetch\" work_status=draft depends_on_path=content/technonymous-index.json assigned_agent_id=worker-1 flow_template_id=ft-1 child_tasks=2 replaceable_blocked_child_tasks=2",
+	})
+
+	if !strings.Contains(prompt, "Draft parent tasks need fresh replacement child work:") {
+		t.Fatalf("prompt = %q, want replacement-parent snapshot guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Their existing child lanes are terminally blocked, so create or queue the smallest replacement child task under the correct parent now instead of broad rediscovery.") {
+		t.Fatalf("prompt = %q, want replacement-child guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now") {
+		t.Fatalf("prompt = %q, want focus replacement-child guidance", prompt)
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotSummarizesProjectState(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()
@@ -18095,66 +18114,63 @@ func TestProjectExecutionContinuationSnapshotSummarizesProjectState(t *testing.T
 }
 
 func TestProjectExecutionContinuationSnapshotForSummaryNarrowsToPriorityArtifactPath(t *testing.T) {
-	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()
 	assignedID := uuid.New()
 	indexParentID := uuid.New()
+	indexChildID := uuid.New()
 	indexDescription := "Crawl technonymous.org archive pages and build post URL index. Output a JSON index at content/technonymous-index.json with title, URL, and date for each post."
 	indexWriteDescription := "Write the crawl results to content/technonymous-index.json."
 	templateDescription := "Create a single self-contained HTML file at templates/template-08-replace.html for Sam.blog."
-	fixture.engine.tasks = &fakeTaskRepo{
-		items: map[uuid.UUID]repo.ProjectTask{
-			uuid.New(): {
-				ID:              uuid.New(),
-				ProjectID:       projectID,
-				TaskNumber:      41,
-				Title:           "Write the results to content/technonymous-index.json",
-				WorkStatus:      "blocked",
-				AssignedAgentID: &assignedID,
-				Description:     stringPtr(indexWriteDescription),
-			},
-			uuid.New(): {
-				ID:              uuid.New(),
-				ProjectID:       projectID,
-				TaskNumber:      37,
-				Title:           "Build a single HTML layout template (template 7 of 10) for Sam.blog",
-				WorkStatus:      "blocked",
-				AssignedAgentID: &assignedID,
-				Description:     stringPtr("Create a single self-contained HTML file at templates/template-07-dark-mode-developer.html for Sam.blog."),
-			},
-			uuid.New(): {
-				ID:              uuid.New(),
-				ProjectID:       projectID,
-				TaskNumber:      43,
-				Title:           "Build a single HTML layout template (template 8 of 10) for Sam.blog — replacement for blocked OC-38",
-				WorkStatus:      "draft",
-				AssignedAgentID: &assignedID,
-				Description:     stringPtr(templateDescription),
-			},
-			indexParentID: {
-				ID:              indexParentID,
-				ProjectID:       projectID,
-				TaskNumber:      39,
-				Title:           "Replacement: Crawl technonymous.org and produce content/technonymous-index.json",
-				WorkStatus:      "draft",
-				AssignedAgentID: &assignedID,
-				Description:     stringPtr(indexDescription),
-			},
-			uuid.New(): {
-				ID:         uuid.New(),
-				ProjectID:  projectID,
-				TaskNumber: 40,
-				Title:      "Navigate to technonymous.org using browser tools",
-				WorkStatus: "blocked",
-				Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, indexParentID.String())),
-			},
+	projectTasks := []repo.ProjectTask{
+		{
+			ID:              uuid.New(),
+			ProjectID:       projectID,
+			TaskNumber:      41,
+			Title:           "Write the results to content/technonymous-index.json",
+			WorkStatus:      "blocked",
+			AssignedAgentID: &assignedID,
+			Description:     stringPtr(indexWriteDescription),
+		},
+		{
+			ID:              uuid.New(),
+			ProjectID:       projectID,
+			TaskNumber:      37,
+			Title:           "Build a single HTML layout template (template 7 of 10) for Sam.blog",
+			WorkStatus:      "blocked",
+			AssignedAgentID: &assignedID,
+			Description:     stringPtr("Create a single self-contained HTML file at templates/template-07-dark-mode-developer.html for Sam.blog."),
+		},
+		{
+			ID:              uuid.New(),
+			ProjectID:       projectID,
+			TaskNumber:      43,
+			Title:           "Build a single HTML layout template (template 8 of 10) for Sam.blog — replacement for blocked OC-38",
+			WorkStatus:      "draft",
+			AssignedAgentID: &assignedID,
+			Description:     stringPtr(templateDescription),
+		},
+		{
+			ID:              indexParentID,
+			ProjectID:       projectID,
+			TaskNumber:      39,
+			Title:           "Replacement: Crawl technonymous.org and produce content/technonymous-index.json",
+			WorkStatus:      "draft",
+			AssignedAgentID: &assignedID,
+			Description:     stringPtr(indexDescription),
+		},
+		{
+			ID:         indexChildID,
+			ProjectID:  projectID,
+			TaskNumber: 40,
+			Title:      "Navigate to technonymous.org using browser tools",
+			WorkStatus: "blocked",
+			Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, indexParentID.String())),
 		},
 	}
-
-	snapshot, err := fixture.engine.projectExecutionContinuationSnapshotForSummary(context.Background(), projectID, "Active project request: restore content/technonymous-index.json")
-	if err != nil {
-		t.Fatalf("projectExecutionContinuationSnapshotForSummary: %v", err)
-	}
+	taskHintsByTask := buildProjectContinuationTaskHints(projectTasks, map[uuid.UUID]string{
+		indexChildID: "flow rejection max visits exceeded",
+	})
+	snapshot, _ := buildProjectExecutionContinuationSnapshot(projectTasks, taskHintsByTask, projectContinuationPriorityPathsFromText("Active project request: restore content/technonymous-index.json"))
 	if !strings.Contains(snapshot.ActiveTaskLine, "task 41 (Write the results to content/technonymous-index.json)") {
 		t.Fatalf("ActiveTaskLine = %q, want dependency-focused active task", snapshot.ActiveTaskLine)
 	}
@@ -18164,75 +18180,74 @@ func TestProjectExecutionContinuationSnapshotForSummaryNarrowsToPriorityArtifact
 	if strings.Contains(snapshot.DraftTaskLine, "task 43") {
 		t.Fatalf("DraftTaskLine = %q, should omit unrelated actionable draft when summary names a concrete artifact path", snapshot.DraftTaskLine)
 	}
-	if !strings.Contains(snapshot.ChildActiveDraftLine, "task 39 (Replacement: Crawl technonymous.org and produce content/technonymous-index.json)") {
-		t.Fatalf("ChildActiveDraftLine = %q, want dependency-focused draft parent", snapshot.ChildActiveDraftLine)
+	if !strings.Contains(snapshot.ReplacementDraftLine, "task 39 (Replacement: Crawl technonymous.org and produce content/technonymous-index.json)") {
+		t.Fatalf("ReplacementDraftLine = %q, want dependency-focused replacement draft parent", snapshot.ReplacementDraftLine)
 	}
-	if strings.TrimSpace(snapshot.FocusTaskLine) != "" {
-		t.Fatalf("FocusTaskLine = %q, want no unrelated focus task when only off-target actionable drafts remain", snapshot.FocusTaskLine)
+	if !strings.Contains(snapshot.FocusTaskLine, "task 39 (Replacement: Crawl technonymous.org and produce content/technonymous-index.json)") {
+		t.Fatalf("FocusTaskLine = %q, want dependency-focused replacement parent when only blocked child lanes remain", snapshot.FocusTaskLine)
 	}
 }
 
 func TestProjectExecutionContinuationSnapshotSkipsDraftParentWithBlockedChildren(t *testing.T) {
-	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()
 	assignedID := uuid.New()
 	parentDraftID := uuid.New()
-	fixture.engine.tasks = &fakeTaskRepo{
-		items: map[uuid.UUID]repo.ProjectTask{
-			uuid.New(): {
-				ID:              uuid.New(),
-				ProjectID:       projectID,
-				TaskNumber:      16,
-				Title:           "Validate API",
-				WorkStatus:      "in_progress",
-				AssignedAgentID: &assignedID,
-			},
-			uuid.New(): {
-				ID:         uuid.New(),
-				ProjectID:  projectID,
-				TaskNumber: 19,
-				Title:      "Ship docs",
-				WorkStatus: "draft",
-			},
-			parentDraftID: {
-				ID:              parentDraftID,
-				ProjectID:       projectID,
-				TaskNumber:      21,
-				Title:           "Theme rollout",
-				WorkStatus:      "draft",
-				AssignedAgentID: &assignedID,
-			},
-			uuid.New(): {
-				ID:         uuid.New(),
-				ProjectID:  projectID,
-				TaskNumber: 22,
-				Title:      "Theme child 1",
-				WorkStatus: "blocked",
-				Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
-			},
-			uuid.New(): {
-				ID:         uuid.New(),
-				ProjectID:  projectID,
-				TaskNumber: 23,
-				Title:      "Theme child 2",
-				WorkStatus: "blocked",
-				Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
-			},
+	childOneID := uuid.New()
+	childTwoID := uuid.New()
+	projectTasks := []repo.ProjectTask{
+		{
+			ID:              uuid.New(),
+			ProjectID:       projectID,
+			TaskNumber:      16,
+			Title:           "Validate API",
+			WorkStatus:      "in_progress",
+			AssignedAgentID: &assignedID,
+		},
+		{
+			ID:         uuid.New(),
+			ProjectID:  projectID,
+			TaskNumber: 19,
+			Title:      "Ship docs",
+			WorkStatus: "draft",
+		},
+		{
+			ID:              parentDraftID,
+			ProjectID:       projectID,
+			TaskNumber:      21,
+			Title:           "Theme rollout",
+			WorkStatus:      "draft",
+			AssignedAgentID: &assignedID,
+		},
+		{
+			ID:         childOneID,
+			ProjectID:  projectID,
+			TaskNumber: 22,
+			Title:      "Theme child 1",
+			WorkStatus: "blocked",
+			Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+		},
+		{
+			ID:         childTwoID,
+			ProjectID:  projectID,
+			TaskNumber: 23,
+			Title:      "Theme child 2",
+			WorkStatus: "blocked",
+			Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
 		},
 	}
-
-	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
-	if err != nil {
-		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
-	}
+	taskHintsByTask := buildProjectContinuationTaskHints(projectTasks, map[uuid.UUID]string{
+		childOneID: "flow rejection max visits exceeded",
+		childTwoID: "flow rejection max visits exceeded",
+	})
+	snapshot, _ := buildProjectExecutionContinuationSnapshot(projectTasks, taskHintsByTask, nil)
 	if strings.Contains(snapshot.DraftTaskLine, "task 21 (Theme rollout)") {
 		t.Fatalf("DraftTaskLine = %q, should skip draft parent with blocked child tasks", snapshot.DraftTaskLine)
 	}
-	if !strings.Contains(snapshot.ChildActiveDraftLine, "task 21 (Theme rollout)") {
-		t.Fatalf("ChildActiveDraftLine = %q, want draft parent with blocked child tasks", snapshot.ChildActiveDraftLine)
+	if !strings.Contains(snapshot.ReplacementDraftLine, "task 21 (Theme rollout)") {
+		t.Fatalf("ReplacementDraftLine = %q, want draft parent with blocked child tasks moved to replacement guidance", snapshot.ReplacementDraftLine)
 	}
-	if !strings.Contains(snapshot.ChildActiveDraftLine, "child_tasks=2") {
-		t.Fatalf("ChildActiveDraftLine = %q, want child task count", snapshot.ChildActiveDraftLine)
+	if !strings.Contains(snapshot.ReplacementDraftLine, "replaceable_blocked_child_tasks=2") {
+		t.Fatalf("ReplacementDraftLine = %q, want replacement blocked child count", snapshot.ReplacementDraftLine)
 	}
 	if !strings.Contains(snapshot.FocusTaskLine, "task 19 (Ship docs)") {
 		t.Fatalf("FocusTaskLine = %q, want standalone actionable draft", snapshot.FocusTaskLine)
@@ -18300,6 +18315,69 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedNoDecomposeChildren
 	}
 	if count != 1 {
 		t.Fatalf("countProjectDraftTasks = %d, want 1 actionable parent after ignoring malformed child artifacts", count)
+	}
+}
+
+func TestProjectExecutionContinuationSnapshotIgnoresMalformedProceduralChildren(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	parentDescription := "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/."
+	childDescription := "Use cli_execute with shell scripting or iterate in the agent loop. Process all 35 posts."
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:          parentDraftID,
+				ProjectID:   projectID,
+				TaskNumber:  58,
+				Title:       "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"applied":             true,
+						"mode":                "parallel_children",
+						"orchestration_only":  true,
+						"source_description":  parentDescription,
+						"primary_deliverable": "Fetch technonymous.org posts via web_fetch and save as markdown files under content/posts/ 1-17",
+					},
+				}),
+			},
+			uuid.New(): {
+				ID:          uuid.New(),
+				ProjectID:   projectID,
+				TaskNumber:  60,
+				Title:       "Use cli_execute with shell scripting or iterate in the agent loop. Process all 35 posts.",
+				Description: &childDescription,
+				WorkStatus:  "in_progress",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/)") {
+		t.Fatalf("DraftTaskLine = %q, want actionable parent task", snapshot.DraftTaskLine)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "Use cli_execute with shell scripting") {
+		t.Fatalf("ActiveTaskLine = %q, should omit malformed procedural child artifact", snapshot.ActiveTaskLine)
+	}
+	if strings.Contains(snapshot.ChildActiveDraftLine, "task 58") {
+		t.Fatalf("ChildActiveDraftLine = %q, should not treat malformed procedural children as active child work", snapshot.ChildActiveDraftLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/)") {
+		t.Fatalf("FocusTaskLine = %q, want parent task restored as focus", snapshot.FocusTaskLine)
+	}
+
+	count, err := fixture.engine.countProjectDraftTasks(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("countProjectDraftTasks: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("countProjectDraftTasks = %d, want 1 actionable parent after ignoring malformed procedural child artifact", count)
 	}
 }
 

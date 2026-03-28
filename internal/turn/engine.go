@@ -4877,7 +4877,7 @@ func projectContinuationProducerTaskRefsForPath(
 		return nil
 	}
 	refs := make([]string, 0, 3)
-	childActivity := projectContinuationChildTaskActivity(tasks)
+	childActivity := projectContinuationChildTaskActivity(tasks, taskHintsByTask)
 	for _, task := range tasks {
 		status := strings.ToLower(strings.TrimSpace(task.WorkStatus))
 		if status == "" || status == "done" || status == "cancelled" {
@@ -4957,7 +4957,8 @@ func (e *TurnEngine) countProjectDraftTasks(ctx context.Context, projectID uuid.
 	if err != nil {
 		return 0, err
 	}
-	childActivity := projectContinuationChildTaskActivity(projectTasks)
+	taskHintsByTask := buildProjectContinuationTaskHints(projectTasks, nil)
+	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
 	count := 0
 	for _, task := range projectTasks {
@@ -5162,8 +5163,8 @@ func (e *TurnEngine) nextRunnableDraftProjectTaskForPriorityPaths(ctx context.Co
 		}
 		return projectTasks[i].TaskNumber < projectTasks[j].TaskNumber
 	})
-	childActivity := projectContinuationChildTaskActivity(projectTasks)
 	taskHintsByTask := buildProjectContinuationTaskHints(projectTasks, nil)
+	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	for _, task := range projectTasks {
 		if !isProjectContinuationActionableDraftTask(task, childActivity[task.ID]) || taskLooksLikeOrchestrationOnlyParent(task) {
 			continue
@@ -7276,6 +7277,11 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 			lines = append(lines, "If a named draft task above already shows depends_on_path=..., inspect that prerequisite artifact before broader search.")
 		}
 	}
+	if replacementLine := strings.TrimSpace(snapshot.ReplacementDraftLine); replacementLine != "" {
+		lines = append(lines, replacementLine)
+		lines = append(lines, "Those draft parents no longer have active child execution. Their existing child lanes are terminally blocked, so create or queue the smallest replacement child task under the correct parent now instead of broad rediscovery.")
+		lines = append(lines, "Do not browse broad workspace roots, task trees, or flow templates first when the replacement parent already names the dependency or deliverable path.")
+	}
 	if parentLine := strings.TrimSpace(snapshot.ChildActiveDraftLine); parentLine != "" {
 		lines = append(lines, parentLine)
 		lines = append(lines, "Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while those child tasks already exist. Let active child lanes continue, or inspect only that parent's direct children with parent_task_id if a concrete blocker must be verified.")
@@ -7287,6 +7293,9 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		}
 		if strings.Contains(focusLine, "deliverable_path=") || strings.Contains(focusLine, "deliverable_root=") || strings.Contains(focusLine, "depends_on_path=") {
 			lines = append(lines, "When the focus task already includes exact deliverable or dependency hints, use those paths directly before any broader workspace search.")
+		}
+		if strings.Contains(focusLine, "replaceable_blocked_child_tasks=") {
+			lines = append(lines, "Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.")
 		}
 	}
 	return lines
@@ -8101,6 +8110,11 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		return nil
 	}
 	if handled, handleErr := e.handleMalformedNoDecomposeChildTaskPreflight(ctx, runtime); handleErr != nil {
+		return handleErr
+	} else if handled {
+		return nil
+	}
+	if handled, handleErr := e.handleMalformedProceduralChildTaskPreflight(ctx, runtime); handleErr != nil {
 		return handleErr
 	} else if handled {
 		return nil
@@ -8935,6 +8949,81 @@ func (e *TurnEngine) malformedNoDecomposeParentTaskForChild(ctx context.Context,
 	return parentTask, true, nil
 }
 
+func (e *TurnEngine) handleMalformedProceduralChildTaskPreflight(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if e == nil || e.tasks == nil || rt == nil || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
+
+	taskRecord, err := e.tasks.GetByID(ctx, rt.session.ScopeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return true, err
+	}
+	parentTask, malformed, err := e.malformedProceduralParentTaskForChild(ctx, taskRecord)
+	if err != nil || !malformed {
+		return malformed, err
+	}
+
+	reason := buildMalformedProceduralChildTaskBlockedReason(taskRecord, parentTask)
+	systemMessage := buildMalformedProceduralChildTaskSystemMessage(taskRecord, parentTask)
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, systemMessage); err != nil {
+		return true, err
+	}
+	if e.taskTransitions == nil {
+		return true, fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
+		if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
+			var transitionErr tasksvc.ErrInvalidStatusTransition
+			if errors.As(err, &transitionErr) {
+				refreshed, refreshErr := e.tasks.GetByID(ctx, taskRecord.ID)
+				if refreshErr == nil {
+					nextStatus := strings.ToLower(strings.TrimSpace(refreshed.WorkStatus))
+					if nextStatus != "blocked" && nextStatus != "done" && nextStatus != "cancelled" {
+						return true, err
+					}
+				} else {
+					return true, err
+				}
+			} else {
+				return true, err
+			}
+		}
+	}
+	rt.stopReason = stopReasonValidationBlocked
+	if err := e.completeTurn(ctx, rt); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) malformedProceduralParentTaskForChild(ctx context.Context, taskRecord repo.ProjectTask) (repo.ProjectTask, bool, error) {
+	if !taskdecomp.TaskLooksProceduralInstructionArtifact(taskRecord.Title, taskRecord.Description) {
+		return repo.ProjectTask{}, false, nil
+	}
+	metadata := messageMetadataMap(taskRecord.Metadata)
+	parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+	if !ok || parentID == uuid.Nil {
+		return repo.ProjectTask{}, false, nil
+	}
+	parentTask, err := e.tasks.GetByID(ctx, parentID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return repo.ProjectTask{}, false, nil
+		}
+		return repo.ProjectTask{}, false, err
+	}
+	if parentTask.ProjectID != taskRecord.ProjectID {
+		return repo.ProjectTask{}, false, nil
+	}
+	return parentTask, true, nil
+}
+
 func buildMalformedNoDecomposeChildTaskBlockedReason(taskRecord, parentTask repo.ProjectTask) string {
 	reason := fmt.Sprintf("%s was created as a child of %s even though the parent explicitly forbids decomposition; resume the bounded work from the parent task instead of this malformed child lane", buildTaskLabel(taskRecord), buildTaskLabel(parentTask))
 	if targetPath := strings.TrimSpace(preferredTaskDeliverablePath(parentTask)); targetPath != "" {
@@ -8952,6 +9041,27 @@ func buildMalformedNoDecomposeChildTaskSystemMessage(taskRecord, parentTask repo
 		lines = append(lines, fmt.Sprintf("Resume the real bounded work from the parent task and target `%s` there instead of reopening this child lane.]", targetPath))
 	} else {
 		lines = append(lines, "Resume the real bounded work from the parent task instead of reopening this child lane.]")
+	}
+	return strings.Join(lines, " ")
+}
+
+func buildMalformedProceduralChildTaskBlockedReason(taskRecord, parentTask repo.ProjectTask) string {
+	reason := fmt.Sprintf("%s was created as a procedural child of %s with only tool instructions instead of a bounded deliverable; resume the bounded work from the parent task or create a real replacement child task instead of this malformed lane", buildTaskLabel(taskRecord), buildTaskLabel(parentTask))
+	if targetPath := strings.TrimSpace(preferredTaskDeliverablePath(parentTask)); targetPath != "" {
+		reason += fmt.Sprintf(" (parent deliverable: %s)", targetPath)
+	}
+	return reason
+}
+
+func buildMalformedProceduralChildTaskSystemMessage(taskRecord, parentTask repo.ProjectTask) string {
+	lines := []string{
+		fmt.Sprintf("[Task lane halted: %s is a malformed procedural child of %s.", buildTaskLabel(taskRecord), buildTaskLabel(parentTask)),
+		"This child title/description is only tool procedure text, not bounded execution work, so this session should not continue.",
+	}
+	if targetPath := strings.TrimSpace(preferredTaskDeliverablePath(parentTask)); targetPath != "" {
+		lines = append(lines, fmt.Sprintf("Resume the real bounded work from the parent task and target `%s` there, or create a fresh bounded replacement child task instead of reopening this procedural lane.]", targetPath))
+	} else {
+		lines = append(lines, "Resume the real bounded work from the parent task, or create a fresh bounded replacement child task instead of reopening this procedural lane.]")
 	}
 	return strings.Join(lines, " ")
 }
@@ -10539,7 +10649,7 @@ func (e *TurnEngine) taskExecutionContinuationSnapshot(ctx context.Context, task
 	if err != nil {
 		return snapshot, err
 	}
-	childActivity := projectContinuationChildTaskActivity(projectTasks)
+	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(projectTasks))
 	for _, candidate := range projectTasks {
 		tasksByID[candidate.ID] = candidate
@@ -17234,6 +17344,7 @@ type projectExecutionContinuationSnapshot struct {
 	ActiveTaskLine       string
 	LeafActiveTaskLine   string
 	DraftTaskLine        string
+	ReplacementDraftLine string
 	ChildActiveDraftLine string
 	FocusTaskLine        string
 }
@@ -17288,8 +17399,9 @@ func buildProjectExecutionContinuationSnapshot(
 	activeTasks := make([]string, 0, 4)
 	leafActiveTasks := make([]string, 0, 4)
 	draftTasks := make([]string, 0, 4)
+	replacementDraftTasks := make([]string, 0, 4)
 	childActiveDraftTasks := make([]string, 0, 4)
-	childActivity := projectContinuationChildTaskActivity(projectTasks)
+	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
 	focusTask := ""
 	filterByPriority := len(priorityPaths) > 0
@@ -17313,6 +17425,17 @@ func buildProjectExecutionContinuationSnapshot(
 		taskRef := projectExecutionContinuationTaskRef(task, activity, hints)
 		if isActionableProjectDraftTask(task) {
 			if activity.childTaskCount > 0 {
+				if activity.activeChildTaskCount == 0 &&
+					activity.replaceableBlockedChildTaskCount > 0 &&
+					activity.replaceableBlockedChildTaskCount == activity.childTaskCount {
+					if len(replacementDraftTasks) < 4 {
+						replacementDraftTasks = append(replacementDraftTasks, taskRef)
+					}
+					if focusTask == "" {
+						focusTask = taskRef
+					}
+					continue
+				}
 				if len(childActiveDraftTasks) < 4 {
 					childActiveDraftTasks = append(childActiveDraftTasks, taskRef)
 				}
@@ -17341,6 +17464,9 @@ func buildProjectExecutionContinuationSnapshot(
 	}
 	if len(draftTasks) > 0 {
 		snapshot.DraftTaskLine = "Actionable draft tasks already in the tree: " + strings.Join(draftTasks, "; ")
+	}
+	if len(replacementDraftTasks) > 0 {
+		snapshot.ReplacementDraftLine = "Draft parent tasks need fresh replacement child work: " + strings.Join(replacementDraftTasks, "; ")
 	}
 	if len(childActiveDraftTasks) > 0 {
 		snapshot.ChildActiveDraftLine = "Draft parent tasks already have child work: " + strings.Join(childActiveDraftTasks, "; ")
@@ -17486,11 +17612,12 @@ func projectContinuationTaskReferencesURLIndex(task repo.ProjectTask) bool {
 }
 
 type projectContinuationChildActivity struct {
-	childTaskCount       int
-	activeChildTaskCount int
+	childTaskCount                   int
+	activeChildTaskCount             int
+	replaceableBlockedChildTaskCount int
 }
 
-func projectContinuationChildTaskActivity(tasks []repo.ProjectTask) map[uuid.UUID]projectContinuationChildActivity {
+func projectContinuationChildTaskActivity(tasks []repo.ProjectTask, hintsByTask map[uuid.UUID]projectContinuationTaskHints) map[uuid.UUID]projectContinuationChildActivity {
 	activityByParentID := make(map[uuid.UUID]projectContinuationChildActivity)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(tasks)
 	for _, task := range tasks {
@@ -17506,6 +17633,12 @@ func projectContinuationChildTaskActivity(tasks []repo.ProjectTask) map[uuid.UUI
 		activity.childTaskCount++
 		if projectTaskExecutionActive(task.WorkStatus) {
 			activity.activeChildTaskCount++
+		}
+		if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
+			switch strings.TrimSpace(hintsByTask[task.ID].ResumePolicy) {
+			case "terminal_keep_blocked", "needs_replacement_work":
+				activity.replaceableBlockedChildTaskCount++
+			}
 		}
 		activityByParentID[parentID] = activity
 	}
@@ -17528,7 +17661,11 @@ func projectContinuationMalformedChildTaskIDs(tasks []repo.ProjectTask) map[uuid
 			continue
 		}
 		parentTask, ok := tasksByID[parentID]
-		if !ok || !projectContinuationParentForbidsDecomposition(parentTask) {
+		if !ok {
+			continue
+		}
+		if !projectContinuationParentForbidsDecomposition(parentTask) &&
+			!taskdecomp.TaskLooksProceduralInstructionArtifact(task.Title, task.Description) {
 			continue
 		}
 		if malformed == nil {
@@ -17601,6 +17738,9 @@ func projectExecutionContinuationTaskRef(task repo.ProjectTask, activity project
 		parts = append(parts, "active_child_tasks="+strconv.Itoa(activity.activeChildTaskCount))
 	} else if activity.childTaskCount > 0 {
 		parts = append(parts, "child_tasks="+strconv.Itoa(activity.childTaskCount))
+		if activity.replaceableBlockedChildTaskCount > 0 {
+			parts = append(parts, "replaceable_blocked_child_tasks="+strconv.Itoa(activity.replaceableBlockedChildTaskCount))
+		}
 	}
 	return strings.Join(parts, " ")
 }

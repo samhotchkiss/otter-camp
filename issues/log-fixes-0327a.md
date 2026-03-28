@@ -747,3 +747,47 @@
   - fresh production proof after redeploy:
     - `git clean -fdx` on `/Users/sam/otter-data/workspaces/sam-blog-rebuild-restart-12` removed stale `.ottercamp/`, `planning/prd-spec/`, `scripts/`, and untracked `content/posts/` residue
     - `git status --short --branch` then returned clean `## main`
+- 2026-03-28 08:07:14 MDT - promote blocked-child draft parents into replacement-work PM guidance
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so project-continuation snapshots now distinguish:
+    - draft parents that still have active child execution
+    - draft parents whose child lanes are all terminally blocked and now need fresh replacement child work
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) to mirror the same classification and fingerprint the new `ReplacementDraftLine`, so worker-authored PM continuations stay aligned with turn-engine prompts
+  - replacement parents now carry `replaceable_blocked_child_tasks=N`, are surfaced as `Draft parent tasks need fresh replacement child work: ...`, and get focused PM guidance to create or queue the smallest replacement child task directly instead of broad rediscovery
+  - added focused coverage in:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectContinuationActionPrompt(AddsChildWorkGuidanceForDecomposedParent|AddsReplacementChildGuidanceForBlockedParent)|ProjectExecutionContinuationSnapshot(SkipsDraftParentWithBlockedChildren|ForSummaryNarrowsToPriorityArtifactPath|SummarizesProjectState|IgnoresMalformedNoDecomposeChildren)|BuildProjectExecutionContinuationPrompt|ProjectExecutionContinuationTaskRefIncludesBlockedResumePolicy)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(ProjectExecutionContinuationSnapshotPromotesBlockedChildParentsToReplacementWork|EnsureProjectContinuationMessageSuppressesRepeatedConsumedActiveReplacementContinuation)$' -count=1`
+- 2026-03-28 08:19:25 MDT - split counted fetch/scrape tasks by batch instead of procedural tool steps
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+    - counted enumerated titles now include crawler-style verbs like `fetch`, `scrape`, `crawl`, and `import`
+    - enumerated batch detection now accepts `all N` phrasing like `Fetch all 35 ...`
+    - unheaded tool-procedure lines beginning with `Use ...` and naming concrete tools like `web_fetch` or `cli_execute` are now treated as instructions, not child deliverables
+  - added focused coverage in:
+    - [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go)
+    - [`internal/task/service_integration_test.go`](/Users/sam/dev/otter-camp/internal/task/service_integration_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(Analyze(PrefersEnumeratedFetchBatchesOverProceduralToolSteps|FlagsEnumeratedCompoundTitlesWithoutStructuredDescriptions)|PrepareQueueDecomposition(SplitsEnumeratedFetchTaskInsteadOfProceduralSteps|SkipsConcreteDeliverableWithProceduralSections|SkipsConcreteDeliverableWithExactStepsAndNoDecompose))$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/task -run 'TestTaskServiceIntegrationQueue(SplitsEnumeratedFetchTaskIntoBatchChildren|KeepsParentDraftAndQueuesChildWorkUnits|AllowsConcreteCrawlerTaskWithExactStepsAndNoDecompose)$' -count=1`
+  - live diagnosis behind the fix: replacement task `58` under Sam.blog parent `55` correctly captured the real scrape contract, but the queue decomposer still turned it into low-value child tasks `59` (`Use web_fetch ...`) and `60` (`Use cli_execute ...`) instead of bounded batch slices
+  - expected post-deploy behavior on the next fresh equivalent lane:
+    - counted scrape/fetch tasks should split into meaningful `1-17` / `18-35` style children
+    - tool-instruction lines like `Use web_fetch...` and `Use cli_execute...` should no longer appear as child task titles
+- 2026-03-28 08:27:45 MDT - preflight malformed procedural child task lanes and hide them from PM snapshots
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go) to export `TaskLooksProceduralInstructionArtifact(...)`, which identifies task titles/descriptions that are only tool procedure text rather than bounded deliverables
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - async `project_task` turns now preflight-block malformed procedural child lanes before model execution
+    - project-continuation snapshots and actionable-draft counts now ignore these malformed procedural child artifacts, just like the earlier malformed no-decompose children
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) so worker-authored PM snapshots ignore the same malformed procedural child artifacts
+  - added focused coverage in:
+    - [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go)
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - [`internal/turn/engine_integration_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_integration_test.go)
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(TaskLooksProceduralInstructionArtifact|Analyze(PrefersEnumeratedFetchBatchesOverProceduralToolSteps|FlagsEnumeratedCompoundTitlesWithoutStructuredDescriptions)|PrepareQueueDecomposition(SplitsEnumeratedFetchTaskInsteadOfProceduralSteps|SkipsConcreteDeliverableWithProceduralSections|SkipsConcreteDeliverableWithExactStepsAndNoDecompose))$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshot(IgnoresMalformedNoDecomposeChildren|IgnoresMalformedProceduralChildren|SkipsDraftParentWithBlockedChildren|ForSummaryNarrowsToPriorityArtifactPath)|BuildProjectContinuationActionPrompt(AddsChildWorkGuidanceForDecomposedParent|AddsReplacementChildGuidanceForBlockedParent)|ProjectExecutionContinuationTaskRefIncludesBlockedResumePolicy)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegration(MalformedNoDecomposeChildKickoffPreflightBlocksBeforeModelCall|MalformedProceduralChildKickoffPreflightBlocksBeforeModelCall)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(ProjectExecutionContinuationSnapshot(IgnoresMalformedNoDecomposeChildren|IgnoresMalformedProceduralChildren|PromotesBlockedChildParentsToReplacementWork)|EnsureProjectContinuationMessageSuppressesRepeatedConsumedActiveReplacementContinuation)$' -count=1`
+  - live diagnosis behind the fix: after the first decomposition repair was written, Sam.blog still had active malformed child tasks `59` and `60` under replacement task `58`, so future PM turns would remain distracted until those existing procedural lanes were explicitly hidden and blocked

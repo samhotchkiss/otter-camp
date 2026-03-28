@@ -2487,7 +2487,8 @@ func (w *Worker) countActionableProjectDraftTasks(ctx context.Context, projectID
 	if err != nil {
 		return 0, err
 	}
-	childActivity := projectContinuationChildTaskActivityForWorker(projectTasks)
+	taskHintsByTask := buildProjectContinuationTaskHintsForWorker(projectTasks, nil)
+	childActivity := projectContinuationChildTaskActivityForWorker(projectTasks, taskHintsByTask)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDsForWorker(projectTasks)
 	count := 0
 	for _, task := range projectTasks {
@@ -2609,6 +2610,7 @@ type projectExecutionContinuationSnapshotForWorker struct {
 	ActiveTaskLine       string
 	LeafActiveTaskLine   string
 	DraftTaskLine        string
+	ReplacementDraftLine string
 	ChildActiveDraftLine string
 	FocusTaskLine        string
 }
@@ -2624,8 +2626,9 @@ type projectContinuationTaskHintsForWorker struct {
 const projectContinuationBlockerExcerptLimitForWorker = 120
 
 type projectContinuationChildActivityForWorker struct {
-	childTaskCount       int
-	activeChildTaskCount int
+	childTaskCount                   int
+	activeChildTaskCount             int
+	replaceableBlockedChildTaskCount int
 }
 
 func isProjectContinuationActionableDraftTaskForWorker(task repo.ProjectTask, activity projectContinuationChildActivityForWorker) bool {
@@ -2646,11 +2649,12 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 	if err != nil {
 		return snapshot, err
 	}
-	childActivity := projectContinuationChildTaskActivityForWorker(projectTasks)
+	childActivity := projectContinuationChildTaskActivityForWorker(projectTasks, taskHintsByTask)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDsForWorker(projectTasks)
 	activeTasks := make([]string, 0, 4)
 	leafActiveTasks := make([]string, 0, 4)
 	draftTasks := make([]string, 0, 4)
+	replacementDraftTasks := make([]string, 0, 4)
 	childActiveDraftTasks := make([]string, 0, 4)
 	focusTask := ""
 	for _, task := range projectTasks {
@@ -2665,6 +2669,17 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 		taskRef := projectExecutionContinuationTaskRefForWorker(task, activity, taskHintsByTask[task.ID])
 		if isActionableProjectDraftTaskForWorker(task) {
 			if activity.childTaskCount > 0 {
+				if activity.activeChildTaskCount == 0 &&
+					activity.replaceableBlockedChildTaskCount > 0 &&
+					activity.replaceableBlockedChildTaskCount == activity.childTaskCount {
+					if len(replacementDraftTasks) < 4 {
+						replacementDraftTasks = append(replacementDraftTasks, taskRef)
+					}
+					if focusTask == "" {
+						focusTask = taskRef
+					}
+					continue
+				}
 				if len(childActiveDraftTasks) < 4 {
 					childActiveDraftTasks = append(childActiveDraftTasks, taskRef)
 				}
@@ -2693,6 +2708,9 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 	}
 	if len(draftTasks) > 0 {
 		snapshot.DraftTaskLine = "Actionable draft tasks already in the tree: " + strings.Join(draftTasks, "; ")
+	}
+	if len(replacementDraftTasks) > 0 {
+		snapshot.ReplacementDraftLine = "Draft parent tasks need fresh replacement child work: " + strings.Join(replacementDraftTasks, "; ")
 	}
 	if len(childActiveDraftTasks) > 0 {
 		snapshot.ChildActiveDraftLine = "Draft parent tasks already have child work: " + strings.Join(childActiveDraftTasks, "; ")
@@ -2806,7 +2824,7 @@ func projectContinuationTaskReferencesURLIndexForWorker(task repo.ProjectTask) b
 	return strings.Contains(text, "url index") || strings.Contains(text, "technonymous-index.json")
 }
 
-func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask) map[uuid.UUID]projectContinuationChildActivityForWorker {
+func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask, hintsByTask map[uuid.UUID]projectContinuationTaskHintsForWorker) map[uuid.UUID]projectContinuationChildActivityForWorker {
 	activityByParentID := make(map[uuid.UUID]projectContinuationChildActivityForWorker)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDsForWorker(tasks)
 	for _, task := range tasks {
@@ -2830,6 +2848,12 @@ func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask) map
 		activity.childTaskCount++
 		if projectTaskExecutionActiveForWorker(task.WorkStatus) {
 			activity.activeChildTaskCount++
+		}
+		if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
+			switch strings.TrimSpace(hintsByTask[task.ID].ResumePolicy) {
+			case "terminal_keep_blocked", "needs_replacement_work":
+				activity.replaceableBlockedChildTaskCount++
+			}
 		}
 		activityByParentID[parentID] = activity
 	}
@@ -2856,7 +2880,11 @@ func projectContinuationMalformedChildTaskIDsForWorker(tasks []repo.ProjectTask)
 			continue
 		}
 		parentTask, ok := tasksByID[parentID]
-		if !ok || !projectContinuationParentForbidsDecompositionForWorker(parentTask) {
+		if !ok {
+			continue
+		}
+		if !projectContinuationParentForbidsDecompositionForWorker(parentTask) &&
+			!taskdecomp.TaskLooksProceduralInstructionArtifact(task.Title, task.Description) {
 			continue
 		}
 		if malformed == nil {
@@ -2928,6 +2956,9 @@ func projectExecutionContinuationTaskRefForWorker(task repo.ProjectTask, activit
 		parts = append(parts, "active_child_tasks="+strconv.Itoa(activity.activeChildTaskCount))
 	} else if activity.childTaskCount > 0 {
 		parts = append(parts, "child_tasks="+strconv.Itoa(activity.childTaskCount))
+		if activity.replaceableBlockedChildTaskCount > 0 {
+			parts = append(parts, "replaceable_blocked_child_tasks="+strconv.Itoa(activity.replaceableBlockedChildTaskCount))
+		}
 	}
 	return strings.Join(parts, " ")
 }
@@ -3080,6 +3111,7 @@ func projectExecutionContinuationFingerprintForWorker(completedTaskID uuid.UUID,
 		strings.TrimSpace(snapshot.ProjectLine),
 		strings.TrimSpace(snapshot.ActiveTaskLine),
 		strings.TrimSpace(snapshot.DraftTaskLine),
+		strings.TrimSpace(snapshot.ReplacementDraftLine),
 		strings.TrimSpace(snapshot.ChildActiveDraftLine),
 		strings.TrimSpace(snapshot.FocusTaskLine),
 	}
@@ -3137,6 +3169,11 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 			lines = append(lines, "If a named draft task above already shows depends_on_path=..., inspect that prerequisite artifact before broader search.")
 		}
 	}
+	if replacementLine := strings.TrimSpace(snapshot.ReplacementDraftLine); replacementLine != "" {
+		lines = append(lines, replacementLine)
+		lines = append(lines, "Those draft parents no longer have active child execution. Their existing child lanes are terminally blocked, so create or queue the smallest replacement child task under the correct parent now instead of broad rediscovery.")
+		lines = append(lines, "Do not browse broad workspace roots, task trees, or flow templates first when the replacement parent already names the dependency or deliverable path.")
+	}
 	if parentLine := strings.TrimSpace(snapshot.ChildActiveDraftLine); parentLine != "" {
 		lines = append(lines, parentLine)
 		lines = append(lines, "Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while those child tasks already exist. Let active child lanes continue, or inspect only that parent's direct children with parent_task_id if a concrete blocker must be verified.")
@@ -3148,6 +3185,9 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 		}
 		if strings.Contains(focusLine, "deliverable_path=") || strings.Contains(focusLine, "deliverable_root=") || strings.Contains(focusLine, "depends_on_path=") {
 			lines = append(lines, "When the focus task already includes exact deliverable or dependency hints, use those paths directly before any broader workspace search.")
+		}
+		if strings.Contains(focusLine, "replaceable_blocked_child_tasks=") {
+			lines = append(lines, "Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.")
 		}
 	}
 	return lines

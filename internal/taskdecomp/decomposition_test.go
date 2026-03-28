@@ -56,6 +56,52 @@ func TestAnalyzeFlagsEnumeratedCompoundTitlesWithoutStructuredDescriptions(t *te
 	}
 }
 
+func TestAnalyzePrefersEnumeratedFetchBatchesOverProceduralToolSteps(t *testing.T) {
+	description := strings.Join([]string{
+		"Read the URL list from content/technonymous-index.json (already verified: 35 post URLs).",
+		"",
+		"For each URL:",
+		"1. Use web_fetch to retrieve the page content as plain text",
+		"2. Extract the post title, publication date (if available), and body content",
+		"3. Format as a clean Markdown file with YAML front matter (title, date, source_url, slug)",
+		"4. Save to content/posts/{slug}.md where slug is derived from the URL path segment (the last path component after /p/)",
+		"",
+		"Use cli_execute with shell scripting or iterate in the agent loop. Process all 35 posts.",
+		"",
+		"Expected output: 35 markdown files in content/posts/, each containing the full post content with front matter.",
+		"",
+		"IMPORTANT: Use ONLY web_fetch and file_write/cli_execute tools. Do NOT use browser_navigate, browser_click, or browser_extract_text.",
+	}, "\n")
+
+	plan := Analyze("Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/", &description)
+	if !plan.RequiresDecomposition {
+		t.Fatal("RequiresDecomposition = false, want true")
+	}
+	want := []string{
+		"Fetch technonymous.org posts via web_fetch and save as markdown files under content/posts/ 1-17",
+		"Fetch technonymous.org posts via web_fetch and save as markdown files under content/posts/ 18-35",
+	}
+	if !reflect.DeepEqual(plan.Deliverables, want) {
+		t.Fatalf("Deliverables = %v, want %v", plan.Deliverables, want)
+	}
+	for _, item := range plan.Deliverables {
+		if strings.Contains(item, "Use web_fetch") || strings.Contains(item, "Use cli_execute") {
+			t.Fatalf("procedural tool instruction leaked into deliverables: %q", item)
+		}
+	}
+}
+
+func TestTaskLooksProceduralInstructionArtifact(t *testing.T) {
+	description := "Use cli_execute with shell scripting or iterate in the agent loop. Process all 35 posts."
+	if !TaskLooksProceduralInstructionArtifact("Use cli_execute with shell scripting or iterate in the agent loop. Process all 35 posts.", &description) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for tool-procedure child task")
+	}
+	realDescription := "Fetch posts 1-17 via web_fetch and save each result as markdown under content/posts/."
+	if TaskLooksProceduralInstructionArtifact("Fetch technonymous.org posts 1-17 via web_fetch and save as markdown files under content/posts/", &realDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = true, want false for bounded batch child task")
+	}
+}
+
 func TestAnalyzePrefersLabelledEnumeratedDeliverables(t *testing.T) {
 	description := "Create one persona per target reader segment."
 
@@ -491,6 +537,51 @@ func TestPrepareQueueDecompositionSkipsWhenAlreadyDecomposed(t *testing.T) {
 	}
 	if len(result.ChildDrafts) != 0 {
 		t.Fatalf("ChildDrafts len = %d, want 0", len(result.ChildDrafts))
+	}
+}
+
+func TestPrepareQueueDecompositionSplitsEnumeratedFetchTaskInsteadOfProceduralSteps(t *testing.T) {
+	description := strings.Join([]string{
+		"Read the URL list from content/technonymous-index.json (already verified: 35 post URLs).",
+		"",
+		"For each URL:",
+		"1. Use web_fetch to retrieve the page content as plain text",
+		"2. Extract the post title, publication date (if available), and body content",
+		"3. Format as a clean Markdown file with YAML front matter (title, date, source_url, slug)",
+		"4. Save to content/posts/{slug}.md where slug is derived from the URL path segment (the last path component after /p/)",
+		"",
+		"Use cli_execute with shell scripting or iterate in the agent loop. Process all 35 posts.",
+		"",
+		"Expected output: 35 markdown files in content/posts/, each containing the full post content with front matter.",
+	}, "\n")
+
+	result, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/",
+		Description:  &description,
+		Metadata:     json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("PrepareQueueDecomposition: %v", err)
+	}
+	if !result.Applied {
+		t.Fatal("Applied = false, want true")
+	}
+	if len(result.ChildDrafts) != 2 {
+		t.Fatalf("ChildDrafts len = %d, want 2", len(result.ChildDrafts))
+	}
+	wantTitles := []string{
+		"Fetch technonymous.org posts via web_fetch and save as markdown files under content/posts/ 1-17",
+		"Fetch technonymous.org posts via web_fetch and save as markdown files under content/posts/ 18-35",
+	}
+	gotTitles := []string{result.ChildDrafts[0].Title, result.ChildDrafts[1].Title}
+	if !reflect.DeepEqual(gotTitles, wantTitles) {
+		t.Fatalf("ChildDraft titles = %v, want %v", gotTitles, wantTitles)
+	}
+	for _, child := range result.ChildDrafts {
+		if strings.Contains(child.Title, "Use web_fetch") || strings.Contains(child.Title, "Use cli_execute") {
+			t.Fatalf("procedural tool instruction leaked into child title: %q", child.Title)
+		}
 	}
 }
 

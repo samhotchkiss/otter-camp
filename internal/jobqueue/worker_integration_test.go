@@ -17846,6 +17846,267 @@ func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedNoDecompos
 	}
 }
 
+func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedProceduralChildren(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "project-continuation-snapshot-ignores-malformed-procedural-children",
+		DisplayName: "Project Continuation Snapshot Ignores Malformed Procedural Children",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "project-continuation-snapshot-ignores-malformed-procedural-children-project",
+		DisplayName:    "Project Continuation Snapshot Ignores Malformed Procedural Children Project",
+		Description:    "Project for malformed procedural child snapshot coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "project-continuation-snapshot-ignores-malformed-procedural-children-template",
+		DisplayName:    "Project Continuation Snapshot Ignores Malformed Procedural Children Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	parentDescription := "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/."
+	parentMetadata, err := json.Marshal(map[string]any{
+		"decomposition": map[string]any{
+			"applied":             true,
+			"mode":                "parallel_children",
+			"orchestration_only":  true,
+			"source_description":  parentDescription,
+			"primary_deliverable": "Fetch technonymous.org posts via web_fetch and save as markdown files under content/posts/ 1-17",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal parent metadata: %v", err)
+	}
+	parentTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     58,
+		Title:          "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+		Metadata:       parentMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childDescription := "Use cli_execute with shell scripting or iterate in the agent loop. Process all 35 posts."
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     60,
+		Title:          "Use cli_execute with shell scripting or iterate in the agent loop. Process all 35 posts.",
+		Description:    &childDescription,
+		WorkStatus:     "in_progress",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+		Metadata:       childMetadata,
+	}); err != nil {
+		t.Fatalf("create malformed procedural child task: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/") {
+		t.Fatalf("DraftTaskLine = %q, want actionable parent task", snapshot.DraftTaskLine)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "Use cli_execute with shell scripting") {
+		t.Fatalf("ActiveTaskLine = %q, should omit malformed procedural child artifact", snapshot.ActiveTaskLine)
+	}
+	if strings.Contains(snapshot.ChildActiveDraftLine, "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/") {
+		t.Fatalf("ChildActiveDraftLine = %q, should not treat malformed procedural children as active child work", snapshot.ChildActiveDraftLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/") {
+		t.Fatalf("FocusTaskLine = %q, want parent task restored as focus", snapshot.FocusTaskLine)
+	}
+
+	remainingDrafts, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	if remainingDrafts != 1 {
+		t.Fatalf("countActionableProjectDraftTasks = %d, want 1 actionable parent after ignoring malformed procedural child artifact", remainingDrafts)
+	}
+}
+
+func TestJobWorkerProjectExecutionContinuationSnapshotPromotesBlockedChildParentsToReplacementWork(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "project-continuation-snapshot-promotes-blocked-child-parents",
+		DisplayName: "Project Continuation Snapshot Promotes Blocked Child Parents",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "project-continuation-snapshot-promotes-blocked-child-parents-project",
+		DisplayName:    "Project Continuation Snapshot Promotes Blocked Child Parents Project",
+		Description:    "Project for replacement-child PM snapshot coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "project-continuation-snapshot-promotes-blocked-child-parents-template",
+		DisplayName:    "Project Continuation Snapshot Promotes Blocked Child Parents Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	eventRepo := repo.NewProjectTaskEventRepo(pool)
+
+	parentDescription := "Scrape all 35 technonymous.org posts to markdown using web_fetch, saving each post under content/posts/."
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     55,
+		Title:          "Scrape all 35 technonymous.org posts to markdown using web_fetch",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	for _, taskNumber := range []int{56, 57} {
+		childTitle := fmt.Sprintf("Blocked child %d", taskNumber)
+		childTask, createErr := taskRepo.Create(ctx, repo.ProjectTask{
+			OrganizationID: org.ID,
+			ProjectID:      project.ID,
+			TaskNumber:     taskNumber,
+			Title:          childTitle,
+			WorkStatus:     "blocked",
+			BlocksScope:    "task",
+			FlowTemplateID: &template.ID,
+			AssignedAgentID: func() *uuid.UUID {
+				id := agent.ID
+				return &id
+			}(),
+			CreatedByType: "system",
+			CreatedByID:   &agent.ID,
+			Metadata:      childMetadata,
+		})
+		if createErr != nil {
+			t.Fatalf("create child task %d: %v", taskNumber, createErr)
+		}
+		if _, recordErr := eventRepo.Record(ctx, repo.ProjectTaskEvent{
+			TaskID:    childTask.ID,
+			ProjectID: project.ID,
+			EventType: "flow.rejected",
+			ActorType: "system",
+			Payload:   json.RawMessage(`{"blocked_reason":"flow rejection max visits exceeded"}`),
+		}); recordErr != nil {
+			t.Fatalf("record blocked reason for child task %d: %v", taskNumber, recordErr)
+		}
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "Scrape all 35 technonymous.org posts to markdown using web_fetch") {
+		t.Fatalf("ReplacementDraftLine = %q, want blocked-child parent promoted to replacement work", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "replaceable_blocked_child_tasks=2") {
+		t.Fatalf("ReplacementDraftLine = %q, want replacement blocked child count", snapshot.ReplacementDraftLine)
+	}
+	if strings.Contains(snapshot.ChildActiveDraftLine, "task 55 (Scrape all 35 technonymous.org posts to markdown using web_fetch)") {
+		t.Fatalf("ChildActiveDraftLine = %q, should not keep terminally blocked child parent in active-child bucket", snapshot.ChildActiveDraftLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "Scrape all 35 technonymous.org posts to markdown using web_fetch") {
+		t.Fatalf("FocusTaskLine = %q, want blocked-child parent as replacement focus", snapshot.FocusTaskLine)
+	}
+}
+
 func TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedActiveReplacementContinuation(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

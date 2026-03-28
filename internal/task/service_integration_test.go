@@ -2246,6 +2246,91 @@ func TestTaskServiceIntegrationQueueKeepsParentDraftAndQueuesChildWorkUnits(t *t
 	}
 }
 
+func TestTaskServiceIntegrationQueueSplitsEnumeratedFetchTaskIntoBatchChildren(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	description := strings.Join([]string{
+		"Read the URL list from content/technonymous-index.json (already verified: 35 post URLs).",
+		"",
+		"For each URL:",
+		"1. Use web_fetch to retrieve the page content as plain text",
+		"2. Extract the post title, publication date (if available), and body content",
+		"3. Format as a clean Markdown file with YAML front matter (title, date, source_url, slug)",
+		"4. Save to content/posts/{slug}.md where slug is derived from the URL path segment (the last path component after /p/)",
+		"",
+		"Use cli_execute with shell scripting or iterate in the agent loop. Process all 35 posts.",
+		"",
+		"Expected output: 35 markdown files in content/posts/, each containing the full post content with front matter.",
+	}, "\n")
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/",
+		Description:    &description,
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	queued, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if queued.WorkStatus != "draft" {
+		t.Fatalf("queued work_status = %q, want draft parent orchestration-only state", queued.WorkStatus)
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT title, work_status
+		FROM project_task
+		WHERE project_id = $1
+		  AND metadata->>'decomposition_parent_task_id' = $2
+		ORDER BY task_number
+	`, project.ID, created.ID.String())
+	if err != nil {
+		t.Fatalf("query decomposed child tasks: %v", err)
+	}
+	defer rows.Close()
+
+	var titles []string
+	for rows.Next() {
+		var title string
+		var workStatus string
+		if err := rows.Scan(&title, &workStatus); err != nil {
+			t.Fatalf("scan child task: %v", err)
+		}
+		if workStatus != "queued" {
+			t.Fatalf("child work_status = %q, want queued", workStatus)
+		}
+		titles = append(titles, title)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate child tasks: %v", err)
+	}
+
+	wantTitles := []string{
+		"Fetch technonymous.org posts via web_fetch and save as markdown files under content/posts/ 1-17",
+		"Fetch technonymous.org posts via web_fetch and save as markdown files under content/posts/ 18-35",
+	}
+	if len(titles) != len(wantTitles) {
+		t.Fatalf("child title count = %d, want %d (%v)", len(titles), len(wantTitles), titles)
+	}
+	for i, want := range wantTitles {
+		if titles[i] != want {
+			t.Fatalf("child title[%d] = %q, want %q (all titles=%v)", i, titles[i], want, titles)
+		}
+		if strings.Contains(titles[i], "Use web_fetch") || strings.Contains(titles[i], "Use cli_execute") {
+			t.Fatalf("procedural tool instruction leaked into child title: %q", titles[i])
+		}
+	}
+}
+
 func TestTaskServiceIntegrationParentDoneRequiresVerificationAndIntegration(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

@@ -11537,6 +11537,136 @@ func TestTurnEngineIntegrationMalformedNoDecomposeChildKickoffPreflightBlocksBef
 	}
 }
 
+func TestTurnEngineIntegrationMalformedProceduralChildKickoffPreflightBlocksBeforeModelCall(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+
+	parentDescription := "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/."
+	parentMetadata := mustJSON(t, map[string]any{
+		"decomposition": map[string]any{
+			"orchestration_only":  true,
+			"source_description":  parentDescription,
+			"primary_deliverable": "Fetch technonymous.org posts via web_fetch and save as markdown files under content/posts/ 1-17",
+		},
+	})
+	parentTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		CreatedByType:  "human_user",
+		CreatedByID:    &fixture.user.ID,
+		Metadata:       parentMetadata,
+	})
+	if err != nil {
+		t.Fatalf("Create parent task: %v", err)
+	}
+
+	flowTemplate := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	childDescription := "Use cli_execute with shell scripting or iterate in the agent loop. Process all 35 posts."
+	childTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Use cli_execute with shell scripting or iterate in the agent loop. Process all 35 posts.",
+		Description:     &childDescription,
+		WorkStatus:      "in_progress",
+		FlowTemplateID:  &flowTemplate.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+		AssignedAgentID: &fixture.agent.ID,
+		Metadata: mustJSON(t, map[string]any{
+			"decomposition_parent_task_id": parentTask.ID.String(),
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Create child task: %v", err)
+	}
+
+	taskSession, _ := mustCreateTaskSession(t, ctx, fixture, childTask, "operator opened an async procedural child session before the job was enqueued")
+	authorType := "human_user"
+	kickoffMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    buildTaskQueueKickoffMessageForTest(childTask),
+		Metadata: mustJSON(t, map[string]any{
+			"source": "task_queue_processor",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage kickoff: %v", err)
+	}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		return ModelResponse{Content: "should never reach model"}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, taskSession.ID, kickoffMessage.ID, &fixture.agent.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage malformed procedural child kickoff: %v", err)
+	}
+	if modelCalls != 0 {
+		t.Fatalf("model calls = %d, want 0 because malformed procedural child kickoff must halt in preflight", modelCalls)
+	}
+
+	refreshedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, childTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID child task: %v", err)
+	}
+	if refreshedTask.WorkStatus != "blocked" {
+		t.Fatalf("child task status = %q, want blocked", refreshedTask.WorkStatus)
+	}
+
+	blockedReasons, err := repo.NewProjectTaskEventRepo(fixture.pool).LatestBlockedReasonsByTask(ctx, []uuid.UUID{childTask.ID})
+	if err != nil {
+		t.Fatalf("LatestBlockedReasonsByTask: %v", err)
+	}
+	blockedReason := blockedReasons[childTask.ID]
+	if !strings.Contains(blockedReason, "procedural child") {
+		t.Fatalf("blocked reason = %q, want malformed procedural child explanation", blockedReason)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	latestCompleted := latestCompletedTurn(turns)
+	if latestCompleted == nil {
+		t.Fatal("expected completed kickoff turn")
+	}
+	if latestCompleted.StopReason == nil || strings.TrimSpace(*latestCompleted.StopReason) != stopReasonValidationBlocked {
+		got := ""
+		if latestCompleted.StopReason != nil {
+			got = strings.TrimSpace(*latestCompleted.StopReason)
+		}
+		t.Fatalf("stop_reason = %q, want %q", got, stopReasonValidationBlocked)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	foundSystemMessage := false
+	for _, message := range messages {
+		if message.TurnID == nil || *message.TurnID != latestCompleted.ID || !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		if strings.Contains(message.Content, "malformed procedural child") && strings.Contains(message.Content, "should not continue") {
+			foundSystemMessage = true
+			break
+		}
+	}
+	if !foundSystemMessage {
+		t.Fatal("missing malformed procedural child preflight system message")
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapFailsValidationWithoutPersistedAssignments(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
