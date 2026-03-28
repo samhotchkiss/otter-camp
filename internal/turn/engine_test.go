@@ -4406,6 +4406,123 @@ func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsUsesTailOffsetAf
 	}
 }
 
+func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsUsesTailOffsetAfterCurrentTurnHeadRead(t *testing.T) {
+	engine := &TurnEngine{messages: newFakeMessageRepo()}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        uuid.New(),
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `content/technonymous-index.json`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `content/technonymous-index.json` is missing.\n" +
+			"If `content/technonymous-index.json` may be large, start with `file.read` using `path=content/technonymous-index.json` and `max_bytes=8192` instead of an unconstrained full-file read. Use narrower follow-up inspection only if that bounded read is insufficient.\n" +
+			"If that first bounded read is truncated and you need the tail, use a follow-up `file.read` on `content/technonymous-index.json` with `offset_bytes` near `byte_size-8192` instead of rereading from byte 0.\n" +
+			"If reading `content/technonymous-index.json` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.",
+	}
+	recordTaskReviewPreferredDeliverableReadResult(rt, ToolResult{
+		Name: "file.read",
+		Output: map[string]any{
+			"path":         "content/technonymous-index.json",
+			"content":      strings.Repeat("x", taskReviewPreferredDeliverableReadMaxBytes),
+			"byte_size":    23010,
+			"bytes_read":   taskReviewPreferredDeliverableReadMaxBytes,
+			"offset_bytes": 0,
+			"truncated":    true,
+		},
+	})
+	toolCalls := []ModelToolCall{{
+		ID:   "read-target",
+		Name: "file.read",
+		Arguments: map[string]any{
+			"path": "content/technonymous-index.json",
+		},
+	}}
+
+	rewritten, changed, err := engine.maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(context.Background(), rt, toolCalls)
+	if err != nil {
+		t.Fatalf("maybeRewriteTaskReviewPreferredDeliverableReadToolCalls: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	if got := intValue(rewritten[0].Arguments["offset_bytes"]); got != 14818 {
+		t.Fatalf("offset_bytes = %d, want 14818", got)
+	}
+}
+
+func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsDoesNotReuseTailAfterCurrentTurnTailRead(t *testing.T) {
+	engine := &TurnEngine{messages: newFakeMessageRepo()}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        uuid.New(),
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `content/technonymous-index.json`.\n" +
+			"If that first bounded read is truncated and you need the tail, use a follow-up `file.read` on `content/technonymous-index.json` with `offset_bytes` near `byte_size-8192` instead of rereading from byte 0.\n",
+	}
+	recordTaskReviewPreferredDeliverableReadResult(rt, ToolResult{
+		Name: "file.read",
+		Output: map[string]any{
+			"path":         "content/technonymous-index.json",
+			"byte_size":    23010,
+			"bytes_read":   taskReviewPreferredDeliverableReadMaxBytes,
+			"offset_bytes": 14818,
+			"truncated":    false,
+		},
+	})
+	toolCalls := []ModelToolCall{{
+		ID:   "read-target",
+		Name: "file.read",
+		Arguments: map[string]any{
+			"path":      "content/technonymous-index.json",
+			"max_bytes": taskReviewPreferredDeliverableReadMaxBytes,
+		},
+	}}
+
+	rewritten, changed, err := engine.maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(context.Background(), rt, toolCalls)
+	if err != nil {
+		t.Fatalf("maybeRewriteTaskReviewPreferredDeliverableReadToolCalls: %v", err)
+	}
+	if changed {
+		t.Fatalf("changed = true, want false with tail already seen: %#v", rewritten[0].Arguments)
+	}
+}
+
+func TestRewriteTaskReviewPreferredDeliverableReadDispatchCallUsesCurrentTurnTailOffset(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        uuid.New(),
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `content/technonymous-index.json`.\n" +
+			"If that first bounded read is truncated and you need the tail, use a follow-up `file.read` on `content/technonymous-index.json` with `offset_bytes` near `byte_size-8192` instead of rereading from byte 0.\n" +
+			"Use flow.review_decision when the review is complete.\n",
+		reviewPreferredDeliverablePath:          "content/technonymous-index.json",
+		reviewPreferredDeliverableByteSize:      23010,
+		reviewPreferredDeliverableHeadTruncated: true,
+	}
+
+	name, arguments := rewriteTaskReviewPreferredDeliverableReadDispatchCall(rt, "file_read", map[string]any{
+		"path":      "content/technonymous-index.json",
+		"encoding":  "utf8",
+		"max_bytes": taskReviewPreferredDeliverableReadMaxBytes,
+	})
+	if name != "file.read" {
+		t.Fatalf("name = %q, want file.read", name)
+	}
+	if got := intValue(arguments["offset_bytes"]); got != 14818 {
+		t.Fatalf("offset_bytes = %d, want 14818", got)
+	}
+	if got := intValue(arguments["max_bytes"]); got != taskReviewPreferredDeliverableReadMaxBytes {
+		t.Fatalf("max_bytes = %d, want %d", got, taskReviewPreferredDeliverableReadMaxBytes)
+	}
+}
+
 func TestHandleCompletedProjectBootstrapGenericAssistantReplyRetriesWithFreshBootstrapPrompt(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	base := time.Unix(1700001000, 0).UTC()

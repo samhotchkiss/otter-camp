@@ -544,39 +544,43 @@ type TurnEngine struct {
 }
 
 type turnRuntime struct {
-	session                 *chat.ChatSession
-	agent                   repo.Agent
-	turn                    *chat.ChatTurn
-	initialMessageID        uuid.UUID
-	initialMessageText      string
-	currentJobID            *uuid.UUID
-	runID                   *uuid.UUID
-	runStepID               *uuid.UUID
-	runAttemptID            *uuid.UUID
-	startedAt               time.Time
-	toolCallsUsed           int
-	activeTier2RunID        *uuid.UUID
-	activeTier2RunMu        sync.RWMutex
-	modelRetryUsed          int
-	invocationAttempt       int
-	toolSet                 []tools.ToolDescriptor
-	stopReason              string
-	projectIdentity         *projectIdentity
-	historyStartID          *uuid.UUID
-	disableMemory           bool
-	freshKickoff            bool
-	availabilityPreflighted bool
-	recoveryTurn            bool
-	recoveryCLIFixes        int
-	recoveryFileFixes       int
-	recoveryReadOnlyRounds  int
-	taskFileFixes           int
-	recoveryFileWrites      map[string]recoveryPopulatedFileWriteState
-	recoveryWriteDone       bool
-	recoveryBlockReason     string
-	recoveryQueuedTurn      bool
-	recoveryTargetPath      string
-	placeholderTargetSeen   bool
+	session                                 *chat.ChatSession
+	agent                                   repo.Agent
+	turn                                    *chat.ChatTurn
+	initialMessageID                        uuid.UUID
+	initialMessageText                      string
+	currentJobID                            *uuid.UUID
+	runID                                   *uuid.UUID
+	runStepID                               *uuid.UUID
+	runAttemptID                            *uuid.UUID
+	startedAt                               time.Time
+	toolCallsUsed                           int
+	activeTier2RunID                        *uuid.UUID
+	activeTier2RunMu                        sync.RWMutex
+	modelRetryUsed                          int
+	invocationAttempt                       int
+	toolSet                                 []tools.ToolDescriptor
+	stopReason                              string
+	projectIdentity                         *projectIdentity
+	historyStartID                          *uuid.UUID
+	disableMemory                           bool
+	freshKickoff                            bool
+	availabilityPreflighted                 bool
+	recoveryTurn                            bool
+	recoveryCLIFixes                        int
+	recoveryFileFixes                       int
+	recoveryReadOnlyRounds                  int
+	taskFileFixes                           int
+	recoveryFileWrites                      map[string]recoveryPopulatedFileWriteState
+	recoveryWriteDone                       bool
+	recoveryBlockReason                     string
+	recoveryQueuedTurn                      bool
+	recoveryTargetPath                      string
+	placeholderTargetSeen                   bool
+	reviewPreferredDeliverablePath          string
+	reviewPreferredDeliverableByteSize      int
+	reviewPreferredDeliverableHeadTruncated bool
+	reviewPreferredDeliverableTailReadSeen  bool
 }
 
 type projectIdentity struct {
@@ -12741,6 +12745,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 		maybeInjectTaskExecutionSubtaskCreateExecutionID(rt, name, arguments)
 		e.maybeInjectOrchestrationParentReviewTaskListParentID(ctx, rt, name, rawArguments, arguments)
+		name, arguments = rewriteTaskReviewPreferredDeliverableReadDispatchCall(rt, name, arguments)
 		if binding.projectID != nil {
 			arguments["project_id"] = binding.projectID.String()
 		}
@@ -20965,6 +20970,7 @@ func (e *TurnEngine) appendToolResults(ctx context.Context, rt *turnRuntime, res
 		if strings.EqualFold(strings.TrimSpace(result.Name), "file.read") && strings.EqualFold(strings.TrimSpace(anyString(result.Output["error"])), "placeholder_deliverable") {
 			rt.placeholderTargetSeen = true
 		}
+		recordTaskReviewPreferredDeliverableReadResult(rt, result)
 		raw, _ := json.Marshal(payload)
 		toolCallID := result.ToolCallID
 		message, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
@@ -25524,17 +25530,33 @@ func (e *TurnEngine) maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(ctx
 }
 
 func (e *TurnEngine) taskReviewPreferredDeliverableTailReadOffset(ctx context.Context, rt *turnRuntime, targetPath string) (int, bool, error) {
-	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.session.ID == uuid.Nil {
+	if rt == nil || rt.session == nil || rt.session.ID == uuid.Nil {
 		return 0, false, nil
-	}
-	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
-	if err != nil {
-		return 0, false, err
 	}
 
 	headReadTruncated := false
 	tailReadSeen := false
 	byteSize := 0
+	if sameWorkspaceRelativePath(strings.TrimSpace(rt.reviewPreferredDeliverablePath), targetPath) {
+		headReadTruncated = rt.reviewPreferredDeliverableHeadTruncated
+		tailReadSeen = rt.reviewPreferredDeliverableTailReadSeen
+		byteSize = rt.reviewPreferredDeliverableByteSize
+	}
+	if (e == nil || e.messages == nil) && headReadTruncated && !tailReadSeen && byteSize > taskReviewPreferredDeliverableReadMaxBytes {
+		tailOffset := byteSize - taskReviewPreferredDeliverableReadMaxBytes
+		if tailOffset > 0 {
+			return tailOffset, true, nil
+		}
+	}
+	if e == nil || e.messages == nil {
+		return 0, false, nil
+	}
+
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return 0, false, err
+	}
+
 	for _, message := range messages {
 		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
 			continue
@@ -25574,6 +25596,77 @@ func (e *TurnEngine) taskReviewPreferredDeliverableTailReadOffset(ctx context.Co
 		return 0, false, nil
 	}
 	return tailOffset, true, nil
+}
+
+func recordTaskReviewPreferredDeliverableReadResult(rt *turnRuntime, result ToolResult) {
+	if rt == nil || !taskReviewPreferredDeliverableFirstApplies(rt) {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(result.Name), "file.read") || len(result.Output) == 0 {
+		return
+	}
+	targetPath := taskReviewPreferredDeliverableTarget(rt)
+	if targetPath == "" {
+		return
+	}
+	path := normalizeWorkspaceRelativePath(anyString(result.Output["path"]))
+	if path == "" || !sameWorkspaceRelativePath(path, targetPath) {
+		return
+	}
+	rt.reviewPreferredDeliverablePath = targetPath
+	if size := intValue(result.Output["byte_size"]); size > rt.reviewPreferredDeliverableByteSize {
+		rt.reviewPreferredDeliverableByteSize = size
+	}
+	offsetBytes := intValue(result.Output["offset_bytes"])
+	if offsetBytes < 0 {
+		offsetBytes = 0
+	}
+	readBytes := intValue(result.Output["bytes_read"])
+	if readBytes <= 0 {
+		readBytes = len([]byte(anyString(result.Output["content"])))
+	}
+	truncated, _ := boolValue(result.Output["truncated"])
+	if offsetBytes == 0 && truncated && readBytes > 0 {
+		rt.reviewPreferredDeliverableHeadTruncated = true
+	}
+	if offsetBytes > 0 && readBytes > 0 {
+		rt.reviewPreferredDeliverableTailReadSeen = true
+	}
+}
+
+func rewriteTaskReviewPreferredDeliverableReadDispatchCall(rt *turnRuntime, toolName string, arguments map[string]any) (string, map[string]any) {
+	if !taskReviewPreferredDeliverableFirstApplies(rt) {
+		return toolName, arguments
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "file.read", "file_read":
+	default:
+		return toolName, arguments
+	}
+	targetPath := taskReviewPreferredDeliverableTarget(rt)
+	if targetPath == "" || !sameWorkspaceRelativePath(normalizeWorkspaceRelativePath(stringValue(arguments["path"])), targetPath) {
+		return toolName, arguments
+	}
+	if !rt.reviewPreferredDeliverableHeadTruncated || rt.reviewPreferredDeliverableTailReadSeen || rt.reviewPreferredDeliverableByteSize <= taskReviewPreferredDeliverableReadMaxBytes {
+		return toolName, arguments
+	}
+	tailOffset := rt.reviewPreferredDeliverableByteSize - taskReviewPreferredDeliverableReadMaxBytes
+	if tailOffset <= 0 {
+		return toolName, arguments
+	}
+	explicitOffsetBytes := intValue(arguments["offset_bytes"])
+	explicitMaxBytes := intValue(arguments["max_bytes"])
+	if explicitOffsetBytes > 0 && explicitMaxBytes > 0 && explicitMaxBytes <= taskReviewPreferredDeliverableReadMaxBytes {
+		return toolName, arguments
+	}
+	rewritten := cloneMap(arguments)
+	if explicitOffsetBytes <= 0 {
+		rewritten["offset_bytes"] = tailOffset
+	}
+	if explicitMaxBytes <= 0 || explicitMaxBytes > taskReviewPreferredDeliverableReadMaxBytes {
+		rewritten["max_bytes"] = taskReviewPreferredDeliverableReadMaxBytes
+	}
+	return "file.read", rewritten
 }
 
 func shouldBlockTaskReviewPreferredDeliverableFirstTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {

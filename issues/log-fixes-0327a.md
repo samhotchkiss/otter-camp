@@ -544,3 +544,18 @@
     - `GOFLAGS='' go test -tags=integration ./internal/repo -run 'TestKeyToolSchemasExposeRequiredParameters$' -count=1`
     - `GOFLAGS='' go test -tags=integration ./internal/controlplane -run 'TestToolBrokerDispatch(FileReadPersistsOffsetWindowIntegration|Tier2PipelineIntegration)$' -count=1`
   - fresh live proof for the new tail-read rewrite is still pending the next natural task-48 review turn on the rebuilt runtime
+- 2026-03-28 03:47:00 MDT - make preferred-deliverable tail rewrites aware of current-turn reads
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `appendToolResults(...)` records preferred-deliverable review read state directly on the active `turnRuntime` as soon as a `file.read` result lands
+  - widened the tail-offset helper to merge that in-memory state with persisted session history before deciding whether to rewrite the next same-target `file.read` to `offset_bytes=byte_size-8192`
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - `TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsUsesTailOffsetAfterCurrentTurnHeadRead`
+    - `TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsDoesNotReuseTailAfterCurrentTurnTailRead`
+  - verified with `gofmt -w internal/turn/engine.go internal/turn/engine_test.go` and `GOFLAGS='' go test ./internal/turn -run 'TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCalls(AddsMaxBytes|PreservesSmallerExplicitLimit|UsesTailOffsetAfterTruncatedHeadRead|UsesTailOffsetAfterCurrentTurnHeadRead|DoesNotReuseTailAfterCurrentTurnTailRead)$' -count=1`
+  - live diagnosis behind the fix: task `48` session `1bb99d1b-d24c-4716-b9d4-3fd3197144ac` kept asking to “read the tail” while dispatching `offset_bytes=0` rereads, so the rewrite needed same-turn visibility rather than another schema/storage change
+- 2026-03-28 03:58:10 MDT - add a dispatch-time safety net for preferred-deliverable tail rereads
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so the actual tool-dispatch loop now rewrites same-target review `file.read` calls to `offset_bytes=byte_size-8192` whenever current-turn preferred-deliverable state already proves a truncated head read and no tail read has landed yet
+  - relaxed the tail-offset helper so it can still derive a tail window from in-memory turn state even if session-history lookup is unavailable
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - `TestRewriteTaskReviewPreferredDeliverableReadDispatchCallUsesCurrentTurnTailOffset`
+  - verified with `gofmt -w internal/turn/engine.go internal/turn/engine_test.go` and `GOFLAGS='' go test ./internal/turn -run 'Test(MaybeRewriteTaskReviewPreferredDeliverableReadToolCalls(AddsMaxBytes|PreservesSmallerExplicitLimit|UsesTailOffsetAfterTruncatedHeadRead|UsesTailOffsetAfterCurrentTurnHeadRead|DoesNotReuseTailAfterCurrentTurnTailRead)|RewriteTaskReviewPreferredDeliverableReadDispatchCallUsesCurrentTurnTailOffset)$' -count=1`
+  - fresh live proof: after the final runtime respawn at `03:56:43 MDT`, task `48` session `1bb99d1b-d24c-4716-b9d4-3fd3197144ac` produced a byte-0 head read at `03:58:02 MDT`, then the next same-target reread in turn `6e173a5a-bc64-4fca-bfbc-73f1120560f4` was executed as `offset_bytes=14818`, `bytes_read=8192`, `truncated=false` at `03:58:06 MDT`
