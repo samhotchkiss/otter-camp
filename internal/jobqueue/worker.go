@@ -430,6 +430,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if requeued > 0 {
 		w.logger.Info("job queue: requeued active project sessions without turns on startup", "count", requeued)
 	}
+	if requeued, err := w.RequeueActiveProjectSessionsMissingContinuation(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup idle project continuation recovery failed", "error", err)
+		}
+	} else if requeued > 0 {
+		w.logger.Info("job queue: requeued active project sessions missing continuation on startup", "count", requeued)
+	}
 	if rejittered, err := w.RejitterPendingRateLimitedAgentTurns(runCtx); err != nil {
 		if runCtx.Err() == nil {
 			w.logger.Error("startup rate-limit retry rejitter failed", "error", err)
@@ -1818,6 +1825,115 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 	}
 	if err := rows.Err(); err != nil {
 		return repaired, fmt.Errorf("iterate active project sessions without turns: %w", err)
+	}
+	return repaired, nil
+}
+
+func (w *Worker) RequeueActiveProjectSessionsMissingContinuation(ctx context.Context) (int64, error) {
+	rows, err := w.pool.Query(ctx, `
+		SELECT cs.id
+		FROM chat_session cs
+		JOIN project p
+		  ON p.id = cs.scope_id
+		WHERE cs.scope_type = 'project'
+		  AND cs.mode = 'async'
+		  AND cs.status = 'active'
+		  AND p.status = 'active'
+		  AND COALESCE(p.settings->'pause'->>'is_paused', 'false') <> 'true'
+		  AND cs.current_turn_id IS NULL
+		  AND COALESCE(cs.metadata->'project_bootstrap'->>'status', '') <> 'active'
+		  AND EXISTS (
+		    SELECT 1
+		    FROM project_task pt
+		    WHERE pt.project_id = cs.scope_id
+		      AND lower(trim(pt.work_status)) = 'draft'
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM project_task pt
+		    WHERE pt.project_id = cs.scope_id
+		      AND lower(trim(pt.work_status)) IN ('queued', 'in_progress', 'review')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM flow_node_execution e
+		    JOIN project_task pt
+		      ON pt.id = e.task_id
+		    WHERE pt.project_id = cs.scope_id
+		      AND lower(trim(pt.work_status)) NOT IN ('done', 'cancelled')
+		      AND e.status = 'active'
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_session task_session
+		    JOIN project_task pt
+		      ON pt.id = task_session.scope_id
+		    WHERE task_session.scope_type = 'project_task'
+		      AND task_session.mode = 'async'
+		      AND task_session.status = 'active'
+		      AND pt.project_id = cs.scope_id
+		      AND lower(trim(pt.work_status)) NOT IN ('done', 'cancelled')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    WHERE ct.session_id = cs.id
+		      AND ct.status IN ('pending', 'in_progress')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_message cm
+		    WHERE cm.session_id = cs.id
+		      AND cm.role = 'user'
+		      AND cm.status = 'pending'
+		      AND COALESCE(cm.metadata->>'source', '') IN ('project_execution_continuation', 'project_bootstrap')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = $1
+		      AND jq.status IN ('pending', 'claimed')
+		      AND (jq.payload->>'session_id')::uuid = cs.id
+		      AND NOT EXISTS (
+		        SELECT 1
+		        FROM chat_turn terminal_ct
+		        WHERE terminal_ct.session_id = (jq.payload->>'session_id')::uuid
+		          AND terminal_ct.trigger_message_id = (jq.payload->>'message_id')::uuid
+		          AND terminal_ct.retry_count = COALESCE((jq.payload->>'retry_count')::int, 0)
+		          AND terminal_ct.status IN ('completed', 'cancelled', 'failed')
+		      )
+		  )
+	`, agentTurnJobType)
+	if err != nil {
+		return 0, fmt.Errorf("list active project sessions missing continuation: %w", err)
+	}
+	defer rows.Close()
+
+	var repaired int64
+	for rows.Next() {
+		var sessionID uuid.UUID
+		if err := rows.Scan(&sessionID); err != nil {
+			return repaired, fmt.Errorf("scan active project session missing continuation: %w", err)
+		}
+		messageID, suppressed, err := w.ensureProjectContinuationMessageDecision(ctx, sessionID)
+		if err != nil {
+			return repaired, fmt.Errorf("ensure missing project continuation message for session %s: %w", sessionID, err)
+		}
+		if suppressed || messageID == uuid.Nil {
+			repaired++
+			continue
+		}
+		payload := agentTurnKeyPayload{
+			SessionID: sessionID,
+			MessageID: messageID,
+		}
+		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, payload, nil); err != nil {
+			return repaired, fmt.Errorf("enqueue missing project continuation dispatch for session %s: %w", sessionID, err)
+		}
+		repaired++
+	}
+	if err := rows.Err(); err != nil {
+		return repaired, fmt.Errorf("iterate active project sessions missing continuation: %w", err)
 	}
 	return repaired, nil
 }
@@ -6219,6 +6335,11 @@ func (w *Worker) runStaleClaimRecovery(ctx context.Context) {
 				w.logger.Error("active project session repair failed", "error", err)
 			} else if requeued > 0 {
 				w.logger.Info("job queue: requeued active project sessions without turns", "count", requeued)
+			}
+			if requeued, err := w.RequeueActiveProjectSessionsMissingContinuation(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("idle project continuation recovery failed", "error", err)
+			} else if requeued > 0 {
+				w.logger.Info("job queue: requeued active project sessions missing continuation", "count", requeued)
 			}
 			if rejittered, err := w.RejitterPendingRateLimitedAgentTurns(ctx); err != nil && ctx.Err() == nil {
 				w.logger.Error("rate-limit retry rejitter failed", "error", err)

@@ -12740,6 +12740,171 @@ func TestMaybeContinueProjectExecutionAfterTaskCompletionClosesSettledSession(t 
 	}
 }
 
+func TestMaybeContinueProjectExecutionAfterTaskCompletionIgnoresBlockedTasksForWakeup(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	blockedTaskID := uuid.New()
+	flowTemplateID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	sessionMetadata := mustJSONRaw(map[string]any{
+		"project_bootstrap": map[string]any{
+			"status": "completed",
+		},
+	})
+	fixture.session.Metadata = sessionMetadata
+	fixture.chat.session.Metadata = sessionMetadata
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO organization (id, slug, display_name, created_at, updated_at)
+		VALUES ($1, $2, $3, now(), now())
+	`, fixture.session.OrganizationID, "blocked-tasks-project-org", "Blocked Tasks Project Org"); err != nil {
+		t.Fatalf("insert organization: %v", err)
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO project (id, organization_id, slug, display_name, status, settings, created_by_type, created_by_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'active', '{}'::jsonb, 'system', $5, now(), now())
+	`, projectID, fixture.session.OrganizationID, "project-ignore-blocked-tasks", "Project Ignore Blocked Tasks", uuid.New()); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO flow_template (
+			id, organization_id, project_id, slug, display_name, description, is_current, version, is_system, created_by_type, created_by_id, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, '', true, 1, false, 'system', $6, now(), now())
+	`, flowTemplateID, fixture.session.OrganizationID, projectID, "blocked-tasks-flow", "Blocked Tasks Flow", uuid.New()); err != nil {
+		t.Fatalf("insert flow_template: %v", err)
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO chat_session (
+			id, organization_id, scope_type, scope_id, mode, status, title,
+			created_by_type, created_by_id, current_turn_id, last_message_at, turn_count, message_count, metadata, created_at, updated_at
+		) VALUES ($1, $2, 'project', $3, 'async', 'active', 'Blocked Tasks Project Session',
+			'system', $4, NULL, now(), 0, 0, $5, now(), now())
+	`, fixture.session.ID, fixture.session.OrganizationID, projectID, uuid.New(), sessionMetadata); err != nil {
+		t.Fatalf("insert chat_session: %v", err)
+	}
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				Status:         "active",
+			},
+		},
+	}
+	dbAgent, err := repo.NewAgentRepo(fixture.engine.pool).Create(context.Background(), repo.Agent{
+		OrganizationID:  fixture.session.OrganizationID,
+		DisplayName:     "Blocked Tasks Project Session Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Test agent",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:              completedTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      11,
+				Title:           "Finalize category index import",
+				WorkStatus:      "done",
+				AssignedAgentID: uuidPtr(dbAgent.ID),
+				FlowTemplateID:  uuidPtr(flowTemplateID),
+			},
+			draftTaskID: {
+				ID:              draftTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      12,
+				Title:           "Build replacement importer for missing category index",
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(dbAgent.ID),
+				FlowTemplateID:  uuidPtr(flowTemplateID),
+			},
+			blockedTaskID: {
+				ID:              blockedTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      13,
+				Title:           "Validate imported category index downstream",
+				WorkStatus:      "blocked",
+				AssignedAgentID: uuidPtr(dbAgent.ID),
+				FlowTemplateID:  uuidPtr(flowTemplateID),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+
+	for _, task := range taskRepo.items {
+		if _, err := fixture.engine.pool.Exec(context.Background(), `
+			INSERT INTO project_task (
+				id, organization_id, project_id, task_number, title, work_status,
+				requires_human_review, created_by_type, metadata, assigned_agent_id, flow_template_id, created_at, updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6,false,'system',$7,$8,$9,now(),now())
+		`, task.ID, fixture.session.OrganizationID, projectID, task.TaskNumber, task.Title, task.WorkStatus, mustJSONRaw(map[string]any{}), dbAgent.ID, flowTemplateID); err != nil {
+			t.Fatalf("insert project_task %s: %v", task.ID, err)
+		}
+	}
+
+	if err := fixture.engine.maybeContinueProjectExecutionAfterTaskCompletion(context.Background(), projectID, taskRepo.items[completedTaskID]); err != nil {
+		t.Fatalf("maybeContinueProjectExecutionAfterTaskCompletion: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil || jobs[0].payload.SessionID != fixture.session.ID {
+		t.Fatalf("enqueued payload = %#v, want session %s", jobs[0].payload, fixture.session.ID)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.engine.pool).GetByID(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("GetByID session: %v", err)
+	}
+	if storedSession.Status != "active" {
+		t.Fatalf("session status = %q, want active", storedSession.Status)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var sawContinuation bool
+	for _, msg := range messages {
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "user") {
+			continue
+		}
+		metadata := messageMetadataMap(msg.Metadata)
+		if !strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), projectExecutionContinuationSource) {
+			continue
+		}
+		if stringValue(metadata["completed_task_id"]) != completedTaskID.String() {
+			continue
+		}
+		if !strings.Contains(msg.Content, "latest completed task was task 11") {
+			t.Fatalf("continuation content = %q, want completed task context", msg.Content)
+		}
+		sawContinuation = true
+		break
+	}
+	if !sawContinuation {
+		t.Fatal("expected fresh continuation message even with blocked sibling tasks present")
+	}
+}
+
 func TestRecoverProjectTaskStaleInboundTurnWithoutRunKeepsLiveInvocation(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	fixture.engine.pool = testdb.New(t)

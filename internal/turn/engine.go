@@ -3446,7 +3446,7 @@ func (e *TurnEngine) maybeContinueProjectExecutionAfterTaskCompletion(ctx contex
 		SELECT COUNT(*)
 		FROM project_task
 		WHERE project_id = $1
-		  AND work_status IN ('queued', 'in_progress', 'review', 'blocked')
+		  AND work_status IN ('queued', 'in_progress', 'review')
 	`, projectID).Scan(&activeTaskWork); err != nil {
 		return err
 	}
