@@ -12151,20 +12151,20 @@ func TestJobWorkerEnsureProjectContinuationMessageIncludesSnapshotGuidance(t *te
 	if !strings.Contains(content, "Already-active non-terminal tasks in the tree:") {
 		t.Fatalf("continuation content missing active-task snapshot: %q", content)
 	}
-	if !strings.Contains(content, "Actionable draft tasks already in the tree:") {
-		t.Fatalf("continuation content missing draft-task snapshot: %q", content)
+	if strings.Contains(content, "Actionable draft tasks already in the tree:") {
+		t.Fatalf("continuation content should not treat decomposed parent as actionable draft: %q", content)
 	}
 	if !strings.Contains(content, "Do not begin with session.list, task.list, task.get") {
 		t.Fatalf("continuation content missing active-task anti-rediscovery guidance: %q", content)
 	}
-	if !strings.Contains(content, "Do not begin with broad project.get, task.list, task.get, or flow.get_execution rediscovery") {
-		t.Fatalf("continuation content missing draft-task anti-rediscovery guidance: %q", content)
+	if !strings.Contains(content, "Draft parent tasks already have child work:") {
+		t.Fatalf("continuation content missing decomposed-parent snapshot: %q", content)
 	}
-	if !strings.Contains(content, "Start from this existing actionable draft before broad rediscovery") {
-		t.Fatalf("continuation content missing focus-task guidance: %q", content)
+	if !strings.Contains(content, "while those child tasks already exist") {
+		t.Fatalf("continuation content missing decomposed-parent anti-rediscovery guidance: %q", content)
 	}
-	if !strings.Contains(content, "do not reread the parent or child task records first") {
-		t.Fatalf("continuation content missing child-task anti-reread guidance: %q", content)
+	if strings.Contains(content, "There are 1 remaining draft project tasks") {
+		t.Fatalf("continuation content should not count decomposed parent as remaining actionable draft: %q", content)
 	}
 }
 

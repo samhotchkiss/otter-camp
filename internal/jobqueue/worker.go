@@ -2168,32 +2168,16 @@ func valueOrEmpty(value *string) string {
 }
 
 func (w *Worker) countActionableProjectDraftTasks(ctx context.Context, projectID uuid.UUID) (int, error) {
-	rows, err := w.pool.Query(ctx, `
-		SELECT title, description, metadata
-		FROM project_task
-		WHERE project_id = $1
-		  AND work_status = 'draft'
-	`, projectID)
+	projectTasks, err := repo.NewProjectTaskRepo(w.pool).ListByProject(ctx, projectID)
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
-
+	childActivity := projectContinuationChildTaskActivityForWorker(projectTasks)
 	count := 0
-	for rows.Next() {
-		var title string
-		var description *string
-		var metadata []byte
-		if err := rows.Scan(&title, &description, &metadata); err != nil {
-			return 0, err
-		}
-		task := repo.ProjectTask{Title: title, Description: description, WorkStatus: "draft", Metadata: metadata}
-		if isActionableProjectDraftTaskForWorker(task) {
+	for _, task := range projectTasks {
+		if isProjectContinuationActionableDraftTaskForWorker(task, childActivity[task.ID]) {
 			count++
 		}
-	}
-	if rows.Err() != nil {
-		return 0, rows.Err()
 	}
 	return count, nil
 }
@@ -2314,6 +2298,10 @@ type projectContinuationChildActivityForWorker struct {
 	activeChildTaskCount int
 }
 
+func isProjectContinuationActionableDraftTaskForWorker(task repo.ProjectTask, activity projectContinuationChildActivityForWorker) bool {
+	return isActionableProjectDraftTaskForWorker(task) && activity.childTaskCount == 0
+}
+
 func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, projectID uuid.UUID) (projectExecutionContinuationSnapshotForWorker, error) {
 	snapshot := projectExecutionContinuationSnapshotForWorker{}
 	if w == nil || w.pool == nil || projectID == uuid.Nil {
@@ -2337,7 +2325,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 		activity := childActivity[task.ID]
 		taskRef := projectExecutionContinuationTaskRefForWorker(task, activity)
 		if isActionableProjectDraftTaskForWorker(task) {
-			if activity.activeChildTaskCount > 0 {
+			if activity.childTaskCount > 0 {
 				if len(childActiveDraftTasks) < 4 {
 					childActiveDraftTasks = append(childActiveDraftTasks, taskRef)
 				}
@@ -2362,7 +2350,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 		snapshot.DraftTaskLine = "Actionable draft tasks already in the tree: " + strings.Join(draftTasks, "; ")
 	}
 	if len(childActiveDraftTasks) > 0 {
-		snapshot.ChildActiveDraftLine = "Draft parent tasks already have active child work: " + strings.Join(childActiveDraftTasks, "; ")
+		snapshot.ChildActiveDraftLine = "Draft parent tasks already have child work: " + strings.Join(childActiveDraftTasks, "; ")
 	}
 	if focusTask != "" {
 		snapshot.FocusTaskLine = "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: " + focusTask
@@ -2463,7 +2451,7 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 	}
 	if parentLine := strings.TrimSpace(snapshot.ChildActiveDraftLine); parentLine != "" {
 		lines = append(lines, parentLine)
-		lines = append(lines, "Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while their child executions are already active. Let the child lanes continue, or inspect only that parent's direct children with parent_task_id if a concrete blocker must be verified.")
+		lines = append(lines, "Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while those child tasks already exist. Let active child lanes continue, or inspect only that parent's direct children with parent_task_id if a concrete blocker must be verified.")
 	}
 	if focusLine := strings.TrimSpace(snapshot.FocusTaskLine); focusLine != "" {
 		lines = append(lines, focusLine)

@@ -11588,6 +11588,62 @@ func TestNextRunnableDraftProjectTaskSkipsOrchestrationOnlyParent(t *testing.T) 
 	}
 }
 
+func TestNextRunnableDraftProjectTaskSkipsDraftParentWithChildTasks(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+
+	projectID := uuid.New()
+	parentID := uuid.New()
+	childID := uuid.New()
+	leafID := uuid.New()
+	agentID := uuid.New()
+	flowID := uuid.New()
+
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:              parentID,
+				ProjectID:       projectID,
+				TaskNumber:      34,
+				Title:           "Scrape and import technonymous.org posts from URL index",
+				WorkStatus:      "draft",
+				AssignedAgentID: &agentID,
+				FlowTemplateID:  &flowID,
+			},
+			childID: {
+				ID:         childID,
+				ProjectID:  projectID,
+				TaskNumber: 35,
+				Title:      "Scrape batch 1",
+				WorkStatus: "blocked",
+				Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentID.String())),
+			},
+			leafID: {
+				ID:              leafID,
+				ProjectID:       projectID,
+				TaskNumber:      37,
+				Title:           "Publish imported posts",
+				WorkStatus:      "draft",
+				AssignedAgentID: &agentID,
+				FlowTemplateID:  &flowID,
+			},
+		},
+	}
+
+	nextTask, ok, err := fixture.engine.nextRunnableDraftProjectTask(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("nextRunnableDraftProjectTask: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected a runnable draft task")
+	}
+	if nextTask.ID != leafID {
+		t.Fatalf("next runnable task = %s, want %s", nextTask.ID, leafID)
+	}
+}
+
 func TestBuildTaskExecutionOffTargetEvidenceToolGuardError(t *testing.T) {
 	t.Parallel()
 
@@ -15452,7 +15508,7 @@ func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 		ProjectLine:          "Active project id: 123",
 		ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 16 (Validate API) id=aaa title=\"Validate API\" work_status=in_progress assigned_agent_id=worker-1",
 		DraftTaskLine:        "Actionable draft tasks already in the tree: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft assigned_agent_id=missing flow_template_id=missing",
-		ChildActiveDraftLine: "Draft parent tasks already have active child work: task 21 (Theme rollout) id=ccc title=\"Theme rollout\" work_status=draft assigned_agent_id=missing flow_template_id=missing active_child_tasks=2",
+		ChildActiveDraftLine: "Draft parent tasks already have child work: task 21 (Theme rollout) id=ccc title=\"Theme rollout\" work_status=draft assigned_agent_id=missing flow_template_id=missing active_child_tasks=2",
 		FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft assigned_agent_id=missing flow_template_id=missing",
 	})
 
@@ -15498,7 +15554,7 @@ func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "repair that exact prerequisite before trying to queue it") {
 		t.Fatalf("prompt = %q, want prerequisite repair guidance", prompt)
 	}
-	if !strings.Contains(prompt, "Draft parent tasks already have active child work:") {
+	if !strings.Contains(prompt, "Draft parent tasks already have child work:") {
 		t.Fatalf("prompt = %q, want child-active draft snapshot", prompt)
 	}
 	if !strings.Contains(prompt, "Do not queue, re-decompose, or broadly rediscover those parent draft tasks again") {
@@ -15509,19 +15565,18 @@ func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	}
 }
 
-func TestBuildProjectContinuationActionPromptAddsChildTaskAntiRereadGuidanceForFocusDraft(t *testing.T) {
+func TestBuildProjectContinuationActionPromptAddsChildWorkGuidanceForDecomposedParent(t *testing.T) {
 	prompt := buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
-		ProjectLine:    "Active project id: 123",
-		ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 35 (Scrape batch 1) id=aaa title=\"Scrape batch 1\" work_status=blocked assigned_agent_id=worker-1",
-		DraftTaskLine:  "Actionable draft tasks already in the tree: task 34 (Scrape and import technonymous.org posts from URL index) id=bbb title=\"Scrape and import technonymous.org posts from URL index\" work_status=draft assigned_agent_id=worker-1 flow_template_id=ft-1 child_tasks=2",
-		FocusTaskLine:  "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 34 (Scrape and import technonymous.org posts from URL index) id=bbb title=\"Scrape and import technonymous.org posts from URL index\" work_status=draft assigned_agent_id=worker-1 flow_template_id=ft-1 child_tasks=2",
+		ProjectLine:          "Active project id: 123",
+		ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 35 (Scrape batch 1) id=aaa title=\"Scrape batch 1\" work_status=blocked assigned_agent_id=worker-1",
+		ChildActiveDraftLine: "Draft parent tasks already have child work: task 34 (Scrape and import technonymous.org posts from URL index) id=bbb title=\"Scrape and import technonymous.org posts from URL index\" work_status=draft assigned_agent_id=worker-1 flow_template_id=ft-1 child_tasks=2",
 	})
 
-	if !strings.Contains(prompt, "do not reread the parent or child task records first") {
-		t.Fatalf("prompt = %q, want child-task anti-reread guidance for focus draft", prompt)
+	if !strings.Contains(prompt, "Draft parent tasks already have child work:") {
+		t.Fatalf("prompt = %q, want decomposed-parent snapshot guidance", prompt)
 	}
-	if !strings.Contains(prompt, "split it directly into smaller reviewable work if bounded-size policy still blocks it") {
-		t.Fatalf("prompt = %q, want bounded-size split guidance for focus draft", prompt)
+	if !strings.Contains(prompt, "while those child tasks already exist") {
+		t.Fatalf("prompt = %q, want decomposed-parent anti-rediscovery guidance", prompt)
 	}
 }
 
@@ -15613,6 +15668,73 @@ func TestProjectExecutionContinuationSnapshotSummarizesProjectState(t *testing.T
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotSkipsDraftParentWithBlockedChildren(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	assignedID := uuid.New()
+	parentDraftID := uuid.New()
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			uuid.New(): {
+				ID:              uuid.New(),
+				ProjectID:       projectID,
+				TaskNumber:      16,
+				Title:           "Validate API",
+				WorkStatus:      "in_progress",
+				AssignedAgentID: &assignedID,
+			},
+			uuid.New(): {
+				ID:         uuid.New(),
+				ProjectID:  projectID,
+				TaskNumber: 19,
+				Title:      "Ship docs",
+				WorkStatus: "draft",
+			},
+			parentDraftID: {
+				ID:              parentDraftID,
+				ProjectID:       projectID,
+				TaskNumber:      21,
+				Title:           "Theme rollout",
+				WorkStatus:      "draft",
+				AssignedAgentID: &assignedID,
+			},
+			uuid.New(): {
+				ID:         uuid.New(),
+				ProjectID:  projectID,
+				TaskNumber: 22,
+				Title:      "Theme child 1",
+				WorkStatus: "blocked",
+				Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+			uuid.New(): {
+				ID:         uuid.New(),
+				ProjectID:  projectID,
+				TaskNumber: 23,
+				Title:      "Theme child 2",
+				WorkStatus: "blocked",
+				Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.DraftTaskLine, "task 21 (Theme rollout)") {
+		t.Fatalf("DraftTaskLine = %q, should skip draft parent with blocked child tasks", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.ChildActiveDraftLine, "task 21 (Theme rollout)") {
+		t.Fatalf("ChildActiveDraftLine = %q, want draft parent with blocked child tasks", snapshot.ChildActiveDraftLine)
+	}
+	if !strings.Contains(snapshot.ChildActiveDraftLine, "child_tasks=2") {
+		t.Fatalf("ChildActiveDraftLine = %q, want child task count", snapshot.ChildActiveDraftLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "task 19 (Ship docs)") {
+		t.Fatalf("FocusTaskLine = %q, want standalone actionable draft", snapshot.FocusTaskLine)
+	}
+}
+
 func TestWaitingBoundFlowExecutionRuntimeSubstateUsesReviewForReviewTask(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -15658,7 +15780,7 @@ func TestBuildProjectExecutionContinuationPrompt(t *testing.T) {
 		ProjectLine:          "Active project id: 123",
 		ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 16 (Validate API) id=aaa title=\"Validate API\" work_status=in_progress assigned_agent_id=worker-1",
 		DraftTaskLine:        "Actionable draft tasks already in the tree: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft assigned_agent_id=missing flow_template_id=missing",
-		ChildActiveDraftLine: "Draft parent tasks already have active child work: task 21 (Theme rollout) id=ccc title=\"Theme rollout\" work_status=draft assigned_agent_id=missing flow_template_id=missing active_child_tasks=2",
+		ChildActiveDraftLine: "Draft parent tasks already have child work: task 21 (Theme rollout) id=ccc title=\"Theme rollout\" work_status=draft assigned_agent_id=missing flow_template_id=missing active_child_tasks=2",
 		FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft assigned_agent_id=missing flow_template_id=missing",
 	})
 
@@ -15701,7 +15823,7 @@ func TestBuildProjectExecutionContinuationPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "repair that exact prerequisite before trying to queue it") {
 		t.Fatalf("prompt = %q, want draft prerequisite repair guidance", prompt)
 	}
-	if !strings.Contains(prompt, "Draft parent tasks already have active child work:") {
+	if !strings.Contains(prompt, "Draft parent tasks already have child work:") {
 		t.Fatalf("prompt = %q, want child-active draft snapshot", prompt)
 	}
 	if !strings.Contains(prompt, "Do not queue, re-decompose, or broadly rediscover those parent draft tasks again") {
@@ -15800,7 +15922,7 @@ func TestAppendContinuationSummaryAndActionRootsProjectContinuationAtSyntheticUs
 	if got := strings.TrimSpace(stringValue(messageMetadataMap(message.Metadata)["source"])); got != "project_continuation_resume" {
 		t.Fatalf("historyStart source = %q, want project_continuation_resume", got)
 	}
-	if !strings.Contains(message.Content, "Draft parent tasks already have active child work:") {
+	if !strings.Contains(message.Content, "Draft parent tasks already have child work:") {
 		t.Fatalf("historyStart content = %q, want child-active draft guidance", message.Content)
 	}
 	if !strings.Contains(message.Content, "Do not queue, re-decompose, or broadly rediscover those parent draft tasks again") {

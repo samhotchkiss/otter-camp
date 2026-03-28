@@ -4914,11 +4914,9 @@ func (e *TurnEngine) nextRunnableDraftProjectTask(ctx context.Context, projectID
 		}
 		return projectTasks[i].TaskNumber < projectTasks[j].TaskNumber
 	})
+	childActivity := projectContinuationChildTaskActivity(projectTasks)
 	for _, task := range projectTasks {
-		if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
-			continue
-		}
-		if taskLooksLikeOrchestrationOnlyParent(task) {
+		if !isProjectContinuationActionableDraftTask(task, childActivity[task.ID]) || taskLooksLikeOrchestrationOnlyParent(task) {
 			continue
 		}
 		if task.AssignedAgentID == nil || *task.AssignedAgentID == uuid.Nil || task.FlowTemplateID == nil || *task.FlowTemplateID == uuid.Nil {
@@ -6890,7 +6888,7 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 	}
 	if parentLine := strings.TrimSpace(snapshot.ChildActiveDraftLine); parentLine != "" {
 		lines = append(lines, parentLine)
-		lines = append(lines, "Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while their child executions are already active. Let the child lanes continue, or inspect only that parent's direct children with parent_task_id if a concrete blocker must be verified.")
+		lines = append(lines, "Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while those child tasks already exist. Let active child lanes continue, or inspect only that parent's direct children with parent_task_id if a concrete blocker must be verified.")
 	}
 	if focusLine := strings.TrimSpace(snapshot.FocusTaskLine); focusLine != "" {
 		lines = append(lines, focusLine)
@@ -16414,7 +16412,7 @@ func (e *TurnEngine) projectExecutionContinuationSnapshot(ctx context.Context, p
 		activity := childActivity[task.ID]
 		taskRef := projectExecutionContinuationTaskRef(task, activity)
 		if isActionableProjectDraftTask(task) {
-			if activity.activeChildTaskCount > 0 {
+			if activity.childTaskCount > 0 {
 				if len(childActiveDraftTasks) < 4 {
 					childActiveDraftTasks = append(childActiveDraftTasks, taskRef)
 				}
@@ -16439,7 +16437,7 @@ func (e *TurnEngine) projectExecutionContinuationSnapshot(ctx context.Context, p
 		snapshot.DraftTaskLine = "Actionable draft tasks already in the tree: " + strings.Join(draftTasks, "; ")
 	}
 	if len(childActiveDraftTasks) > 0 {
-		snapshot.ChildActiveDraftLine = "Draft parent tasks already have active child work: " + strings.Join(childActiveDraftTasks, "; ")
+		snapshot.ChildActiveDraftLine = "Draft parent tasks already have child work: " + strings.Join(childActiveDraftTasks, "; ")
 	}
 	if focusTask != "" {
 		snapshot.FocusTaskLine = "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: " + focusTask
@@ -16471,7 +16469,7 @@ func projectContinuationChildTaskActivity(tasks []repo.ProjectTask) map[uuid.UUI
 }
 
 func isProjectContinuationActionableDraftTask(task repo.ProjectTask, activity projectContinuationChildActivity) bool {
-	return isActionableProjectDraftTask(task) && activity.activeChildTaskCount == 0
+	return isActionableProjectDraftTask(task) && activity.childTaskCount == 0
 }
 
 func projectTaskExecutionActive(status string) bool {
