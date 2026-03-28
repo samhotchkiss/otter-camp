@@ -8783,6 +8783,109 @@ func TestShouldBlockTaskExecutionBroadContextToolAllowsOrchestrationValidationCo
 	}
 }
 
+func TestShouldBlockTaskExecutionSiblingResponsibilityToolForWriteFocusedChildLane(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentID := uuid.New()
+	currentID := uuid.New()
+	siblingID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+	flowTemplateID := uuid.New()
+	currentDescription := "Write the results to content/technonymous-index.json"
+	siblingDescription := "Navigate to technonymous.org using browser tools"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = currentID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			currentID: {
+				ID:              currentID,
+				ProjectID:       projectID,
+				TaskNumber:      41,
+				Title:           "Write the results to content/technonymous-index.json",
+				Description:     &currentDescription,
+				WorkStatus:      "blocked",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+				Metadata:        mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentID.String()}),
+			},
+			siblingID: {
+				ID:              siblingID,
+				ProjectID:       projectID,
+				TaskNumber:      40,
+				Title:           "Navigate to technonymous.org using browser tools",
+				Description:     &siblingDescription,
+				WorkStatus:      "blocked",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+				Metadata:        mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentID.String()}),
+			},
+		},
+	}
+
+	rt := &turnRuntime{session: fixture.session}
+	blocked, reason := fixture.engine.shouldBlockTaskExecutionSiblingResponsibilityTool(context.Background(), rt, "web.fetch")
+	if !blocked {
+		t.Fatal("blocked = false, want true for write-focused child lane")
+	}
+	if !strings.Contains(reason, "write-focused child lane") || !strings.Contains(reason, "task 40") {
+		t.Fatalf("reason = %q, want sibling-responsibility guidance", reason)
+	}
+}
+
+func TestShouldNotBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChildLane(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentID := uuid.New()
+	currentID := uuid.New()
+	siblingID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+	flowTemplateID := uuid.New()
+	currentDescription := "Navigate to technonymous.org using browser tools"
+	siblingDescription := "Write the results to content/technonymous-index.json"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = currentID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			currentID: {
+				ID:              currentID,
+				ProjectID:       projectID,
+				TaskNumber:      40,
+				Title:           "Navigate to technonymous.org using browser tools",
+				Description:     &currentDescription,
+				WorkStatus:      "blocked",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+				Metadata:        mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentID.String()}),
+			},
+			siblingID: {
+				ID:              siblingID,
+				ProjectID:       projectID,
+				TaskNumber:      41,
+				Title:           "Write the results to content/technonymous-index.json",
+				Description:     &siblingDescription,
+				WorkStatus:      "blocked",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+				Metadata:        mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentID.String()}),
+			},
+		},
+	}
+
+	rt := &turnRuntime{session: fixture.session}
+	blocked, reason := fixture.engine.shouldBlockTaskExecutionSiblingResponsibilityTool(context.Background(), rt, "web.fetch")
+	if blocked {
+		t.Fatalf("blocked = true, want false for discovery-focused child lane: %q", reason)
+	}
+}
+
 func TestShouldBlockOrchestrationParentReviewTaskListToolRequiresParentScopedList(t *testing.T) {
 	t.Parallel()
 
@@ -15536,7 +15639,7 @@ func TestAsyncProjectTaskGuardrailContinuationDepthRequeuesFromSyntheticContinua
 		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
 			continue
 		}
-		if !strings.EqualFold(strings.TrimSpace(message.Content), buildTaskContinuationActionPrompt("")) {
+		if !strings.EqualFold(strings.TrimSpace(message.Content), buildTaskContinuationActionPrompt("", taskExecutionContinuationSnapshot{})) {
 			continue
 		}
 		if taskContinuationResumeMessageRootsHistory(message) {
@@ -15574,7 +15677,7 @@ func TestTaskContinuationRootMessageStartsAssemblyAtTriggerMessage(t *testing.T)
 		SessionID: fixture.session.ID,
 		Role:      "user",
 		Status:    "pending",
-		Content:   buildTaskContinuationActionPrompt(""),
+		Content:   buildTaskContinuationActionPrompt("", taskExecutionContinuationSnapshot{}),
 		Metadata:  taskContinuationResumeMessageMetadata(nil, 1),
 	})
 
@@ -16396,7 +16499,7 @@ Target Path: design-system/03-accessibility-standards.md
 func TestBuildTaskContinuationActionPromptTreatsDocumentSummaryAsDraft(t *testing.T) {
 	summary := "# Visual Direction\n\n- Kind: strategy_artifact\n\n## Design Principles\nConcrete draft body."
 
-	prompt := buildTaskContinuationActionPrompt(summary)
+	prompt := buildTaskContinuationActionPrompt(summary, taskExecutionContinuationSnapshot{})
 
 	if !strings.Contains(prompt, "The continuation summary above already contains draft deliverable content. Treat it as the working artifact draft for this turn.") {
 		t.Fatalf("prompt = %q, want draft-summary guidance", prompt)
@@ -16406,6 +16509,120 @@ func TestBuildTaskContinuationActionPromptTreatsDocumentSummaryAsDraft(t *testin
 	}
 	if !strings.Contains(prompt, "If a target file is in scope, revise the draft directly and write the file with concrete content instead of re-deriving the document from scratch.") {
 		t.Fatalf("prompt = %q, want direct-write guidance", prompt)
+	}
+}
+
+func TestBuildTaskContinuationActionPromptIncludesChildTaskSnapshotGuidance(t *testing.T) {
+	snapshot := taskExecutionContinuationSnapshot{
+		CurrentTaskLine:    "Current task: task 41 (Write the results to content/technonymous-index.json) id=writer work_status=blocked deliverable_path=content/technonymous-index.json blocker=\"recovery halted after 3 retries\"",
+		ParentContractLine: "Parent task contract: task 39 (Replacement: Crawl technonymous.org and produce content/technonymous-index.json) id=parent work_status=draft source_contract=\"Crawl technonymous.org, discover all blog post URLs, and produce content/technonymous-index.json. Child deliverables: Navigate to technonymous.org using browser tools; Write the results to content/technonymous-index.json\"",
+		SiblingTaskLine:    "Sibling tasks already in the same parent group: task 40 (Navigate to technonymous.org using browser tools) id=sibling work_status=blocked",
+	}
+
+	prompt := buildTaskContinuationActionPrompt(taskExecutionContinuationFallbackSummary(), snapshot)
+
+	if !strings.Contains(prompt, snapshot.CurrentTaskLine) {
+		t.Fatalf("prompt = %q, want current task line", prompt)
+	}
+	if !strings.Contains(prompt, "Do not begin by re-reading task.get for the current task") {
+		t.Fatalf("prompt = %q, want direct current-task guidance", prompt)
+	}
+	if !strings.Contains(prompt, "deliverable_path=..., inspect or write that exact path") {
+		t.Fatalf("prompt = %q, want exact-path guidance", prompt)
+	}
+	if !strings.Contains(prompt, snapshot.ParentContractLine) {
+		t.Fatalf("prompt = %q, want parent contract line", prompt)
+	}
+	if !strings.Contains(prompt, "Use the parent contract above only to stay within this bounded child lane.") {
+		t.Fatalf("prompt = %q, want bounded child-lane guidance", prompt)
+	}
+	if !strings.Contains(prompt, snapshot.SiblingTaskLine) {
+		t.Fatalf("prompt = %q, want sibling task line", prompt)
+	}
+	if !strings.Contains(prompt, "do not browse external sources from this lane") {
+		t.Fatalf("prompt = %q, want write-lane anti-browsing guidance", prompt)
+	}
+}
+
+func TestTaskExecutionContinuationSnapshotIncludesParentContractAndSiblingHints(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentID := uuid.New()
+	currentID := uuid.New()
+	siblingID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+	flowTemplateID := uuid.New()
+	parentDescription := "Navigate to technonymous.org using browser tools"
+	currentDescription := "Write the results to content/technonymous-index.json"
+	siblingDescription := "Navigate to technonymous.org using browser tools"
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:              parentID,
+				ProjectID:       projectID,
+				TaskNumber:      39,
+				Title:           "Replacement: Crawl technonymous.org and produce content/technonymous-index.json",
+				Description:     &parentDescription,
+				WorkStatus:      "draft",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+				Metadata: mustRawJSON(t, map[string]any{
+					"decomposition": map[string]any{
+						"applied":             true,
+						"orchestration_only":  true,
+						"primary_deliverable": "Navigate to technonymous.org using browser tools",
+						"source_description":  "Crawl technonymous.org, discover all blog post URLs, and produce content/technonymous-index.json containing an array of objects with at minimum { \"url\": \"...\", \"title\": \"...\" } for every post found.",
+						"deliverables": []any{
+							"Navigate to technonymous.org using browser tools",
+							"Write the results to content/technonymous-index.json",
+						},
+					},
+				}),
+			},
+			currentID: {
+				ID:              currentID,
+				ProjectID:       projectID,
+				TaskNumber:      41,
+				Title:           "Write the results to content/technonymous-index.json",
+				Description:     &currentDescription,
+				WorkStatus:      "blocked",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+				Metadata:        mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentID.String()}),
+			},
+			siblingID: {
+				ID:              siblingID,
+				ProjectID:       projectID,
+				TaskNumber:      40,
+				Title:           "Navigate to technonymous.org using browser tools",
+				Description:     &siblingDescription,
+				WorkStatus:      "blocked",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+				Metadata:        mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentID.String()}),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+
+	snapshot, err := fixture.engine.taskExecutionContinuationSnapshot(context.Background(), currentID)
+	if err != nil {
+		t.Fatalf("taskExecutionContinuationSnapshot: %v", err)
+	}
+	if !strings.Contains(snapshot.CurrentTaskLine, "task 41") {
+		t.Fatalf("CurrentTaskLine = %q, want current task ref", snapshot.CurrentTaskLine)
+	}
+	if !strings.Contains(snapshot.CurrentTaskLine, "deliverable_path=content/technonymous-index.json") {
+		t.Fatalf("CurrentTaskLine = %q, want deliverable path hint", snapshot.CurrentTaskLine)
+	}
+	if !strings.Contains(snapshot.ParentContractLine, "task 39") {
+		t.Fatalf("ParentContractLine = %q, want parent task ref", snapshot.ParentContractLine)
+	}
+	if !strings.Contains(snapshot.ParentContractLine, "source_contract=") || !strings.Contains(snapshot.ParentContractLine, "content/technonymous-index.json") {
+		t.Fatalf("ParentContractLine = %q, want parent contract excerpt", snapshot.ParentContractLine)
+	}
+	if !strings.Contains(snapshot.SiblingTaskLine, "task 40") {
+		t.Fatalf("SiblingTaskLine = %q, want sibling task ref", snapshot.SiblingTaskLine)
 	}
 }
 

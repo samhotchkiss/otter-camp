@@ -169,6 +169,7 @@ var projectContinuationPromptDependencyPathPattern = regexp.MustCompile(`depends
 var explicitDeliverablePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
+	regexp.MustCompile(`(?i)\b(?:write|create|produce)\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\bsave\s+as\s+([^\s,;]+)`),
 }
 var preferredDeliverableRootPatterns = []*regexp.Regexp{
@@ -9223,11 +9224,12 @@ func (e *TurnEngine) handleTaskContinuationDepthTurnFailure(
 	}
 
 	retryAttempt := e.taskContinuationResumeAttempt(ctx, messageID) + 1
+	snapshot, _ := e.taskExecutionContinuationSnapshot(ctx, runtime.session.ScopeID)
 	actionMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
 		SessionID: runtime.session.ID,
 		TurnID:    &runtime.turn.ID,
 		Role:      "user",
-		Content:   buildTaskContinuationActionPrompt(""),
+		Content:   buildTaskContinuationActionPrompt("", snapshot),
 		Metadata:  taskContinuationResumeMessageMetadata(runtime.session, retryAttempt),
 	})
 	if err != nil {
@@ -10160,6 +10162,10 @@ func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt 
 	}
 	historyStartID := message.ID
 	if shouldAppendTaskContinuationActionPrompt(rt.session) {
+		snapshot, snapshotErr := e.taskExecutionContinuationSnapshot(ctx, rt.session.ScopeID)
+		if snapshotErr != nil {
+			return snapshotErr
+		}
 		if reviewPrompt, reviewMetadata, ok, promptErr := e.taskReviewContinuationActionPrompt(ctx, rt, previousTurn); promptErr != nil {
 			return promptErr
 		} else if ok {
@@ -10193,7 +10199,7 @@ func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt 
 				SessionID: rt.session.ID,
 				TurnID:    &rt.turn.ID,
 				Role:      "user",
-				Content:   buildTaskContinuationActionPrompt(summary),
+				Content:   buildTaskContinuationActionPrompt(summary, snapshot),
 				Metadata:  syntheticContinuationActionMessageMetadata(rt.session, taskContinuationResumeMessageSource),
 			})
 			if err != nil {
@@ -10317,6 +10323,132 @@ func (e *TurnEngine) persistTurnHistoryStart(ctx context.Context, rt *turnRuntim
 	}
 	rt.turn = &updated
 	return nil
+}
+
+type taskExecutionContinuationSnapshot struct {
+	CurrentTaskLine    string
+	ParentContractLine string
+	SiblingTaskLine    string
+}
+
+const taskContinuationParentContractExcerptLimit = 220
+
+func (e *TurnEngine) taskExecutionContinuationSnapshot(ctx context.Context, taskID uuid.UUID) (taskExecutionContinuationSnapshot, error) {
+	snapshot := taskExecutionContinuationSnapshot{}
+	if e == nil || e.tasks == nil || taskID == uuid.Nil {
+		return snapshot, nil
+	}
+
+	taskRecord, err := e.tasks.GetByID(ctx, taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return snapshot, nil
+		}
+		return snapshot, err
+	}
+
+	projectTasks := []repo.ProjectTask{taskRecord}
+	if taskRecord.ProjectID != uuid.Nil {
+		tasks, listErr := e.tasks.ListByProject(ctx, taskRecord.ProjectID)
+		if listErr != nil {
+			return snapshot, listErr
+		}
+		if len(tasks) > 0 {
+			projectTasks = tasks
+		}
+	}
+
+	taskHintsByTask, err := e.projectContinuationTaskHintsByTask(ctx, projectTasks)
+	if err != nil {
+		return snapshot, err
+	}
+	childActivity := projectContinuationChildTaskActivity(projectTasks)
+	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(projectTasks))
+	for _, candidate := range projectTasks {
+		tasksByID[candidate.ID] = candidate
+	}
+
+	snapshot.CurrentTaskLine = "Current task: " + projectExecutionContinuationTaskRef(taskRecord, childActivity[taskRecord.ID], taskHintsByTask[taskRecord.ID])
+	metadata := messageMetadataMap(taskRecord.Metadata)
+	parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+	if !ok || parentID == uuid.Nil {
+		return snapshot, nil
+	}
+	parentTask, ok := tasksByID[parentID]
+	if !ok {
+		return snapshot, nil
+	}
+
+	parentLine := "Parent task contract: " + projectExecutionContinuationTaskRef(parentTask, childActivity[parentTask.ID], taskHintsByTask[parentTask.ID])
+	if contract := taskContinuationParentContractExcerpt(parentTask); contract != "" {
+		parentLine += " source_contract=" + strconv.Quote(contract)
+	}
+	snapshot.ParentContractLine = parentLine
+
+	siblings := make([]string, 0, 3)
+	for _, candidate := range projectTasks {
+		if candidate.ID == taskRecord.ID {
+			continue
+		}
+		candidateMeta := messageMetadataMap(candidate.Metadata)
+		candidateParentID, ok := parseUUIDAny(candidateMeta["decomposition_parent_task_id"])
+		if !ok || candidateParentID != parentID {
+			continue
+		}
+		siblings = append(siblings, projectExecutionContinuationTaskRef(candidate, childActivity[candidate.ID], taskHintsByTask[candidate.ID]))
+		if len(siblings) >= 3 {
+			break
+		}
+	}
+	if len(siblings) > 0 {
+		snapshot.SiblingTaskLine = "Sibling tasks already in the same parent group: " + strings.Join(siblings, "; ")
+	}
+	return snapshot, nil
+}
+
+func taskContinuationParentContractExcerpt(task repo.ProjectTask) string {
+	metadata := messageMetadataMap(task.Metadata)
+	decomposition, _ := metadata["decomposition"].(map[string]any)
+	parts := make([]string, 0, 3)
+	if sourceDescription := strings.TrimSpace(anyString(decomposition["source_description"])); sourceDescription != "" {
+		parts = append(parts, sourceDescription)
+	}
+	if primaryDeliverable := strings.TrimSpace(anyString(decomposition["primary_deliverable"])); primaryDeliverable != "" {
+		parts = append(parts, "Primary deliverable: "+primaryDeliverable)
+	}
+	if deliverables, ok := decomposition["deliverables"].([]any); ok && len(deliverables) > 0 {
+		items := make([]string, 0, len(deliverables))
+		for _, item := range deliverables {
+			value := strings.TrimSpace(anyString(item))
+			if value == "" {
+				continue
+			}
+			items = append(items, value)
+			if len(items) >= 4 {
+				break
+			}
+		}
+		if len(items) > 0 {
+			parts = append(parts, "Child deliverables: "+strings.Join(items, "; "))
+		}
+	}
+	combined := strings.Join(parts, " ")
+	normalized := strings.Join(strings.Fields(strings.TrimSpace(combined)), " ")
+	if normalized == "" {
+		return ""
+	}
+	runes := []rune(normalized)
+	if len(runes) <= taskContinuationParentContractExcerptLimit {
+		return normalized
+	}
+	cut := strings.TrimSpace(string(runes[:taskContinuationParentContractExcerptLimit]))
+	if idx := strings.LastIndexAny(cut, " ,.;:"); idx >= taskContinuationParentContractExcerptLimit/2 {
+		cut = strings.TrimSpace(cut[:idx])
+	}
+	if cut == "" {
+		cut = strings.TrimSpace(string(runes[:taskContinuationParentContractExcerptLimit]))
+	}
+	return cut + "..."
 }
 
 func compactContinuationSummary(summary string) string {
@@ -12696,6 +12828,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			continue
 		}
 		if blocked, reason := e.shouldBlockOrchestrationParentReviewTaskListTool(ctx, rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
+		if blocked, reason := e.shouldBlockTaskExecutionSiblingResponsibilityTool(ctx, rt, name); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
 				Name:       name,
@@ -16808,7 +16948,7 @@ func buildTaskRecoveryActionPrompt() string {
 	return strings.Join(lines, " ")
 }
 
-func buildTaskContinuationActionPrompt(summary string) string {
+func buildTaskContinuationActionPrompt(summary string, snapshot taskExecutionContinuationSnapshot) string {
 	lines := []string{
 		"Continue the active task now from the continuation summary above.",
 		"Your next response must take direct action on the task instead of generic chat.",
@@ -16818,6 +16958,47 @@ func buildTaskContinuationActionPrompt(summary string) string {
 		"Do not start with project.list, project.get, task.list, task.get, task_get, flow.list_templates, flow.get_execution, file.read, file_list, or agent.list unless a specific blocker names that exact record.",
 		"Use the existing workspace, task state, and recent tool results to continue the task directly.",
 		"If you truly cannot continue, report the concrete blocker in one sentence instead of switching into generic conversation.",
+	}
+	if currentLine := strings.TrimSpace(snapshot.CurrentTaskLine); currentLine != "" {
+		lines = append(lines, currentLine)
+		lines = append(lines, "Do not begin by re-reading task.get for the current task when the current-task snapshot above already names its state and scope.")
+		if strings.Contains(currentLine, "blocker=") {
+			lines = append(lines, "If the current task above already includes blocker=..., act directly on that blocker summary instead of broad rereads.")
+		}
+		if strings.Contains(currentLine, "resume_policy=needs_replacement_work") {
+			lines = append(lines, "If the current task above already shows resume_policy=needs_replacement_work, create or queue only the smallest replacement or follow-on work needed to recover it instead of broad rediscovery.")
+		}
+		if strings.Contains(currentLine, "resume_policy=manual_recovery_repair") {
+			lines = append(lines, "If the current task above already shows resume_policy=manual_recovery_repair, make only the targeted repair needed for that deliverable instead of broader browsing.")
+		}
+		if strings.Contains(currentLine, "resume_policy=terminal_keep_blocked") {
+			lines = append(lines, "If the current task above already shows resume_policy=terminal_keep_blocked, keep it blocked and work around it instead of retrying the same lane.")
+		}
+		if strings.Contains(currentLine, "deliverable_path=") {
+			lines = append(lines, "If the current task above already shows deliverable_path=..., inspect or write that exact path instead of broad workspace or external browsing.")
+		} else if strings.Contains(currentLine, "deliverable_root=") {
+			lines = append(lines, "If the current task above already shows deliverable_root=..., stay inside that exact root instead of broad workspace rediscovery.")
+		}
+		if strings.Contains(currentLine, "depends_on_path=") {
+			lines = append(lines, "If the current task above already shows depends_on_path=..., inspect that prerequisite artifact first instead of broad search.")
+		}
+	}
+	if parentLine := strings.TrimSpace(snapshot.ParentContractLine); parentLine != "" {
+		lines = append(lines, parentLine)
+		lines = append(lines, "Use the parent contract above only to stay within this bounded child lane. Do not redo parent orchestration or sibling steps from this task continuation.")
+	}
+	if siblingLine := strings.TrimSpace(snapshot.SiblingTaskLine); siblingLine != "" {
+		lines = append(lines, siblingLine)
+		lines = append(lines, "Do not call task.list or broad project/task rediscovery just to rediscover sibling lanes already named above.")
+		currentLower := strings.ToLower(strings.TrimSpace(snapshot.CurrentTaskLine))
+		siblingLower := strings.ToLower(siblingLine)
+		if (strings.Contains(currentLower, "write the results to") || strings.Contains(strings.TrimSpace(snapshot.CurrentTaskLine), "deliverable_path=")) &&
+			(strings.Contains(siblingLower, "navigate to") || strings.Contains(siblingLower, "browser tools") || strings.Contains(siblingLower, "discover")) {
+			lines = append(lines, "If the current task is the write-focused child lane and a named sibling already owns discovery or navigation work, do not browse external sources from this lane. Use or unblock the prerequisite output instead.")
+		}
+		if strings.Contains(currentLower, "navigate to") && (strings.Contains(siblingLower, "write the results to") || strings.Contains(siblingLower, "deliverable_path=")) {
+			lines = append(lines, "If the current task is the discovery child lane, stop once you have the concrete URLs, titles, or prerequisite evidence needed for the sibling write lane. Do not fetch unrelated full post bodies or perform the sibling file-write step here.")
+		}
 	}
 	if continuationSummaryLooksLikeDraft(summary) {
 		lines = append(lines,
@@ -24640,6 +24821,107 @@ func (e *TurnEngine) shouldBlockTaskExecutionBroadContextTool(ctx context.Contex
 	}
 }
 
+func (e *TurnEngine) shouldBlockTaskExecutionSiblingResponsibilityTool(ctx context.Context, rt *turnRuntime, toolName string) (bool, string) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, ""
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "browser.navigate", "web.fetch":
+	default:
+		return false, ""
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return false, ""
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return false, ""
+	}
+	if !taskExecutionWriteFocusedChildTask(taskRecord) {
+		return false, ""
+	}
+	siblings, err := e.taskExecutionSiblingTasks(ctx, taskRecord)
+	if err != nil {
+		return false, ""
+	}
+	discoverySiblings := make([]repo.ProjectTask, 0, len(siblings))
+	for _, sibling := range siblings {
+		if taskExecutionDiscoveryFocusedChildTask(sibling) {
+			discoverySiblings = append(discoverySiblings, sibling)
+		}
+	}
+	if len(discoverySiblings) == 0 {
+		return false, ""
+	}
+	return true, buildTaskExecutionSiblingResponsibilityToolGuardError(taskRecord, discoverySiblings)
+}
+
+func (e *TurnEngine) taskExecutionSiblingTasks(ctx context.Context, taskRecord repo.ProjectTask) ([]repo.ProjectTask, error) {
+	if e == nil || e.tasks == nil || taskRecord.ProjectID == uuid.Nil {
+		return nil, nil
+	}
+	metadata := messageMetadataMap(taskRecord.Metadata)
+	parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+	if !ok || parentID == uuid.Nil {
+		return nil, nil
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	siblings := make([]repo.ProjectTask, 0, len(projectTasks))
+	for _, candidate := range projectTasks {
+		if candidate.ID == taskRecord.ID {
+			continue
+		}
+		candidateMeta := messageMetadataMap(candidate.Metadata)
+		candidateParentID, ok := parseUUIDAny(candidateMeta["decomposition_parent_task_id"])
+		if !ok || candidateParentID != parentID {
+			continue
+		}
+		siblings = append(siblings, candidate)
+	}
+	return siblings, nil
+}
+
+func taskExecutionWriteFocusedChildTask(taskRecord repo.ProjectTask) bool {
+	if explicitDeliverablePath(taskRecord) != "" {
+		return true
+	}
+	text := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	if taskRecord.Description != nil {
+		text += " " + strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	return containsAny(text,
+		"write ",
+		"save ",
+		"create ",
+		"produce ",
+		"results to ",
+	)
+}
+
+func taskExecutionDiscoveryFocusedChildTask(taskRecord repo.ProjectTask) bool {
+	text := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	if taskRecord.Description != nil {
+		text += " " + strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	return containsAny(text,
+		"navigate ",
+		"browser",
+		"discover ",
+		"crawl ",
+		"fetch ",
+		"listing",
+		"archive",
+	)
+}
+
 func taskExecutionAllowsLimitedProjectContext(taskRecord repo.ProjectTask) bool {
 	if taskLooksLikeOrchestrationOnlyParent(taskRecord) {
 		return true
@@ -25285,6 +25567,31 @@ func buildTaskExecutionBroadContextToolGuardError(toolName string) string {
 	default:
 		return "task execution should not reread broad org or project context from a task-scoped async session. Continue the assigned task directly."
 	}
+}
+
+func buildTaskExecutionSiblingResponsibilityToolGuardError(taskRecord repo.ProjectTask, siblings []repo.ProjectTask) string {
+	current := projectBootstrapTaskLabel(taskRecord)
+	if strings.TrimSpace(current) == "" {
+		current = "the current task"
+	}
+	labels := make([]string, 0, len(siblings))
+	for _, sibling := range siblings {
+		label := projectBootstrapTaskLabel(sibling)
+		if strings.TrimSpace(label) == "" {
+			label = strings.TrimSpace(sibling.Title)
+		}
+		if strings.TrimSpace(label) == "" {
+			continue
+		}
+		labels = append(labels, label)
+		if len(labels) >= 3 {
+			break
+		}
+	}
+	if len(labels) == 0 {
+		return fmt.Sprintf("task execution should stay inside the write-focused child lane for %s. Do not browse external sources from this lane when sibling discovery/navigation work already exists; use or unblock the prerequisite output instead.", current)
+	}
+	return fmt.Sprintf("task execution should stay inside the write-focused child lane for %s. Sibling discovery/navigation work already exists in %s. Do not browse external sources from this lane; use or unblock that prerequisite output instead.", current, strings.Join(labels, ", "))
 }
 
 func buildOrchestrationParentReviewTaskListGuardError(taskRecord repo.ProjectTask) string {
