@@ -827,9 +827,10 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 	}
 
 	// Condition 5b: a consumed recovery-resume message that already produced a
-	// successful file.write in a completed turn should not be re-dispatched.
-	// Those stale retries just reopen recovery after the target file was
-	// already written.
+	// successful clean file.write in a completed turn should not be
+	// re-dispatched. Validation-loop-blocked turns can still contain a
+	// successful file.write before the recovery attempt fails again, so those
+	// stale retries must remain eligible for requeue.
 	ct5b, err := w.pool.Exec(ctx, `
 		UPDATE job_queue jq
 		SET status = 'dead_letter',
@@ -861,6 +862,7 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		    WHERE ct.session_id = (jq.payload->>'session_id')::uuid
 		      AND ct.trigger_message_id = (jq.payload->>'message_id')::uuid
 		      AND ct.status = 'completed'
+		      AND COALESCE(ct.stop_reason, '') = ''
 		      AND COALESCE(tool_result.content::jsonb->>'tool_name', '') = 'file.write'
 		      AND COALESCE(tool_result.content::jsonb->>'error', '') = ''
 		      AND COALESCE(tool_result.content::jsonb->'output'->>'error', '') = ''
@@ -1597,6 +1599,7 @@ func (w *Worker) recoveryResumeMessageCompletedWithSuccessfulFileWrite(ctx conte
 			WHERE ct.session_id = $1
 			  AND ct.trigger_message_id = $2
 			  AND ct.status = 'completed'
+			  AND COALESCE(ct.stop_reason, '') = ''
 			  AND COALESCE(tool_result.content::jsonb->>'tool_name', '') = 'file.write'
 			  AND COALESCE(tool_result.content::jsonb->>'error', '') = ''
 			  AND COALESCE(tool_result.content::jsonb->'output'->>'error', '') = ''

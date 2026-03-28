@@ -12648,7 +12648,7 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsValidationLoopB
 	}
 }
 
-func createSuccessfulRecoveryResumeExecutionFixture(t *testing.T, pool *pgxpool.Pool, slug string) (context.Context, repo.ChatSession, repo.FlowNodeExecution, repo.ChatMessage) {
+func createRecoveryResumeExecutionFixture(t *testing.T, pool *pgxpool.Pool, slug string, stopReason *string) (context.Context, repo.ChatSession, repo.FlowNodeExecution, repo.ChatMessage) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -12761,6 +12761,7 @@ func createSuccessfulRecoveryResumeExecutionFixture(t *testing.T, pool *pgxpool.
 		RespondingType:   "agent",
 		RespondingID:     agent.ID,
 		Status:           "completed",
+		StopReason:       stopReason,
 		TriggerMessageID: &message.ID,
 	})
 	if err != nil {
@@ -12791,6 +12792,11 @@ func createSuccessfulRecoveryResumeExecutionFixture(t *testing.T, pool *pgxpool.
 	}
 
 	return ctx, session, execution, message
+}
+
+func createSuccessfulRecoveryResumeExecutionFixture(t *testing.T, pool *pgxpool.Pool, slug string) (context.Context, repo.ChatSession, repo.FlowNodeExecution, repo.ChatMessage) {
+	t.Helper()
+	return createRecoveryResumeExecutionFixture(t, pool, slug, nil)
 }
 
 func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsSuccessfulRecoveryResumeWrite(t *testing.T) {
@@ -12871,6 +12877,89 @@ func TestJobWorkerPurgeStaleAgentTurnJobsPurgesSuccessfulRecoveryResumeWrite(t *
 	}
 	if lastError != "purged stale recovery resume after successful file.write" {
 		t.Fatalf("last_error = %q, want successful recovery purge reason", lastError)
+	}
+}
+
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsDoesNotSkipValidationLoopBlockedRecoveryResumeWrite(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	stopReason := "validation_loop_blocked"
+	ctx, session, _, _ := createRecoveryResumeExecutionFixture(t, pool, "requeue-active-execution-keep-blocked-recovery-resume", &stopReason)
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1 when recovery resume turn still ended validation_loop_blocked", requeued)
+	}
+
+	var queuedJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		  AND status IN ('pending', 'claimed')
+	`, session.ID).Scan(&queuedJobs); err != nil {
+		t.Fatalf("count queued jobs: %v", err)
+	}
+	if queuedJobs != 1 {
+		t.Fatalf("queued jobs = %d, want 1 after validation_loop_blocked recovery write", queuedJobs)
+	}
+}
+
+func TestJobWorkerPurgeStaleAgentTurnJobsDoesNotPurgeValidationLoopBlockedRecoveryResumeWrite(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	stopReason := "validation_loop_blocked"
+	ctx, session, execution, message := createRecoveryResumeExecutionFixture(t, pool, "purge-keep-blocked-recovery-resume", &stopReason)
+
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, $2, 70, $3, $4)
+		RETURNING id
+	`,
+		fmt.Sprintf(`{"session_id":"%s","message_id":"%s","flow_node_execution_id":"%s","retry_count":1}`, session.ID, message.ID, execution.ID),
+		time.Now().UTC(),
+		fmt.Sprintf("agent_turn:%s:%s:1", session.ID, message.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, message.ID, 1),
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert stale recovery resume job: %v", err)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 0 {
+		t.Fatalf("purged jobs = %d, want 0 when recovery resume turn ended validation_loop_blocked", purged)
+	}
+
+	var status, lastError string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(last_error, '')
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status, &lastError); err != nil {
+		t.Fatalf("query job after purge pass: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("job status = %q, want pending", status)
+	}
+	if lastError != "" {
+		t.Fatalf("last_error = %q, want empty when validation_loop_blocked recovery write stays eligible", lastError)
 	}
 }
 
