@@ -18462,6 +18462,81 @@ func TestContinuationTurnUsesTaskFallbackSummaryForAsyncProjectTask(t *testing.T
 	}
 }
 
+func TestContinuationTurnUsesContentMigrationCheckpointSummaryForAsyncProjectTask(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				Title:           "Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/",
+				AssignedAgentID: &assignedID,
+				Metadata: mustJSONRaw(map[string]any{
+					taskcheckpoint.ContentMigrationMetadataKey: map[string]any{
+						"version":         1,
+						"checkpoint_path": ".ottercamp/checkpoints/oc-70-content-migration.md",
+						"outputs": []map[string]any{
+							{"path": "content/posts/better-output-less-input.md"},
+							{"path": "content/posts/the-year-the-phone-started-talking.md"},
+							{"path": "content/posts/i-cant-picture-my-kids.md"},
+							{"path": "content/posts/you-havent-had-to-wonder-about-anything.md"},
+						},
+					},
+				}),
+			},
+		},
+	}
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
+	}
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			t.Fatal("continuation_summary model call should be skipped when content migration checkpoint exists")
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var summaryMessage *repo.ChatMessage
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "[Continuation summary]") {
+			msgCopy := msg
+			summaryMessage = &msgCopy
+		}
+	}
+	if summaryMessage == nil {
+		t.Fatal("continuation summary message missing")
+	}
+	if !strings.Contains(summaryMessage.Content, "Content migration checkpoint is active.") {
+		t.Fatalf("continuation summary = %q, want checkpoint-backed summary", summaryMessage.Content)
+	}
+	if !strings.Contains(summaryMessage.Content, ".ottercamp/checkpoints/oc-70-content-migration.md") {
+		t.Fatalf("continuation summary = %q, want checkpoint path", summaryMessage.Content)
+	}
+	if !strings.Contains(summaryMessage.Content, "content/posts/better-output-less-input.md") {
+		t.Fatalf("continuation summary = %q, want persisted output path", summaryMessage.Content)
+	}
+}
+
 func TestContinuationTurnUsesTaskFallbackSummaryForSupervisorContextQuestionnaire(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

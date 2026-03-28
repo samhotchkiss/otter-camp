@@ -10463,6 +10463,9 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 		if summary, ok := e.taskExecutionContinuationSummary(ctx, rt); ok {
 			return e.appendContinuationSummaryAndAction(ctx, rt, currentTurn, summary)
 		}
+		if summary, ok := e.taskContentMigrationCheckpointSummary(ctx, rt); ok {
+			return e.appendContinuationSummaryAndAction(ctx, rt, currentTurn, summary)
+		}
 	}
 	if summary, ok := e.projectActiveRequestContinuationSummary(ctx, rt); ok {
 		return e.appendContinuationSummaryAndAction(ctx, rt, currentTurn, summary)
@@ -10679,6 +10682,68 @@ func (e *TurnEngine) taskExecutionContinuationSummary(ctx context.Context, rt *t
 		return compactContinuationSummary(draft), true
 	}
 	return "", false
+}
+
+func (e *TurnEngine) taskContentMigrationCheckpointSummary(ctx context.Context, rt *turnRuntime) (string, bool) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil || !shouldAppendTaskContinuationActionPrompt(rt.session) {
+		return "", false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || rt.session.ScopeID == uuid.Nil {
+		return "", false
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, rt.session.ScopeID)
+	if err != nil {
+		return "", false
+	}
+	checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata)
+	if !ok {
+		return "", false
+	}
+	parts := []string{"Content migration checkpoint is active."}
+	if path := strings.TrimSpace(checkpoint.CheckpointPath); path != "" {
+		parts = append(parts, "Checkpoint: "+path+".")
+	}
+	if outputSummary := summarizeWorkspaceFilesForContinuation("Persisted outputs", checkpoint.Outputs, 3); outputSummary != "" {
+		parts = append(parts, outputSummary+".")
+	} else if artifactSummary := summarizeWorkspaceFilesForContinuation("Persisted artifacts", checkpoint.Artifacts, 2); artifactSummary != "" {
+		parts = append(parts, artifactSummary+".")
+	}
+	if preferredPath := strings.TrimSpace(contentMigrationCheckpointPreferredOutputPath(taskRecord, checkpoint)); preferredPath != "" {
+		parts = append(parts, "Resume from the persisted workspace files and continue direct mutations, starting with `"+preferredPath+"` if it still needs repair.")
+	} else {
+		parts = append(parts, "Resume from the persisted workspace files and continue direct mutations instead of replaying raw fetch content.")
+	}
+	return strings.Join(parts, " "), true
+}
+
+func summarizeWorkspaceFilesForContinuation(label string, files []taskcheckpoint.WorkspaceFile, limit int) string {
+	if limit <= 0 || len(files) == 0 {
+		return ""
+	}
+	seen := make(map[string]struct{}, len(files))
+	paths := make([]string, 0, len(files))
+	for _, item := range files {
+		path := strings.TrimSpace(item.Path)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+		if len(paths) >= limit {
+			break
+		}
+	}
+	if len(paths) == 0 {
+		return ""
+	}
+	summary := label + ": " + strings.Join(paths, ", ")
+	if remaining := len(files) - len(paths); remaining > 0 {
+		summary += fmt.Sprintf(" (+%d more)", remaining)
+	}
+	return summary
 }
 
 func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt *turnRuntime, previousTurn *repo.ChatTurn, summary string) error {

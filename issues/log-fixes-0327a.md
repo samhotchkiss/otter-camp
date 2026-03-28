@@ -1624,3 +1624,26 @@
     - startup-enqueued merge job `d39f1029-9ada-4b00-a46f-9bfb6108afa6` completed `done` on the first attempt
     - merge queue entry `804136ec-5dfe-411f-b397-fe9d5f12b007` is now `merged`
     - worker log recorded `merge completed without default remote; skipping push enqueue`
+- 2026-03-28 18:02:00 MDT - Finished: reuse persisted content-migration checkpoints for async task continuations.
+  - live diagnosis:
+    - task `70` had already persisted `content_migration_checkpoint` metadata and checkpoint file [`oc-70-content-migration.md`](/Users/sam/otter-data/task-worktrees/sam-blog-rebuild-restart-12/task-70/.ottercamp/checkpoints/oc-70-content-migration.md)
+    - after the raw fetch batch hit the prompt guardrail and context compression, the continuation path still appended `[Continuation summary] Continuation summary unavailable.` and paid for an avoidable synthetic summary model call
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `continueTurn(...)` now tries `taskContentMigrationCheckpointSummary(...)` for async `project_task` sessions before falling back to the synthetic `continuation_summary` model path
+    - the new summary reuses parsed `content_migration_checkpoint` metadata, the persisted checkpoint path, compact output/artifact lists, and any preferred output path already implied by the checkpoint
+    - added `summarizeWorkspaceFilesForContinuation(...)` so the prompt stays compact even when the checkpoint has multiple outputs
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestContinuationTurnUsesContentMigrationCheckpointSummaryForAsyncProjectTask`
+    - the test explicitly fails if a `continuation_summary` model request is attempted
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3459`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestContinuationTurnUses(TaskFallbackSummaryForAsyncProjectTask|ContentMigrationCheckpointSummaryForAsyncProjectTask)$' -count=1`
+  - deploy status:
+    - rebuilt/restarted tmux `codex-e2e-20260324`; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+  - fresh live state:
+    - recent task-70 sessions after restart (`148f91f7-0820-4e07-889f-484e04ec19cd`, `8ee30a7b-6e81-4b6a-8932-d49a8093c15a`, `2f96ee65-f602-44f4-acdb-f764db6ebaf8`) recorded only `agent_turn` invocations, so the extra synthetic `continuation_summary` model call is gone from the active retry window
+    - review continuations are now emitting deterministic summaries (`Active task request: Review only...`) instead of `Continuation summary unavailable.`
+  - remaining direct proof target:
+    - the next context-compressed execution retry that falls past both active-request and task-execution summaries should emit the new `Content migration checkpoint is active.` text and reuse the checkpoint/output paths directly
