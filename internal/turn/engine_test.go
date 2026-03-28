@@ -18126,6 +18126,70 @@ func TestProjectExecutionContinuationSnapshotSkipsDraftParentWithBlockedChildren
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotIgnoresMalformedNoDecomposeChildren(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	noDecomposeSource := "## Objective\nCrawl technonymous.org homepage and write content/technonymous-index.json with all post URLs.\n## Exact Steps\n1. Navigate to the homepage.\n2. Extract links.\n```python\nimport os, json\n```\n## Critical Rules\nDo NOT decompose this task into subtasks. Execute it directly in a single session."
+	parentDescription := "Crawl technonymous.org homepage and write content/technonymous-index.json with all post URLs."
+	childDescription := "import os, json"
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:          parentDraftID,
+				ProjectID:   projectID,
+				TaskNumber:  49,
+				Title:       "Crawl technonymous.org homepage and write content/technonymous-index.json with all post URLs",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"applied":             true,
+						"mode":                "parallel_children",
+						"orchestration_only":  true,
+						"source_description":  noDecomposeSource,
+						"primary_deliverable": "Produce the file content/technonymous-index.json containing an array of all blog post URLs found on technonymous.org.",
+					},
+				}),
+			},
+			uuid.New(): {
+				ID:          uuid.New(),
+				ProjectID:   projectID,
+				TaskNumber:  54,
+				Title:       "import os, json",
+				Description: &childDescription,
+				WorkStatus:  "in_progress",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "task 49 (Crawl technonymous.org homepage and write content/technonymous-index.json with all post URLs)") {
+		t.Fatalf("DraftTaskLine = %q, want actionable no-decompose parent task", snapshot.DraftTaskLine)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "task 54 (import os, json)") {
+		t.Fatalf("ActiveTaskLine = %q, should omit malformed no-decompose child artifact", snapshot.ActiveTaskLine)
+	}
+	if strings.Contains(snapshot.ChildActiveDraftLine, "task 49") {
+		t.Fatalf("ChildActiveDraftLine = %q, should not treat malformed no-decompose children as active child work", snapshot.ChildActiveDraftLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "task 49 (Crawl technonymous.org homepage and write content/technonymous-index.json with all post URLs)") {
+		t.Fatalf("FocusTaskLine = %q, want parent task restored as focus", snapshot.FocusTaskLine)
+	}
+
+	count, err := fixture.engine.countProjectDraftTasks(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("countProjectDraftTasks: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("countProjectDraftTasks = %d, want 1 actionable parent after ignoring malformed child artifacts", count)
+	}
+}
+
 func TestProjectExecutionContinuationTaskRefIncludesBlockedReasonExcerpt(t *testing.T) {
 	task := repo.ProjectTask{
 		ID:         uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),

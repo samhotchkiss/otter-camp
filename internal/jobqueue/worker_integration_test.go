@@ -17715,6 +17715,137 @@ func TestJobWorkerEnsureProjectContinuationMessageAllowsRetryAfterRepoVersionCha
 	}
 }
 
+func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedNoDecomposeChildren(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "project-continuation-snapshot-ignores-malformed-no-decompose-children",
+		DisplayName: "Project Continuation Snapshot Ignores Malformed No Decompose Children",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "project-continuation-snapshot-ignores-malformed-no-decompose-children-project",
+		DisplayName:    "Project Continuation Snapshot Ignores Malformed No Decompose Children Project",
+		Description:    "Project for malformed no-decompose child snapshot coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "project-continuation-snapshot-ignores-malformed-no-decompose-children-template",
+		DisplayName:    "Project Continuation Snapshot Ignores Malformed No Decompose Children Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	parentDescription := "Crawl technonymous.org homepage and write content/technonymous-index.json with all post URLs."
+	noDecomposeSource := "## Objective\nCrawl technonymous.org homepage and write content/technonymous-index.json with all post URLs.\n## Exact Steps\n1. Navigate to the homepage.\n2. Extract links.\n```python\nimport os, json\n```\n## Critical Rules\nDo NOT decompose this task into subtasks. Execute it directly in a single session."
+	parentMetadata, err := json.Marshal(map[string]any{
+		"decomposition": map[string]any{
+			"applied":             true,
+			"mode":                "parallel_children",
+			"orchestration_only":  true,
+			"source_description":  noDecomposeSource,
+			"primary_deliverable": "Produce the file content/technonymous-index.json containing an array of all blog post URLs found on technonymous.org.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal parent metadata: %v", err)
+	}
+	parentTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     49,
+		Title:          "Crawl technonymous.org homepage and write content/technonymous-index.json with all post URLs",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+		Metadata:       parentMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childDescription := "import os, json"
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     54,
+		Title:          "import os, json",
+		Description:    &childDescription,
+		WorkStatus:     "in_progress",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+		Metadata:       childMetadata,
+	}); err != nil {
+		t.Fatalf("create malformed child task: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "Crawl technonymous.org homepage and write content/technonymous-index.json with all post URLs") {
+		t.Fatalf("DraftTaskLine = %q, want actionable no-decompose parent task", snapshot.DraftTaskLine)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "import os, json") {
+		t.Fatalf("ActiveTaskLine = %q, should omit malformed no-decompose child artifact", snapshot.ActiveTaskLine)
+	}
+	if strings.Contains(snapshot.ChildActiveDraftLine, "Crawl technonymous.org homepage and write content/technonymous-index.json with all post URLs") {
+		t.Fatalf("ChildActiveDraftLine = %q, should not treat malformed no-decompose children as active child work", snapshot.ChildActiveDraftLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "Crawl technonymous.org homepage and write content/technonymous-index.json with all post URLs") {
+		t.Fatalf("FocusTaskLine = %q, want parent task restored as focus", snapshot.FocusTaskLine)
+	}
+
+	remainingDrafts, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	if remainingDrafts != 1 {
+		t.Fatalf("countActionableProjectDraftTasks = %d, want 1 actionable parent after ignoring malformed child artifacts", remainingDrafts)
+	}
+}
+
 func TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedActiveReplacementContinuation(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

@@ -4957,8 +4957,12 @@ func (e *TurnEngine) countProjectDraftTasks(ctx context.Context, projectID uuid.
 		return 0, err
 	}
 	childActivity := projectContinuationChildTaskActivity(projectTasks)
+	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
 	count := 0
 	for _, task := range projectTasks {
+		if _, skip := malformedChildTaskIDs[task.ID]; skip {
+			continue
+		}
 		if isProjectContinuationActionableDraftTask(task, childActivity[task.ID]) {
 			count++
 		}
@@ -17166,10 +17170,14 @@ func buildProjectExecutionContinuationSnapshot(
 	draftTasks := make([]string, 0, 4)
 	childActiveDraftTasks := make([]string, 0, 4)
 	childActivity := projectContinuationChildTaskActivity(projectTasks)
+	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
 	focusTask := ""
 	filterByPriority := len(priorityPaths) > 0
 	matchedPriority := false
 	for _, task := range projectTasks {
+		if _, skip := malformedChildTaskIDs[task.ID]; skip {
+			continue
+		}
 		status := strings.ToLower(strings.TrimSpace(task.WorkStatus))
 		if status == "" || status == "done" || status == "cancelled" {
 			continue
@@ -17358,7 +17366,11 @@ type projectContinuationChildActivity struct {
 
 func projectContinuationChildTaskActivity(tasks []repo.ProjectTask) map[uuid.UUID]projectContinuationChildActivity {
 	activityByParentID := make(map[uuid.UUID]projectContinuationChildActivity)
+	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(tasks)
 	for _, task := range tasks {
+		if _, skip := malformedChildTaskIDs[task.ID]; skip {
+			continue
+		}
 		metadata := messageMetadataMap(task.Metadata)
 		parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
 		if !ok || parentID == uuid.Nil {
@@ -17372,6 +17384,40 @@ func projectContinuationChildTaskActivity(tasks []repo.ProjectTask) map[uuid.UUI
 		activityByParentID[parentID] = activity
 	}
 	return activityByParentID
+}
+
+func projectContinuationMalformedChildTaskIDs(tasks []repo.ProjectTask) map[uuid.UUID]struct{} {
+	if len(tasks) == 0 {
+		return nil
+	}
+	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(tasks))
+	for _, task := range tasks {
+		tasksByID[task.ID] = task
+	}
+	var malformed map[uuid.UUID]struct{}
+	for _, task := range tasks {
+		metadata := messageMetadataMap(task.Metadata)
+		parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+		if !ok || parentID == uuid.Nil {
+			continue
+		}
+		parentTask, ok := tasksByID[parentID]
+		if !ok || !projectContinuationParentForbidsDecomposition(parentTask) {
+			continue
+		}
+		if malformed == nil {
+			malformed = make(map[uuid.UUID]struct{})
+		}
+		malformed[task.ID] = struct{}{}
+	}
+	return malformed
+}
+
+func projectContinuationParentForbidsDecomposition(task repo.ProjectTask) bool {
+	metadata := messageMetadataMap(task.Metadata)
+	decomposition, _ := metadata["decomposition"].(map[string]any)
+	sourceDescription := strings.TrimSpace(anyString(decomposition["source_description"]))
+	return sourceDescription != "" && taskdecomp.DescriptionForbidsDecomposition(sourceDescription)
 }
 
 func isProjectContinuationActionableDraftTask(task repo.ProjectTask, activity projectContinuationChildActivity) bool {

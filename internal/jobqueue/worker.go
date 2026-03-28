@@ -24,6 +24,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/metrics"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 )
 
@@ -2487,8 +2488,12 @@ func (w *Worker) countActionableProjectDraftTasks(ctx context.Context, projectID
 		return 0, err
 	}
 	childActivity := projectContinuationChildTaskActivityForWorker(projectTasks)
+	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDsForWorker(projectTasks)
 	count := 0
 	for _, task := range projectTasks {
+		if _, skip := malformedChildTaskIDs[task.ID]; skip {
+			continue
+		}
 		if isProjectContinuationActionableDraftTaskForWorker(task, childActivity[task.ID]) {
 			count++
 		}
@@ -2641,11 +2646,15 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 		return snapshot, err
 	}
 	childActivity := projectContinuationChildTaskActivityForWorker(projectTasks)
+	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDsForWorker(projectTasks)
 	activeTasks := make([]string, 0, 4)
 	draftTasks := make([]string, 0, 4)
 	childActiveDraftTasks := make([]string, 0, 4)
 	focusTask := ""
 	for _, task := range projectTasks {
+		if _, skip := malformedChildTaskIDs[task.ID]; skip {
+			continue
+		}
 		status := strings.ToLower(strings.TrimSpace(task.WorkStatus))
 		if status == "" || status == "done" || status == "cancelled" {
 			continue
@@ -2791,7 +2800,11 @@ func projectContinuationTaskReferencesURLIndexForWorker(task repo.ProjectTask) b
 
 func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask) map[uuid.UUID]projectContinuationChildActivityForWorker {
 	activityByParentID := make(map[uuid.UUID]projectContinuationChildActivityForWorker)
+	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDsForWorker(tasks)
 	for _, task := range tasks {
+		if _, skip := malformedChildTaskIDs[task.ID]; skip {
+			continue
+		}
 		var metadata map[string]any
 		if err := json.Unmarshal(task.Metadata, &metadata); err != nil {
 			continue
@@ -2813,6 +2826,47 @@ func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask) map
 		activityByParentID[parentID] = activity
 	}
 	return activityByParentID
+}
+
+func projectContinuationMalformedChildTaskIDsForWorker(tasks []repo.ProjectTask) map[uuid.UUID]struct{} {
+	if len(tasks) == 0 {
+		return nil
+	}
+	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(tasks))
+	for _, task := range tasks {
+		tasksByID[task.ID] = task
+	}
+	var malformed map[uuid.UUID]struct{}
+	for _, task := range tasks {
+		var metadata map[string]any
+		if err := json.Unmarshal(task.Metadata, &metadata); err != nil {
+			continue
+		}
+		parentIDText := strings.TrimSpace(fmt.Sprint(metadata["decomposition_parent_task_id"]))
+		parentID, err := uuid.Parse(parentIDText)
+		if err != nil || parentID == uuid.Nil {
+			continue
+		}
+		parentTask, ok := tasksByID[parentID]
+		if !ok || !projectContinuationParentForbidsDecompositionForWorker(parentTask) {
+			continue
+		}
+		if malformed == nil {
+			malformed = make(map[uuid.UUID]struct{})
+		}
+		malformed[task.ID] = struct{}{}
+	}
+	return malformed
+}
+
+func projectContinuationParentForbidsDecompositionForWorker(task repo.ProjectTask) bool {
+	var metadata map[string]any
+	if err := json.Unmarshal(task.Metadata, &metadata); err != nil {
+		return false
+	}
+	decomposition, _ := metadata["decomposition"].(map[string]any)
+	sourceDescription := strings.TrimSpace(fmt.Sprint(decomposition["source_description"]))
+	return sourceDescription != "" && taskdecomp.DescriptionForbidsDecomposition(sourceDescription)
 }
 
 func projectTaskExecutionActiveForWorker(status string) bool {

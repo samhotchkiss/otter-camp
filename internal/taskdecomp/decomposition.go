@@ -826,6 +826,10 @@ func descriptionForbidsDecomposition(raw string) bool {
 	return false
 }
 
+func DescriptionForbidsDecomposition(raw string) bool {
+	return descriptionForbidsDecomposition(raw)
+}
+
 func isInstructionOnlyDeliverable(normalized string) bool {
 	for _, prefix := range []string{
 		"this is ",

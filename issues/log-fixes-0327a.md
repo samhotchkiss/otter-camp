@@ -609,3 +609,17 @@
     - `GOFLAGS='' go test -tags=integration ./internal/tools/native -run 'TestIntegrationTaskUpdateQueue(AllowsSingleConcreteTemplateWithRequirements|AllowsConcreteCrawlerTaskWithExactStepsAndNoDecompose|KeepsDecomposedParentDraftAndQueuesChildren)$' -count=1`
   - live diagnosis behind the fix: Sam.blog task `49` had already decomposed into malformed children `50-54`, including procedural browser-step tasks and code child `54: import os, json`, even though the parent brief explicitly said not to decompose
   - fresh production proof is pending the next natural creation or queue of a replacement crawl task with the same brief; the currently active malformed child tasks are pre-fix artifacts
+- 2026-03-28 05:14:11 MDT - ignore malformed no-decompose child artifacts in PM continuation snapshots
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go) to export `DescriptionForbidsDecomposition(...)` so runtime paths can consistently recognize explicit no-decompose briefs
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so project-continuation snapshot building and actionable-draft counting now skip decomposed child tasks whose parent `decomposition.source_description` explicitly forbids decomposition
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) so worker-built PM continuation snapshots and actionable-draft counts apply the same malformed-child filtering during recovery and suppression decisions
+  - added focused coverage in:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): `TestProjectExecutionContinuationSnapshotIgnoresMalformedNoDecomposeChildren`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go): `TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedNoDecomposeChildren`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(ExtractDeliverablesIgnoresExactStepsCriticalRulesAndCodeFence|PrepareQueueDecompositionSkipsConcreteDeliverableWithExactStepsAndNoDecompose)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshot(IgnoresMalformedNoDecomposeChildren|SkipsDraftParentWithBlockedChildren|ForSummaryNarrowsToPriorityArtifactPath)|ProjectExecutionContinuationPromptFingerprintIncludesRepoVersion)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(ProjectExecutionContinuationSnapshotIgnoresMalformedNoDecomposeChildren|EnsureProjectContinuationMessageAllowsRetryAfterRepoVersionChange|EnsureProjectContinuationMessageSuppressesRepeatedConsumedActiveReplacementContinuation)$' -count=1`
+  - deployed by rebuilding `./bin/ottercamp`, restarting tmux `codex-e2e-20260324`, and confirming `./bin/ottercamp health --output json` returned `status=ok`
+  - live diagnosis behind the fix: PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` kept naming malformed child tasks `52` / `54` from no-decompose parent `49`, which guaranteed another rediscovery-only validation block instead of actionable PM progress
+  - fresh post-deploy production proof is pending the next natural PM continuation turn on the restarted runtime; no new `agent_turn` job has been claimed for that session yet
