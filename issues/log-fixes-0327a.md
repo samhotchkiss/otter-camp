@@ -1563,3 +1563,24 @@
     - fresh production proof is still pending because Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` is currently on pre-restart in-flight turn `522cf931-41db-4e36-a89f-71ca2e90301c` for old resume message `dad175ba-f0c6-4f00-8b41-f4f6f8d1ad31`
   - expected result after deploy:
     - idle PM sessions stop accumulating consumed pending resume messages and instead collapse to either one fresh project continuation or a fully drained/suppressed continuation state
+- 2026-03-28 17:21:48 MDT - In progress: clear stale cancelled child occupancy from PM snapshots and focused-draft guards.
+  - live diagnosis:
+    - Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` still named cancelled task `69` as the focused draft at messages `4735-4737`, and the assistant explicitly called that guard stale at message `4739`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - project-continuation child activity now counts only open child lanes (`queued`, `in_progress`, `review`, `blocked`) as parent occupancy, so terminal `done` / `cancelled` children stop hiding their parent draft
+    - explicit no-decompose parents still ignore malformed legacy child artifacts entirely instead of being demoted into replacement-child guidance
+    - focused-draft mutation guards now re-derive the current focus task from the live project tree before blocking, instead of trusting a stale prompt `FocusTaskLine`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - worker-side project continuation snapshots now use the same open-child accounting, so future PM prompts stop carrying dead child occupancy forward across retries/restarts
+  - changed tests:
+    - added `TestProjectExecutionContinuationSnapshotIgnoresCancelledChildrenAsExistingChildWork`
+    - added `TestShouldBlockProjectContinuationFocusedDraftMutationIgnoresCancelledPromptFocus`
+    - added `TestJobWorkerProjectExecutionContinuationSnapshotIgnoresCancelledChildren`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3453`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go internal/jobqueue/worker.go internal/jobqueue/worker_integration_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshot(IgnoresCancelledChildrenAsExistingChildWork|SkipsDraftParentWithBlockedChildren|IgnoresMalformedNoDecomposeChildren|IgnoresMalformedProceduralChildren|KeepsReviewDecisionBlockedChildrenAsExistingChildWork)|ShouldBlockProjectContinuationFocusedDraftMutation(IgnoresCancelledPromptFocus|ForMalformedChildParent|ForAncestorPromotion))$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(IgnoresCancelledChildren|IgnoresMalformedNoDecomposeChildren|IgnoresMalformedProceduralChildren|PromotesBlockedChildParentsToReplacementWork)$' -count=1`
+  - next proof target after deploy:
+    - Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` should stop surfacing cancelled task `69` as the focused bounded step and instead expose the live parent draft / current bounded task on the next fresh continuation turn

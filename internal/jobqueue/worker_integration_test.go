@@ -18537,6 +18537,87 @@ func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedProcedural
 	}
 }
 
+func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresCancelledChildren(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "project-continuation-snapshot-ignores-cancelled-children",
+		DisplayName: "Project Continuation Snapshot Ignores Cancelled Children",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "project-continuation-snapshot-ignores-cancelled-children-project",
+		DisplayName:    "Project Continuation Snapshot Ignores Cancelled Children Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	parent, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     55,
+		Title:          "Scrape all 35 technonymous.org posts to markdown using web_fetch",
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parent.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     69,
+		Title:          "Fetch posts 25-35",
+		WorkStatus:     "cancelled",
+		BlocksScope:    "task",
+		CreatedByType:  "system",
+		Metadata:       childMetadata,
+	}); err != nil {
+		t.Fatalf("create cancelled child task: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "Scrape all 35 technonymous.org posts to markdown using web_fetch") {
+		t.Fatalf("DraftTaskLine = %q, want parent draft restored after cancelled child", snapshot.DraftTaskLine)
+	}
+	if strings.Contains(snapshot.ChildActiveDraftLine, "Scrape all 35 technonymous.org posts to markdown using web_fetch") {
+		t.Fatalf("ChildActiveDraftLine = %q, should not treat cancelled child as existing child work", snapshot.ChildActiveDraftLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "Scrape all 35 technonymous.org posts to markdown using web_fetch") {
+		t.Fatalf("FocusTaskLine = %q, want parent task restored as focus", snapshot.FocusTaskLine)
+	}
+
+	remainingDrafts, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	if remainingDrafts != 1 {
+		t.Fatalf("countActionableProjectDraftTasks = %d, want 1 actionable parent after ignoring cancelled child", remainingDrafts)
+	}
+}
+
 func TestJobWorkerProjectExecutionContinuationSnapshotPromotesBlockedChildParentsToReplacementWork(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

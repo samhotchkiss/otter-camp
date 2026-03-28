@@ -19400,6 +19400,40 @@ func TestProjectExecutionContinuationSnapshotSkipsDraftParentWithBlockedChildren
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotIgnoresCancelledChildrenAsExistingChildWork(t *testing.T) {
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	childID := uuid.New()
+	projectTasks := []repo.ProjectTask{
+		{
+			ID:         parentDraftID,
+			ProjectID:  projectID,
+			TaskNumber: 55,
+			Title:      "Scrape all 35 technonymous.org posts to markdown using web_fetch",
+			WorkStatus: "draft",
+		},
+		{
+			ID:         childID,
+			ProjectID:  projectID,
+			TaskNumber: 69,
+			Title:      "Fetch posts 25-35",
+			WorkStatus: "cancelled",
+			Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+		},
+	}
+
+	snapshot, _ := buildProjectExecutionContinuationSnapshot(projectTasks, buildProjectContinuationTaskHints(projectTasks, nil), nil)
+	if !strings.Contains(snapshot.DraftTaskLine, "task 55 (Scrape all 35 technonymous.org posts to markdown using web_fetch)") {
+		t.Fatalf("DraftTaskLine = %q, want parent draft restored after cancelled child", snapshot.DraftTaskLine)
+	}
+	if strings.Contains(snapshot.ChildActiveDraftLine, "task 55") {
+		t.Fatalf("ChildActiveDraftLine = %q, should not treat cancelled child as existing child work", snapshot.ChildActiveDraftLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "task 55 (Scrape all 35 technonymous.org posts to markdown using web_fetch)") {
+		t.Fatalf("FocusTaskLine = %q, want parent task restored as focus", snapshot.FocusTaskLine)
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotKeepsReviewDecisionBlockedChildrenAsExistingChildWork(t *testing.T) {
 	projectID := uuid.New()
 	assignedID := uuid.New()
@@ -19779,6 +19813,52 @@ func TestShouldBlockProjectContinuationFocusedDraftMutationForAncestorPromotion(
 	}
 	if !strings.Contains(reason, "focused draft task task 58") || !strings.Contains(reason, "ancestor draft task 55") {
 		t.Fatalf("reason = %q, want focused-child ancestor-promotion guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftMutationIgnoresCancelledPromptFocus(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	ancestorTaskID := uuid.New()
+	cancelledFocusTaskID := uuid.New()
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			ancestorTaskID: {
+				ID:         ancestorTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 55,
+				Title:      "Scrape all 35 technonymous.org posts to markdown using web_fetch",
+				WorkStatus: "draft",
+			},
+			cancelledFocusTaskID: {
+				ID:         cancelledFocusTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 69,
+				Title:      "Fetch posts 25-35",
+				WorkStatus: "cancelled",
+				Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, ancestorTaskID.String())),
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: recover batch markdown outputs", projectExecutionContinuationSnapshot{
+			ProjectLine:   "Active project id: " + projectID.String(),
+			FocusTaskLine: "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 69 (Fetch posts 25-35) id=" + cancelledFocusTaskID.String() + " title=\"Fetch posts 25-35\" work_status=cancelled",
+		}),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftMutationTool(context.Background(), rt, "task.update", map[string]any{
+		"task_id":     ancestorTaskID.String(),
+		"work_status": "queued",
+	})
+	if blocked {
+		t.Fatalf("blocked = true, reason = %q; want stale cancelled focus to stop blocking ancestor promotion", reason)
 	}
 }
 

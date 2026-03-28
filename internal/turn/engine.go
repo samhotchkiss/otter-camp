@@ -18284,9 +18284,22 @@ type projectContinuationChildActivity struct {
 	replaceableBlockedChildTaskCount int
 }
 
+func projectContinuationCountsAsOpenChildTask(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "queued", "in_progress", "review", "blocked":
+		return true
+	default:
+		return false
+	}
+}
+
 func projectContinuationChildTaskActivity(tasks []repo.ProjectTask, hintsByTask map[uuid.UUID]projectContinuationTaskHints) map[uuid.UUID]projectContinuationChildActivity {
 	activityByParentID := make(map[uuid.UUID]projectContinuationChildActivity)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(tasks)
+	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(tasks))
+	for _, task := range tasks {
+		tasksByID[task.ID] = task
+	}
 	for _, task := range tasks {
 		metadata := messageMetadataMap(task.Metadata)
 		parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
@@ -18294,9 +18307,15 @@ func projectContinuationChildTaskActivity(tasks []repo.ProjectTask, hintsByTask 
 			continue
 		}
 		if _, skip := malformedChildTaskIDs[task.ID]; skip {
+			if parentTask, ok := tasksByID[parentID]; ok && projectContinuationParentForbidsDecomposition(parentTask) {
+				continue
+			}
 			activity := activityByParentID[parentID]
 			activity.malformedChildTaskCount++
 			activityByParentID[parentID] = activity
+			continue
+		}
+		if !projectContinuationCountsAsOpenChildTask(task.WorkStatus) {
 			continue
 		}
 		activity := activityByParentID[parentID]
@@ -18363,6 +18382,40 @@ func projectContinuationParentForbidsDecomposition(task repo.ProjectTask) bool {
 	decomposition, _ := metadata["decomposition"].(map[string]any)
 	sourceDescription := strings.TrimSpace(anyString(decomposition["source_description"]))
 	return sourceDescription != "" && taskdecomp.DescriptionForbidsDecomposition(sourceDescription)
+}
+
+func projectContinuationFocusCandidateTask(task repo.ProjectTask, activity projectContinuationChildActivity) bool {
+	if !isActionableProjectDraftTask(task) {
+		return false
+	}
+	if activity.childTaskCount > 0 || activity.malformedChildTaskCount > 0 {
+		return projectContinuationDraftTaskNeedsFreshReplacementChildWork(activity)
+	}
+	return true
+}
+
+func projectContinuationCurrentFocusTask(projectTasks []repo.ProjectTask, taskHintsByTask map[uuid.UUID]projectContinuationTaskHints, priorityPaths map[string]struct{}) (repo.ProjectTask, bool) {
+	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
+	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
+	filterByPriority := len(priorityPaths) > 0
+	for _, task := range projectTasks {
+		if _, skip := malformedChildTaskIDs[task.ID]; skip {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(task.WorkStatus))
+		if status == "" || status == "cancelled" {
+			continue
+		}
+		activity := childActivity[task.ID]
+		hints := taskHintsByTask[task.ID]
+		if filterByPriority && !projectContinuationTaskMatchesPriorityPaths(task, hints, priorityPaths) {
+			continue
+		}
+		if projectContinuationFocusCandidateTask(task, activity) {
+			return task, true
+		}
+	}
+	return repo.ProjectTask{}, false
 }
 
 func isProjectContinuationActionableDraftTask(task repo.ProjectTask, activity projectContinuationChildActivity) bool {
@@ -28541,18 +28594,20 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 	if err != nil {
 		return false, ""
 	}
+	priorityPaths := projectContinuationPriorityPathsFromText(strings.TrimSpace(rt.initialMessageText))
 	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(projectTasks))
 	for _, task := range projectTasks {
 		tasksByID[task.ID] = task
-	}
-	focusTask, ok := tasksByID[focusTaskID]
-	if !ok {
-		return false, ""
 	}
 	taskHintsByTask, err := e.projectContinuationTaskHintsByTask(ctx, projectTasks)
 	if err != nil {
 		return false, ""
 	}
+	focusTask, ok := projectContinuationCurrentFocusTask(projectTasks, taskHintsByTask, priorityPaths)
+	if !ok {
+		return false, ""
+	}
+	focusTaskID = focusTask.ID
 	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	focusActivity := childActivity[focusTaskID]
 	if targetTaskID == focusTaskID && projectContinuationDraftTaskNeedsFreshReplacementChildWork(focusActivity) {

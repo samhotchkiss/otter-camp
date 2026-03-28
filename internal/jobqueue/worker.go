@@ -2689,6 +2689,15 @@ type projectContinuationChildActivityForWorker struct {
 	replaceableBlockedChildTaskCount int
 }
 
+func projectContinuationCountsAsOpenChildTaskForWorker(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "queued", "in_progress", "review", "blocked":
+		return true
+	default:
+		return false
+	}
+}
+
 func isProjectContinuationActionableDraftTaskForWorker(task repo.ProjectTask, activity projectContinuationChildActivityForWorker) bool {
 	return isActionableProjectDraftTaskForWorker(task) && activity.childTaskCount == 0
 }
@@ -2989,6 +2998,10 @@ func projectContinuationTaskReferencesURLIndexForWorker(task repo.ProjectTask) b
 func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask, hintsByTask map[uuid.UUID]projectContinuationTaskHintsForWorker) map[uuid.UUID]projectContinuationChildActivityForWorker {
 	activityByParentID := make(map[uuid.UUID]projectContinuationChildActivityForWorker)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDsForWorker(tasks)
+	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(tasks))
+	for _, task := range tasks {
+		tasksByID[task.ID] = task
+	}
 	for _, task := range tasks {
 		var metadata map[string]any
 		if err := json.Unmarshal(task.Metadata, &metadata); err != nil {
@@ -3004,9 +3017,15 @@ func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask, hin
 			continue
 		}
 		if _, skip := malformedChildTaskIDs[task.ID]; skip {
+			if parentTask, ok := tasksByID[parentID]; ok && projectContinuationParentForbidsDecompositionForWorker(parentTask) {
+				continue
+			}
 			activity := activityByParentID[parentID]
 			activity.malformedChildTaskCount++
 			activityByParentID[parentID] = activity
+			continue
+		}
+		if !projectContinuationCountsAsOpenChildTaskForWorker(task.WorkStatus) {
 			continue
 		}
 		activity := activityByParentID[parentID]
