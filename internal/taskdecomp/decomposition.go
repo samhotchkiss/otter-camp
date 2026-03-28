@@ -166,11 +166,11 @@ func titleSuggestsCompoundBoundedWork(title string) bool {
 			return true
 		}
 	}
-	if enumeratedBatchTitlePattern.MatchString(normalized) && containsAny(normalized, broadScopeSignals) {
+	if enumeratedBatchTitlePattern.MatchString(normalized) && containsStandaloneSignal(normalized, broadScopeSignals) {
 		return true
 	}
 	if strings.Count(normalized, " and ") >= 2 || strings.Count(normalized, " across ") >= 1 {
-		if containsAny(normalized, broadScopeSignals) {
+		if containsStandaloneSignal(normalized, broadScopeSignals) {
 			return true
 		}
 	}
@@ -1011,8 +1011,11 @@ func estimateTaskMinutes(title string, description *string, parentScoped bool) (
 	if matches := len(enumMarkerPattern.FindAllString(text, -1)); matches >= 3 {
 		estimatedMinutes += matches * 5
 	}
-	if containsAny(text, broadScopeSignals) && !isBoundedSectionDraft && !shouldBypassBroadScopePenaltyForParentScopedChild(title, rawDescription, deliverables, parentScoped) {
+	if containsStandaloneSignal(text, broadScopeSignals) && !isBoundedSectionDraft && !shouldBypassBroadScopePenaltyForParentScopedChild(title, rawDescription, deliverables, parentScoped) {
 		estimatedMinutes += 15
+	}
+	if singleConcreteFileDeliverable && estimatedMinutes > maxMinutes {
+		estimatedMinutes = maxMinutes
 	}
 
 	return estimatedMinutes, maxMinutes
@@ -1029,7 +1032,10 @@ func looksLikeSingleConcreteFileDeliverable(title, rawDescription string, delive
 	if normalizedText == "" {
 		return false
 	}
-	if containsAny(normalizedText, broadScopeSignals) {
+	if containsStandaloneSignal(normalizedText, broadScopeSignals) {
+		return false
+	}
+	if containsStandaloneSignal(normalizedText, toolHeavySignals) || containsStandaloneSignal(normalizedText, externalBoundSignals) {
 		return false
 	}
 	paths := extractWorkspaceFilePaths(title + "\n" + rawDescription)
@@ -1090,6 +1096,31 @@ func containsAny(text string, signals []string) bool {
 		}
 	}
 	return false
+}
+
+func containsStandaloneSignal(text string, signals []string) bool {
+	for _, signal := range signals {
+		start := 0
+		for {
+			idx := strings.Index(text[start:], signal)
+			if idx < 0 {
+				break
+			}
+			idx += start
+			beforeOK := idx == 0 || !isSignalWordByte(text[idx-1])
+			afterIdx := idx + len(signal)
+			afterOK := afterIdx >= len(text) || !isSignalWordByte(text[afterIdx])
+			if beforeOK && afterOK {
+				return true
+			}
+			start = idx + len(signal)
+		}
+	}
+	return false
+}
+
+func isSignalWordByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
 }
 
 func splitSegments(raw, delimiter string) []string {

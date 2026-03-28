@@ -34,6 +34,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"github.com/samhotchkiss/otter-camp/internal/toolargs"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
+	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 	"log/slog"
 )
 
@@ -11283,6 +11284,25 @@ func TestHandleCompletedProjectExecutionContinuationTurnSuppressesRepeatedRedisc
 	}
 	if retryCount != 1 {
 		t.Fatalf("project continuation messages with fingerprint %s = %d, want 1", fingerprint, retryCount)
+	}
+}
+
+func TestProjectExecutionContinuationPromptFingerprintIncludesRepoVersion(t *testing.T) {
+	originalVersion := versionpkg.RepoVersion
+	defer func() {
+		versionpkg.RepoVersion = originalVersion
+	}()
+
+	completedTaskID := uuid.New()
+	content := "Continue the active project execution now."
+
+	versionpkg.RepoVersion = "3384"
+	fingerprintA := projectExecutionContinuationPromptFingerprint(completedTaskID, content)
+	versionpkg.RepoVersion = "3385"
+	fingerprintB := projectExecutionContinuationPromptFingerprint(completedTaskID, content)
+
+	if fingerprintA == fingerprintB {
+		t.Fatalf("fingerprint should change across repo versions, got %q for both", fingerprintA)
 	}
 }
 

@@ -46,6 +46,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/toolargs"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
+	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
@@ -7094,6 +7095,7 @@ func (e *TurnEngine) appendProjectExecutionContinuationMessage(ctx context.Conte
 		"source":                            projectExecutionContinuationSource,
 		"auto_continue":                     true,
 		"continuation_snapshot_fingerprint": fingerprint,
+		"repo_version":                      strings.TrimSpace(versionpkg.RepoVersion),
 	}
 	if completedTaskID != uuid.Nil {
 		metadataMap["completed_task_id"] = completedTaskID.String()
@@ -7122,6 +7124,7 @@ func (e *TurnEngine) appendProjectExecutionContinuationMessage(ctx context.Conte
 func projectExecutionContinuationPromptFingerprint(completedTaskID uuid.UUID, content string) string {
 	hasher := fnv.New64a()
 	parts := []string{
+		strings.TrimSpace(versionpkg.RepoVersion),
 		completedTaskID.String(),
 		strings.TrimSpace(content),
 	}

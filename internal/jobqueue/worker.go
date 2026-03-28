@@ -24,6 +24,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/metrics"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 )
 
 const (
@@ -2048,6 +2049,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			expectedSnapshotFingerprint = projectExecutionContinuationFingerprintForWorker(completedTaskID, remainingDrafts, snapshot)
 			metadataMap["completed_task_id"] = expectedCompletedTaskID
 			metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+			metadataMap["repo_version"] = strings.TrimSpace(versionpkg.RepoVersion)
 			content = buildProjectExecutionContinuationPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot)
 		}
 	}
@@ -3010,6 +3012,7 @@ func projectTaskLabelForWorker(task repo.ProjectTask) string {
 func projectExecutionContinuationFingerprintForWorker(completedTaskID uuid.UUID, remainingDraftTasks int, snapshot projectExecutionContinuationSnapshotForWorker) string {
 	hasher := fnv.New64a()
 	parts := []string{
+		strings.TrimSpace(versionpkg.RepoVersion),
 		completedTaskID.String(),
 		strconv.Itoa(remainingDraftTasks),
 		strings.TrimSpace(snapshot.ProjectLine),

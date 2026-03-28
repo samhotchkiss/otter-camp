@@ -599,9 +599,9 @@ func TestValidateBoundedTaskSizeAllowsParentScopedSinglePillarSlice(t *testing.T
 }
 
 func TestValidateBoundedTaskSizeAllowsSingleConcreteTemplateWithRequirements(t *testing.T) {
-	title := "Build a single HTML layout template (template 8 of 10) for Sam.blog"
+	title := "Build a single HTML layout template (template 8 of 10) for Sam.blog — replacement for blocked OC-38"
 	description := strings.Join([]string{
-		"Create a single self-contained HTML file at `templates/template-08-replace.html` for Sam.blog.",
+		"Create a single self-contained HTML file at `templates/template-08-replace.html` for Sam.blog. This is template 8 of 10, replacing the blocked OC-38.",
 		"",
 		"Requirements:",
 		"- Single HTML file, no JavaScript interactivity or build tooling required",
@@ -611,6 +611,17 @@ func TestValidateBoundedTaskSizeAllowsSingleConcreteTemplateWithRequirements(t *
 		"- Mobile responsive via CSS media queries",
 		"- Deliverable: templates/template-08-replace.html",
 	}, "\n")
+	if !looksLikeSingleConcreteFileDeliverable(title, description, extractDeliverables(description)) {
+		t.Fatalf(
+			"looksLikeSingleConcreteFileDeliverable = false, titleSuggestsCompoundBoundedWork=%t broadScope=%t toolHeavy=%t external=%t paths=%v deliverables=%v",
+			titleSuggestsCompoundBoundedWork(title),
+			containsAny(strings.ToLower(strings.TrimSpace(strings.Join([]string{title, description}, " "))), broadScopeSignals),
+			containsStandaloneSignal(strings.ToLower(strings.TrimSpace(strings.Join([]string{title, description}, " "))), toolHeavySignals),
+			containsStandaloneSignal(strings.ToLower(strings.TrimSpace(strings.Join([]string{title, description}, " "))), externalBoundSignals),
+			extractWorkspaceFilePaths(title+"\n"+description),
+			extractDeliverables(description),
+		)
+	}
 
 	if err := validateBoundedTaskSize(title, &description, false); err != nil {
 		t.Fatalf("validateBoundedTaskSize err = %v, want nil for bounded single-file template task", err)
@@ -704,7 +715,7 @@ func TestPrepareQueueDecompositionSkipsConcreteDeliverableWithProceduralSections
 
 func TestPrepareQueueDecompositionSkipsSingleConcreteTemplateWithRequirements(t *testing.T) {
 	description := strings.Join([]string{
-		"Create a single self-contained HTML file at `templates/template-08-replace.html` for Sam.blog.",
+		"Create a single self-contained HTML file at `templates/template-08-replace.html` for Sam.blog. This is template 8 of 10, replacing the blocked OC-38.",
 		"",
 		"Requirements:",
 		"- Single HTML file, no JavaScript interactivity or build tooling required",
@@ -717,7 +728,7 @@ func TestPrepareQueueDecompositionSkipsSingleConcreteTemplateWithRequirements(t 
 
 	result, err := PrepareQueueDecomposition(QueueDecompositionInput{
 		ParentTaskID: uuid.New(),
-		Title:        "Build a single HTML layout template (template 8 of 10) for Sam.blog",
+		Title:        "Build a single HTML layout template (template 8 of 10) for Sam.blog — replacement for blocked OC-38",
 		Description:  &description,
 		Metadata:     json.RawMessage(`{}`),
 	})

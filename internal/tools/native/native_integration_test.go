@@ -8111,6 +8111,74 @@ func TestIntegrationTaskUpdateQueueKeepsDecomposedParentDraftAndQueuesChildren(t
 	}
 }
 
+func TestIntegrationTaskUpdateQueueAllowsSingleConcreteTemplateWithRequirements(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	sessionOut, err := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()}).Execute(integrationExecCtxWith(orgID, agent.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   project.ID.String(),
+		"mode":       "async",
+		"title":      "Queue template replacement",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, agent.ID, sessionID)
+
+	description := strings.Join([]string{
+		"Create a single self-contained HTML file at `templates/template-08-replace.html` for Sam.blog. This is template 8 of 10, replacing the blocked OC-38.",
+		"",
+		"Requirements:",
+		"- Single HTML file, no JavaScript interactivity or build tooling required",
+		"- Designed as a professional personal hub for Sam Hotchkiss",
+		"- Unique visual identity distinct from templates 1-7 and 9-10",
+		"- Sections: hero/intro, about, blog listing, photography, speaking/consulting CTA, SamBot chat placeholder, contact",
+		"- Mobile responsive via CSS media queries",
+		"- Deliverable: templates/template-08-replace.html",
+	}, "\n")
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  orgID,
+		ProjectID:       project.ID,
+		TaskNumber:      43,
+		Title:           "Build a single HTML layout template (template 8 of 10) for Sam.blog — replacement for blocked OC-38",
+		Description:     &description,
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &agent.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(projectCtx, "task.update", map[string]any{
+		"task_id":     task.ID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update queued: %v", err)
+	}
+	if got, exists := out["error"]; exists && got != nil {
+		t.Fatalf("task.update error = %v, want nil", got)
+	}
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task.update output task = %T, want map[string]any", out["task"])
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", taskOut["work_status"])); !strings.EqualFold(got, "queued") {
+		t.Fatalf("task output work_status = %q, want queued", got)
+	}
+}
+
 func TestIntegrationTaskUpdateRejectsQueuedPromotionForOrchestrationParentWithoutChildren(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

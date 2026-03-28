@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
+	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 )
 
 func TestJobWorkerProcessesEnqueuedJobs(t *testing.T) {
@@ -17523,6 +17524,194 @@ func TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedRedi
 	}
 	if pendingCount != 0 {
 		t.Fatalf("pending continuation messages = %d, want 0 after suppression", pendingCount)
+	}
+}
+
+func TestJobWorkerEnsureProjectContinuationMessageAllowsRetryAfterRepoVersionChange(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	originalVersion := versionpkg.RepoVersion
+	defer func() {
+		versionpkg.RepoVersion = originalVersion
+	}()
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "ensure-project-continuation-retries-after-version-change",
+		DisplayName: "Ensure Project Continuation Retries After Version Change",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "ensure-project-continuation-retries-after-version-change-project",
+		DisplayName:    "Ensure Project Continuation Retries After Version Change Project",
+		Description:    "Project for post-deploy continuation retry coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "ensure-project-continuation-retries-after-version-change-template",
+		DisplayName:    "Ensure Project Continuation Retries After Version Change Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	doneTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     48,
+		Title:          "Produce content/technonymous-index.json",
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	assignedAgentID := agent.ID
+	description := "Create a single self-contained HTML file at templates/template-08-replace.html for Sam.blog."
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      43,
+		Title:           "Build a single HTML layout template (template 8 of 10) for Sam.blog — replacement for blocked OC-38",
+		Description:     &description,
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &assignedAgentID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	}); err != nil {
+		t.Fatalf("create draft task: %v", err)
+	}
+
+	versionpkg.RepoVersion = "3384"
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	remainingDrafts, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	oldFingerprint := projectExecutionContinuationFingerprintForWorker(doneTask.ID, remainingDrafts, snapshot)
+	metadata, err := json.Marshal(map[string]any{
+		"source":                 "project_execution_continuation",
+		"auto_continue":          true,
+		"synthetic_user_message": true,
+		"completed_task_id":      doneTask.ID.String(),
+		projectContinuationSnapshotFingerprintKey: oldFingerprint,
+		"repo_version": versionpkg.RepoVersion,
+	})
+	if err != nil {
+		t.Fatalf("marshal continuation metadata: %v", err)
+	}
+	staleMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "failed",
+		Metadata:  metadata,
+	})
+	if err != nil {
+		t.Fatalf("create stale continuation message: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	completedTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StopReason:       &stopReason,
+		TriggerMessageID: &staleMessage.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create completed continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &completedTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation found that the remaining draft work still violates the bounded size policy. Split it into smaller reviewable child tasks instead of trying to queue the broad parent again.]",
+		Status:    "final",
+	}); err != nil {
+		t.Fatalf("create continuation bounded-size guard message: %v", err)
+	}
+
+	versionpkg.RepoVersion = "3385"
+	messageID, suppressed, err := worker.ensureProjectContinuationMessageDecision(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ensureProjectContinuationMessageDecision: %v", err)
+	}
+	if suppressed {
+		t.Fatal("suppressed = true, want false after repo version change")
+	}
+	if messageID == uuid.Nil {
+		t.Fatal("messageID = nil, want fresh continuation after repo version change")
+	}
+
+	createdMessage, err := repo.NewChatMessageRepo(pool).GetByID(ctx, messageID)
+	if err != nil {
+		t.Fatalf("GetByID fresh continuation message: %v", err)
+	}
+	var createdMetadata map[string]any
+	if err := json.Unmarshal(createdMessage.Metadata, &createdMetadata); err != nil {
+		t.Fatalf("unmarshal fresh continuation metadata: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", createdMetadata["repo_version"])); got != "3385" {
+		t.Fatalf("repo_version metadata = %q, want 3385", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", createdMetadata[projectContinuationSnapshotFingerprintKey])); got == "" || got == oldFingerprint {
+		t.Fatalf("fresh continuation fingerprint = %q, want non-empty and different from %q", got, oldFingerprint)
 	}
 }
 

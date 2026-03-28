@@ -2702,7 +2702,7 @@ func TestTaskServiceIntegrationQueueAllowsSingleConcreteTemplateWithRequirements
 	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
 
 	description := strings.Join([]string{
-		"Create a single self-contained HTML file at `templates/template-08-replace.html` for Sam.blog.",
+		"Create a single self-contained HTML file at `templates/template-08-replace.html` for Sam.blog. This is template 8 of 10, replacing the blocked OC-38.",
 		"",
 		"Requirements:",
 		"- Single HTML file, no JavaScript interactivity or build tooling required",
@@ -2715,7 +2715,7 @@ func TestTaskServiceIntegrationQueueAllowsSingleConcreteTemplateWithRequirements
 
 	created, err := svc.CreateTask(ctx, CreateTaskRequest{
 		ProjectID:      project.ID,
-		Title:          "Build a single HTML layout template (template 8 of 10) for Sam.blog",
+		Title:          "Build a single HTML layout template (template 8 of 10) for Sam.blog — replacement for blocked OC-38",
 		Description:    &description,
 		FlowTemplateID: &template.ID,
 		CreatedByType:  "system",
