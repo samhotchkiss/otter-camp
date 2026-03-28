@@ -3245,6 +3245,89 @@ func TestHandleTurnCompletedEventRetriesReviewTurnWithoutDecision(t *testing.T) 
 	}
 }
 
+func TestHandleTurnCompletedEventRetriesReviewTurnWithoutDecisionRefreshesTaskReviewPrompt(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	base := time.Unix(1700000002, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	description := "Fetch posts 1-12 from technonymous-index.json and save as markdown under content/posts/."
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				TaskNumber:        61,
+				Title:             "Fetch posts 1-12 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+				Description:       &description,
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &nodeID,
+				Metadata: mustRawJSON(t, map[string]any{
+					"content_migration_checkpoint": map[string]any{
+						"version": 1,
+						"outputs": []map[string]any{
+							{"path": "content/posts/one.md"},
+							{"path": "content/posts/two.md"},
+						},
+					},
+				}),
+			},
+		},
+	}
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "review"},
+		},
+	}
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	message.Content = "Review only.\n" +
+		"Do not continue implementation, do not write deliverable files, and do not summarize what you plan to review.\n" +
+		"Start with the preferred deliverable root `content/posts`. Inspect that output root directly before broad workspace discovery, and do not begin with task.get, git.log, or dependency-file reads outside `content/posts` unless `content/posts` itself is missing.\n" +
+		"If listing or reading under `content/posts` returns `not_found`, stop broad inspection and call flow.review_decision reject using that missing deliverable-root evidence.\n" +
+		"Use flow_node_execution_id " + executionID.String() + " in flow.review_decision.\n"
+	message.Metadata = mustRawJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"synthetic_user_message": true,
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.messages.upsert(message)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "I reviewed the deliverables and need one more pass before deciding.")
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+	retryMessage, err := fixture.messages.GetByID(context.Background(), jobs[0].payload.MessageID)
+	if err != nil {
+		t.Fatalf("GetByID retry message: %v", err)
+	}
+	if !strings.Contains(retryMessage.Content, "The checkpoint already identifies the task-owned outputs under `content/posts`") {
+		t.Fatalf("retry message = %q, want refreshed checkpoint output-set guidance", retryMessage.Content)
+	}
+}
+
 func TestHandleTurnCompletedEventRetriesReviewTurnWithoutDecisionRestoresRunIDFromSessionHistory(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	base := time.Unix(1700000001, 0).UTC()

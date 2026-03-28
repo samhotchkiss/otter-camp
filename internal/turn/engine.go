@@ -1889,6 +1889,7 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 			retryContent = e.buildTaskReviewActionPrompt(ctx, session)
 			retryMetadata = e.syntheticContinuationActionMessageMetadataWithCarryForward(ctx, session, "task_review_action", latestUser.Metadata)
 		} else if taskReviewActionMessage(*latestUser) {
+			retryContent = e.buildTaskReviewActionPrompt(ctx, session)
 			retryMetadata = e.syntheticContinuationActionMessageMetadataWithCarryForward(ctx, session, "task_review_action", latestUser.Metadata)
 		}
 		if resolvedPrompt, ok, promptErr := e.reviewApprovalRetryPrompt(ctx, session, taskRecord, latestUser, latestCompleted); promptErr != nil {
