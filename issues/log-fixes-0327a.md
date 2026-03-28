@@ -522,3 +522,11 @@
   - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, repaired the worker pane respawn to `codex-e2e-20260324:0.1`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
   - live diagnosis behind the fix: task `48` session `f1b27039-5b3b-4a57-aaf4-025443cdc612` was repeatedly reading the full `35340` byte `content/technonymous-index.json` payload and then immediately hitting the prompt-input guardrail
   - fresh post-deploy live proof is still pending because the watched review session remained inside a pre-restart in-flight turn wave after the restart
+- 2026-03-28 03:16:36 MDT - keep discovery-only child lanes out of sibling deliverable writes
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so discovery-focused decomposed child tasks now block `file.write` / `file.edit` calls when a sibling write-focused child already exists under the same parent
+  - added a matching early-stop path so a turn that only produced that blocked discovery-lane write mutation ends immediately with `validation_loop_blocked` instead of re-entering more same-turn correction churn
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - `TestShouldBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChildWrite`
+    - `TestShouldStopAfterBlockedTaskExecutionSiblingMutation`
+  - verified with `gofmt -w internal/turn/engine.go internal/turn/engine_test.go` and `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChild(DetailFetch|Write)|ShouldNotBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChildListingFetch|ShouldStopAfterBlockedTaskExecutionSiblingMutation)$' -count=1`
+  - live diagnosis behind the fix: task `46` session `5073a26f-0352-49b5-80c8-536f7531fbbe` was still trying to write `content/technonymous-index.json` from the discovery/listing lane even though sibling write work already existed

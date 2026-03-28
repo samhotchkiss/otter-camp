@@ -13053,6 +13053,11 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Task boundary guard blocked new child-task creation from this async task lane. Ending the turn early so the next continuation stays on the current task deliverable.]")
 			return true, nil
 		}
+		if len(toolCalls) == 0 && shouldStopAfterBlockedTaskExecutionSiblingMutation(rt, blockedCalls) {
+			rt.stopReason = stopReasonValidationBlocked
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Task sibling-responsibility guard blocked a discovery-only child lane from mutating the shared deliverable. Ending the turn early so the write-focused sibling can own the artifact.]")
+			return true, nil
+		}
 		if shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, blockedCalls) {
 			rt.stopReason = stopReasonValidationBlocked
 			if message := projectExecutionBlockedMutationStopMessage(blockedCalls); message != "" {
@@ -24301,6 +24306,31 @@ func shouldStopAfterBlockedTaskExecutionBoundaryMutation(rt *turnRuntime, result
 	return false
 }
 
+func shouldStopAfterBlockedTaskExecutionSiblingMutation(rt *turnRuntime, results []ToolResult) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	if len(results) == 0 {
+		return false
+	}
+	for _, result := range results {
+		errText := strings.ToLower(strings.TrimSpace(result.Error))
+		switch strings.ToLower(strings.TrimSpace(result.Name)) {
+		case "file.write", "file_write", "file.edit", "file_edit":
+			if strings.Contains(errText, "discovery/listing lane") &&
+				strings.Contains(errText, "do not write deliverable files") {
+				continue
+			}
+		}
+		return false
+	}
+	return true
+}
+
 func shouldStopAfterBlockedProjectContinuationRediscovery(rt *turnRuntime, results []ToolResult) bool {
 	if rt == nil || rt.session == nil {
 		return false
@@ -24998,8 +25028,9 @@ func (e *TurnEngine) shouldBlockTaskExecutionSiblingResponsibilityTool(ctx conte
 		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
 		return false, ""
 	}
-	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "browser.navigate", "web.fetch":
+	normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
+	switch normalizedToolName {
+	case "browser.navigate", "web.fetch", "file.write", "file_write", "file.edit", "file_edit":
 	default:
 		return false, ""
 	}
@@ -25025,10 +25056,18 @@ func (e *TurnEngine) shouldBlockTaskExecutionSiblingResponsibilityTool(ctx conte
 			writeSiblings = append(writeSiblings, sibling)
 		}
 	}
-	if taskExecutionWriteFocusedChildTask(taskRecord) && len(discoverySiblings) > 0 {
+	if taskExecutionWriteFocusedChildTask(taskRecord) &&
+		len(discoverySiblings) > 0 &&
+		(normalizedToolName == "browser.navigate" || normalizedToolName == "web.fetch") {
 		return true, buildTaskExecutionSiblingResponsibilityToolGuardError(taskRecord, discoverySiblings)
 	}
-	if !taskExecutionDiscoveryFocusedChildTask(taskRecord) || len(writeSiblings) == 0 || taskExecutionAllowsDetailContentFetch(taskRecord) {
+	if !taskExecutionDiscoveryFocusedChildTask(taskRecord) || len(writeSiblings) == 0 {
+		return false, ""
+	}
+	if normalizedToolName == "file.write" || normalizedToolName == "file_write" || normalizedToolName == "file.edit" || normalizedToolName == "file_edit" {
+		return true, buildTaskExecutionDiscoveryWriteGuardError(taskRecord, writeSiblings)
+	}
+	if taskExecutionAllowsDetailContentFetch(taskRecord) {
 		return false, ""
 	}
 	rawURL := strings.TrimSpace(anyString(arguments["url"]))
@@ -25872,6 +25911,31 @@ func buildTaskExecutionDiscoveryDetailFetchGuardError(taskRecord repo.ProjectTas
 		return fmt.Sprintf("task execution should keep %s in the discovery/listing lane. Do not fetch full detail pages like %q from this lane when a sibling already owns the write step; stop after archive/listing evidence instead.", current, rawURL)
 	}
 	return fmt.Sprintf("task execution should keep %s in the discovery/listing lane. Sibling write work already exists in %s, so do not fetch full detail pages like %q from this lane; stop after archive/listing evidence and hand the URLs/titles to the write lane instead.", current, strings.Join(labels, ", "), rawURL)
+}
+
+func buildTaskExecutionDiscoveryWriteGuardError(taskRecord repo.ProjectTask, siblings []repo.ProjectTask) string {
+	current := projectBootstrapTaskLabel(taskRecord)
+	if strings.TrimSpace(current) == "" {
+		current = "the current task"
+	}
+	labels := make([]string, 0, len(siblings))
+	for _, sibling := range siblings {
+		label := projectBootstrapTaskLabel(sibling)
+		if strings.TrimSpace(label) == "" {
+			label = strings.TrimSpace(sibling.Title)
+		}
+		if strings.TrimSpace(label) == "" {
+			continue
+		}
+		labels = append(labels, label)
+		if len(labels) >= 3 {
+			break
+		}
+	}
+	if len(labels) == 0 {
+		return fmt.Sprintf("task execution should keep %s in the discovery/listing lane. Do not write deliverable files from this lane when sibling write work already exists; stop after archive/listing evidence instead.", current)
+	}
+	return fmt.Sprintf("task execution should keep %s in the discovery/listing lane. Sibling write work already exists in %s. Do not write deliverable files from this lane; stop after archive/listing evidence and hand the URLs/titles to the write lane instead.", current, strings.Join(labels, ", "))
 }
 
 func buildOrchestrationParentReviewTaskListGuardError(taskRecord repo.ProjectTask) string {
