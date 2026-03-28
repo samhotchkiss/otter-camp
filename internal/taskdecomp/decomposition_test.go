@@ -96,9 +96,17 @@ func TestTaskLooksProceduralInstructionArtifact(t *testing.T) {
 	if !TaskLooksProceduralInstructionArtifact("Use cli_execute with shell scripting or iterate in the agent loop. Process all 35 posts.", &description) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for tool-procedure child task")
 	}
+	browserDescription := "Use browser tools to navigate to https://technonymous.org"
+	if !TaskLooksProceduralInstructionArtifact("Use browser tools to navigate to https://technonymous.org", &browserDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for browser-navigation-only procedural child task")
+	}
 	realDescription := "Fetch posts 1-17 via web_fetch and save each result as markdown under content/posts/."
 	if TaskLooksProceduralInstructionArtifact("Fetch technonymous.org posts 1-17 via web_fetch and save as markdown files under content/posts/", &realDescription) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = true, want false for bounded batch child task")
+	}
+	boundedBrowserDescription := "Use browser tools to navigate technonymous.org, discover the site structure, identify all blog post URLs"
+	if TaskLooksProceduralInstructionArtifact("Use browser tools to navigate technonymous.org, discover the site structure, identify all blog post URLs", &boundedBrowserDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = true, want false for bounded crawl deliverable")
 	}
 }
 

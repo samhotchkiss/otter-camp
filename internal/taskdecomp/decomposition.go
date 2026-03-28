@@ -875,6 +875,14 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 	if strings.Contains(normalized, "gallery-style") || strings.Contains(normalized, "given prominence") {
 		return true
 	}
+	if strings.HasPrefix(normalized, "use browser tools to navigate to ") {
+		target := strings.TrimSpace(strings.TrimRight(strings.TrimPrefix(normalized, "use browser tools to navigate to "), ".,:;"))
+		if target != "" &&
+			!strings.ContainsAny(target, " \t\r\n,") &&
+			(strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") || strings.Contains(target, ".")) {
+			return true
+		}
+	}
 	if strings.HasPrefix(normalized, "use ") {
 		for _, marker := range []string{
 			"web_fetch",

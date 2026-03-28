@@ -1,5 +1,14 @@
 # 0327a Fix Log
 
+- 2026-03-28 14:05:00 MDT - `pending` `Block browser-procedural child review lanes before model calls`
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go) so `TaskLooksProceduralInstructionArtifact(...)` now recognizes plain-English browser-navigation-only steps like `Use browser tools to navigate to https://...` when the remainder is only a single URL/domain target
+  - kept that classifier intentionally narrow so bounded crawl deliverables like `Use browser tools to navigate technonymous.org, discover the site structure, identify all blog post URLs` still do not get marked as malformed procedural artifacts
+  - expanded [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go) to cover both the new positive browser-procedure case and the negative bounded-crawl case
+  - added [`internal/turn/engine_integration_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_integration_test.go) coverage with `TestTurnEngineIntegrationMalformedProceduralBrowserChildReviewPreflightBlocksBeforeModelCall`, reproducing the live Sam.blog task-45 review shape and asserting the engine halts it in preflight with `modelCalls=0`
+  - verified with `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(TaskLooksProceduralInstructionArtifact|ExtractDeliverablesIgnoresProceduralStepsAndImportantSections|PrepareQueueDecompositionSkipsConcreteDeliverableWithProceduralSections)$' -count=1` and `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationMalformedProcedural(BrowserChildReview|ChildKickoff)PreflightBlocksBeforeModelCall$' -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `data.status=ok`
+  - live status: deployed as a forward guard; the hot Sam.blog task-45 review session had already closed by the time the new binary came up, so fresh production proof now depends on the next malformed browser-procedural child retry/reopen
+
 - 2026-03-28 13:19:42 MDT - `pending` `Cap authoritative batch review sibling sampling`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so authoritative checkpoint-output review prompts now tell the model to sample at most `4` additional sibling outputs after the preferred target instead of trying to read the whole batch before deciding
   - added runtime enforcement for that same cap in both the same-batch sibling-read guard and the later same-turn post-target read guard, so authoritative batch reviews stop before `max_tool_calls` when they already have enough sampled evidence
