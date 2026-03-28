@@ -169,6 +169,9 @@ var explicitDeliverablePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\bsave\s+as\s+([^\s,;]+)`),
 }
+var preferredDeliverableRootPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(?:under|in)\s+/?((?:content(?:/[A-Za-z0-9._-]+)+)/?)`),
+}
 
 const reviewRepeatedFileReadNotFoundTurnStopSubstring = "[Repeated identical file.read validation failure in this turn (2/3): not_found."
 const projectContinuationRediscoveryGuardPrefix = "[Project continuation rediscovery guard blocked only broad rereads."
@@ -12524,6 +12527,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if blocked, reason := shouldBlockTaskReviewCompanionPlanningArtifactTool(rt, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -15690,6 +15701,25 @@ func preferredTaskDeliverablePath(taskRecord repo.ProjectTask) string {
 	return ""
 }
 
+func preferredTaskDeliverableRoot(taskRecord repo.ProjectTask) string {
+	if taskRecord.Description == nil {
+		return ""
+	}
+	description := strings.TrimSpace(*taskRecord.Description)
+	for _, pattern := range preferredDeliverableRootPatterns {
+		matches := pattern.FindStringSubmatch(description)
+		if len(matches) < 2 {
+			continue
+		}
+		root := normalizeExplicitDeliverablePathCandidate(matches[1])
+		if !looksLikePreferredDeliverableRootPath(root) {
+			continue
+		}
+		return root
+	}
+	return ""
+}
+
 func inferredTaskExecutionLogTargetPath(taskRecord repo.ProjectTask) (string, bool) {
 	if taskRecord.TaskNumber <= 0 {
 		return "", false
@@ -17708,6 +17738,30 @@ func parsePromptDeliverableTarget(content string) string {
 			return ""
 		}
 		return target
+	}
+	return ""
+}
+
+func parsePromptDeliverableRoot(content string) string {
+	const marker = "Start with the preferred deliverable root `"
+
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		idx := strings.Index(trimmed, marker)
+		if idx < 0 {
+			continue
+		}
+		remainder := trimmed[idx+len(marker):]
+		end := strings.Index(remainder, "`")
+		if end < 0 {
+			return ""
+		}
+		rawRoot := remainder[:end]
+		root := normalizeWorkspaceRelativePath(rawRoot)
+		if !looksLikePreferredDeliverableRootPath(root) {
+			return ""
+		}
+		return root
 	}
 	return ""
 }
@@ -22368,9 +22422,13 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 	}
 	if taskRecord, ok := e.reviewPromptTaskRecord(ctx, session); ok {
 		targetPath := strings.TrimSpace(e.reviewPromptDeliverableTarget(ctx, session, taskRecord))
+		rootPath := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
 		if targetPath != "" {
 			lines = append(lines, fmt.Sprintf("Start with the preferred deliverable target `%s`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `%s` is missing.", targetPath, targetPath))
 			lines = append(lines, fmt.Sprintf("If reading `%s` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.", targetPath))
+		} else if rootPath != "" {
+			lines = append(lines, fmt.Sprintf("Start with the preferred deliverable root `%s`. Inspect that output root directly before broad workspace discovery, and do not begin with task.get, git.log, or dependency-file reads outside `%s` unless `%s` itself is missing.", rootPath, rootPath, rootPath))
+			lines = append(lines, fmt.Sprintf("If listing or reading under `%s` returns `not_found`, stop broad inspection and call flow.review_decision reject using that missing deliverable-root evidence.", rootPath))
 		}
 		if taskLooksLikeOrchestrationOnlyParent(taskRecord) {
 			lines = append(lines, "This task is an orchestration-only parent. Review the parent orchestration summary and the direct child-task outcomes, not missing companion planning artifacts.")
@@ -24398,6 +24456,31 @@ func shouldBlockTaskReviewPreferredDeliverableFirstTool(rt *turnRuntime, toolNam
 	}
 }
 
+func shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if !taskReviewPreferredDeliverableRootFirstApplies(rt) {
+		return false, ""
+	}
+	normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
+	rootPath := taskReviewPreferredDeliverableRoot(rt)
+	if rootPath == "" {
+		return false, ""
+	}
+	switch normalizedToolName {
+	case "file.read", "file_read", "file.list", "file_list", "file.search", "file_search":
+		path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+		if path != "" && workspacePathWithinRoot(path, rootPath) {
+			return false, ""
+		}
+		return true, buildTaskReviewPreferredDeliverableRootFirstGuardError(rootPath, normalizedToolName)
+	case "task.get", "task_get", "task.list", "task_list":
+		return true, buildTaskReviewPreferredDeliverableRootFirstGuardError(rootPath, normalizedToolName)
+	case "git.diff", "git_diff", "git.status", "git_status", "git.log", "git_log":
+		return true, buildTaskReviewPreferredDeliverableRootFirstGuardError(rootPath, normalizedToolName)
+	default:
+		return false, ""
+	}
+}
+
 func shouldBlockTaskReviewCompanionPlanningArtifactTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
 	if !taskReviewCompanionPlanningArtifactBlockApplies(rt) {
 		return false, ""
@@ -24437,6 +24520,16 @@ func taskReviewPreferredDeliverableFirstApplies(rt *turnRuntime) bool {
 	return !strings.Contains(strings.TrimSpace(rt.initialMessageText), "This task is an orchestration-only parent.")
 }
 
+func taskReviewPreferredDeliverableRootFirstApplies(rt *turnRuntime) bool {
+	if !taskReviewPromptActive(rt) {
+		return false
+	}
+	if strings.Contains(strings.TrimSpace(rt.initialMessageText), "This task is an orchestration-only parent.") {
+		return false
+	}
+	return taskReviewPreferredDeliverableTarget(rt) == "" && taskReviewPreferredDeliverableRoot(rt) != ""
+}
+
 func taskReviewCompanionPlanningArtifactBlockApplies(rt *turnRuntime) bool {
 	if !taskReviewPromptActive(rt) {
 		return false
@@ -24446,6 +24539,13 @@ func taskReviewCompanionPlanningArtifactBlockApplies(rt *turnRuntime) bool {
 		return false
 	}
 	return strings.Contains(initial, "Do not invent companion planning-artifact requirements")
+}
+
+func taskReviewPreferredDeliverableRoot(rt *turnRuntime) string {
+	if !taskReviewPromptActive(rt) {
+		return ""
+	}
+	return parsePromptDeliverableRoot(strings.TrimSpace(rt.initialMessageText))
 }
 
 func taskReviewPreferredDeliverableTarget(rt *turnRuntime) string {
@@ -25070,6 +25170,23 @@ func buildTaskReviewPreferredDeliverableFirstGuardError(targetPath, toolName str
 		return fmt.Sprintf("this review prompt already names preferred deliverable target `%s`. Do not browse the workspace with %s before reading `%s` directly. Read `%s` first, then call flow.review_decision reject immediately if it is missing or a placeholder.", targetPath, toolName, targetPath, targetPath)
 	default:
 		return fmt.Sprintf("this review prompt already names preferred deliverable target `%s`. Do not inspect sibling files before reading `%s` directly. Read `%s` first, then call flow.review_decision reject immediately if it is missing or a placeholder.", targetPath, targetPath, targetPath)
+	}
+}
+
+func buildTaskReviewPreferredDeliverableRootFirstGuardError(rootPath, toolName string) string {
+	rootPath = normalizeWorkspaceRelativePath(rootPath)
+	if rootPath == "" {
+		return "this review prompt already names a preferred deliverable root. Inspect that output root directly before broader workspace, git, or task rediscovery."
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "git.diff", "git.status", "git.log", "git_diff", "git_status", "git_log":
+		return fmt.Sprintf("this review prompt already names preferred deliverable root `%s`. Do not inspect repo state with %s before listing or reading files under `%s` directly.", rootPath, toolName, rootPath)
+	case "task.get", "task.list", "task_get", "task_list":
+		return fmt.Sprintf("this review prompt already names preferred deliverable root `%s`. Do not inspect task metadata with %s before listing or reading files under `%s` directly.", rootPath, toolName, rootPath)
+	case "file.list", "file.search", "file_list", "file_search", "file.read", "file_read":
+		return fmt.Sprintf("this review prompt already names preferred deliverable root `%s`. Do not inspect `%s` with %s before listing or reading files under `%s` directly.", rootPath, normalizeWorkspaceRelativePath(rootPath), toolName, rootPath)
+	default:
+		return fmt.Sprintf("this review prompt already names preferred deliverable root `%s`. Inspect that output root directly before broader rediscovery.", rootPath)
 	}
 }
 
@@ -27048,6 +27165,29 @@ func looksLikeExplicitDeliverablePath(normalized, raw string) bool {
 		}
 	}
 	return false
+}
+
+func looksLikePreferredDeliverableRootPath(normalized string) bool {
+	normalized = normalizeWorkspaceRelativePath(normalized)
+	if normalized == "" {
+		return false
+	}
+	if !strings.HasPrefix(strings.ToLower(normalized), "content/") {
+		return false
+	}
+	return !strings.Contains(filepath.Base(normalized), ".")
+}
+
+func workspacePathWithinRoot(path, root string) bool {
+	path = normalizeWorkspaceRelativePath(path)
+	root = normalizeWorkspaceRelativePath(root)
+	if path == "" || root == "" {
+		return false
+	}
+	if sameWorkspaceRelativePath(path, root) {
+		return true
+	}
+	return strings.HasPrefix(path, strings.TrimSuffix(root, "/")+"/")
 }
 
 func explicitExecutionDeliverableWriteCompleted(taskRecord repo.ProjectTask, result ToolResult) bool {

@@ -12130,6 +12130,45 @@ func TestShouldNotBlockTaskReviewCompanionPlanningArtifactToolForPlanningDeliver
 	}
 }
 
+func TestShouldBlockTaskReviewPreferredDeliverableRootFirstTool(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable root `content/posts`. Inspect that output root directly before broad workspace discovery, and do not begin with task.get, git.log, or dependency-file reads outside `content/posts` unless `content/posts` itself is missing.\n" +
+			"If listing or reading under `content/posts` returns `not_found`, stop broad inspection and call flow.review_decision reject using that missing deliverable-root evidence.\n" +
+			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
+	}
+
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, "file.list", map[string]any{"path": "content/posts", "recursive": true}); blocked {
+		t.Fatalf("expected preferred deliverable root list to remain allowed, reason = %q", reason)
+	}
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, "file.read", map[string]any{"path": "content/posts/2025-07-29-hello-world.md"}); blocked {
+		t.Fatalf("expected deliverable read under root to remain allowed, reason = %q", reason)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		toolName  string
+		arguments map[string]any
+	}{
+		{name: "task get", toolName: "task.get", arguments: map[string]any{"task_id": uuid.NewString()}},
+		{name: "git log", toolName: "git.log", arguments: map[string]any{}},
+		{name: "dependency read", toolName: "file.read", arguments: map[string]any{"path": "content/technonymous-index.json"}},
+		{name: "planning read", toolName: "file.read", arguments: map[string]any{"path": "planning/prd-spec/oc-34-prd.md"}},
+	} {
+		blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, tc.toolName, tc.arguments)
+		if !blocked {
+			t.Fatalf("expected %s to be blocked before preferred deliverable root inspection", tc.name)
+		}
+		if !strings.Contains(reason, "content/posts") {
+			t.Fatalf("%s guard reason = %q, want deliverable root guidance", tc.name, reason)
+		}
+	}
+}
+
 func TestShouldNotBlockTaskReviewPreferredDeliverableFirstToolForOrchestrationParent(t *testing.T) {
 	parentTaskID := uuid.New()
 	rt := &turnRuntime{
@@ -33033,6 +33072,39 @@ func TestBuildTaskReviewActionPromptIncludesPreferredDeliverableTargetFromSaveAs
 	}
 	if strings.Contains(prompt, "templates/layout-10-conversational.html.`") {
 		t.Fatalf("prompt = %q, did not want trailing punctuation in deliverable path", prompt)
+	}
+}
+
+func TestBuildTaskReviewActionPromptIncludesPreferredDeliverableRoot(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Using the scraped post index, extract full content (title, body, date, tags) from each technonymous.org post and convert to markdown files with frontmatter. Commit to the Sam.blog repo under /content/posts/."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  10,
+				Title:       "Convert scraped technonymous.org posts to markdown",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"bootstrap_first_wave_selected": true,
+				}),
+			},
+		},
+	}
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "Start with the preferred deliverable root `content/posts`") {
+		t.Fatalf("prompt = %q, want deliverable root guidance", prompt)
+	}
+	if !strings.Contains(prompt, "dependency-file reads outside `content/posts`") {
+		t.Fatalf("prompt = %q, want bounded root-first guidance", prompt)
 	}
 }
 
