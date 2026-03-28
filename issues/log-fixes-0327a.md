@@ -1283,3 +1283,32 @@
   - expected result after deploy:
     - batch review prompts recover the authoritative output set from explicit deliverable paths in the task brief even when checkpoint metadata only points at one file
     - multi-output review lanes stop getting trapped in one-file-first sibling-read guard loops and instead review the authoritative batch under the shared root
+- 2026-03-28 14:12:42 MDT - `Refresh synthetic review prompts across deploys`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `taskContinuationResumeMessageMetadata(...)` and `syntheticContinuationActionMessageMetadata(...)` now stamp `repo_version`
+    - `shouldAppendSyntheticUserPrompt(...)` now ignores stale pending synthetic prompts from older repo versions instead of letting them suppress fresh review/recovery prompts after deploy
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldAppendSyntheticUserPromptIgnoresStaleRepoVersionPendingSource`
+    - existing metadata tests now assert `repo_version`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldAppendSyntheticUserPrompt(SkipsDuplicatePendingSource|IgnoresDuplicateOnCompletedTurn|IgnoresOrphanPendingSyntheticPrompt|IgnoresStaleRepoVersionPendingSource)|TaskContinuationResumeMessageMetadataIncludesFlowNodeExecutionID|SyntheticContinuationActionMessageMetadataIncludesFlowNodeExecutionID)$' -count=1`
+  - live proof:
+    - task-64 session `5a0c5569-b5f0-4ac9-ac55-c73eea9aea73` stopped replaying stale `14:02 MDT` prompts and appended fresh `task_review_action` prompts at sequences `926`, `942`, and `943`
+  - expected result after deploy:
+    - hot review/recovery lanes stop waiting behind stale pending synthetic prompts from older binaries
+    - freshly shipped prompt fixes take effect on the next retry instead of after arbitrary backlog drain
+- 2026-03-28 14:12:42 MDT - `Relax authoritative batch review after preferred read`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `shouldBlockTaskReviewPreferredDeliverableFirstTool(...)` now allows same-root `file.read` after a successful preferred-target read when the prompt already marks the batch output set authoritative
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldNotBlockTaskReviewPreferredDeliverableFirstToolAfterSuccessfulTargetReadWithinAuthoritativeOutputSet`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockTaskReviewPreferredDeliverableSiblingReadTool|ShouldNotBlockTaskReviewSiblingReadWithinAuthoritativeCheckpointOutputSet|ShouldNotBlockTaskReviewPreferredDeliverableFirstToolAfterSuccessfulTargetReadWithinAuthoritativeOutputSet|ShouldBlockTaskReviewRepeatedCheckpointOutputTool|BuildTaskReviewActionPromptIncludesCheckpointOutputSetWhenPreferredTargetExists)$' -count=1`
+  - live proof status:
+    - deployed and test-green
+    - the task-64 canary is currently paused on assistant message `1214`, so direct proof of the final same-turn guard relaxation is still pending the next fresh tool batch
+  - expected result after deploy:
+    - once a batch review has successfully read the preferred target, the same turn can move into named same-root outputs from the authoritative batch set
+    - the lane stops reopening the old sibling-read guard wall after already satisfying the “read the preferred target first” requirement

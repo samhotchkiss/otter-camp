@@ -7506,6 +7506,40 @@ func TestShouldAppendSyntheticUserPromptIgnoresOrphanPendingSyntheticPrompt(t *t
 	}
 }
 
+func TestShouldAppendSyntheticUserPromptIgnoresStaleRepoVersionPendingSource(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	pendingTurn, err := fixture.chat.CreateTurn(context.Background(), fixture.session.ID, fixture.chat.participants[0].ParticipantID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := fixture.chat.StartTurn(context.Background(), pendingTurn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+	turnID := pendingTurn.ID
+	staleMetadata := mustRawJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"repo_version":           "stale-version",
+		"synthetic_user_message": true,
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Review only. Inspect the current deliverables.",
+		Metadata:  staleMetadata,
+	})
+
+	shouldAppend, err := fixture.engine.shouldAppendSyntheticUserPrompt(context.Background(), fixture.session.ID, "task_review_action")
+	if err != nil {
+		t.Fatalf("shouldAppendSyntheticUserPrompt: %v", err)
+	}
+	if !shouldAppend {
+		t.Fatal("shouldAppendSyntheticUserPrompt = false, want true when duplicate pending synthetic prompt is from a stale repo_version")
+	}
+}
+
 func TestNormalizeRoutedAgentForSessionDropsStaleAsyncTaskOverride(t *testing.T) {
 	agentID := uuid.New()
 	session := &chat.ChatSession{ScopeType: "project_task", Mode: "async"}
@@ -14294,6 +14328,28 @@ func TestShouldNotBlockTaskReviewSiblingReadWithinAuthoritativeCheckpointOutputS
 
 	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, "file.read", map[string]any{"path": "content/posts/discomfort-is-growth.md"}); blocked {
 		t.Fatalf("expected same-root checkpoint output read to remain allowed, reason = %q", reason)
+	}
+}
+
+func TestShouldNotBlockTaskReviewPreferredDeliverableFirstToolAfterSuccessfulTargetReadWithinAuthoritativeOutputSet(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `content/posts/practice-one-screen-at-a-time.md`.\n" +
+			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/practice-one-screen-at-a-time.md`, `content/posts/discomfort-is-growth.md`.\n" +
+			"Treat that output set as authoritative for this batch; after inspecting `content/posts/practice-one-screen-at-a-time.md`, read any additional evidence directly from those named outputs and do not call `file.list` on `content/posts` or reread dependency artifacts outside `content/posts` just to rediscover which files belong to the batch.\n" +
+			"Use flow.review_decision with the active flow_node_execution_id to approve or reject this review step.",
+		reviewPreferredDeliverablePath: "content/posts/practice-one-screen-at-a-time.md",
+	}
+
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableFirstTool(rt, "file.read", map[string]any{"path": "content/posts/discomfort-is-growth.md"}); blocked {
+		t.Fatalf("expected sibling read to remain allowed after a successful preferred-target read, reason = %q", reason)
+	}
+	if blocked, _ := shouldBlockTaskReviewPreferredDeliverableFirstTool(rt, "file.list", map[string]any{"path": "content/posts"}); !blocked {
+		t.Fatal("expected file.list on the deliverable root to remain blocked even after a successful preferred-target read")
 	}
 }
 
@@ -38605,6 +38661,9 @@ func TestTaskContinuationResumeMessageMetadataIncludesFlowNodeExecutionID(t *tes
 	if payload["continuation_attempt"] != float64(2) {
 		t.Fatalf("continuation_attempt = %v, want 2", payload["continuation_attempt"])
 	}
+	if payload["repo_version"] != versionpkg.RepoVersion {
+		t.Fatalf("repo_version = %v, want %s", payload["repo_version"], versionpkg.RepoVersion)
+	}
 }
 
 func TestSyntheticContinuationActionMessageMetadataIncludesFlowNodeExecutionID(t *testing.T) {
@@ -38626,6 +38685,9 @@ func TestSyntheticContinuationActionMessageMetadataIncludesFlowNodeExecutionID(t
 	}
 	if payload["source"] != "task_recovery_resume" {
 		t.Fatalf("source = %v, want task_recovery_resume", payload["source"])
+	}
+	if payload["repo_version"] != versionpkg.RepoVersion {
+		t.Fatalf("repo_version = %v, want %s", payload["repo_version"], versionpkg.RepoVersion)
 	}
 }
 

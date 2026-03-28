@@ -24318,6 +24318,7 @@ func taskContinuationResumeMessageMetadata(session *chat.ChatSession, attempt in
 		"source":                 taskContinuationResumeMessageSource,
 		"continuation_root":      true,
 		"continuation_attempt":   attempt,
+		"repo_version":           strings.TrimSpace(versionpkg.RepoVersion),
 		"synthetic_user_message": true,
 	}
 	if executionID := flowNodeExecutionIDFromSessionMetadata(session); executionID != nil && *executionID != uuid.Nil {
@@ -24329,6 +24330,7 @@ func taskContinuationResumeMessageMetadata(session *chat.ChatSession, attempt in
 func syntheticContinuationActionMessageMetadata(session *chat.ChatSession, source string) json.RawMessage {
 	payload := map[string]any{
 		"source":                 strings.TrimSpace(source),
+		"repo_version":           strings.TrimSpace(versionpkg.RepoVersion),
 		"synthetic_user_message": true,
 	}
 	if executionID := flowNodeExecutionIDFromSessionMetadata(session); executionID != nil && *executionID != uuid.Nil {
@@ -24582,6 +24584,7 @@ func (e *TurnEngine) shouldAppendSyntheticUserPrompt(ctx context.Context, sessio
 	if source == "" {
 		return true, nil
 	}
+	currentRepoVersion := strings.TrimSpace(versionpkg.RepoVersion)
 	messages, err := e.messages.ListBySession(ctx, sessionID)
 	if err != nil {
 		return false, err
@@ -24596,6 +24599,9 @@ func (e *TurnEngine) shouldAppendSyntheticUserPrompt(ctx context.Context, sessio
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), source) {
+			if currentRepoVersion != "" && !strings.EqualFold(strings.TrimSpace(stringValue(metadata["repo_version"])), currentRepoVersion) {
+				continue
+			}
 			if message.TurnID == nil || *message.TurnID == uuid.Nil {
 				continue
 			}
@@ -27018,6 +27024,16 @@ func shouldBlockTaskReviewPreferredDeliverableFirstTool(rt *turnRuntime, toolNam
 	case "file.read", "file_read":
 		path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
 		if path == "" || sameWorkspaceRelativePath(path, targetPath) {
+			return false, ""
+		}
+		rootPath := taskReviewPreferredDeliverableRoot(rt)
+		if rootPath == "" {
+			rootPath = normalizeWorkspaceRelativePath(filepath.ToSlash(filepath.Dir(targetPath)))
+		}
+		if rootPath != "" &&
+			taskReviewPromptTreatsCheckpointOutputSetAsAuthoritative(rt, rootPath) &&
+			sameWorkspaceRelativePath(strings.TrimSpace(rt.reviewPreferredDeliverablePath), targetPath) &&
+			workspacePathWithinRoot(path, rootPath) {
 			return false, ""
 		}
 		return true, buildTaskReviewPreferredDeliverableFirstGuardError(targetPath, "file.read")
