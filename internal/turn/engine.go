@@ -12781,6 +12781,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := shouldBlockProjectContinuationDependencyFocusedExternalTool(rt, name); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if blocked, reason := shouldBlockProjectContinuationDependencyFocusedTaskCreate(rt, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -25997,6 +26005,30 @@ func buildProjectContinuationSnapshotFlowExecutionGuardError() string {
 	return "project continuation already has named active or draft tasks in the continuation prompt and no concrete flow_node_execution_id was named as the blocker. Do not probe flow.get_execution from the project lane first; act on the named task directly or advance the correct task execution lane."
 }
 
+func shouldBlockProjectContinuationDependencyFocusedExternalTool(rt *turnRuntime, toolName string) (bool, string) {
+	if rt == nil || rt.session == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, ""
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "browser.navigate", "web.fetch":
+	default:
+		return false, ""
+	}
+	initialMessage := strings.TrimSpace(rt.initialMessageText)
+	if !strings.Contains(initialMessage, "Draft parent tasks already have child work:") {
+		return false, ""
+	}
+	dependencyPaths := projectContinuationDependencyPathsFromPrompt(initialMessage)
+	if len(dependencyPaths) == 0 {
+		return false, ""
+	}
+	return true, buildProjectContinuationDependencyFocusedExternalToolGuardError(dependencyPaths)
+}
+
 func shouldBlockProjectContinuationDependencyFocusedTaskCreate(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
 	if rt == nil || rt.session == nil {
 		return false, ""
@@ -26077,6 +26109,20 @@ func buildProjectContinuationDependencyFocusedTaskCreateGuardError(dependencyPat
 	}
 	sort.Strings(paths)
 	return fmt.Sprintf("project continuation is already focused on prerequisite artifact path(s) %s in the continuation prompt. Do not create unrelated top-level tasks from the project lane; create or advance only the smallest task that restores one of those named artifacts.", strings.Join(paths, ", "))
+}
+
+func buildProjectContinuationDependencyFocusedExternalToolGuardError(dependencyPaths map[string]struct{}) string {
+	if len(dependencyPaths) == 0 {
+		return "project continuation already has matching replacement task lanes named in the continuation prompt. Do not browse external sources from the project session; queue or advance the matching task instead."
+	}
+	paths := make([]string, 0, len(dependencyPaths))
+	for path := range dependencyPaths {
+		if normalized := normalizeWorkspaceRelativePath(path); normalized != "" {
+			paths = append(paths, normalized)
+		}
+	}
+	sort.Strings(paths)
+	return fmt.Sprintf("project continuation is already focused on prerequisite artifact path(s) %s and matching replacement child work is named in the continuation prompt. Do not browse external sources from the project session; queue or advance the matching task instead.", strings.Join(paths, ", "))
 }
 
 func buildProjectContinuationFlowExecutionLookupGuardError(taskRecord repo.ProjectTask, flowNodeExecutionID uuid.UUID) string {

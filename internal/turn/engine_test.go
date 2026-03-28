@@ -10069,6 +10069,57 @@ func TestShouldNotBlockProjectContinuationDependencyFocusedTaskCreateForNamedPar
 	}
 }
 
+func TestShouldBlockProjectContinuationDependencyFocusedExternalTool(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	activeTaskID := uuid.New()
+	parentTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: restore content/technonymous-index.json", projectExecutionContinuationSnapshot{
+			ProjectLine:          "Active project id: " + projectID.String(),
+			ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 41 (Write the results to content/technonymous-index.json) id=" + activeTaskID.String() + " title=\"Write the results to content/technonymous-index.json\" work_status=blocked deliverable_path=content/technonymous-index.json assigned_agent_id=worker-1 flow_template_id=flow-1",
+			ChildActiveDraftLine: "Draft parent tasks already have child work: task 39 (Replacement: Crawl technonymous.org and produce content/technonymous-index.json) id=" + parentTaskID.String() + " title=\"Replacement: Crawl technonymous.org and produce content/technonymous-index.json\" work_status=draft depends_on_path=content/technonymous-index.json assigned_agent_id=worker-1 flow_template_id=flow-1 child_tasks=2",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationDependencyFocusedExternalTool(rt, "web.fetch")
+	if !blocked {
+		t.Fatal("expected project continuation external fetch to be blocked when matching replacement child work is already named in the prompt")
+	}
+	if !strings.Contains(reason, "content/technonymous-index.json") {
+		t.Fatalf("reason = %q, want dependency path guidance", reason)
+	}
+}
+
+func TestShouldNotBlockProjectContinuationDependencyFocusedExternalToolWithoutChildWork(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	activeTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: restore content/technonymous-index.json", projectExecutionContinuationSnapshot{
+			ProjectLine:    "Active project id: " + projectID.String(),
+			ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 41 (Write the results to content/technonymous-index.json) id=" + activeTaskID.String() + " title=\"Write the results to content/technonymous-index.json\" work_status=blocked deliverable_path=content/technonymous-index.json assigned_agent_id=worker-1 flow_template_id=flow-1",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationDependencyFocusedExternalTool(rt, "web.fetch")
+	if blocked {
+		t.Fatalf("expected external fetch to remain available without named replacement child work, got %q", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationFlowExecutionLookupToolForTaskCurrentFlowNodeID(t *testing.T) {
 	t.Parallel()
 
