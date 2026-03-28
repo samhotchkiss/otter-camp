@@ -3241,6 +3241,8 @@ func explicitReviewDecisionFromText(content string) (string, bool) {
 		"review decision reject",
 		"decision: reject",
 		"decision reject",
+		"sufficient evidence to reject",
+		"enough evidence to reject",
 		"reject for rework",
 		"i am rejecting",
 		"i'm rejecting",
@@ -19625,9 +19627,6 @@ func (e *TurnEngine) reviewPromptCheckpointOutputPaths(ctx context.Context, task
 		reviewPromptCheckpointOutputPathsFromMetadata(taskRecord),
 		reviewPromptCheckpointOutputPathsFromDescription(taskRecord),
 	)
-	if len(paths) == 0 {
-		return paths
-	}
 	if e == nil || e.projects == nil {
 		return paths
 	}

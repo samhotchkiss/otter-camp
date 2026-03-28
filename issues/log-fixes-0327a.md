@@ -1392,3 +1392,21 @@
   - expected result after deploy:
     - authoritative batch review keeps the primary preferred-target read/tail behavior intact
     - same-root sibling spot-checks stay allowed, but no longer default toward oversized reads that blow up prompt growth
+- 2026-03-28 15:50:40 MDT - `Recover zero-metadata review output sets and synthesize explicit reject phrasing`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `reviewPromptCheckpointOutputPaths(...)` now still scans the task worktree for task-owned batch outputs even when checkpoint metadata/description contribute zero output paths, instead of returning early
+    - `explicitReviewDecisionFromText(...)` now treats `sufficient evidence to reject` and `enough evidence to reject` as explicit reject language for review-decision synthesis
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestBuildTaskReviewActionPromptRecoversTaskOwnedBatchOutputsFromWorktreeWithoutCheckpointMetadata`
+    - added `TestMaybeSynthesizeTaskReviewDecisionToolCallsUsesSufficientEvidenceRejectPhrasing`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3440` so the next synthetic review prompt can replace any older pending same-source prompt rows
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildTaskReviewActionPromptRecoversTaskOwnedBatchOutputsFromWorktree|BuildTaskReviewActionPromptRecoversTaskOwnedBatchOutputsFromWorktreeWithoutCheckpointMetadata|MaybeSynthesizeTaskReviewDecisionToolCalls(UsesSufficientEvidenceRejectPhrasing|UsesDirtyWorkspaceRejectOnlyRetry|InfersRejectFromStrongFindings)|RecordTaskReviewPreferredDeliverableReadResultTracksRootOnlyReviewSampling|ShouldBlockTaskReviewPreferredDeliverableRoot(FirstTool|ReadPastSampleCapAfterRootList|ListWhenCheckpointOutputSetAuthoritative)|BuildTaskReviewActionPromptIncludesPreferredDeliverableRoot)$' -count=1`
+  - deploy status:
+    - rebuilt/restarted tmux `codex-e2e-20260324`; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+    - the exact post-deploy task-65 review proof is still pending because the active task-65 execution retry failed during restart cleanup before the next review wakeup
+  - expected result after deploy:
+    - batch review prompts for content-migration tasks can recover the authoritative `content/posts/...` output set from the task worktree even when the checkpoint row is empty
+    - once a review assistant says the preferred-target miss is already sufficient evidence to reject, the runtime synthesizes `flow.review_decision reject` instead of paying another retry

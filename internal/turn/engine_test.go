@@ -25391,6 +25391,61 @@ func TestMaybeSynthesizeTaskReviewDecisionToolCallsInfersRejectFromStrongFinding
 	}
 }
 
+func TestMaybeSynthesizeTaskReviewDecisionToolCallsUsesSufficientEvidenceRejectPhrasing(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		TaskNumber: 65,
+		Title:      "Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/",
+		WorkStatus: "review",
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskReviewDecisionToolCalls(
+		context.Background(),
+		rt,
+		"The preferred deliverable target `content/posts/yonderosa-and-the-art-of-having-less.md` is not present — the initial read returned a not_found-equivalent error. Per the review instructions, this is sufficient evidence to reject.",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskReviewDecisionToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "flow.review_decision" {
+		t.Fatalf("toolCalls = %+v, want one flow.review_decision", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["decision"]); got != "reject" {
+		t.Fatalf("decision = %q, want reject", got)
+	}
+}
+
 func TestEnsureRecoveryTurnDurableTaskStateFailsWithoutTaskTransitions(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -37885,6 +37940,97 @@ func TestBuildTaskReviewActionPromptRecoversTaskOwnedBatchOutputsFromWorktree(t 
 	}
 	if !strings.Contains(prompt, "Treat that output set as authoritative for this batch;") {
 		t.Fatalf("prompt = %q, want authoritative checkpoint output-set guidance", prompt)
+	}
+}
+
+func TestBuildTaskReviewActionPromptRecoversTaskOwnedBatchOutputsFromWorktreeWithoutCheckpointMetadata(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fixture := newUnitFixture(t, "async")
+	tempDataDir := t.TempDir()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	projectSlug := "review-batch-worktree-no-metadata"
+	projectRoot := filepath.Join(tempDataDir, "workspaces", projectSlug)
+	branchName := "task/65"
+	description := "Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/."
+	outputs := []string{
+		"content/posts/yonderosa-and-the-art-of-having-less.md",
+		"content/posts/when-you-dont-need-a-routine.md",
+		"content/posts/stop-preparing-your-kids-for-jobs.md",
+	}
+
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, string(out))
+		}
+	}
+
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll project root: %v", err)
+	}
+	run(projectRoot, "init", "-b", "main")
+	run(projectRoot, "config", "user.email", "test@example.com")
+	run(projectRoot, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(projectRoot, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile README: %v", err)
+	}
+	run(projectRoot, "add", "README.md")
+	run(projectRoot, "commit", "-m", "init")
+	run(projectRoot, "checkout", "-b", branchName)
+	for _, rel := range outputs {
+		abs := filepath.Join(projectRoot, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatalf("MkdirAll output dir: %v", err)
+		}
+		if err := os.WriteFile(abs, []byte("---\ntitle: test\n---\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", rel, err)
+		}
+	}
+	run(projectRoot, "add", "content/posts")
+	run(projectRoot, "commit", "-m", "task outputs")
+	run(projectRoot, "checkout", "main")
+
+	fixture.engine.dataDir = tempDataDir
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				Slug:           projectSlug,
+			},
+		},
+	}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				ProjectID:   projectID,
+				TaskNumber:  65,
+				Title:       "Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/",
+				Description: &description,
+				WorkStatus:  "review",
+				BranchName:  &branchName,
+			},
+		},
+	}
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(ctx, fixture.session)
+	if !strings.Contains(prompt, outputs[0]) {
+		t.Fatalf("prompt = %q, want task-owned output recovered from worktree without checkpoint metadata", prompt)
+	}
+	if !strings.Contains(prompt, outputs[2]) {
+		t.Fatalf("prompt = %q, want additional task-owned output recovered from worktree without checkpoint metadata", prompt)
+	}
+	if !strings.Contains(prompt, "Treat that output set as authoritative for this batch;") {
+		t.Fatalf("prompt = %q, want authoritative checkpoint output-set guidance without checkpoint metadata", prompt)
 	}
 }
 
