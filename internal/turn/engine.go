@@ -12372,11 +12372,19 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt, name, arguments) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
 				Name:       name,
-				Error:      buildTaskPlaceholderDeliverableFollowOnToolGuardError(name),
+				Error:      buildTaskPlaceholderDeliverableFollowOnToolGuardError(rt, name),
 			})
 			continue
 		}
@@ -24109,6 +24117,14 @@ func shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt *turnRuntime, toolName
 	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
 		return false
 	}
+	if taskReviewPromptActive(rt) {
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "task.get", "task.list", "git.log", "file.list", "file.search", "file.read":
+			return true
+		default:
+			return false
+		}
+	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "task.list", "git.log", "file.list", "file.search":
 		return true
@@ -24117,6 +24133,63 @@ func shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt *turnRuntime, toolName
 	default:
 		return false
 	}
+}
+
+func shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt *turnRuntime, calls []ModelToolCall, toolName string, arguments map[string]any) (bool, string) {
+	if !taskReviewPromptActive(rt) {
+		return false, ""
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "file.read", "file_read":
+	default:
+		return false, ""
+	}
+	targetPath := taskReviewPreferredDeliverableTarget(rt)
+	if targetPath == "" || !taskReviewBatchIncludesPreferredDeliverableRead(calls, targetPath) {
+		return false, ""
+	}
+	path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+	if path == "" || sameWorkspaceRelativePath(path, targetPath) {
+		return false, ""
+	}
+	return true, buildTaskReviewPreferredDeliverableBatchReadGuardError(targetPath)
+}
+
+func taskReviewPromptActive(rt *turnRuntime) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	content := strings.TrimSpace(rt.initialMessageText)
+	return strings.HasPrefix(content, "Review only.") && strings.Contains(content, "flow.review_decision")
+}
+
+func taskReviewPreferredDeliverableTarget(rt *turnRuntime) string {
+	if !taskReviewPromptActive(rt) {
+		return ""
+	}
+	return parsePromptDeliverableTarget(strings.TrimSpace(rt.initialMessageText))
+}
+
+func taskReviewBatchIncludesPreferredDeliverableRead(calls []ModelToolCall, targetPath string) bool {
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	if targetPath == "" {
+		return false
+	}
+	for _, call := range calls {
+		switch strings.ToLower(strings.TrimSpace(call.Name)) {
+		case "file.read", "file_read":
+		default:
+			continue
+		}
+		callPath := normalizeWorkspaceRelativePath(stringValue(call.Arguments["path"]))
+		if callPath != "" && sameWorkspaceRelativePath(callPath, targetPath) {
+			return true
+		}
+	}
+	return false
 }
 
 func taskRecoveryReadPathMatchesTask(path string, taskNumber int) bool {
@@ -24658,7 +24731,10 @@ func buildTaskStatusMessageToolGuardError() string {
 	return "task execution should not spend turns on status or notification messages without an explicit destination session. Continue the task deliverable directly in this turn, or provide a concrete target session_id for a real cross-session handoff."
 }
 
-func buildTaskPlaceholderDeliverableFollowOnToolGuardError(toolName string) string {
+func buildTaskPlaceholderDeliverableFollowOnToolGuardError(rt *turnRuntime, toolName string) string {
+	if taskReviewPromptActive(rt) {
+		return "review already confirmed that the preferred deliverable is a rejected placeholder. Do not inspect more files or task metadata now. Call flow.review_decision reject using the placeholder tool result as the rejection evidence."
+	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "task.list", "git.log":
 		return "task execution already confirmed that the target deliverable file is a rejected placeholder. Do not reread task lists or git history now. Use the completed validation artifacts already read in this turn and write the substantive deliverable body directly."
@@ -24667,6 +24743,14 @@ func buildTaskPlaceholderDeliverableFollowOnToolGuardError(toolName string) stri
 	default:
 		return "task execution already confirmed that the target deliverable file is a rejected placeholder. Do not reread broad planning or discovery context now. Write the substantive deliverable body directly using the artifacts already read in this turn."
 	}
+}
+
+func buildTaskReviewPreferredDeliverableBatchReadGuardError(targetPath string) string {
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	if targetPath == "" {
+		return "this review batch already reads the preferred deliverable target. Do not inspect sibling files in the same step. Read the preferred target first, then call flow.review_decision reject immediately if that read returns not_found, placeholder_deliverable, or mismatched_deliverable_context."
+	}
+	return fmt.Sprintf("this review batch already reads the preferred deliverable target `%s`. Do not inspect sibling files in the same step. Read `%s` first, then call flow.review_decision reject immediately if that read returns not_found, placeholder_deliverable, or mismatched_deliverable_context.", targetPath, targetPath)
 }
 
 func shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt *turnRuntime, blocked bool) bool {

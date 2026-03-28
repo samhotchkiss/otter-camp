@@ -11738,6 +11738,76 @@ func TestShouldBlockTaskPlaceholderDeliverableFollowOnTool(t *testing.T) {
 	}
 }
 
+func TestShouldBlockTaskPlaceholderDeliverableFollowOnToolForReview(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText:    "Review only. Inspect the current deliverables and use flow.review_decision to approve or reject this review step.",
+		placeholderTargetSeen: true,
+	}
+
+	if !shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt, "task.get", map[string]any{"task_id": uuid.NewString()}) {
+		t.Fatal("expected task.get to be blocked after placeholder deliverable read during review")
+	}
+	if !shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt, "file.read", map[string]any{"path": "templates/layout-10-conversational.html"}) {
+		t.Fatal("expected file.read to be blocked after placeholder deliverable read during review")
+	}
+	if !shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt, "file.read", map[string]any{"path": "planning/discovery-plan/oc-24-validation-plan.md"}) {
+		t.Fatal("expected planning file.read to be blocked after placeholder deliverable read during review")
+	}
+
+	if got := buildTaskPlaceholderDeliverableFollowOnToolGuardError(rt, "file.read"); !strings.Contains(got, "flow.review_decision reject") {
+		t.Fatalf("guard error = %q, want reject-only review guidance", got)
+	}
+}
+
+func TestShouldBlockTaskReviewPreferredDeliverableSiblingReadTool(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `templates/layout-10-conversational.html`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `templates/layout-10-conversational.html` is missing.\n" +
+			"If reading `templates/layout-10-conversational.html` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.",
+	}
+	calls := []ModelToolCall{
+		{
+			Name: "file.read",
+			Arguments: map[string]any{
+				"path": "templates/layout-10-conversational.html",
+			},
+		},
+		{
+			Name: "file.read",
+			Arguments: map[string]any{
+				"path": "planning/discovery-plan/oc-24-validation-plan.md",
+			},
+		},
+	}
+
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, "file.read", map[string]any{"path": "templates/layout-10-conversational.html"}); blocked {
+		t.Fatalf("preferred target read should remain allowed, reason = %q", reason)
+	}
+
+	blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, "file.read", map[string]any{"path": "planning/discovery-plan/oc-24-validation-plan.md"})
+	if !blocked {
+		t.Fatal("expected sibling review file.read to be blocked when the same batch already reads the preferred deliverable target")
+	}
+	if !strings.Contains(reason, "flow.review_decision reject") {
+		t.Fatalf("guard reason = %q, want reject guidance", reason)
+	}
+	if !strings.Contains(reason, "templates/layout-10-conversational.html") {
+		t.Fatalf("guard reason = %q, want preferred deliverable target", reason)
+	}
+
+	if blocked, _ := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, []ModelToolCall{calls[1]}, "file.read", map[string]any{"path": "planning/discovery-plan/oc-24-validation-plan.md"}); blocked {
+		t.Fatal("expected sibling read to remain allowed when the same batch does not include the preferred deliverable target")
+	}
+}
+
 func TestShouldNotStopAfterBlockedProjectBootstrapRecoveryRereadScaffoldOnlyRecovery(t *testing.T) {
 	now := time.Now().UTC()
 	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
