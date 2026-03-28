@@ -108,7 +108,7 @@ const (
 	asyncProjectTaskWorkPromptGuardrail        = 35000
 	asyncProjectTaskReviewPromptGuardrail      = 20000
 	taskReviewPreferredDeliverableReadMaxBytes = 8192
-	taskReviewCheckpointOutputReadMaxBytes     = 4096
+	taskReviewCheckpointOutputReadMaxBytes     = 1536
 	taskReviewCheckpointOutputSampleCap        = 4
 	validationLoopBlockThreshold               = 3
 	validationLoopTurnStopThreshold            = 2

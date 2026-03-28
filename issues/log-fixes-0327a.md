@@ -1,5 +1,13 @@
 # 0327a Fix Log
 
+- 2026-03-28 15:07:00 MDT - `pending` `Shrink authoritative review sibling samples to fit one turn`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so authoritative checkpoint-output sibling reads now clamp to `1536` bytes instead of `4096`
+  - kept the larger `8192` preferred-target read window intact; only the follow-on sibling spot-checks are smaller, which is enough to keep one preferred target plus four sibling samples under the async task-review prompt guardrail
+  - updated focused expectations in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) for the authoritative sibling-read rewrite and sample-cap prompt text
+  - verified with `GOFLAGS='' go test ./internal/turn -run 'Test(MaybeRewriteTaskReviewPreferredDeliverableReadToolCallsBoundsAuthoritativeCheckpointSiblingRead|RewriteTaskReviewPreferredDeliverableReadDispatchCallBoundsAuthoritativeCheckpointSiblingRead|ShouldBlockTaskReviewSiblingReadPastAuthoritativeCheckpointSampleCap|ShouldBlockTaskReviewPreferredDeliverableFirstToolAfterAuthoritativeSampleCap)$' -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `data.status=ok`
+  - live status: deployed; the pre-fix task-64 turns clearly showed the `4096`-byte sibling-sample prompt-guardrail failure, but the first clean post-restart sibling sample on the new binary has not finished yet
+
 - 2026-03-28 14:05:00 MDT - `pending` `Block browser-procedural child review lanes before model calls`
   - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go) so `TaskLooksProceduralInstructionArtifact(...)` now recognizes plain-English browser-navigation-only steps like `Use browser tools to navigate to https://...` when the remainder is only a single URL/domain target
   - kept that classifier intentionally narrow so bounded crawl deliverables like `Use browser tools to navigate technonymous.org, discover the site structure, identify all blog post URLs` still do not get marked as malformed procedural artifacts

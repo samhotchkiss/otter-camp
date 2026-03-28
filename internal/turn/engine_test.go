@@ -4570,7 +4570,7 @@ func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsBoundsAuthoritat
 			"Start with the preferred deliverable target `content/posts/practice-one-screen-at-a-time.md`.\n" +
 			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/practice-one-screen-at-a-time.md`, `content/posts/discomfort-is-growth.md`.\n" +
 			"Treat that output set as authoritative for this batch; after inspecting `content/posts/practice-one-screen-at-a-time.md`, read any additional evidence directly from those named outputs and do not call `file.list` on `content/posts` or reread dependency artifacts outside `content/posts` just to rediscover which files belong to the batch.\n" +
-			"For additional checkpoint outputs under `content/posts`, prefer bounded `file.read` calls with `max_bytes=4096` unless you already know you need a smaller slice.\n" +
+			fmt.Sprintf("For additional checkpoint outputs under `content/posts`, prefer bounded `file.read` calls with `max_bytes=%d` unless you already know you need a smaller slice.\n", taskReviewCheckpointOutputReadMaxBytes) +
 			"Use flow.review_decision with the active flow_node_execution_id to approve or reject this review step.",
 	}
 	toolCalls := []ModelToolCall{
@@ -4791,7 +4791,7 @@ func TestRewriteTaskReviewPreferredDeliverableReadDispatchCallBoundsAuthoritativ
 			"Start with the preferred deliverable target `content/posts/practice-one-screen-at-a-time.md`.\n" +
 			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/practice-one-screen-at-a-time.md`, `content/posts/discomfort-is-growth.md`.\n" +
 			"Treat that output set as authoritative for this batch; after inspecting `content/posts/practice-one-screen-at-a-time.md`, read any additional evidence directly from those named outputs and do not call `file.list` on `content/posts` or reread dependency artifacts outside `content/posts` just to rediscover which files belong to the batch.\n" +
-			"For additional checkpoint outputs under `content/posts`, prefer bounded `file.read` calls with `max_bytes=4096` unless you already know you need a smaller slice.\n" +
+			fmt.Sprintf("For additional checkpoint outputs under `content/posts`, prefer bounded `file.read` calls with `max_bytes=%d` unless you already know you need a smaller slice.\n", taskReviewCheckpointOutputReadMaxBytes) +
 			"Use flow.review_decision with the active flow_node_execution_id to approve or reject this review step.",
 		reviewPreferredDeliverablePath: "content/posts/practice-one-screen-at-a-time.md",
 	}
@@ -14499,7 +14499,7 @@ func TestShouldBlockTaskReviewSiblingReadPastAuthoritativeCheckpointSampleCap(t 
 			"Start with the preferred deliverable target `content/posts/practice-one-screen-at-a-time.md`.\n" +
 			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/practice-one-screen-at-a-time.md`, `content/posts/discomfort-is-growth.md`, `content/posts/red-light-green-light.md`, `content/posts/if-i-were-them-i-would-be-them.md`, `content/posts/the-next-thing-will-be-better.md`, `content/posts/be-an-optimist.md`.\n" +
 			"Treat that output set as authoritative for this batch; after inspecting `content/posts/practice-one-screen-at-a-time.md`, read any additional evidence directly from those named outputs and do not call `file.list` on `content/posts` or reread dependency artifacts outside `content/posts` just to rediscover which files belong to the batch.\n" +
-			"For additional checkpoint outputs under `content/posts`, prefer bounded `file.read` calls with `max_bytes=4096` unless you already know you need a smaller slice.\n" +
+			fmt.Sprintf("For additional checkpoint outputs under `content/posts`, prefer bounded `file.read` calls with `max_bytes=%d` unless you already know you need a smaller slice.\n", taskReviewCheckpointOutputReadMaxBytes) +
 			"After inspecting `content/posts/practice-one-screen-at-a-time.md`, sample at most 4 additional checkpoint outputs under `content/posts` in this turn. Do not try to read every file in the batch before calling `flow.review_decision`.\n" +
 			"Use flow.review_decision with the active flow_node_execution_id to approve or reject this review step.",
 	}
@@ -14556,7 +14556,7 @@ func TestShouldBlockTaskReviewPreferredDeliverableFirstToolAfterAuthoritativeSam
 			"Start with the preferred deliverable target `content/posts/practice-one-screen-at-a-time.md`.\n" +
 			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/practice-one-screen-at-a-time.md`, `content/posts/discomfort-is-growth.md`.\n" +
 			"Treat that output set as authoritative for this batch; after inspecting `content/posts/practice-one-screen-at-a-time.md`, read any additional evidence directly from those named outputs and do not call `file.list` on `content/posts` or reread dependency artifacts outside `content/posts` just to rediscover which files belong to the batch.\n" +
-			"For additional checkpoint outputs under `content/posts`, prefer bounded `file.read` calls with `max_bytes=4096` unless you already know you need a smaller slice.\n" +
+			fmt.Sprintf("For additional checkpoint outputs under `content/posts`, prefer bounded `file.read` calls with `max_bytes=%d` unless you already know you need a smaller slice.\n", taskReviewCheckpointOutputReadMaxBytes) +
 			"After inspecting `content/posts/practice-one-screen-at-a-time.md`, sample at most 4 additional checkpoint outputs under `content/posts` in this turn. Do not try to read every file in the batch before calling `flow.review_decision`.\n" +
 			"Use flow.review_decision with the active flow_node_execution_id to approve or reject this review step.",
 		reviewPreferredDeliverablePath:     "content/posts/practice-one-screen-at-a-time.md",
