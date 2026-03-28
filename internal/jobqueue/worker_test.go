@@ -48,10 +48,13 @@ func TestRejitteredRateLimitedRunAfterClampsOversizedRunAfter(t *testing.T) {
 func TestBuildProjectExecutionContinuationPromptForWorkerIncludesBlockerReuseGuidance(t *testing.T) {
 	prompt := buildProjectExecutionContinuationPromptForWorker(38, "Import batch review", 0, projectExecutionContinuationSnapshotForWorker{
 		ProjectLine:    "Active project id: 123",
-		ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 38 (Import batch review) id=aaa title=\"Import batch review\" work_status=blocked blocker=\"review turn repeatedly hit file.read not_found across 3 consecutive turns\"",
+		ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 38 (Import batch review) id=aaa title=\"Import batch review\" work_status=blocked resume_policy=needs_replacement_work blocker=\"review turn repeatedly hit file.read not_found across 3 consecutive turns\"",
 	})
 
 	if !strings.Contains(prompt, "act directly on that blocker summary") {
 		t.Fatalf("prompt = %q, want blocker reuse guidance", prompt)
+	}
+	if !strings.Contains(prompt, "create or queue the smallest replacement or follow-on work needed to recover it") {
+		t.Fatalf("prompt = %q, want replacement-work guidance", prompt)
 	}
 }

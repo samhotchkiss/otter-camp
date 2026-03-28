@@ -16095,7 +16095,7 @@ func TestTaskExecutionRetryPromptForRecoveryTargetFocusSkipsWhenTargetAlreadyWri
 func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	prompt := buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
 		ProjectLine:          "Active project id: 123",
-		ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 16 (Validate API) id=aaa title=\"Validate API\" work_status=blocked assigned_agent_id=worker-1 blocker=\"review turn repeatedly hit file.read not_found across 3 consecutive turns\"",
+		ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 16 (Validate API) id=aaa title=\"Validate API\" work_status=blocked assigned_agent_id=worker-1 resume_policy=needs_replacement_work blocker=\"review turn repeatedly hit file.read not_found across 3 consecutive turns\"",
 		DraftTaskLine:        "Actionable draft tasks already in the tree: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft assigned_agent_id=missing flow_template_id=missing",
 		ChildActiveDraftLine: "Draft parent tasks already have child work: task 21 (Theme rollout) id=ccc title=\"Theme rollout\" work_status=draft assigned_agent_id=missing flow_template_id=missing active_child_tasks=2",
 		FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft assigned_agent_id=missing flow_template_id=missing",
@@ -16133,6 +16133,12 @@ func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "act directly on that blocker summary") {
 		t.Fatalf("prompt = %q, want blocker reuse guidance", prompt)
+	}
+	if !strings.Contains(prompt, "resume_policy=needs_replacement_work") {
+		t.Fatalf("prompt = %q, want blocker resume policy context", prompt)
+	}
+	if !strings.Contains(prompt, "create or queue the smallest replacement or follow-on work needed to recover it") {
+		t.Fatalf("prompt = %q, want replacement-work guidance", prompt)
 	}
 	if !strings.Contains(prompt, "Actionable draft tasks already in the tree:") {
 		t.Fatalf("prompt = %q, want draft-task snapshot", prompt)
@@ -16339,8 +16345,25 @@ func TestProjectExecutionContinuationTaskRefIncludesBlockedReasonExcerpt(t *test
 	if !strings.Contains(ref, "blocker=") {
 		t.Fatalf("ref = %q, want blocker excerpt", ref)
 	}
+	if !strings.Contains(ref, "resume_policy=needs_replacement_work") {
+		t.Fatalf("ref = %q, want replacement-work policy", ref)
+	}
 	if !strings.Contains(ref, "review turn repeatedly hit file.read not_found") {
 		t.Fatalf("ref = %q, want blocker excerpt content", ref)
+	}
+}
+
+func TestProjectExecutionContinuationTaskRefIncludesTerminalResumePolicy(t *testing.T) {
+	task := repo.ProjectTask{
+		ID:         uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+		TaskNumber: 24,
+		Title:      "HTML review",
+		WorkStatus: "blocked",
+	}
+
+	ref := projectExecutionContinuationTaskRef(task, projectContinuationChildActivity{}, "flow rejection max visits exceeded")
+	if !strings.Contains(ref, "resume_policy=terminal_keep_blocked") {
+		t.Fatalf("ref = %q, want terminal keep blocked policy", ref)
 	}
 }
 

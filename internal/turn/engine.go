@@ -6962,6 +6962,15 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		if strings.Contains(activeLine, "blocker=") {
 			lines = append(lines, "If a named active task above already includes blocker=..., act directly on that blocker summary instead of rereading task.get just to rediscover the same reason.")
 		}
+		if strings.Contains(activeLine, "resume_policy=terminal_keep_blocked") {
+			lines = append(lines, "If a named blocked task above already shows resume_policy=terminal_keep_blocked, leave it blocked from the project lane and work around it instead of rereading or retrying it.")
+		}
+		if strings.Contains(activeLine, "resume_policy=needs_replacement_work") {
+			lines = append(lines, "If a named blocked task above already shows resume_policy=needs_replacement_work, create or queue the smallest replacement or follow-on work needed to recover it instead of broad rediscovery.")
+		}
+		if strings.Contains(activeLine, "resume_policy=manual_recovery_repair") {
+			lines = append(lines, "If a named blocked task above already shows resume_policy=manual_recovery_repair, queue only the targeted manual repair needed for that deliverable instead of broader session or project listing.")
+		}
 	}
 	if draftLine := strings.TrimSpace(snapshot.DraftTaskLine); draftLine != "" {
 		lines = append(lines, draftLine)
@@ -16722,6 +16731,9 @@ func projectExecutionContinuationTaskRef(task repo.ProjectTask, activity project
 		parts = append(parts, "requires_human_review=true")
 	}
 	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
+		if resumePolicy := projectContinuationBlockedTaskResumePolicy(blockedReason); resumePolicy != "" {
+			parts = append(parts, "resume_policy="+resumePolicy)
+		}
 		if excerpt := projectContinuationBlockedReasonExcerpt(blockedReason); excerpt != "" {
 			parts = append(parts, "blocker="+strconv.Quote(excerpt))
 		}
@@ -16751,6 +16763,21 @@ func projectContinuationBlockedReasonExcerpt(reason string) string {
 		cut = strings.TrimSpace(string(runes[:projectContinuationBlockerExcerptLimit]))
 	}
 	return cut + "..."
+}
+
+func projectContinuationBlockedTaskResumePolicy(reason string) string {
+	normalized := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(reason)), " "))
+	switch {
+	case strings.Contains(normalized, "flow rejection max visits exceeded"):
+		return "terminal_keep_blocked"
+	case strings.Contains(normalized, "recovery halted after recovered file.write"):
+		return "manual_recovery_repair"
+	case strings.Contains(normalized, "review turn completed without calling flow.review_decision"),
+		strings.Contains(normalized, "review turn repeatedly hit"):
+		return "needs_replacement_work"
+	default:
+		return ""
+	}
 }
 
 func buildProjectContinuationActionPrompt(summary string, snapshot projectExecutionContinuationSnapshot) string {
