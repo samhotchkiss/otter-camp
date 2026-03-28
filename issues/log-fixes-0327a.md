@@ -1143,3 +1143,20 @@
     - tool result `218` immediately returned the new guard error telling the lane to call `flow.review_decision reject` instead of inspecting repo/task state
   - result:
     - dirty-workspace review retries stop spending a full extra turn rereading files or repo state after the runtime already told them to reject immediately
+- 2026-03-28 12:39:24 MDT - `pending` `Synthesize dirty-workspace review rejection after bad tool attempts`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - updated `maybeSynthesizeTaskReviewDecisionToolCalls(...)` so dirty-workspace reject-only review retries synthesize `flow.review_decision reject` immediately when the model emits non-decision tool calls and no decision tool
+    - kept the earlier dirty-workspace reject-only validation guard in place; this new slice removes the remaining blocked-tool hop on top of that
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestMaybeSynthesizeTaskReviewDecisionToolCallsUsesDirtyWorkspaceRejectOnlyRetry`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(MaybeSynthesizeTaskReviewDecisionToolCalls(UsesExplicitRejectDecision|UsesDirtyWorkspaceRejectOnlyRetry|SkipsWhenDecisionToolAlreadyPresent)|MaybeRewriteDirtyWorkspaceReviewApprovalToolCalls|ShouldBlockTaskReviewDirtyWorkspaceRetryTool)$' -count=1`
+  - deploy state:
+    - rebuilt and restarted tmux `codex-e2e-20260324`
+    - `./bin/ottercamp health --output json` returned `data.status=ok`
+  - live proof status:
+    - deployed and test-green
+    - fresh production proof for the new synthesis branch is still pending because the dirty-workspace canary sessions (`d901ca6f-d4b5-4ded-8f31-3da57de44b54`, then `1139b4a5-49e7-41e7-87a6-cf7bbd27b724`) rolled over during restart before another full non-decision tool attempt completed on the newest binary
+  - result:
+    - the remaining dirty-workspace retry path should now collapse straight to `flow.review_decision reject` instead of paying even one blocked `git.status` / `git.diff` / `cli.execute` attempt first

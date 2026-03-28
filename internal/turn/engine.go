@@ -15995,12 +15995,30 @@ func (e *TurnEngine) maybeSynthesizeTaskReviewDecisionToolCalls(ctx context.Cont
 			return toolCalls, false, nil
 		}
 	}
-	decision, ok := explicitReviewDecisionFromText(assistantContent)
-	if !ok {
-		return toolCalls, false, nil
-	}
 	executionID := flowNodeExecutionIDFromSessionMetadata(rt.session)
 	if executionID == nil || *executionID == uuid.Nil {
+		return toolCalls, false, nil
+	}
+	if taskReviewDirtyWorkspaceRejectOnlyApplies(rt) && len(toolCalls) > 0 {
+		synthesized := ModelToolCall{
+			ID:   fmt.Sprintf("task-review-decision-%s", uuid.NewString()),
+			Name: "flow.review_decision",
+			Tier: "tier2",
+			Arguments: map[string]any{
+				"flow_node_execution_id": executionID.String(),
+				"decision":               "reject",
+				"reason":                 "Review retry already failed approval because the workspace is still dirty; reject immediately instead of re-inspecting repo or deliverable state.",
+			},
+		}
+		e.logger.Info("task review: synthesized dirty-workspace rejection from reject-only retry tool attempt",
+			"session_id", rt.session.ID,
+			"turn_id", rt.turn.ID,
+			"flow_node_execution_id", executionID.String(),
+		)
+		return []ModelToolCall{synthesized}, true, nil
+	}
+	decision, ok := explicitReviewDecisionFromText(assistantContent)
+	if !ok {
 		return toolCalls, false, nil
 	}
 

@@ -24575,6 +24575,77 @@ func TestMaybeSynthesizeTaskReviewDecisionToolCallsUsesExplicitRejectDecision(t 
 	}
 }
 
+func TestMaybeSynthesizeTaskReviewDecisionToolCallsUsesDirtyWorkspaceRejectOnlyRetry(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		TaskNumber: 10,
+		Title:      "Review converted technonymous posts",
+		WorkStatus: "review",
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		initialMessageText: "Review only.\n" +
+			"Inspect the current deliverables and use flow.review_decision to approve or reject this review step.\n" +
+			"Your previous approve attempt for this exact review step failed because the workspace is still dirty.\n" +
+			"Inspect the dirty deliverable state and reissue flow.review_decision immediately with decision=reject and concise findings for flow_node_execution_id " + executionID.String() + ".\n" +
+			"Do not reply with narration, a plan, or placeholder arguments.",
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskReviewDecisionToolCalls(
+		context.Background(),
+		rt,
+		"Let me inspect the dirty workspace state to identify the uncommitted changes, then reject.",
+		[]ModelToolCall{{
+			ID:        "git-status-1",
+			Name:      "git.status",
+			Tier:      "tier2",
+			Arguments: map[string]any{},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskReviewDecisionToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "flow.review_decision" {
+		t.Fatalf("toolCalls = %+v, want one flow.review_decision", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["decision"]); got != "reject" {
+		t.Fatalf("decision = %q, want reject", got)
+	}
+	if got := stringValue(toolCalls[0].Arguments["flow_node_execution_id"]); got != executionID.String() {
+		t.Fatalf("flow_node_execution_id = %q, want %s", got, executionID)
+	}
+	if got := stringValue(toolCalls[0].Arguments["reason"]); !strings.Contains(got, "workspace is still dirty") {
+		t.Fatalf("reason = %q, want dirty-workspace context", got)
+	}
+}
+
 func TestMaybeSynthesizeTaskReviewDecisionToolCallsSkipsWhenDecisionToolAlreadyPresent(t *testing.T) {
 	t.Parallel()
 
