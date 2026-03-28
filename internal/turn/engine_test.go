@@ -31328,6 +31328,39 @@ func TestSessionTaskDeliverablePathPrefersCheckpointTargetOverInferredReportPath
 	}
 }
 
+func TestShouldReuseHistoricalDeliverableTargetForTaskRejectsInputArtifactOutsidePreferredRoot(t *testing.T) {
+	t.Parallel()
+
+	description := "Scrape all 35 technonymous.org blog posts listed in content/technonymous-index.json and save each as a clean Markdown file under content/posts/."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  56,
+		Title:       "Scrape technonymous.org posts to markdown",
+		Description: &description,
+	}
+
+	if shouldReuseHistoricalDeliverableTargetForTask(taskRecord, "content/technonymous-index.json") {
+		t.Fatal("expected dependency artifact outside preferred deliverable root to be ignored")
+	}
+	if !shouldReuseHistoricalDeliverableTargetForTask(taskRecord, "content/posts/2026-02-03-stop-preparing-your-kids-for-jobs.md") {
+		t.Fatal("expected deliverable file under preferred root to remain eligible")
+	}
+}
+
+func TestPreferredTaskDeliverableRootSkipsDependencyArtifactAndUsesOutputRoot(t *testing.T) {
+	t.Parallel()
+
+	description := "Scrape all 35 technonymous.org blog posts listed in content/technonymous-index.json and save each as a clean Markdown file under content/posts/."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  56,
+		Title:       "Scrape technonymous.org posts to markdown",
+		Description: &description,
+	}
+
+	if got := preferredTaskDeliverableRoot(taskRecord); got != "content/posts" {
+		t.Fatalf("preferredTaskDeliverableRoot(...) = %q, want %q", got, "content/posts")
+	}
+}
+
 func TestRecoverySynthesizedFileWriteTargetPathPrefersSessionDeliverableTargetOverInferredReportPath(t *testing.T) {
 	t.Parallel()
 
@@ -35101,7 +35134,7 @@ func TestBuildTaskReviewActionPromptIncludesPreferredDeliverableRoot(t *testing.
 
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
-	description := "Using the scraped post index, extract full content (title, body, date, tags) from each technonymous.org post and convert to markdown files with frontmatter. Commit to the Sam.blog repo under /content/posts/."
+	description := "Scrape all 35 technonymous.org blog posts listed in content/technonymous-index.json and save each as a clean Markdown file under content/posts/."
 
 	fixture.session.ScopeType = "project_task"
 	fixture.session.ScopeID = taskID
@@ -35126,6 +35159,52 @@ func TestBuildTaskReviewActionPromptIncludesPreferredDeliverableRoot(t *testing.
 	}
 	if !strings.Contains(prompt, "dependency-file reads outside `content/posts`") {
 		t.Fatalf("prompt = %q, want bounded root-first guidance", prompt)
+	}
+}
+
+func TestBuildTaskReviewActionPromptIgnoresHistoricalInputArtifactOutsidePreferredDeliverableRoot(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Using the scraped post index, extract full content (title, body, date, tags) from each technonymous.org post and convert to markdown files with frontmatter. Commit to the Sam.blog repo under /content/posts/."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  56,
+				Title:       "Scrape technonymous.org posts to markdown",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"bootstrap_first_wave_selected": true,
+				}),
+			},
+		},
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":      "content/technonymous-index.json",
+				"byte_size": 1024,
+				"content":   "{\"posts\":35}",
+			},
+		})),
+	})
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "Start with the preferred deliverable root `content/posts`") {
+		t.Fatalf("prompt = %q, want preferred deliverable root guidance", prompt)
+	}
+	if strings.Contains(prompt, "Start with the preferred deliverable target `content/technonymous-index.json`") {
+		t.Fatalf("prompt = %q, did not want historical input artifact to become preferred review target", prompt)
 	}
 }
 

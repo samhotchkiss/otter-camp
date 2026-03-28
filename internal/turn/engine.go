@@ -16305,17 +16305,31 @@ func preferredTaskDeliverableRoot(taskRecord repo.ProjectTask) string {
 	}
 	description := strings.TrimSpace(*taskRecord.Description)
 	for _, pattern := range preferredDeliverableRootPatterns {
-		matches := pattern.FindStringSubmatch(description)
-		if len(matches) < 2 {
-			continue
+		matches := pattern.FindAllStringSubmatch(description, -1)
+		for _, match := range matches {
+			if len(match) < 2 {
+				continue
+			}
+			root := normalizeExplicitDeliverablePathCandidate(match[1])
+			if !looksLikePreferredDeliverableRootPath(root) {
+				continue
+			}
+			return root
 		}
-		root := normalizeExplicitDeliverablePathCandidate(matches[1])
-		if !looksLikePreferredDeliverableRootPath(root) {
-			continue
-		}
-		return root
 	}
 	return ""
+}
+
+func shouldReuseHistoricalDeliverableTargetForTask(taskRecord repo.ProjectTask, candidate string) bool {
+	candidate = normalizeWorkspaceRelativePath(candidate)
+	if candidate == "" {
+		return false
+	}
+	root := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
+	if root == "" {
+		return true
+	}
+	return workspacePathWithinRoot(candidate, root)
 }
 
 func inferredTaskExecutionLogTargetPath(taskRecord repo.ProjectTask) (string, bool) {
@@ -18705,10 +18719,12 @@ func (e *TurnEngine) sessionTaskDeliverablePath(ctx context.Context, sessionID u
 	}
 	if sessionID != uuid.Nil {
 		if targetPath := normalizeWorkspaceRelativePath(e.latestRecoveryTargetPathForSession(ctx, sessionID)); targetPath != "" &&
+			shouldReuseHistoricalDeliverableTargetForTask(taskRecord, targetPath) &&
 			looksLikeExplicitDeliverablePath(targetPath, targetPath) {
 			return targetPath
 		}
 		if targetPath := normalizeWorkspaceRelativePath(e.latestTaskHistoricalDeliverablePath(ctx, sessionID, taskRecord.ID)); targetPath != "" &&
+			shouldReuseHistoricalDeliverableTargetForTask(taskRecord, targetPath) &&
 			looksLikeExplicitDeliverablePath(targetPath, targetPath) {
 			return targetPath
 		}
@@ -23415,12 +23431,17 @@ func (e *TurnEngine) reviewPromptDeliverableTarget(ctx context.Context, session 
 			continue
 		}
 		if targetPath := normalizeWorkspaceRelativePath(anyString(output["deliverable_path"])); targetPath != "" {
-			return targetPath
+			if shouldReuseHistoricalDeliverableTargetForTask(taskRecord, targetPath) {
+				return targetPath
+			}
+			continue
 		}
 		switch strings.ToLower(strings.TrimSpace(toolName)) {
 		case "file.read", "file.write":
 			if targetPath := normalizeWorkspaceRelativePath(anyString(output["path"])); targetPath != "" {
-				return targetPath
+				if shouldReuseHistoricalDeliverableTargetForTask(taskRecord, targetPath) {
+					return targetPath
+				}
 			}
 		}
 	}

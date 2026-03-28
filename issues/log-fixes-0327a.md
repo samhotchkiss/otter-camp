@@ -630,3 +630,20 @@
   - deployed by rebuilding `./bin/ottercamp`, restarting tmux `codex-e2e-20260324`, and confirming `./bin/ottercamp health --output json` returned `status=ok`
   - live diagnosis behind the fix: PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` kept naming malformed child tasks `52` / `54` from no-decompose parent `49`, which guaranteed another rediscovery-only validation block instead of actionable PM progress
   - fresh post-deploy production proof is pending the next natural PM continuation turn on the restarted runtime; no new `agent_turn` job has been claimed for that session yet
+- 2026-03-28 05:56:35 MDT - keep task-review preferred targets inside the declared output root
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so:
+    - `preferredTaskDeliverableRoot(...)` scans all `in/under content/...` matches in a task brief and keeps the first one that actually looks like a deliverable root instead of stopping on an earlier dependency artifact like `content/technonymous-index.json`
+    - `sessionTaskDeliverablePath(...)` and `reviewPromptDeliverableTarget(...)` now ignore historical/session deliverable candidates that fall outside that preferred root
+  - added focused coverage in:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+      - `TestBuildTaskReviewActionPromptIgnoresHistoricalInputArtifactOutsidePreferredDeliverableRoot`
+      - `TestShouldReuseHistoricalDeliverableTargetForTaskRejectsInputArtifactOutsidePreferredRoot`
+      - `TestPreferredTaskDeliverableRootSkipsDependencyArtifactAndUsesOutputRoot`
+    - [`internal/turn/engine_integration_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_integration_test.go):
+      - `TestBuildTaskReviewActionPromptIgnoresHistoricalInputArtifactOutsidePreferredDeliverableRootIntegration`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildTaskReviewActionPromptIncludesPreferredDeliverableRoot|BuildTaskReviewActionPromptIgnoresHistoricalInputArtifactOutsidePreferredDeliverableRoot|ShouldReuseHistoricalDeliverableTargetForTaskRejectsInputArtifactOutsidePreferredRoot|PreferredTaskDeliverableRootSkipsDependencyArtifactAndUsesOutputRoot|SessionTaskDeliverablePathPrefersCheckpointTargetOverInferredReportPath)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'Test(BuildTaskReviewActionPromptFallsBackToHistoricalTaskSessionDeliverableTargetIntegration|BuildTaskReviewActionPromptIgnoresHistoricalInputArtifactOutsidePreferredDeliverableRootIntegration)$' -count=1`
+  - deployed by rebuilding `./bin/ottercamp`, restarting tmux `codex-e2e-20260324`, and confirming `./bin/ottercamp health --output json` returned `status=ok`
+  - live diagnosis behind the fix: fresh task-56 review continuation summary `399` at `05:53:06 MDT` still named `content/technonymous-index.json` as the preferred deliverable target because the first `in content/...` match in the brief shadowed the later `under content/posts/` output root
+  - fresh post-final-deploy production proof is pending because that pre-fix review session closed before another continuation could be emitted on the corrected binary
