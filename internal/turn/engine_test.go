@@ -10617,6 +10617,29 @@ func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnSubtaskCreateBou
 	}
 }
 
+func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnBoundedSizeTaskUpdateError(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+	}
+	result := ToolResult{
+		Name: "task.update",
+		Output: map[string]any{
+			"error": "task exceeds bounded size policy (estimated 50 minutes > 30 minute limit): split the work into smaller reviewable tasks before queueing",
+		},
+	}
+	if !shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, []ToolResult{result}) {
+		t.Fatal("expected bounded-size task.update rejection to stop the turn")
+	}
+	if message := projectExecutionBlockedMutationStopMessage([]ToolResult{result}); !strings.Contains(message, "bounded size policy") {
+		t.Fatalf("projectExecutionBlockedMutationStopMessage = %q, want bounded-size guidance", message)
+	}
+}
+
 func TestShouldStopAfterBlockedProjectContinuationRediscovery(t *testing.T) {
 	t.Parallel()
 

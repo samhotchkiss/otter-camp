@@ -12481,6 +12481,9 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return false, err
 		}
 		if shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, results) {
+			if message := projectExecutionBlockedMutationStopMessage(results); message != "" {
+				_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, message)
+			}
 			return true, nil
 		}
 		failedBootstrap, err := e.handleProjectBootstrapChildTaskFailure(ctx, rt, results)
@@ -23099,7 +23102,7 @@ func shouldStopAfterBlockedProjectExecutionBlockedMutation(rt *turnRuntime, resu
 	}
 	for _, result := range results {
 		name := strings.ToLower(strings.TrimSpace(result.Name))
-		errText := strings.ToLower(strings.TrimSpace(result.Error))
+		errText := strings.ToLower(strings.TrimSpace(toolResultErrorCode(result)))
 		if containsAny(errText,
 			"task_lane_owned_by_project_task_session",
 			"task_execution_required",
@@ -23132,9 +23135,26 @@ func shouldStopAfterBlockedProjectExecutionBlockedMutation(rt *turnRuntime, resu
 				strings.Contains(errText, "project session already has remaining draft tasks to advance") {
 				return true
 			}
+			if strings.Contains(errText, "bounded size policy") || strings.Contains(errText, "bounded task-size policy") {
+				return true
+			}
+		case "task.update":
+			if strings.Contains(errText, "bounded size policy") || strings.Contains(errText, "bounded task-size policy") {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func projectExecutionBlockedMutationStopMessage(results []ToolResult) string {
+	for _, result := range results {
+		errText := strings.ToLower(strings.TrimSpace(toolResultErrorCode(result)))
+		if strings.Contains(errText, "bounded size policy") || strings.Contains(errText, "bounded task-size policy") {
+			return "[Project continuation found that the remaining draft work still violates the bounded size policy. Split it into smaller reviewable child tasks instead of trying to queue the broad parent again.]"
+		}
+	}
+	return ""
 }
 
 func shouldStopAfterBlockedTaskExecutionBoundaryMutation(rt *turnRuntime, results []ToolResult) bool {
