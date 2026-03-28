@@ -1,5 +1,14 @@
 # 0327a Fix Log
 
+- 2026-03-28 13:19:42 MDT - `pending` `Cap authoritative batch review sibling sampling`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so authoritative checkpoint-output review prompts now tell the model to sample at most `4` additional sibling outputs after the preferred target instead of trying to read the whole batch before deciding
+  - added runtime enforcement for that same cap in both the same-batch sibling-read guard and the later same-turn post-target read guard, so authoritative batch reviews stop before `max_tool_calls` when they already have enough sampled evidence
+  - extended `recordTaskReviewPreferredDeliverableReadResult(...)` in the same file to track successful sibling-output spot checks under the authoritative root during the current turn
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) for both the same-batch cap and the post-target same-turn cap
+  - verified with `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockTaskReviewPreferredDeliverableSiblingReadTool|ShouldNotBlockTaskReviewSiblingReadWithinAuthoritativeCheckpointOutputSet|ShouldBlockTaskReviewSiblingReadPastAuthoritativeCheckpointSampleCap|ShouldNotBlockTaskReviewPreferredDeliverableFirstToolAfterSuccessfulTargetReadWithinAuthoritativeOutputSet|ShouldBlockTaskReviewPreferredDeliverableFirstToolAfterAuthoritativeSampleCap|MaybeRewriteTaskReviewPreferredDeliverableReadToolCalls(AddsMaxBytes|PreservesSmallerExplicitLimit|BoundsAuthoritativeCheckpointSiblingRead|UsesTailOffsetAfterTruncatedHeadRead|UsesTailOffsetAfterCurrentTurnHeadRead|DoesNotReuseTailAfterCurrentTurnTailRead)|RewriteTaskReviewPreferredDeliverableReadDispatchCall(UsesCurrentTurnTailOffset|BoundsAuthoritativeCheckpointSiblingRead))$' -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `data.status=ok`
+  - live status: deployed, but the first post-restart task-64 review turn was still rooted on pre-restart prompt message `411`, so fresh direct proof of the new sample-cap instruction is waiting on the next clean review retry
+
 - 2026-03-28 12:58:34 MDT - `pending` `Keep task CLI reads inside the current worktree`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so async `project_task` validation now blocks `cli.execute` commands that reference a parent project workspace or repo root by absolute path when that root differs from the current task worktree
   - added `cliCommandExternalWorkspaceRoot(...)`, `shouldBlockTaskExecutionExternalWorkspaceCLITool(...)`, and a task-lane correction message telling the model to stay inside the current task worktree and use workspace-relative paths only

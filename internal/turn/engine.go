@@ -109,6 +109,7 @@ const (
 	asyncProjectTaskReviewPromptGuardrail      = 20000
 	taskReviewPreferredDeliverableReadMaxBytes = 8192
 	taskReviewCheckpointOutputReadMaxBytes     = 4096
+	taskReviewCheckpointOutputSampleCap        = 4
 	validationLoopBlockThreshold               = 3
 	validationLoopTurnStopThreshold            = 2
 	duplicateSuccessfulFileWriteChurnCode      = "duplicate_successful_write_churn"
@@ -588,6 +589,7 @@ type turnRuntime struct {
 	reviewPreferredDeliverableByteSize      int
 	reviewPreferredDeliverableHeadTruncated bool
 	reviewPreferredDeliverableTailReadSeen  bool
+	reviewCheckpointOutputSiblingReads      int
 }
 
 type projectIdentity struct {
@@ -13492,7 +13494,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
-		if blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, name, arguments); blocked {
+		if blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, id, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
 				Name:       name,
@@ -24449,6 +24451,7 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 			if rootPath != "" && len(checkpointOutputs) > 1 {
 				lines = append(lines, fmt.Sprintf("The checkpoint already identifies the task-owned outputs under `%s`: %s. Treat that output set as authoritative for this batch; after inspecting `%s`, read any additional evidence directly from those named outputs and do not call `file.list` on `%s` or reread dependency artifacts outside `%s` just to rediscover which files belong to the batch.", rootPath, summarizeReviewPromptOutputPaths(checkpointOutputs, reviewPromptCheckpointOutputSummaryLimit(checkpointOutputs)), targetPath, rootPath, rootPath))
 				lines = append(lines, fmt.Sprintf("For additional checkpoint outputs under `%s`, prefer bounded `file.read` calls with `max_bytes=%d` unless you already know you need a smaller slice.", rootPath, taskReviewCheckpointOutputReadMaxBytes))
+				lines = append(lines, fmt.Sprintf("After inspecting `%s`, sample at most %d additional checkpoint outputs under `%s` in this turn. Do not try to read every file in the batch before calling `flow.review_decision`.", targetPath, taskReviewCheckpointOutputSampleCap, rootPath))
 			}
 		} else if rootPath != "" {
 			lines = append(lines, fmt.Sprintf("Start with the preferred deliverable root `%s`. Inspect that output root directly before broad workspace discovery, and do not begin with task.get, git.log, or dependency-file reads outside `%s` unless `%s` itself is missing.", rootPath, rootPath, rootPath))
@@ -26795,7 +26798,7 @@ func shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt *turnRuntime, toolName
 	}
 }
 
-func shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt *turnRuntime, calls []ModelToolCall, toolName string, arguments map[string]any) (bool, string) {
+func shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt *turnRuntime, calls []ModelToolCall, toolCallID, toolName string, arguments map[string]any) (bool, string) {
 	if !taskReviewPreferredDeliverableFirstApplies(rt) {
 		return false, ""
 	}
@@ -26819,9 +26822,35 @@ func shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt *turnRuntime, c
 	if rootPath != "" &&
 		taskReviewPromptTreatsCheckpointOutputSetAsAuthoritative(rt, rootPath) &&
 		workspacePathWithinRoot(path, rootPath) {
+		if ordinal := taskReviewCheckpointOutputSiblingReadOrdinal(rt, calls, toolCallID, targetPath, rootPath); ordinal > taskReviewCheckpointOutputSampleCap {
+			return true, buildTaskReviewCheckpointOutputSampleCapGuardError(rootPath, taskReviewCheckpointOutputSampleCap)
+		}
 		return false, ""
 	}
 	return true, buildTaskReviewPreferredDeliverableBatchReadGuardError(targetPath)
+}
+
+func taskReviewCheckpointOutputSiblingReadOrdinal(rt *turnRuntime, calls []ModelToolCall, toolCallID, targetPath, rootPath string) int {
+	count := 0
+	if rt != nil {
+		count = rt.reviewCheckpointOutputSiblingReads
+	}
+	for _, call := range calls {
+		switch strings.ToLower(strings.TrimSpace(call.Name)) {
+		case "file.read", "file_read":
+		default:
+			continue
+		}
+		path := normalizeWorkspaceRelativePath(stringValue(call.Arguments["path"]))
+		if path == "" || sameWorkspaceRelativePath(path, targetPath) || !workspacePathWithinRoot(path, rootPath) {
+			continue
+		}
+		count++
+		if strings.TrimSpace(call.ID) != "" && strings.TrimSpace(call.ID) == strings.TrimSpace(toolCallID) {
+			return count
+		}
+	}
+	return count
 }
 
 func shouldBlockTaskReviewDirtyWorkspaceRetryTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
@@ -27058,7 +27087,21 @@ func recordTaskReviewPreferredDeliverableReadResult(rt *turnRuntime, result Tool
 		return
 	}
 	path := normalizeWorkspaceRelativePath(anyString(result.Output["path"]))
-	if path == "" || !sameWorkspaceRelativePath(path, targetPath) {
+	if path == "" {
+		return
+	}
+	if !sameWorkspaceRelativePath(path, targetPath) {
+		rootPath := taskReviewPreferredDeliverableRoot(rt)
+		if rootPath == "" {
+			rootPath = normalizeWorkspaceRelativePath(filepath.ToSlash(filepath.Dir(targetPath)))
+		}
+		if rootPath != "" &&
+			taskReviewPromptTreatsCheckpointOutputSetAsAuthoritative(rt, rootPath) &&
+			sameWorkspaceRelativePath(strings.TrimSpace(rt.reviewPreferredDeliverablePath), targetPath) &&
+			workspacePathWithinRoot(path, rootPath) &&
+			intValue(result.Output["byte_size"]) > 0 {
+			rt.reviewCheckpointOutputSiblingReads++
+		}
 		return
 	}
 	rt.reviewPreferredDeliverablePath = targetPath
@@ -27184,6 +27227,9 @@ func shouldBlockTaskReviewPreferredDeliverableFirstTool(rt *turnRuntime, toolNam
 			taskReviewPromptTreatsCheckpointOutputSetAsAuthoritative(rt, rootPath) &&
 			sameWorkspaceRelativePath(strings.TrimSpace(rt.reviewPreferredDeliverablePath), targetPath) &&
 			workspacePathWithinRoot(path, rootPath) {
+			if rt.reviewCheckpointOutputSiblingReads >= taskReviewCheckpointOutputSampleCap {
+				return true, buildTaskReviewCheckpointOutputSampleCapGuardError(rootPath, taskReviewCheckpointOutputSampleCap)
+			}
 			return false, ""
 		}
 		return true, buildTaskReviewPreferredDeliverableFirstGuardError(targetPath, "file.read")
@@ -28324,6 +28370,17 @@ func buildTaskReviewPreferredDeliverableBatchReadGuardError(targetPath string) s
 		return "this review batch already reads the preferred deliverable target. Do not inspect sibling files in the same step. Read the preferred target first, then call flow.review_decision reject immediately if that read returns not_found, placeholder_deliverable, or mismatched_deliverable_context."
 	}
 	return fmt.Sprintf("this review batch already reads the preferred deliverable target `%s`. Do not inspect sibling files in the same step. Read `%s` first, then call flow.review_decision reject immediately if that read returns not_found, placeholder_deliverable, or mismatched_deliverable_context.", targetPath, targetPath)
+}
+
+func buildTaskReviewCheckpointOutputSampleCapGuardError(rootPath string, sampleCap int) string {
+	rootPath = normalizeWorkspaceRelativePath(rootPath)
+	if sampleCap <= 0 {
+		sampleCap = 1
+	}
+	if rootPath == "" {
+		return fmt.Sprintf("this review prompt already treats the checkpoint output set as authoritative for the batch. After the preferred target, sample at most %d additional outputs in this turn, then call flow.review_decision instead of reading every remaining file.", sampleCap)
+	}
+	return fmt.Sprintf("this review prompt already treats the checkpoint output set under `%s` as authoritative for the batch. After the preferred target, sample at most %d additional outputs under `%s` in this turn, then call flow.review_decision instead of reading every remaining file.", rootPath, sampleCap, rootPath)
 }
 
 func buildTaskReviewDirtyWorkspaceRetryGuardError(toolName string) string {

@@ -14437,11 +14437,11 @@ func TestShouldBlockTaskReviewPreferredDeliverableSiblingReadTool(t *testing.T) 
 		},
 	}
 
-	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, "file.read", map[string]any{"path": "templates/layout-10-conversational.html"}); blocked {
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, "read-target", "file.read", map[string]any{"path": "templates/layout-10-conversational.html"}); blocked {
 		t.Fatalf("preferred target read should remain allowed, reason = %q", reason)
 	}
 
-	blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, "file.read", map[string]any{"path": "planning/discovery-plan/oc-24-validation-plan.md"})
+	blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, "read-sibling", "file.read", map[string]any{"path": "planning/discovery-plan/oc-24-validation-plan.md"})
 	if !blocked {
 		t.Fatal("expected sibling review file.read to be blocked when the same batch already reads the preferred deliverable target")
 	}
@@ -14452,7 +14452,7 @@ func TestShouldBlockTaskReviewPreferredDeliverableSiblingReadTool(t *testing.T) 
 		t.Fatalf("guard reason = %q, want preferred deliverable target", reason)
 	}
 
-	if blocked, _ := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, []ModelToolCall{calls[1]}, "file.read", map[string]any{"path": "planning/discovery-plan/oc-24-validation-plan.md"}); blocked {
+	if blocked, _ := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, []ModelToolCall{calls[1]}, "read-sibling", "file.read", map[string]any{"path": "planning/discovery-plan/oc-24-validation-plan.md"}); blocked {
 		t.Fatal("expected sibling read to remain allowed when the same batch does not include the preferred deliverable target")
 	}
 }
@@ -14484,8 +14484,43 @@ func TestShouldNotBlockTaskReviewSiblingReadWithinAuthoritativeCheckpointOutputS
 		},
 	}
 
-	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, "file.read", map[string]any{"path": "content/posts/discomfort-is-growth.md"}); blocked {
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, "read-sibling", "file.read", map[string]any{"path": "content/posts/discomfort-is-growth.md"}); blocked {
 		t.Fatalf("expected same-root checkpoint output read to remain allowed, reason = %q", reason)
+	}
+}
+
+func TestShouldBlockTaskReviewSiblingReadPastAuthoritativeCheckpointSampleCap(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `content/posts/practice-one-screen-at-a-time.md`.\n" +
+			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/practice-one-screen-at-a-time.md`, `content/posts/discomfort-is-growth.md`, `content/posts/red-light-green-light.md`, `content/posts/if-i-were-them-i-would-be-them.md`, `content/posts/the-next-thing-will-be-better.md`, `content/posts/be-an-optimist.md`.\n" +
+			"Treat that output set as authoritative for this batch; after inspecting `content/posts/practice-one-screen-at-a-time.md`, read any additional evidence directly from those named outputs and do not call `file.list` on `content/posts` or reread dependency artifacts outside `content/posts` just to rediscover which files belong to the batch.\n" +
+			"For additional checkpoint outputs under `content/posts`, prefer bounded `file.read` calls with `max_bytes=4096` unless you already know you need a smaller slice.\n" +
+			"After inspecting `content/posts/practice-one-screen-at-a-time.md`, sample at most 4 additional checkpoint outputs under `content/posts` in this turn. Do not try to read every file in the batch before calling `flow.review_decision`.\n" +
+			"Use flow.review_decision with the active flow_node_execution_id to approve or reject this review step.",
+	}
+	calls := []ModelToolCall{
+		{ID: "read-target", Name: "file.read", Arguments: map[string]any{"path": "content/posts/practice-one-screen-at-a-time.md"}},
+		{ID: "s1", Name: "file.read", Arguments: map[string]any{"path": "content/posts/discomfort-is-growth.md"}},
+		{ID: "s2", Name: "file.read", Arguments: map[string]any{"path": "content/posts/red-light-green-light.md"}},
+		{ID: "s3", Name: "file.read", Arguments: map[string]any{"path": "content/posts/if-i-were-them-i-would-be-them.md"}},
+		{ID: "s4", Name: "file.read", Arguments: map[string]any{"path": "content/posts/the-next-thing-will-be-better.md"}},
+		{ID: "s5", Name: "file.read", Arguments: map[string]any{"path": "content/posts/be-an-optimist.md"}},
+	}
+
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, "s4", "file.read", map[string]any{"path": "content/posts/the-next-thing-will-be-better.md"}); blocked {
+		t.Fatalf("fourth sibling sample should remain allowed, reason = %q", reason)
+	}
+	blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, "s5", "file.read", map[string]any{"path": "content/posts/be-an-optimist.md"})
+	if !blocked {
+		t.Fatal("expected fifth sibling sample to be blocked")
+	}
+	if !strings.Contains(reason, "sample at most 4 additional outputs") {
+		t.Fatalf("reason = %q, want sample-cap guidance", reason)
 	}
 }
 
@@ -14508,6 +14543,32 @@ func TestShouldNotBlockTaskReviewPreferredDeliverableFirstToolAfterSuccessfulTar
 	}
 	if blocked, _ := shouldBlockTaskReviewPreferredDeliverableFirstTool(rt, "file.list", map[string]any{"path": "content/posts"}); !blocked {
 		t.Fatal("expected file.list on the deliverable root to remain blocked even after a successful preferred-target read")
+	}
+}
+
+func TestShouldBlockTaskReviewPreferredDeliverableFirstToolAfterAuthoritativeSampleCap(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `content/posts/practice-one-screen-at-a-time.md`.\n" +
+			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/practice-one-screen-at-a-time.md`, `content/posts/discomfort-is-growth.md`.\n" +
+			"Treat that output set as authoritative for this batch; after inspecting `content/posts/practice-one-screen-at-a-time.md`, read any additional evidence directly from those named outputs and do not call `file.list` on `content/posts` or reread dependency artifacts outside `content/posts` just to rediscover which files belong to the batch.\n" +
+			"For additional checkpoint outputs under `content/posts`, prefer bounded `file.read` calls with `max_bytes=4096` unless you already know you need a smaller slice.\n" +
+			"After inspecting `content/posts/practice-one-screen-at-a-time.md`, sample at most 4 additional checkpoint outputs under `content/posts` in this turn. Do not try to read every file in the batch before calling `flow.review_decision`.\n" +
+			"Use flow.review_decision with the active flow_node_execution_id to approve or reject this review step.",
+		reviewPreferredDeliverablePath:     "content/posts/practice-one-screen-at-a-time.md",
+		reviewCheckpointOutputSiblingReads: taskReviewCheckpointOutputSampleCap,
+	}
+
+	blocked, reason := shouldBlockTaskReviewPreferredDeliverableFirstTool(rt, "file.read", map[string]any{"path": "content/posts/discomfort-is-growth.md"})
+	if !blocked {
+		t.Fatal("expected sibling read to be blocked after sample cap is reached")
+	}
+	if !strings.Contains(reason, "sample at most 4 additional outputs") {
+		t.Fatalf("reason = %q, want sample-cap guidance", reason)
 	}
 }
 
