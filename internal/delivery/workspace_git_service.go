@@ -290,7 +290,10 @@ func deliveryGitBranchHasCommit(ctx context.Context, repoRoot, branchName string
 }
 
 func deliverySeedTargetBranchFromSource(ctx context.Context, repoRoot, targetBranch, sourceBranch string) error {
-	_, err := deliveryGitOutput(ctx, repoRoot, "checkout", "-f", "-B", strings.TrimSpace(targetBranch), strings.TrimSpace(sourceBranch))
+	if _, err := deliveryGitOutput(ctx, repoRoot, "checkout", "-f", "-B", strings.TrimSpace(targetBranch), strings.TrimSpace(sourceBranch)); err != nil {
+		return err
+	}
+	_, err := deliveryGitOutput(ctx, repoRoot, "clean", "-fdx")
 	return err
 }
 

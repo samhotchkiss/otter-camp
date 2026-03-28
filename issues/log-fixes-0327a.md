@@ -734,3 +734,16 @@
     - the parent workspace `/Users/sam/otter-data/workspaces/sam-blog-rebuild-restart-12` now has real `main` history with merge commits for tasks `9`, `15`, `25`, `27`, `28`, `29`, `31`, `32`, `42`, and `53`
     - `/Users/sam/otter-data/workspaces/sam-blog-rebuild-restart-12/content/technonymous-index.json` now exists directly in the parent workspace on `main`
     - the remaining non-merged tasks (`14`, `47`, `48`, `50`) failed as explicit merge conflicts and raised `system_alert` inbox items instead of silently stalling
+- 2026-03-28 07:44:13 MDT - clean seeded parent workspaces after first branch promotion
+  - changed [`internal/delivery/workspace_git_service.go`](/Users/sam/dev/otter-camp/internal/delivery/workspace_git_service.go) so `deliverySeedTargetBranchFromSource(...)` now runs `git clean -fdx` after seeding an unborn target branch from the task branch
+  - changed [`internal/delivery/workspace_git_service_test.go`](/Users/sam/dev/otter-camp/internal/delivery/workspace_git_service_test.go) so the empty-head seed test:
+    - uses an orphan `main` branch to match the real workspace bootstrap shape
+    - proves stray `.ottercamp/` and `planning/` residue is removed while tracked task output remains
+  - verified with:
+    - `GOFLAGS='' go test ./internal/delivery -run 'TestWorkspaceGitService(MergeSeedsEmptyTargetBranchFromTaskBranch|MergeAllowsUnrelatedHistories|MergeMergesBranchIntoBoundRepoPath|MergeReturnsConflictAndAborts|PushPushesActiveTargetBranch|CommitExistsChecksHistory)$' -count=1`
+    - rebuilt `./bin/ottercamp`
+    - restarted tmux `codex-e2e-20260324`
+    - `./bin/ottercamp health --output json`
+  - fresh production proof after redeploy:
+    - `git clean -fdx` on `/Users/sam/otter-data/workspaces/sam-blog-rebuild-restart-12` removed stale `.ottercamp/`, `planning/prd-spec/`, `scripts/`, and untracked `content/posts/` residue
+    - `git status --short --branch` then returned clean `## main`

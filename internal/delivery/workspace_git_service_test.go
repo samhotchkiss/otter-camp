@@ -102,6 +102,20 @@ func TestWorkspaceGitServiceMergeSeedsEmptyTargetBranchFromTaskBranch(t *testing
 	writeWorkspaceGitFile(t, repoRoot, "content/posts/post.md", "from task branch\n")
 	workspaceGitCmd(t, ctx, repoRoot, "add", "-A")
 	workspaceGitCmd(t, ctx, repoRoot, "commit", "-m", "task output")
+	workspaceGitCmd(t, ctx, repoRoot, "checkout", "--orphan", "main")
+
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".ottercamp"), 0o755); err != nil {
+		t.Fatalf("mkdir .ottercamp: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, "planning", "prd-spec"), 0o755); err != nil {
+		t.Fatalf("mkdir planning/prd-spec: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".ottercamp", "scratch.txt"), []byte("junk\n"), 0o644); err != nil {
+		t.Fatalf("write .ottercamp/scratch.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "planning", "prd-spec", "notes.md"), []byte("junk\n"), 0o644); err != nil {
+		t.Fatalf("write planning/prd-spec/notes.md: %v", err)
+	}
 
 	service, err := NewWorkspaceGitService(WorkspaceGitServiceOptions{
 		Projects: &workspaceGitProjectRepoStub{
@@ -140,6 +154,12 @@ func TestWorkspaceGitServiceMergeSeedsEmptyTargetBranchFromTaskBranch(t *testing
 	got := readWorkspaceGitFile(t, filepath.Join(repoRoot, "content/posts/post.md"))
 	if got != "from task branch\n" {
 		t.Fatalf("seeded file content = %q, want %q", got, "from task branch\n")
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, ".ottercamp")); !os.IsNotExist(err) {
+		t.Fatalf(".ottercamp exists after seed, err=%v, want not exist", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "planning")); !os.IsNotExist(err) {
+		t.Fatalf("planning exists after seed, err=%v, want not exist", err)
 	}
 }
 
