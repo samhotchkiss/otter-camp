@@ -10514,6 +10514,7 @@ func TestShouldBlockProjectExecutionPrematureDoneTool(t *testing.T) {
 	doneTaskID := uuid.New()
 
 	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
 	fixture.session.ScopeType = "project"
 	fixture.session.ScopeID = projectID
 	metadata, err := json.Marshal(map[string]any{
@@ -11540,6 +11541,97 @@ func TestHandleCompletedProjectExecutionContinuationTurnResumesBlockedReviewTask
 	}
 	if !sawSystemMessage {
 		t.Fatal("expected system message recording resumed blocked review lane")
+	}
+}
+
+func TestNextResumableBlockedProjectTaskSkipsMalformedBlockedReviewTask(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentTaskID := uuid.New()
+	malformedBlockedReviewTaskID := uuid.New()
+	validBlockedReviewTaskID := uuid.New()
+	reviewNodeID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+
+	parentDescription := "Produce content/technonymous-index.json by crawling technonymous.org"
+	childDescription := "Use browser tools to navigate to https://technonymous.org"
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentTaskID: {
+				ID:              parentTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      44,
+				Title:           "Produce content/technonymous-index.json by crawling technonymous.org",
+				Description:     &parentDescription,
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+			malformedBlockedReviewTaskID: {
+				ID:                malformedBlockedReviewTaskID,
+				ProjectID:         projectID,
+				TaskNumber:        45,
+				Title:             "Use browser tools to navigate to https://technonymous.org",
+				Description:       &childDescription,
+				WorkStatus:        "blocked",
+				CurrentFlowNodeID: &reviewNodeID,
+				AssignedAgentID:   uuidPtr(uuid.New()),
+				FlowTemplateID:    uuidPtr(uuid.New()),
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition_parent_task_id": parentTaskID.String(),
+					"agent_turn_validation_guard": map[string]any{
+						"tool_name":       "flow.review_decision",
+						"failure_class":   "tool_validation",
+						"failure_code":    "review_decision_required",
+						"failure_reason":  "review turn completed without calling flow.review_decision",
+						"count":           3,
+						"block_threshold": 3,
+						"blocked":         true,
+					},
+				}),
+			},
+			validBlockedReviewTaskID: {
+				ID:                validBlockedReviewTaskID,
+				ProjectID:         projectID,
+				TaskNumber:        61,
+				Title:             "Fetch posts 1-12",
+				WorkStatus:        "blocked",
+				CurrentFlowNodeID: &reviewNodeID,
+				AssignedAgentID:   uuidPtr(uuid.New()),
+				FlowTemplateID:    uuidPtr(uuid.New()),
+				Metadata: mustJSONRaw(map[string]any{
+					"agent_turn_validation_guard": map[string]any{
+						"tool_name":       "flow.review_decision",
+						"failure_class":   "tool_validation",
+						"failure_code":    "review_decision_required",
+						"failure_reason":  "review turn completed without calling flow.review_decision",
+						"count":           3,
+						"block_threshold": 3,
+						"blocked":         true,
+					},
+				}),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+
+	selected, ok, err := fixture.engine.nextResumableBlockedProjectTask(context.Background(), projectID, map[uuid.UUID]struct{}{
+		malformedBlockedReviewTaskID: {},
+	})
+	if err != nil {
+		t.Fatalf("nextResumableBlockedProjectTask: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected selector to fall back to a valid blocked review task")
+	}
+	if selected.ID != validBlockedReviewTaskID {
+		t.Fatalf("selected task = %s, want %s", selected.ID, validBlockedReviewTaskID)
+	}
+	if selected.ID == malformedBlockedReviewTaskID {
+		t.Fatal("malformed blocked review task should not have been selected for resume")
 	}
 }
 

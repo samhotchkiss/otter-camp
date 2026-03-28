@@ -1,5 +1,13 @@
 # 0327a Fix Log
 
+- 2026-03-28 15:18:00 MDT - `pending` `Skip malformed blocked review children in PM resumes`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `nextResumableBlockedProjectTask(...)` now skips any blocked task already classified by `projectContinuationMalformedChildTaskIDs(...)` as a malformed procedural or no-decompose child artifact
+  - this keeps project continuations from reopening blocked review lanes like Sam.blog task `45` that should remain blocked permanently and be worked around from the parent/replacement path instead
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) with `TestNextResumableBlockedProjectTaskSkipsMalformedBlockedReviewTask`
+  - verified with `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurn(ResumesBlockedReviewTaskBeforeQueueingDraft|RetriesGenericReplyWithFreshMessage|SuppressesRepeatedRediscoveryBlockedRetry)|NextResumableBlockedProjectTaskSkipsMalformedBlockedReviewTask)$' -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `data.status=ok`
+  - live status: deployed as a forward guard; the PM session is currently idle (`current_turn_id=NULL`), so fresh direct proof depends on the next project continuation wakeup after this restart
+
 - 2026-03-28 15:07:00 MDT - `pending` `Shrink authoritative review sibling samples to fit one turn`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so authoritative checkpoint-output sibling reads now clamp to `1536` bytes instead of `4096`
   - kept the larger `8192` preferred-target read window intact; only the follow-on sibling spot-checks are smaller, which is enough to keep one preferred target plus four sibling samples under the async task-review prompt guardrail

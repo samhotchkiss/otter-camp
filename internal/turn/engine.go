@@ -17971,9 +17971,13 @@ func (e *TurnEngine) nextResumableBlockedProjectTask(ctx context.Context, projec
 	if err != nil {
 		return repo.ProjectTask{}, false, err
 	}
+	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
 	var selected repo.ProjectTask
 	found := false
 	for _, task := range projectTasks {
+		if _, malformed := malformedChildTaskIDs[task.ID]; malformed {
+			continue
+		}
 		if !projectContinuationTaskNeedsReviewResume(task, blockedReasons[task.ID]) {
 			continue
 		}
