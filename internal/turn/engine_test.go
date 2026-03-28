@@ -9517,6 +9517,85 @@ func TestShouldBlockTaskExecutionBroadContextToolAllowsOrchestrationValidationCo
 	}
 }
 
+func TestCLICommandExternalWorkspaceRoot(t *testing.T) {
+	t.Parallel()
+
+	taskRoot := "/Users/sam/otter-data/task-worktrees/demo/task-35"
+	workspaceRoots := []string{
+		"/Users/sam/otter-data/workspaces/demo",
+		"/Users/sam/otter-data/workspaces/org/demo",
+		taskRoot,
+	}
+
+	if root := cliCommandExternalWorkspaceRoot("cat /Users/sam/otter-data/workspaces/demo/content/index.json", taskRoot, workspaceRoots); root != "/Users/sam/otter-data/workspaces/demo" {
+		t.Fatalf("root = %q, want canonical project workspace root", root)
+	}
+	if root := cliCommandExternalWorkspaceRoot("cat content/index.json", taskRoot, workspaceRoots); root != "" {
+		t.Fatalf("root = %q, want no external root for workspace-relative command", root)
+	}
+	if root := cliCommandExternalWorkspaceRoot("cat /Users/sam/otter-data/task-worktrees/demo/task-35/content/index.json", taskRoot, workspaceRoots); root != "" {
+		t.Fatalf("root = %q, want task worktree path to remain allowed", root)
+	}
+}
+
+func TestShouldBlockTaskExecutionExternalWorkspaceCLITool(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	dataDir := t.TempDir()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	projectSlug := "sam-blog-rebuild-restart-12"
+	orgSlug := "sam"
+	description := "Scrape up to 5 technonymous.org blog posts from the URL index and save each as markdown in content/posts/."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.dataDir = dataDir
+	fixture.engine.tasks = &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:             taskID,
+			ProjectID:      projectID,
+			OrganizationID: fixture.session.OrganizationID,
+			TaskNumber:     35,
+			Title:          "Scrape batch 1",
+			WorkStatus:     "in_progress",
+			Description:    &description,
+		},
+	}}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+
+	projectRoot := filepath.Join(dataDir, "workspaces", projectSlug)
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatalf("mkdir project root: %v", err)
+	}
+	initializeTurnTestGitRepo(t, projectRoot)
+
+	rt := &turnRuntime{session: fixture.session}
+	blocked, reason := fixture.engine.shouldBlockTaskExecutionExternalWorkspaceCLITool(context.Background(), rt, "cli.execute", map[string]any{
+		"command": "cat /tmp/demo && cat " + filepath.Join(projectRoot, "content/posts/example.md"),
+	})
+	if !blocked {
+		t.Fatal("expected absolute parent workspace CLI read to be blocked")
+	}
+	if !strings.Contains(reason, filepath.Clean(projectRoot)) {
+		t.Fatalf("reason = %q, want offending project root", reason)
+	}
+
+	blocked, reason = fixture.engine.shouldBlockTaskExecutionExternalWorkspaceCLITool(context.Background(), rt, "cli.execute", map[string]any{
+		"command": "cat content/posts/example.md",
+	})
+	if blocked {
+		t.Fatalf("workspace-relative command blocked unexpectedly: %s", reason)
+	}
+}
+
 func TestShouldBlockTaskExecutionSiblingResponsibilityToolForWriteFocusedChildLane(t *testing.T) {
 	t.Parallel()
 

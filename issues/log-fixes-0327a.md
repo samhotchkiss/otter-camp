@@ -1,5 +1,11 @@
 # 0327a Fix Log
 
+- 2026-03-28 12:58:34 MDT - `pending` `Keep task CLI reads inside the current worktree`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so async `project_task` validation now blocks `cli.execute` commands that reference a parent project workspace or repo root by absolute path when that root differs from the current task worktree
+  - added `cliCommandExternalWorkspaceRoot(...)`, `shouldBlockTaskExecutionExternalWorkspaceCLITool(...)`, and a task-lane correction message telling the model to stay inside the current task worktree and use workspace-relative paths only
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) for both the pure path detector and the real git-backed task-worktree engine path
+  - verified with `GOFLAGS='' go test ./internal/turn -run 'Test(CLICommandExternalWorkspaceRoot|ShouldBlockTaskExecutionExternalWorkspaceCLITool|ShouldBlockTaskExecutionBroadContextTool|ShouldBlockTaskExecutionBroadContextToolAllowsOrchestrationValidationContextReads)$' -count=1`
+
 - 2026-03-28 05:37:16 MDT - `pending` `Preflight malformed no-decompose child task lanes`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `handleUserMessage(...)` now runs `handleMalformedNoDecomposeChildTaskPreflight(...)` before prompt assembly for async `project_task` sessions
   - the new preflight detects child tasks whose `decomposition_parent_task_id` points at a parent whose `decomposition.source_description` explicitly forbids decomposition, emits a terminal system correction, marks the malformed child task blocked, sets `stop_reason=validation_loop_blocked`, and completes the turn without reaching the model

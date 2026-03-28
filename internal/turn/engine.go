@@ -12744,6 +12744,32 @@ func isReadOnlyDiscoveryCLIExecuteCall(arguments map[string]any) bool {
 	return isReadOnlyCLICommand(command)
 }
 
+func cliCommandExternalWorkspaceRoot(command, taskRoot string, workspaceRoots []string) string {
+	trimmedCommand := strings.TrimSpace(command)
+	if trimmedCommand == "" {
+		return ""
+	}
+	normalizedTaskRoot := filepath.Clean(strings.TrimSpace(taskRoot))
+	seen := map[string]struct{}{}
+	for _, root := range workspaceRoots {
+		normalizedRoot := filepath.Clean(strings.TrimSpace(root))
+		if normalizedRoot == "" || normalizedRoot == "." {
+			continue
+		}
+		if normalizedTaskRoot != "" && sameWorkspaceRelativePath(normalizedRoot, normalizedTaskRoot) {
+			continue
+		}
+		if _, exists := seen[normalizedRoot]; exists {
+			continue
+		}
+		seen[normalizedRoot] = struct{}{}
+		if strings.Contains(trimmedCommand, normalizedRoot) {
+			return normalizedRoot
+		}
+	}
+	return ""
+}
+
 func isReadOnlyCLICommand(command string) bool {
 	trimmed := strings.TrimSpace(command)
 	if trimmed == "" {
@@ -13407,6 +13433,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 				ToolCallID: id,
 				Name:       name,
 				Error:      buildTaskExecutionBroadContextToolGuardError(name),
+			})
+			continue
+		}
+		if blocked, reason := e.shouldBlockTaskExecutionExternalWorkspaceCLITool(ctx, rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
 			})
 			continue
 		}
@@ -26279,6 +26313,50 @@ func (e *TurnEngine) shouldBlockTaskExecutionBroadContextTool(ctx context.Contex
 	}
 }
 
+func (e *TurnEngine) shouldBlockTaskExecutionExternalWorkspaceCLITool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if e == nil || e.tasks == nil || e.projects == nil || rt == nil || rt.session == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") ||
+		!strings.EqualFold(strings.TrimSpace(toolName), "cli.execute") {
+		return false, ""
+	}
+	normalized := toolargs.Normalize("cli.execute", cloneMap(arguments))
+	command := strings.TrimSpace(anyString(normalized["command"]))
+	if command == "" {
+		return false, ""
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return false, ""
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return false, ""
+	}
+	taskRoot, err := e.taskWorkspaceRoot(ctx, taskRecord)
+	if err != nil {
+		return false, ""
+	}
+	projectRecord, err := e.projects.GetByID(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return false, ""
+	}
+	workspaceRoots, err := e.projectWorkspaceRoots(ctx, taskRecord.OrganizationID, projectRecord)
+	if err != nil {
+		return false, ""
+	}
+	projectRoot, err := e.projectRepoRoot(ctx, projectRecord)
+	if err == nil && strings.TrimSpace(projectRoot) != "" {
+		workspaceRoots = append(workspaceRoots, projectRoot)
+	}
+	if offendingRoot := cliCommandExternalWorkspaceRoot(command, taskRoot, workspaceRoots); offendingRoot != "" {
+		return true, buildTaskExecutionExternalWorkspaceCLIGuardError(taskRoot, offendingRoot)
+	}
+	return false, ""
+}
+
 func (e *TurnEngine) shouldBlockTaskExecutionSiblingResponsibilityTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
 	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
 		return false, ""
@@ -27528,6 +27606,18 @@ func buildTaskExecutionBroadContextToolGuardError(toolName string) string {
 	default:
 		return "task execution should not reread broad org or project context from a task-scoped async session. Continue the assigned task directly."
 	}
+}
+
+func buildTaskExecutionExternalWorkspaceCLIGuardError(taskRoot, offendingRoot string) string {
+	root := strings.TrimSpace(offendingRoot)
+	if root == "" {
+		return "task execution must stay inside the current task worktree. Do not inspect or mutate the parent project workspace by absolute path; use workspace-relative paths from the current task worktree only."
+	}
+	taskRoot = strings.TrimSpace(taskRoot)
+	if taskRoot == "" {
+		return fmt.Sprintf("task execution must stay inside the current task worktree. Do not inspect or mutate `%s` by absolute path; use workspace-relative task paths instead.", root)
+	}
+	return fmt.Sprintf("task execution must stay inside the current task worktree `%s`. Do not inspect or mutate `%s` by absolute path; use workspace-relative paths from the current task worktree only.", taskRoot, root)
 }
 
 func buildTaskExecutionSiblingResponsibilityToolGuardError(taskRecord repo.ProjectTask, siblings []repo.ProjectTask) string {
