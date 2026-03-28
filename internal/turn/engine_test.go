@@ -32370,6 +32370,33 @@ func TestSessionTaskDeliverablePathPrefersContentMigrationOutputOverStaleRecover
 	}
 }
 
+func TestNormalizeRecoveryCheckpointTargetForTaskClearsDependencyArtifactOutsidePreferredDeliverableRoot(t *testing.T) {
+	t.Parallel()
+
+	description := "Read content/technonymous-index.json. For each of the last 11 URLs in the post_urls array (indices 24-34), use web_fetch to retrieve the page content, then save the article text as clean markdown files under content/posts/.\n\nDeliverable: 11 markdown files in content/posts/."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  63,
+		Title:       "Fetch posts 25-35 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+		Description: &description,
+		Metadata: mustRawJSON(t, map[string]any{
+			"content_migration_checkpoint": map[string]any{
+				"version": 1,
+				"outputs": []map[string]any{
+					{"path": "content/posts/the-water-is-nearing-a-boil.md"},
+					{"path": "content/posts/how-to-cook-a-steak-and-why-it-matters.md"},
+				},
+			},
+		}),
+	}
+
+	checkpoint := normalizeRecoveryCheckpointTargetForTask(taskRecord, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath: "content/technonymous-index.json",
+	})
+	if got := strings.TrimSpace(checkpoint.TargetPath); got != "" {
+		t.Fatalf("checkpoint.TargetPath = %q, want cleared outside-root dependency artifact", got)
+	}
+}
+
 func TestShouldReuseHistoricalDeliverableTargetForTaskRejectsInputArtifactOutsidePreferredRoot(t *testing.T) {
 	t.Parallel()
 

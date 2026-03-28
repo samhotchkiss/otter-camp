@@ -1059,3 +1059,22 @@
   - result:
     - the single-file redirect trap is broken for this batch content-migration family
     - the remaining execution seam is now downstream file-generation/completion work, not path-collapse churn
+- 2026-03-28 12:02:50 MDT - clear outside-root recovery checkpoints for multi-output deliverable-root tasks
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `normalizeRecoveryCheckpointTargetForTask(...)` now clears `checkpoint.TargetPath` when a batch/root-owned task has a preferred deliverable root and the stored recovery target sits outside that root
+    - this specifically stops dependency artifacts like `content/technonymous-index.json` from surviving as the durable recovery target once the task is really a `content/posts` batch deliverable
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestNormalizeRecoveryCheckpointTargetForTaskClearsDependencyArtifactOutsidePreferredDeliverableRoot`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `go test ./internal/turn -run 'Test(SessionTaskDeliverablePathPrefersContentMigrationOutputOverStaleRecoveryCheckpoint|NormalizeRecoveryCheckpointTargetForTaskClearsDependencyArtifactOutsidePreferredDeliverableRoot|HandleTaskFileWriteWrongPathAllowsBatchWritesWithinPreferredDeliverableRoot)$' -count=1`
+  - deploy state:
+    - rebuilt and restarted tmux `codex-e2e-20260324`
+    - `./bin/ottercamp health --output json` returned `data.status=ok`
+  - fresh live proof on task `63`:
+    - pre-fix session `be5dc554-8bcb-4fc5-982d-2f1851e99a57` still showed tool result `71` with `deliverable_path=content/technonymous-index.json` and `recovery_target_focus_required`
+    - post-restart session `2f7f1fb2-6364-4327-bc25-d6c4d33d0560` is now on a review turn rooted under `content/posts`, with checkpoint system message `28` naming task-owned outputs under `content/posts` and assistant message `37` saying it will read checkpoint-identified deliverable files directly under `content/posts/`
+    - the bad `content/technonymous-index.json` recovery target is gone from the fresh post-restart hot path
+  - result:
+    - batch review/recovery lanes stay on the actual deliverable root instead of snapping back to the dependency artifact
+    - the next live seam is now review completion efficiency, not dependency-target drift

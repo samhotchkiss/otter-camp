@@ -16610,6 +16610,7 @@ func normalizeRecoveryCheckpointTargetForTask(taskRecord repo.ProjectTask, check
 	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
 	targetPath := strings.TrimSpace(checkpoint.TargetPath)
 	explicit := strings.TrimSpace(explicitDeliverablePath(taskRecord))
+	root := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
 	if targetPath != "" &&
 		recoveryLowSignalPackageMarkerPath(targetPath) &&
 		(explicit == "" || !sameWorkspaceRelativePath(explicit, targetPath)) {
@@ -16617,6 +16618,13 @@ func normalizeRecoveryCheckpointTargetForTask(taskRecord repo.ProjectTask, check
 		targetPath = ""
 	}
 	if targetPath != "" && !looksLikeExplicitDeliverablePath(normalizeWorkspaceRelativePath(targetPath), targetPath) {
+		checkpoint.TargetPath = ""
+		targetPath = ""
+	}
+	if targetPath != "" &&
+		root != "" &&
+		taskAllowsWritesWithinPreferredDeliverableRoot(taskRecord) &&
+		!workspacePathWithinRoot(normalizeWorkspaceRelativePath(targetPath), root) {
 		checkpoint.TargetPath = ""
 		targetPath = ""
 	}
