@@ -10617,6 +10617,32 @@ func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnSubtaskCreateBou
 	}
 }
 
+func TestShouldStopAfterBlockedProjectContinuationRediscovery(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+	}
+	results := []ToolResult{
+		{Name: "session.list", Error: "project continuation already has the active project session context plus named active tasks in the continuation prompt. Do not reread broader session or inbox state with session.list; act on the named tasks directly or report the concrete blocker."},
+		{Name: "task.list", Error: "project continuation already has named active or draft tasks in the continuation prompt. Do not re-list the broader project task tree; act on one of the named tasks directly or inspect only a named parent's direct children with parent_task_id if that narrower evidence is truly required."},
+	}
+	if !shouldStopAfterBlockedProjectContinuationRediscovery(rt, results) {
+		t.Fatal("expected pure project-continuation rediscovery batch to stop the turn")
+	}
+	if shouldStopAfterBlockedProjectContinuationRediscovery(rt, results[:1]) {
+		t.Fatal("single blocked rediscovery call should not stop the turn")
+	}
+	mixed := append([]ToolResult{}, results...)
+	mixed = append(mixed, ToolResult{Name: "task.update", Error: "deliverable_path_required: continue the concrete deliverable instead"})
+	if shouldStopAfterBlockedProjectContinuationRediscovery(rt, mixed) {
+		t.Fatal("mixed blocked batch should not use the project-continuation rediscovery stop")
+	}
+}
+
 func TestShouldStopAfterBlockedTaskExecutionBoundaryMutation(t *testing.T) {
 	t.Parallel()
 
@@ -26172,6 +26198,64 @@ func TestDispatchToolsMaxToolCallsStopsReviewDiscoveryChurn(t *testing.T) {
 	}
 	if !fixture.messages.containsContentSubstring("Review only. Inspect the current deliverables and use flow.review_decision") {
 		t.Fatal("expected fresh review action prompt")
+	}
+}
+
+func TestDispatchToolsStopsAfterPureBlockedProjectContinuationRediscoveryBatch(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	activeTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.session.Mode = "async"
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:         turnID,
+			SessionID:  fixture.session.ID,
+			TurnNumber: 1,
+			Status:     "in_progress",
+		},
+		startedAt:          time.Now(),
+		initialMessageText: "Project continuation resume.\nAlready-active non-terminal tasks in the tree:\n- [#35] Active task (task_id=" + activeTaskID.String() + ")\nActionable draft tasks already in the tree:\n- [#36] Draft task (task_id=" + draftTaskID.String() + ")",
+	}
+	fixture.chat.turns[turnID] = rt.turn
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turnID)
+
+	stop, err := fixture.engine.dispatchTools(context.Background(), rt, []ModelToolCall{
+		{
+			ID:   "blocked-session-list",
+			Name: "session.list",
+			Arguments: map[string]any{
+				"scope_type": "task",
+				"scope_id":   activeTaskID.String(),
+			},
+		},
+		{
+			ID:   "blocked-task-list",
+			Name: "task.list",
+			Arguments: map[string]any{
+				"project_id": projectID.String(),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dispatchTools: %v", err)
+	}
+	if !stop {
+		t.Fatal("expected dispatchTools to stop after pure blocked project-continuation rediscovery batch")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if !fixture.messages.containsContentSubstring("Project continuation rediscovery guard blocked only broad rereads") {
+		t.Fatal("expected project continuation rediscovery early-stop message")
 	}
 }
 

@@ -12436,6 +12436,11 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if shouldStopAfterBlockedProjectKickoffSessionCreate(rt, blockedCalls) {
 			return true, nil
 		}
+		if len(toolCalls) == 0 && shouldStopAfterBlockedProjectContinuationRediscovery(rt, blockedCalls) {
+			rt.stopReason = stopReasonValidationBlocked
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Project continuation rediscovery guard blocked only broad rereads. Ending this turn early so the next continuation can act directly on the named tasks instead of repeating blocked PM discovery.]")
+			return true, nil
+		}
 	}
 	if rt.toolCallsUsed >= toolBudget {
 		return e.stopForMaxToolCalls(ctx, rt)
@@ -23155,6 +23160,30 @@ func shouldStopAfterBlockedTaskExecutionBoundaryMutation(rt *turnRuntime, result
 		}
 	}
 	return false
+}
+
+func shouldStopAfterBlockedProjectContinuationRediscovery(rt *turnRuntime, results []ToolResult) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	if len(results) < 2 {
+		return false
+	}
+	for _, result := range results {
+		errText := strings.ToLower(strings.TrimSpace(result.Error))
+		if strings.HasPrefix(errText, "project continuation already ") {
+			continue
+		}
+		if strings.HasPrefix(errText, "project continuation called flow.get_execution ") {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func maybeInjectTaskExecutionSubtaskCreateExecutionID(rt *turnRuntime, toolName string, arguments map[string]any) {
