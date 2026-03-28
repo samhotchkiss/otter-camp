@@ -19115,6 +19115,48 @@ func contentMigrationCheckpointPreferredOutputPath(taskRecord repo.ProjectTask, 
 	return ""
 }
 
+func reviewPromptCheckpointOutputPaths(taskRecord repo.ProjectTask) []string {
+	checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata)
+	if !ok || len(checkpoint.Outputs) == 0 {
+		return nil
+	}
+	root := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
+	seen := make(map[string]struct{}, len(checkpoint.Outputs))
+	paths := make([]string, 0, len(checkpoint.Outputs))
+	for _, output := range checkpoint.Outputs {
+		targetPath := normalizeWorkspaceRelativePath(output.Path)
+		if targetPath == "" {
+			continue
+		}
+		if root != "" && !workspacePathWithinRoot(targetPath, root) {
+			continue
+		}
+		if _, ok := seen[targetPath]; ok {
+			continue
+		}
+		seen[targetPath] = struct{}{}
+		paths = append(paths, targetPath)
+	}
+	return paths
+}
+
+func summarizeReviewPromptOutputPaths(paths []string, limit int) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	if limit <= 0 || limit > len(paths) {
+		limit = len(paths)
+	}
+	parts := make([]string, 0, limit+1)
+	for _, path := range paths[:limit] {
+		parts = append(parts, fmt.Sprintf("`%s`", path))
+	}
+	if remaining := len(paths) - limit; remaining > 0 {
+		parts = append(parts, fmt.Sprintf("and %d more", remaining))
+	}
+	return strings.Join(parts, ", ")
+}
+
 func (e *TurnEngine) latestTaskHistoricalDeliverablePath(ctx context.Context, sessionID, taskID uuid.UUID) string {
 	if e == nil || e.pool == nil || taskID == uuid.Nil {
 		return ""
@@ -23774,6 +23816,7 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 	if taskRecord, ok := e.reviewPromptTaskRecord(ctx, session); ok {
 		targetPath := strings.TrimSpace(e.reviewPromptDeliverableTarget(ctx, session, taskRecord))
 		rootPath := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
+		checkpointOutputs := reviewPromptCheckpointOutputPaths(taskRecord)
 		if targetPath != "" {
 			lines = append(lines, fmt.Sprintf("Start with the preferred deliverable target `%s`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `%s` is missing.", targetPath, targetPath))
 			lines = append(lines, fmt.Sprintf("If `%s` may be large, start with `file.read` using `path=%s` and `max_bytes=%d` instead of an unconstrained full-file read. Use narrower follow-up inspection only if that bounded read is insufficient.", targetPath, targetPath, taskReviewPreferredDeliverableReadMaxBytes))
@@ -23781,6 +23824,9 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 			lines = append(lines, fmt.Sprintf("If reading `%s` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.", targetPath))
 		} else if rootPath != "" {
 			lines = append(lines, fmt.Sprintf("Start with the preferred deliverable root `%s`. Inspect that output root directly before broad workspace discovery, and do not begin with task.get, git.log, or dependency-file reads outside `%s` unless `%s` itself is missing.", rootPath, rootPath, rootPath))
+			if len(checkpointOutputs) > 1 {
+				lines = append(lines, fmt.Sprintf("The checkpoint already identifies the task-owned outputs under `%s`: %s. Review only that output set under `%s`; do not reread dependency artifacts outside `%s` to map the batch unless every checkpoint output is missing.", rootPath, summarizeReviewPromptOutputPaths(checkpointOutputs, 4), rootPath, rootPath))
+			}
 			lines = append(lines, fmt.Sprintf("If listing or reading under `%s` returns `not_found`, stop broad inspection and call flow.review_decision reject using that missing deliverable-root evidence.", rootPath))
 		}
 		if taskLooksLikeOrchestrationOnlyParent(taskRecord) {
@@ -26339,6 +26385,9 @@ func shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt *turnRuntime, too
 		if path != "" && workspacePathWithinRoot(path, rootPath) {
 			return false, ""
 		}
+		if taskReviewPromptNamesCheckpointOutputSet(rt, rootPath) {
+			return true, buildTaskReviewPreferredDeliverableRootCheckpointOutputGuardError(rootPath, path, normalizedToolName)
+		}
 		return true, buildTaskReviewPreferredDeliverableRootFirstGuardError(rootPath, normalizedToolName)
 	case "task.get", "task_get", "task.list", "task_list":
 		return true, buildTaskReviewPreferredDeliverableRootFirstGuardError(rootPath, normalizedToolName)
@@ -26386,6 +26435,18 @@ func taskReviewPreferredDeliverableFirstApplies(rt *turnRuntime) bool {
 		return false
 	}
 	return !strings.Contains(strings.TrimSpace(rt.initialMessageText), "This task is an orchestration-only parent.")
+}
+
+func taskReviewPromptNamesCheckpointOutputSet(rt *turnRuntime, rootPath string) bool {
+	if rt == nil {
+		return false
+	}
+	rootPath = normalizeWorkspaceRelativePath(rootPath)
+	if rootPath == "" {
+		return false
+	}
+	marker := fmt.Sprintf("The checkpoint already identifies the task-owned outputs under `%s`:", rootPath)
+	return strings.Contains(strings.TrimSpace(rt.initialMessageText), marker)
 }
 
 func taskReviewPreferredDeliverableRootFirstApplies(rt *turnRuntime) bool {
@@ -27404,6 +27465,18 @@ func buildTaskReviewPreferredDeliverableRootFirstGuardError(rootPath, toolName s
 	default:
 		return fmt.Sprintf("this review prompt already names preferred deliverable root `%s`. Inspect that output root directly before broader rediscovery.", rootPath)
 	}
+}
+
+func buildTaskReviewPreferredDeliverableRootCheckpointOutputGuardError(rootPath, path, toolName string) string {
+	rootPath = normalizeWorkspaceRelativePath(rootPath)
+	path = normalizeWorkspaceRelativePath(path)
+	if rootPath == "" {
+		return "this review prompt already carries the checkpoint output set for the preferred deliverable root. Review those task-owned outputs directly instead of rereading dependency artifacts."
+	}
+	if path == "" {
+		return fmt.Sprintf("this review prompt already names preferred deliverable root `%s` and the checkpoint output set under `%s`. Review those task-owned outputs directly instead of rereading dependency artifacts to map the batch.", rootPath, rootPath)
+	}
+	return fmt.Sprintf("this review prompt already names preferred deliverable root `%s` and the checkpoint output set under `%s`. Do not inspect outside-root dependency artifact `%s` with %s to map the batch. Review the checkpoint outputs under `%s` directly, then call flow.review_decision once you have enough evidence.", rootPath, rootPath, path, toolName, rootPath)
 }
 
 func buildTaskReviewCompanionPlanningArtifactGuardError(targetPath, toolName, path string) string {

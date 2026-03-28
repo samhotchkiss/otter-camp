@@ -14215,6 +14215,31 @@ func TestShouldBlockTaskReviewPreferredDeliverableRootFirstTool(t *testing.T) {
 	}
 }
 
+func TestShouldBlockTaskReviewPreferredDeliverableRootDependencyReadWithCheckpointOutputSet(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable root `content/posts`. Inspect that output root directly before broad workspace discovery, and do not begin with task.get, git.log, or dependency-file reads outside `content/posts` unless `content/posts` itself is missing.\n" +
+			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/post-1.md`, `content/posts/post-2.md`, and 10 more. Review only that output set under `content/posts`; do not reread dependency artifacts outside `content/posts` to map the batch unless every checkpoint output is missing.\n" +
+			"If listing or reading under `content/posts` returns `not_found`, stop broad inspection and call flow.review_decision reject using that missing deliverable-root evidence.\n" +
+			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
+	}
+
+	blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, "file.read", map[string]any{"path": "content/technonymous-index.json"})
+	if !blocked {
+		t.Fatal("expected dependency artifact read to be blocked when checkpoint output set is already named")
+	}
+	if !strings.Contains(reason, "checkpoint output set under `content/posts`") {
+		t.Fatalf("guard reason = %q, want checkpoint output-set guidance", reason)
+	}
+	if !strings.Contains(reason, "content/technonymous-index.json") {
+		t.Fatalf("guard reason = %q, want blocked dependency artifact path", reason)
+	}
+}
+
 func TestShouldNotBlockTaskReviewPreferredDeliverableFirstToolForOrchestrationParent(t *testing.T) {
 	parentTaskID := uuid.New()
 	rt := &turnRuntime{
@@ -36088,6 +36113,12 @@ func TestBuildTaskReviewActionPromptPrefersDeliverableRootForBatchContentMigrati
 	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
 	if !strings.Contains(prompt, "Start with the preferred deliverable root `content/posts`") {
 		t.Fatalf("prompt = %q, want preferred deliverable root guidance", prompt)
+	}
+	if !strings.Contains(prompt, "The checkpoint already identifies the task-owned outputs under `content/posts`") {
+		t.Fatalf("prompt = %q, want checkpoint output-set guidance", prompt)
+	}
+	if !strings.Contains(prompt, "`content/posts/practice-eliminating-streaming-video.md`") {
+		t.Fatalf("prompt = %q, want checkpoint output summary", prompt)
 	}
 	if strings.Contains(prompt, "Start with the preferred deliverable target `content/posts/practice-eliminating-streaming-video.md`") {
 		t.Fatalf("prompt = %q, did not want single-file target guidance for batch outputs", prompt)
