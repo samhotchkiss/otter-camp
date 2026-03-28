@@ -116,6 +116,9 @@ type QueueDecomposition struct {
 func Analyze(title string, description *string) Plan {
 	trimmedTitle := strings.TrimSpace(title)
 	rawDescription := strings.TrimSpace(deref(description))
+	if descriptionForbidsDecomposition(rawDescription) {
+		return Plan{}
+	}
 
 	titleDriven := titleSuggestsCompoundBoundedWork(trimmedTitle)
 	deliverables := extractDeliverables(rawDescription)
@@ -676,7 +679,15 @@ func extractDeliverables(description string) []string {
 	lines := strings.Split(description, "\n")
 	if len(lines) > 1 {
 		currentSection := ""
+		inCodeFence := false
 		for _, line := range lines {
+			if togglesCodeFence(line) {
+				inCodeFence = !inCodeFence
+				continue
+			}
+			if inCodeFence {
+				continue
+			}
 			if heading, ok := descriptionSectionHeading(line); ok {
 				currentSection = heading
 				continue
@@ -727,11 +738,40 @@ func extractDeliverables(description string) []string {
 
 func descriptionSectionHeading(raw string) (string, bool) {
 	normalized := normalizeDescriptionSectionHeading(raw)
-	switch normalized {
-	case "objective", "deliverable", "deliverables", "output", "outputs",
-		"step", "steps", "instruction", "instructions", "process", "procedure",
-		"implementation", "important", "note", "notes", "requirements", "constraints":
-		return normalized, true
+	switch {
+	case normalized == "objective" || strings.HasSuffix(normalized, " objective"):
+		return "objective", true
+	case normalized == "deliverable" || normalized == "deliverables" ||
+		strings.HasSuffix(normalized, " deliverable") || strings.HasSuffix(normalized, " deliverables"):
+		return "deliverables", true
+	case normalized == "output" || normalized == "outputs" ||
+		strings.HasSuffix(normalized, " output") || strings.HasSuffix(normalized, " outputs"):
+		return "outputs", true
+	case normalized == "step" || normalized == "steps" ||
+		strings.HasSuffix(normalized, " step") || strings.HasSuffix(normalized, " steps"):
+		return "steps", true
+	case normalized == "instruction" || normalized == "instructions" ||
+		strings.HasSuffix(normalized, " instruction") || strings.HasSuffix(normalized, " instructions"):
+		return "instructions", true
+	case normalized == "process" || normalized == "procedure" ||
+		strings.HasSuffix(normalized, " process") || strings.HasSuffix(normalized, " procedure"):
+		return "procedure", true
+	case normalized == "implementation" || strings.HasSuffix(normalized, " implementation"):
+		return "implementation", true
+	case normalized == "important" || strings.HasSuffix(normalized, " important"):
+		return "important", true
+	case normalized == "rule" || normalized == "rules" ||
+		strings.HasSuffix(normalized, " rule") || strings.HasSuffix(normalized, " rules"):
+		return "rules", true
+	case normalized == "note" || normalized == "notes" ||
+		strings.HasSuffix(normalized, " note") || strings.HasSuffix(normalized, " notes"):
+		return "notes", true
+	case normalized == "requirement" || normalized == "requirements" ||
+		strings.HasSuffix(normalized, " requirement") || strings.HasSuffix(normalized, " requirements"):
+		return "requirements", true
+	case normalized == "constraint" || normalized == "constraints" ||
+		strings.HasSuffix(normalized, " constraint") || strings.HasSuffix(normalized, " constraints"):
+		return "constraints", true
 	default:
 		return "", false
 	}
@@ -754,11 +794,36 @@ func normalizeDescriptionSectionHeading(raw string) string {
 func sectionSkipsDeliverables(section string) bool {
 	switch section {
 	case "step", "steps", "instruction", "instructions", "process", "procedure",
-		"implementation", "important", "note", "notes", "requirements", "constraints":
+		"implementation", "important", "rule", "rules", "note", "notes", "requirements", "constraints":
 		return true
 	default:
 		return false
 	}
+}
+
+func togglesCodeFence(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	return strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")
+}
+
+func descriptionForbidsDecomposition(raw string) bool {
+	normalized := strings.ToLower(strings.Join(strings.Fields(raw), " "))
+	if normalized == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"do not decompose this task into subtasks",
+		"do not decompose this task",
+		"do not split this task into subtasks",
+		"do not split into subtasks",
+		"execute it directly in a single session",
+		"execute this directly in a single session",
+	} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func isInstructionOnlyDeliverable(normalized string) bool {

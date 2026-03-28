@@ -2733,6 +2733,66 @@ func TestTaskServiceIntegrationQueueAllowsSingleConcreteTemplateWithRequirements
 	}
 }
 
+func TestTaskServiceIntegrationQueueAllowsConcreteCrawlerTaskWithExactStepsAndNoDecompose(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	description := strings.Join([]string{
+		"## Objective",
+		"Produce the file `content/technonymous-index.json` containing an array of all blog post URLs found on technonymous.org.",
+		"",
+		"## Exact Steps",
+		"1. Use `browser_navigate` to go to `https://technonymous.org`",
+		"2. Use `browser_extract_text` to get the page content and identify post links",
+		"3. If there is pagination or archive pages, follow those links to find all posts",
+		"4. Collect every unique blog post URL (not category/tag/about pages — only actual posts)",
+		"5. Write the file `content/technonymous-index.json` using `cli_execute` with python3:",
+		"```",
+		"python3 -c \"",
+		"import os, json",
+		"os.makedirs('content', exist_ok=True)",
+		"urls = [... all discovered URLs ...]",
+		"with open('content/technonymous-index.json', 'w') as f:",
+		"    json.dump(urls, f, indent=2)",
+		"print('Written', len(urls), 'URLs')",
+		"\"",
+		"```",
+		"6. Verify the file exists with `cli_execute` running `cat content/technonymous-index.json`",
+		"7. Commit and advance.",
+		"",
+		"## Critical Rules",
+		"- Do NOT produce planning artifacts. The ONLY deliverable is the JSON file.",
+		"- If `file_write` fails or gets redirected, use `cli_execute` with python3 as shown above.",
+		"- The JSON file must be an array of URL strings, e.g.: `[\"https://technonymous.org/post-1\", \"https://technonymous.org/post-2\", ...]`",
+		"- Do NOT decompose this task into subtasks. Execute it directly in a single session.",
+	}, "\n")
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Crawl technonymous.org homepage and write content/technonymous-index.json with all post URLs",
+		Description:    &description,
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	queued, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus queued err = %v, want nil", err)
+	}
+	if got := strings.TrimSpace(queued.WorkStatus); !strings.EqualFold(got, "queued") {
+		t.Fatalf("queued.WorkStatus = %q, want queued", got)
+	}
+	if parentID := taskdecomp.ParseParentTaskID(queued.Metadata); parentID != uuid.Nil {
+		t.Fatalf("queued task unexpectedly has decomposition_parent_task_id = %s", parentID)
+	}
+}
+
 func newTaskIntegrationService(t *testing.T, pool *pgxpool.Pool) TaskService {
 	t.Helper()
 	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})

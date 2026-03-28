@@ -743,6 +743,92 @@ func TestPrepareQueueDecompositionSkipsSingleConcreteTemplateWithRequirements(t 
 	}
 }
 
+func TestExtractDeliverablesIgnoresExactStepsCriticalRulesAndCodeFence(t *testing.T) {
+	description := strings.Join([]string{
+		"## Objective",
+		"Produce the file `content/technonymous-index.json` containing an array of all blog post URLs found on technonymous.org.",
+		"",
+		"## Exact Steps",
+		"1. Use `browser_navigate` to go to `https://technonymous.org`",
+		"2. Use `browser_extract_text` to get the page content and identify post links",
+		"3. If there is pagination or archive pages, follow those links to find all posts",
+		"4. Collect every unique blog post URL (not category/tag/about pages — only actual posts)",
+		"5. Write the file `content/technonymous-index.json` using `cli_execute` with python3:",
+		"```",
+		"python3 -c \"",
+		"import os, json",
+		"os.makedirs('content', exist_ok=True)",
+		"urls = [... all discovered URLs ...]",
+		"with open('content/technonymous-index.json', 'w') as f:",
+		"    json.dump(urls, f, indent=2)",
+		"print('Written', len(urls), 'URLs')",
+		"\"",
+		"```",
+		"6. Verify the file exists with `cli_execute` running `cat content/technonymous-index.json`",
+		"7. Commit and advance.",
+		"",
+		"## Critical Rules",
+		"- Do NOT produce planning artifacts. The ONLY deliverable is the JSON file.",
+		"- If `file_write` fails or gets redirected, use `cli_execute` with python3 as shown above.",
+		"- The JSON file must be an array of URL strings, e.g.: `[\"https://technonymous.org/post-1\", \"https://technonymous.org/post-2\", ...]`",
+		"- Do NOT decompose this task into subtasks. Execute it directly in a single session.",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	want := []string{"Produce the file content/technonymous-index.json containing an array of all blog post URLs found on technonymous.org."}
+	if !reflect.DeepEqual(items, want) {
+		t.Fatalf("extractDeliverables() = %v, want %v", items, want)
+	}
+}
+
+func TestPrepareQueueDecompositionSkipsConcreteDeliverableWithExactStepsAndNoDecompose(t *testing.T) {
+	description := strings.Join([]string{
+		"## Objective",
+		"Produce the file `content/technonymous-index.json` containing an array of all blog post URLs found on technonymous.org.",
+		"",
+		"## Exact Steps",
+		"1. Use `browser_navigate` to go to `https://technonymous.org`",
+		"2. Use `browser_extract_text` to get the page content and identify post links",
+		"3. If there is pagination or archive pages, follow those links to find all posts",
+		"4. Collect every unique blog post URL (not category/tag/about pages — only actual posts)",
+		"5. Write the file `content/technonymous-index.json` using `cli_execute` with python3:",
+		"```",
+		"python3 -c \"",
+		"import os, json",
+		"os.makedirs('content', exist_ok=True)",
+		"urls = [... all discovered URLs ...]",
+		"with open('content/technonymous-index.json', 'w') as f:",
+		"    json.dump(urls, f, indent=2)",
+		"print('Written', len(urls), 'URLs')",
+		"\"",
+		"```",
+		"6. Verify the file exists with `cli_execute` running `cat content/technonymous-index.json`",
+		"7. Commit and advance.",
+		"",
+		"## Critical Rules",
+		"- Do NOT produce planning artifacts. The ONLY deliverable is the JSON file.",
+		"- If `file_write` fails or gets redirected, use `cli_execute` with python3 as shown above.",
+		"- The JSON file must be an array of URL strings, e.g.: `[\"https://technonymous.org/post-1\", \"https://technonymous.org/post-2\", ...]`",
+		"- Do NOT decompose this task into subtasks. Execute it directly in a single session.",
+	}, "\n")
+
+	result, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        "Crawl technonymous.org homepage and write content/technonymous-index.json with all post URLs",
+		Description:  &description,
+		Metadata:     json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("PrepareQueueDecomposition: %v", err)
+	}
+	if result.Applied {
+		t.Fatalf("Applied = true, want false for explicit no-decompose concrete deliverable: %+v", result)
+	}
+	if len(result.ChildDrafts) != 0 {
+		t.Fatalf("ChildDrafts len = %d, want 0", len(result.ChildDrafts))
+	}
+}
+
 func TestExtractDeliverablesIgnoresInstructionOnlyRequirementLines(t *testing.T) {
 	description := strings.Join([]string{
 		"- Design and build layout templates 1-3 as self-contained HTML files with embedded CSS",
