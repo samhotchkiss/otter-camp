@@ -32477,6 +32477,52 @@ func TestRecoverySynthesizedFileWriteTargetPathPrefersSessionDeliverableTargetOv
 	}
 }
 
+func TestRecoverySynthesizedFileWriteTargetPathPrefersExplicitRecoveryTargetOverBatchSessionDeliverable(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	description := "Read content/technonymous-index.json. For each of the first 12 URLs in the post_urls array, save clean markdown files under content/posts/."
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:          taskID,
+			TaskNumber:  61,
+			Title:       "Fetch posts 1-12 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+			Description: &description,
+			WorkStatus:  "blocked",
+			Metadata: mustRawJSON(t, map[string]any{
+				"content_migration_checkpoint": map[string]any{
+					"version": 1,
+					"outputs": []map[string]any{
+						{"path": "content/posts/you-havent-had-to-wonder-about-anything.md"},
+						{"path": "content/posts/yonderosa-and-the-art-of-having-fun.md"},
+					},
+				},
+			}),
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn:       true,
+		recoveryTargetPath: "content/posts/stop-preparing-your-kids-for-jobs.md",
+	}
+
+	if got := fixture.engine.recoverySynthesizedFileWriteTargetPath(context.Background(), rt); got != "content/posts/stop-preparing-your-kids-for-jobs.md" {
+		t.Fatalf("recoverySynthesizedFileWriteTargetPath(...) = %q, want explicit recovery target", got)
+	}
+}
+
 func TestHandleTaskFileWriteWrongPathSkipsCrossArtifactFamilyRewrite(t *testing.T) {
 	t.Parallel()
 
@@ -32878,6 +32924,71 @@ func TestHandleTaskFileWriteWrongPathAllowsBatchWritesWithinPreferredDeliverable
 	}
 	if _, exists := call.Arguments["create_dirs"]; exists {
 		t.Fatalf("create_dirs = %v, want absent when rewrite is skipped", call.Arguments["create_dirs"])
+	}
+}
+
+func TestHandleTaskFileWriteWrongPathPrefersRecoveryTargetDuringRecoveryTurn(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+	description := "Read content/technonymous-index.json. For each of the first 12 URLs in the post_urls array, save clean markdown files under content/posts/."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:          taskID,
+			TaskNumber:  61,
+			Title:       "Fetch posts 1-12 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+			Description: &description,
+			WorkStatus:  "blocked",
+			Metadata: mustRawJSON(t, map[string]any{
+				"content_migration_checkpoint": map[string]any{
+					"version": 1,
+					"outputs": []map[string]any{
+						{"path": "content/posts/you-havent-had-to-wonder-about-anything.md"},
+						{"path": "content/posts/yonderosa-and-the-art-of-having-fun.md"},
+					},
+				},
+			}),
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn:       true,
+		recoveryTargetPath: "content/posts/stop-preparing-your-kids-for-jobs.md",
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    "content/posts/you-havent-had-to-wonder-about-anything.md",
+			"content": "# Stop Preparing Your Kids for Jobs\n",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWrongPath(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWrongPath: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["path"]); got != "content/posts/stop-preparing-your-kids-for-jobs.md" {
+		t.Fatalf("path = %q, want recovery target path", got)
+	}
+	if got, ok := call.Arguments["create_dirs"].(bool); !ok || !got {
+		t.Fatalf("create_dirs = %v, want true", call.Arguments["create_dirs"])
 	}
 }
 

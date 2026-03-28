@@ -1078,3 +1078,25 @@
   - result:
     - batch review/recovery lanes stay on the actual deliverable root instead of snapping back to the dependency artifact
     - the next live seam is now review completion efficiency, not dependency-target drift
+- 2026-03-28 12:11:30 MDT - prefer explicit recovery targets over batch session deliverables during recovery file-write repair
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `handleTaskFileWriteWrongPath(...)` now prefers `rt.recoveryTargetPath` and the active recovery checkpoint before batch/session deliverable heuristics on recovery turns
+    - the batch-root write exemption now only applies to non-recovery turns, so recovery resumes cannot silently treat a sibling batch output as already acceptable
+    - `recoverySynthesizedFileWriteTargetPath(...)` now returns `rt.recoveryTargetPath` first when the active recovery turn already carries an explicit target file
+    - this fixes the path used by `handleRecoveryRejectedFileWriteContent(...)`, which had still been canonicalizing checkpoint-path writes onto the first batch session deliverable instead of the named recovery target
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestRecoverySynthesizedFileWriteTargetPathPrefersExplicitRecoveryTargetOverBatchSessionDeliverable`
+    - kept the recovery-turn path rewrite regression `TestHandleTaskFileWriteWrongPathPrefersRecoveryTargetDuringRecoveryTurn`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `go test ./internal/turn -run 'Test(RecoverySynthesizedFileWriteTargetPath(PrefersExplicitRecoveryTargetOverBatchSessionDeliverable|PrefersSessionDeliverableTargetOverInferredReportPath)|HandleTaskFileWriteWrongPath(PrefersRecoveryTargetDuringRecoveryTurn|AllowsBatchWritesWithinPreferredDeliverableRoot)|NormalizeRecoveryCheckpointTargetForTaskClearsDependencyArtifactOutsidePreferredDeliverableRoot)$' -count=1`
+  - deploy state:
+    - rebuilt and restarted tmux `codex-e2e-20260324`
+    - `./bin/ottercamp health --output json` returned `data.status=ok`
+  - fresh live proof on task `61`:
+    - pre-fix recovery session `741ebe25-8571-4274-af6b-b6fa5c7ff40d` still showed repeated checkpoint-path writes being rewritten to sibling file `content/posts/you-havent-had-to-wonder-about-anything.md` at tool results `42`, `49`, `53`, and `55`
+    - first fresh post-restart recovery turn in new session `0e26ba9c-54df-442f-afc3-a27851aeac9f` kept the same assistant checkpoint-path write attempt at message `58`, but tool result `59` now landed on the correct recovery target `content/posts/stop-preparing-your-kids-for-jobs.md`
+    - the task advanced from `in_progress` back to `review` on the new session instead of continuing the wrong-file recovery churn
+  - result:
+    - explicit recovery turns now repair the named target file rather than a sibling checkpoint output
+    - the remaining cost center is review completion / decision efficiency, not recovery target drift

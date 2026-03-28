@@ -15091,7 +15091,18 @@ func (e *TurnEngine) handleTaskFileWriteWrongPath(ctx context.Context, rt *turnR
 		}
 		return false, false, err
 	}
-	targetPath := normalizeTurnWorkspacePath(e.sessionTaskDeliverablePath(ctx, rt.session.ID, taskRecord))
+	targetPath := ""
+	if rt.recoveryTurn {
+		targetPath = normalizeTurnWorkspacePath(rt.recoveryTargetPath)
+		if targetPath == "" {
+			if checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt); ok {
+				targetPath = normalizeTurnWorkspacePath(checkpoint.TargetPath)
+			}
+		}
+	}
+	if targetPath == "" {
+		targetPath = normalizeTurnWorkspacePath(e.sessionTaskDeliverablePath(ctx, rt.session.ID, taskRecord))
+	}
 	if targetPath == "" {
 		if checkpoint, ok := e.recoveryFileWriteCheckpointCandidate(ctx, rt, ""); ok {
 			targetPath = normalizeTurnWorkspacePath(checkpoint.TargetPath)
@@ -15109,10 +15120,13 @@ func (e *TurnEngine) handleTaskFileWriteWrongPath(ctx context.Context, rt *turnR
 	if attemptedPath == "" {
 		return false, false, nil
 	}
-	if preferredRoot := normalizeTurnWorkspacePath(preferredTaskDeliverableRoot(taskRecord)); preferredRoot != "" &&
-		taskAllowsWritesWithinPreferredDeliverableRoot(taskRecord) &&
-		sameOrNestedTurnWorkspacePath(attemptedPath, preferredRoot) {
-		return false, false, nil
+	if !rt.recoveryTurn {
+		preferredRoot := normalizeTurnWorkspacePath(preferredTaskDeliverableRoot(taskRecord))
+		if preferredRoot != "" &&
+			taskAllowsWritesWithinPreferredDeliverableRoot(taskRecord) &&
+			sameOrNestedTurnWorkspacePath(attemptedPath, preferredRoot) {
+			return false, false, nil
+		}
 	}
 	if sameOrNestedTurnWorkspacePath(attemptedPath, targetPath) {
 		return false, false, nil
@@ -15857,6 +15871,12 @@ func recoveryToolCallsAreReadOnlyDiscovery(toolCalls []ModelToolCall) bool {
 }
 
 func (e *TurnEngine) recoverySynthesizedFileWriteTargetPath(ctx context.Context, rt *turnRuntime) string {
+	if rt != nil {
+		if targetPath := normalizeTurnWorkspacePath(rt.recoveryTargetPath); targetPath != "" &&
+			looksLikeExplicitDeliverablePath(targetPath, targetPath) {
+			return targetPath
+		}
+	}
 	if taskRecord, ok := e.recoveryCheckpointTaskRecord(ctx, rt); ok {
 		if checkpoint, checkpointOK := e.currentRecoveryFileWriteCheckpoint(ctx, rt); checkpointOK {
 			if rawTargetPath := normalizeTurnWorkspacePath(checkpoint.TargetPath); rawTargetPath != "" &&
