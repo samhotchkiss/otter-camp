@@ -660,3 +660,25 @@
   - deployed by rebuilding `./bin/ottercamp`, restarting tmux `codex-e2e-20260324`, and confirming `./bin/ottercamp health --output json` returned `status=ok`
   - live diagnosis behind the fix: task-56 retry turn `a826ec5e-bf3d-408b-8ee4-67e1782f1b0f` had a fresh root-aware prompt at message `51` and assistant response at message `52`, but the next guard error at message `53` still referenced `content/technonymous-index.json`, proving the runtime state had not been refreshed to the new prompt
   - fresh post-deploy production proof is pending because tasks `56` and `57` had already drained to `blocked` with no active session after the restart, so there was no immediate retry on the corrected binary
+- 2026-03-28 06:24:00 MDT - make duplicate-successful file.write retry guidance path-specific for ordinary async task turns
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `buildValidationLoopTurnStopSystemMessage(...)` now emits path-aware guidance for `duplicate_successful_write_churn`
+  - added `repeatedSuccessfulFileWriteChurnTargetPath(...)` so the system message can extract the concrete written path from the validation reason
+  - the new message tells the next continuation that the prior write to that path already returned success, must not troubleshoot `file.write`, and must not start by rewriting that same path again
+  - updated [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) so `TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdIdenticalSuccessfulFileWriteInSameTurn` now asserts the new path-specific retry guidance
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdIdenticalSuccessfulFileWriteInSameTurn$' -count=1`
+  - live diagnosis behind the fix: task-56 session `589c5986-b952-4d00-a1d9-65cf9730a59d` ended one turn after three identical successful rewrites of `content/posts/stop-preparing-your-kids-for-jobs.md`, but the immediate retry still opened with `The file_write tool isn't accepting content in this session context`, which showed the old early-stop message was too vague
+  - fresh post-deploy production proof is pending because that retry had already started on the old wording before this patch landed
+- 2026-03-28 06:47:14 MDT - block PM parent-scoped child inspection for named leaf tasks
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so project-continuation snapshots now emit `Active leaf tasks already have no child tasks to inspect:` with `leaf_task_id=...` markers, and so `shouldBlockProjectContinuationSnapshotRediscoveryTool(...)` now rejects `task.list(parent_task_id=...)` when that parent task is already named as a leaf in the prompt
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) so worker-authored project-continuation prompts include the same leaf-task snapshot line and matching guidance, keeping worker recovery prompts aligned with turn-engine prompts
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - `TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksLeafParentScopedTaskList`
+    - widened `TestBuildProjectExecutionContinuationPrompt`
+  - added focused coverage in [`internal/jobqueue/worker_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_test.go):
+    - `TestBuildProjectExecutionContinuationPromptForWorkerIncludesLeafTaskGuidance`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksLeafParentScopedTaskList|ShouldNotBlockProjectContinuationSnapshotRediscoveryToolForParentScopedTaskList|BuildProjectExecutionContinuationPrompt)$' -count=1`
+    - `GOFLAGS='' go test ./internal/jobqueue -run 'TestBuildProjectExecutionContinuationPromptForWorkerIncludes(BlockerReuseGuidance|LeafTaskGuidance)$' -count=1`
+  - live diagnosis behind the fix: Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` was still spending a tool call on `task.list(parent_task_id=task56)` even though the continuation prompt already knew task `56` was the active leaf lane
+  - fresh post-deploy production proof is pending the next PM continuation turn on the new binary

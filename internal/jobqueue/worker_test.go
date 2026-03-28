@@ -66,6 +66,21 @@ func TestBuildProjectExecutionContinuationPromptForWorkerIncludesBlockerReuseGui
 	}
 }
 
+func TestBuildProjectExecutionContinuationPromptForWorkerIncludesLeafTaskGuidance(t *testing.T) {
+	prompt := buildProjectExecutionContinuationPromptForWorker(56, "Import post", 0, projectExecutionContinuationSnapshotForWorker{
+		ProjectLine:        "Active project id: 123",
+		ActiveTaskLine:     "Already-active non-terminal tasks in the tree: task 56 (Import post) id=aaa title=\"Import post\" work_status=in_progress deliverable_path=content/posts/post.md",
+		LeafActiveTaskLine: "Active leaf tasks already have no child tasks to inspect: task 56 (Import post) leaf_task_id=aaa",
+	})
+
+	if !strings.Contains(prompt, "Active leaf tasks already have no child tasks to inspect:") {
+		t.Fatalf("prompt = %q, want leaf-task snapshot", prompt)
+	}
+	if !strings.Contains(prompt, "Do not call task.list(parent_task_id=...) for those named leaf tasks") {
+		t.Fatalf("prompt = %q, want leaf-task guidance", prompt)
+	}
+}
+
 func TestBuildProjectContinuationTaskHintsForWorkerIncludesDeliverableAndDependencyHints(t *testing.T) {
 	indexDescription := "Crawl technonymous.org archive pages and build post URL index. Output a JSON index at content/technonymous-index.json with title, URL, and date for each post."
 	scrapeDescription := "Scrape and import technonymous.org posts from the URL index under content/posts/"

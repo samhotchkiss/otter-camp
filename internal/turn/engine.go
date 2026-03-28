@@ -168,6 +168,7 @@ const (
 )
 
 var projectContinuationPromptTaskIDPattern = regexp.MustCompile(`id=([0-9a-fA-F-]{36})`)
+var projectContinuationPromptLeafTaskIDPattern = regexp.MustCompile(`leaf_task_id=([0-9a-fA-F-]{36})`)
 var projectContinuationPromptDependencyPathPattern = regexp.MustCompile(`(?:depends_on_path|deliverable_path)=([^\s]+)`)
 var projectContinuationWorkspacePathPattern = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\b`)
 var explicitDeliverablePathPatterns = []*regexp.Regexp{
@@ -7256,6 +7257,10 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		if strings.Contains(activeLine, "depends_on_path=") {
 			lines = append(lines, "If a named active task above already shows depends_on_path=..., inspect that prerequisite artifact first instead of broad search.")
 		}
+	}
+	if leafLine := strings.TrimSpace(snapshot.LeafActiveTaskLine); leafLine != "" {
+		lines = append(lines, leafLine)
+		lines = append(lines, "Do not call task.list(parent_task_id=...) for those named leaf tasks. They already have no child tasks to inspect, so act on the task's exact deliverable or blocker instead.")
 	}
 	if draftLine := strings.TrimSpace(snapshot.DraftTaskLine); draftLine != "" {
 		lines = append(lines, draftLine)
@@ -17227,6 +17232,7 @@ func buildTaskContinuationActionPrompt(summary string, snapshot taskExecutionCon
 type projectExecutionContinuationSnapshot struct {
 	ProjectLine          string
 	ActiveTaskLine       string
+	LeafActiveTaskLine   string
 	DraftTaskLine        string
 	ChildActiveDraftLine string
 	FocusTaskLine        string
@@ -17280,6 +17286,7 @@ func buildProjectExecutionContinuationSnapshot(
 ) (projectExecutionContinuationSnapshot, bool) {
 	snapshot := projectExecutionContinuationSnapshot{}
 	activeTasks := make([]string, 0, 4)
+	leafActiveTasks := make([]string, 0, 4)
 	draftTasks := make([]string, 0, 4)
 	childActiveDraftTasks := make([]string, 0, 4)
 	childActivity := projectContinuationChildTaskActivity(projectTasks)
@@ -17322,9 +17329,15 @@ func buildProjectExecutionContinuationSnapshot(
 		if len(activeTasks) < 4 {
 			activeTasks = append(activeTasks, taskRef)
 		}
+		if activity.childTaskCount == 0 && len(leafActiveTasks) < 4 {
+			leafActiveTasks = append(leafActiveTasks, fmt.Sprintf("%s leaf_task_id=%s", projectBootstrapTaskLabel(task), task.ID.String()))
+		}
 	}
 	if len(activeTasks) > 0 {
 		snapshot.ActiveTaskLine = "Already-active non-terminal tasks in the tree: " + strings.Join(activeTasks, "; ")
+	}
+	if len(leafActiveTasks) > 0 {
+		snapshot.LeafActiveTaskLine = "Active leaf tasks already have no child tasks to inspect: " + strings.Join(leafActiveTasks, "; ")
 	}
 	if len(draftTasks) > 0 {
 		snapshot.DraftTaskLine = "Actionable draft tasks already in the tree: " + strings.Join(draftTasks, "; ")
@@ -23010,7 +23023,11 @@ func buildValidationLoopTurnStopSystemMessage(state taskValidationGuardState) st
 	}
 	toolName := strings.TrimSpace(state.ToolName)
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateSuccessfulFileWriteChurnCode) {
-		return fmt.Sprintf("[Repeated identical successful file.write churn in this turn (%d/%d): %s. Ending the turn early so the next continuation can take a narrower step.]", state.Count, validationLoopBlockThreshold, reason)
+		targetPath := repeatedSuccessfulFileWriteChurnTargetPath(reason)
+		if targetPath != "" {
+			return fmt.Sprintf("[Repeated identical successful file.write churn in this turn (%d/%d): %s. The prior write to `%s` already returned success. Do not troubleshoot `file.write` or immediately rewrite `%s` again as the first step in the next continuation. Continue with the next unresolved target instead, or make one bounded verification read of `%s` before any materially different update if verification is strictly necessary.]", state.Count, validationLoopBlockThreshold, reason, targetPath, targetPath, targetPath)
+		}
+		return fmt.Sprintf("[Repeated identical successful file.write churn in this turn (%d/%d): %s. The prior write already returned success. Do not troubleshoot `file.write` in the next continuation; continue with the next unresolved target or make one bounded verification read before any materially different update.]", state.Count, validationLoopBlockThreshold, reason)
 	}
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateRedirectedFileWriteChurnCode) {
 		return fmt.Sprintf("[Repeated redirected file.write churn in this turn (%d/%d): %s. Ending the turn early so the next continuation writes the deliverable directly instead of staging more helper files.]", state.Count, validationLoopBlockThreshold, reason)
@@ -23034,6 +23051,24 @@ func buildValidationLoopTurnStopSystemMessage(state taskValidationGuardState) st
 		return fmt.Sprintf("[Repeated identical tool validation failure in this turn (%d/%d): %s. Ending the turn early so the next continuation can take a narrower step.]", state.Count, validationLoopBlockThreshold, reason)
 	}
 	return fmt.Sprintf("[Repeated identical %s validation failure in this turn (%d/%d): %s. Ending the turn early so the next continuation can take a narrower step.]", toolName, state.Count, validationLoopBlockThreshold, reason)
+}
+
+func repeatedSuccessfulFileWriteChurnTargetPath(reason string) string {
+	trimmed := strings.TrimSpace(reason)
+	if trimmed == "" {
+		return ""
+	}
+	const prefix = "repeated successful file.write rewrote `"
+	start := strings.Index(trimmed, prefix)
+	if start < 0 {
+		return ""
+	}
+	remainder := trimmed[start+len(prefix):]
+	end := strings.Index(remainder, "`")
+	if end <= 0 {
+		return ""
+	}
+	return normalizeWorkspaceRelativePath(remainder[:end])
 }
 
 func buildValidationLoopSystemMessage(state taskValidationGuardState) string {
@@ -26408,7 +26443,15 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 		}
 		return true, buildProjectContinuationSnapshotFlowTemplateRediscoveryGuardError(toolName)
 	case "task.list":
-		if strings.TrimSpace(stringValue(arguments["parent_task_id"])) != "" {
+		if parentTaskIDText := strings.TrimSpace(stringValue(arguments["parent_task_id"])); parentTaskIDText != "" {
+			parentTaskID, err := uuid.Parse(parentTaskIDText)
+			if err != nil || parentTaskID == uuid.Nil {
+				return false, ""
+			}
+			leafTaskIDs := projectContinuationPromptLeafTaskIDs(initialMessage)
+			if _, ok := leafTaskIDs[parentTaskID]; ok {
+				return true, buildProjectContinuationSnapshotLeafTaskRediscoveryGuardError(parentTaskID)
+			}
 			return false, ""
 		}
 		return true, buildProjectContinuationSnapshotRediscoveryGuardError(toolName, uuid.Nil)
@@ -26461,6 +26504,25 @@ func projectContinuationPromptNamedTaskIDs(initialMessage string) map[uuid.UUID]
 	return ids
 }
 
+func projectContinuationPromptLeafTaskIDs(initialMessage string) map[uuid.UUID]struct{} {
+	matches := projectContinuationPromptLeafTaskIDPattern.FindAllStringSubmatch(initialMessage, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	ids := make(map[uuid.UUID]struct{}, len(matches))
+	for _, match := range matches {
+		if len(match) != 2 {
+			continue
+		}
+		taskID, err := uuid.Parse(strings.TrimSpace(match[1]))
+		if err != nil || taskID == uuid.Nil {
+			continue
+		}
+		ids[taskID] = struct{}{}
+	}
+	return ids
+}
+
 func buildProjectContinuationSnapshotRediscoveryGuardError(toolName string, taskID uuid.UUID) string {
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "project.get", "project.list":
@@ -26475,6 +26537,10 @@ func buildProjectContinuationSnapshotRediscoveryGuardError(toolName string, task
 	default:
 		return "project continuation already has the necessary project snapshot in the continuation prompt. Do not reread the broader project task tree first."
 	}
+}
+
+func buildProjectContinuationSnapshotLeafTaskRediscoveryGuardError(taskID uuid.UUID) string {
+	return fmt.Sprintf("project continuation already named task id=%s as a leaf task with no child tasks to inspect. Do not call task.list(parent_task_id=...) for that task; act on its exact deliverable or blocker instead.", taskID.String())
 }
 
 func buildProjectContinuationSnapshotSessionRediscoveryGuardError(toolName string) string {

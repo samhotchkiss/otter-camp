@@ -10432,6 +10432,35 @@ func TestShouldNotBlockProjectContinuationSnapshotRediscoveryToolForParentScoped
 	}
 }
 
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksLeafParentScopedTaskList(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	leafTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:        "Active project id: " + projectID.String(),
+			ActiveTaskLine:     "Already-active non-terminal tasks in the tree: task 56 (Import post) id=" + leafTaskID.String() + " title=\"Import post\" work_status=in_progress deliverable_path=content/posts/post.md",
+			LeafActiveTaskLine: "Active leaf tasks already have no child tasks to inspect: task 56 (Import post) leaf_task_id=" + leafTaskID.String(),
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "task.list", map[string]any{
+		"parent_task_id": leafTaskID.String(),
+	})
+	if !blocked {
+		t.Fatal("expected parent-scoped task.list to be blocked once the continuation prompt already names that active task as a leaf")
+	}
+	if !strings.Contains(reason, "leaf task with no child tasks to inspect") {
+		t.Fatalf("reason = %q, want leaf-task guidance", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationDependencyFocusedTaskCreateBlocksUnrelatedTopLevelTask(t *testing.T) {
 	t.Parallel()
 
@@ -18411,6 +18440,7 @@ func TestBuildProjectExecutionContinuationPrompt(t *testing.T) {
 	prompt := buildProjectExecutionContinuationPrompt(task, 4, projectExecutionContinuationSnapshot{
 		ProjectLine:          "Active project id: 123",
 		ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 16 (Validate API) id=aaa title=\"Validate API\" work_status=in_progress assigned_agent_id=worker-1",
+		LeafActiveTaskLine:   "Active leaf tasks already have no child tasks to inspect: task 16 (Validate API) leaf_task_id=aaa",
 		DraftTaskLine:        "Actionable draft tasks already in the tree: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft assigned_agent_id=missing flow_template_id=missing",
 		ChildActiveDraftLine: "Draft parent tasks already have child work: task 21 (Theme rollout) id=ccc title=\"Theme rollout\" work_status=draft assigned_agent_id=missing flow_template_id=missing active_child_tasks=2",
 		FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft assigned_agent_id=missing flow_template_id=missing",
@@ -18445,6 +18475,12 @@ func TestBuildProjectExecutionContinuationPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Do not begin with session.list, task.list, task.get, file.list on the workspace root, git.log, or git.status") {
 		t.Fatalf("prompt = %q, want active-task anti-rediscovery guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Active leaf tasks already have no child tasks to inspect:") {
+		t.Fatalf("prompt = %q, want leaf-task snapshot", prompt)
+	}
+	if !strings.Contains(prompt, "Do not call task.list(parent_task_id=...) for those named leaf tasks") {
+		t.Fatalf("prompt = %q, want leaf-task anti-rediscovery guidance", prompt)
 	}
 	if !strings.Contains(prompt, "Actionable draft tasks already in the tree:") {
 		t.Fatalf("prompt = %q, want draft-task snapshot", prompt)
@@ -25057,6 +25093,12 @@ func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdIdenticalSuccess
 	}
 	if !fixture.messages.containsContentSubstring("Repeated identical successful file.write churn in this turn") {
 		t.Fatal("expected repeated successful file.write churn early-stop validation message")
+	}
+	if !fixture.messages.containsContentSubstring("Do not troubleshoot `file.write`") {
+		t.Fatal("expected repeated successful file.write churn message to block file.write troubleshooting on retry")
+	}
+	if !fixture.messages.containsContentSubstring("Do not troubleshoot `file.write` or immediately rewrite `config/pipeline-config-invalid.yaml` again as the first step") {
+		t.Fatal("expected repeated successful file.write churn message to include path-specific retry guidance")
 	}
 }
 

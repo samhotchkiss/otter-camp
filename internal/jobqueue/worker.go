@@ -2607,6 +2607,7 @@ func looksLikeProjectContinuationMetaDraftForWorker(title string, description *s
 type projectExecutionContinuationSnapshotForWorker struct {
 	ProjectLine          string
 	ActiveTaskLine       string
+	LeafActiveTaskLine   string
 	DraftTaskLine        string
 	ChildActiveDraftLine string
 	FocusTaskLine        string
@@ -2648,6 +2649,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 	childActivity := projectContinuationChildTaskActivityForWorker(projectTasks)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDsForWorker(projectTasks)
 	activeTasks := make([]string, 0, 4)
+	leafActiveTasks := make([]string, 0, 4)
 	draftTasks := make([]string, 0, 4)
 	childActiveDraftTasks := make([]string, 0, 4)
 	focusTask := ""
@@ -2679,9 +2681,15 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 		if len(activeTasks) < 4 {
 			activeTasks = append(activeTasks, taskRef)
 		}
+		if activity.childTaskCount == 0 && len(leafActiveTasks) < 4 {
+			leafActiveTasks = append(leafActiveTasks, fmt.Sprintf("%s leaf_task_id=%s", projectTaskLabelForWorker(task), task.ID.String()))
+		}
 	}
 	if len(activeTasks) > 0 {
 		snapshot.ActiveTaskLine = "Already-active non-terminal tasks in the tree: " + strings.Join(activeTasks, "; ")
+	}
+	if len(leafActiveTasks) > 0 {
+		snapshot.LeafActiveTaskLine = "Active leaf tasks already have no child tasks to inspect: " + strings.Join(leafActiveTasks, "; ")
 	}
 	if len(draftTasks) > 0 {
 		snapshot.DraftTaskLine = "Actionable draft tasks already in the tree: " + strings.Join(draftTasks, "; ")
@@ -3110,6 +3118,10 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 		if strings.Contains(activeLine, "depends_on_path=") {
 			lines = append(lines, "If a named active task above already shows depends_on_path=..., inspect that prerequisite artifact first instead of broad search.")
 		}
+	}
+	if leafLine := strings.TrimSpace(snapshot.LeafActiveTaskLine); leafLine != "" {
+		lines = append(lines, leafLine)
+		lines = append(lines, "Do not call task.list(parent_task_id=...) for those named leaf tasks. They already have no child tasks to inspect, so act on the task's exact deliverable or blocker instead.")
 	}
 	if draftLine := strings.TrimSpace(snapshot.DraftTaskLine); draftLine != "" {
 		lines = append(lines, draftLine)
