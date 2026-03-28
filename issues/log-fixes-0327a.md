@@ -826,3 +826,23 @@
     - post-restart, the same session never emitted those errors again after sequence `40`
     - the fresh retry window `41-77` fetched the entire `1-12` post batch, validated the generated markdown files, and finished execution
     - resulting state: task `61` is now `review` and its task session is closed
+- 2026-03-28 09:14:57 MDT - derive content-migration checkpoint state from task-owned branch/worktree delta and prefer real outputs over stale recovery targets
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `appendContentMigrationCheckpoint(...)` now uses `taskWorkspaceRoot(...)` instead of the parent project workspace
+    - content-migration `Scripts` and `Outputs` are filtered to task-owned files using the union of:
+      - `git diff --name-only main...HEAD`
+      - `git status --porcelain --untracked-files=all`
+    - `sessionTaskDeliverablePath(...)` now prefers a real content-migration output path from `content_migration_checkpoint.outputs` before falling back to `recovery_file_write_checkpoint`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestSessionTaskDeliverablePathPrefersContentMigrationOutputOverStaleRecoveryCheckpoint`
+  - changed [`internal/turn/engine_integration_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_integration_test.go):
+    - content-migration checkpoint integration tests now initialize a real parent repo, write fixtures into the task worktree, and prove that parent-workspace output contamination does not leak into the continuation checkpoint/prompt
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestSessionTaskDeliverablePath(PrefersCheckpointTargetOverInferredReportPath|PrefersContentMigrationOutputOverStaleRecoveryCheckpoint)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationContentMigration(ContinuationUsesWorkspaceCheckpoint|ResumeUsesPersistedCheckpointState|CheckpointPushesFirstOutputBeforeMoreScaffolding)$' -count=1`
+  - live diagnosis behind the fix:
+    - old task-63 sessions `5f5b5eee-5a03-410c-a84e-ab1eefe5720d` and `15b90c22-a025-4078-ad4f-358f4667ef8c` kept replaying inherited first-batch outputs in the checkpoint and then anchored review on `content/technonymous-index.json`
+    - direct filesystem check on `/Users/sam/otter-data/task-worktrees/sam-blog-rebuild-restart-12/task-63` showed the true task branch delta was the last-11 batch via `git diff --name-only main...HEAD`, even when `git status` was clean
+  - current live state after redeploy:
+    - fresh task-63 session `08b56f02-a02e-4329-bd15-cb24eacef05d` is back in bounded execution on the new runtime and wrote outputs like `content/posts/why-privacy-matters-part-2-what-to.md`, `content/posts/how-to-cook-a-steak-and-why-it-matters.md`, and `content/posts/the-water-is-nearing-a-boil.md`
+    - fresh direct proof of the rewritten checkpoint system message is still pending the next continuation turn on that session

@@ -31734,6 +31734,34 @@ func TestSessionTaskDeliverablePathPrefersCheckpointTargetOverInferredReportPath
 	}
 }
 
+func TestSessionTaskDeliverablePathPrefersContentMigrationOutputOverStaleRecoveryCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	description := "Fetch posts 25-35 from technonymous-index.json and save the markdown files under content/posts/."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  63,
+		Title:       "Fetch posts 25-35 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+		Description: &description,
+		Metadata: mustRawJSON(t, map[string]any{
+			"content_migration_checkpoint": map[string]any{
+				"version": 1,
+				"outputs": []map[string]any{
+					{"path": "content/posts/the-water-is-nearing-a-boil.md"},
+					{"path": "content/posts/why-privacy-matters-part-2-what-to.md"},
+				},
+			},
+			"recovery_file_write_checkpoint": map[string]any{
+				"target_path": "content/technonymous-index.json",
+			},
+		}),
+	}
+
+	if got := fixture.engine.sessionTaskDeliverablePath(context.Background(), fixture.session.ID, taskRecord); got != "content/posts/the-water-is-nearing-a-boil.md" {
+		t.Fatalf("sessionTaskDeliverablePath(...) = %q, want %q", got, "content/posts/the-water-is-nearing-a-boil.md")
+	}
+}
+
 func TestShouldReuseHistoricalDeliverableTargetForTaskRejectsInputArtifactOutsidePreferredRoot(t *testing.T) {
 	t.Parallel()
 

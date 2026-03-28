@@ -11920,17 +11920,24 @@ func (e *TurnEngine) appendContentMigrationCheckpoint(ctx context.Context, rt *t
 		return false, nil
 	}
 
-	projectRecord, err := e.projects.GetByID(ctx, taskRecord.ProjectID)
-	if err != nil {
-		return false, err
-	}
-	workspaceRoot, err := workspace.ProjectRoot(e.dataDir, projectRecord.Slug)
+	workspaceRoot, err := e.taskWorkspaceRoot(ctx, taskRecord)
 	if err != nil {
 		return false, err
 	}
 	snapshot, err := taskcheckpoint.ScanWorkspace(workspaceRoot)
 	if err != nil {
 		return false, err
+	}
+	if taskOwnedPaths, pathErr := contentMigrationTaskOwnedPaths(ctx, workspaceRoot); pathErr == nil {
+		snapshot.Scripts = filterContentMigrationWorkspaceFiles(snapshot.Scripts, taskOwnedPaths)
+		snapshot.Outputs = filterContentMigrationWorkspaceFiles(snapshot.Outputs, taskOwnedPaths)
+	} else if e.logger != nil {
+		e.logger.Warn("content migration checkpoint falling back to full worktree scan",
+			"session_id", rt.session.ID,
+			"turn_id", rt.turn.ID,
+			"workspace_root", workspaceRoot,
+			"error", pathErr,
+		)
 	}
 
 	checkpointPath := taskcheckpoint.CheckpointRelativePath(taskRecord.TaskNumber, taskRecord.ID)
@@ -11966,6 +11973,62 @@ func (e *TurnEngine) appendContentMigrationCheckpoint(ctx context.Context, rt *t
 	}
 	rt.historyStartID = &message.ID
 	return true, nil
+}
+
+func contentMigrationTaskOwnedPaths(ctx context.Context, workspaceRoot string) (map[string]struct{}, error) {
+	paths := map[string]struct{}{}
+	if turnBranchExists(ctx, workspaceRoot, "main") {
+		diff, err := turnGitOutput(ctx, workspaceRoot, "diff", "--name-only", "main...HEAD")
+		if err != nil {
+			return nil, err
+		}
+		appendContentMigrationOwnedPathSet(paths, diff, false)
+	}
+	status, err := turnGitOutput(ctx, workspaceRoot, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return nil, err
+	}
+	appendContentMigrationOwnedPathSet(paths, status, true)
+	return paths, nil
+}
+
+func appendContentMigrationOwnedPathSet(dst map[string]struct{}, output string, porcelain bool) {
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimRight(line, "\r")
+		if strings.TrimSpace(trimmed) == "" {
+			continue
+		}
+		path := strings.TrimSpace(trimmed)
+		if porcelain && len(path) > 3 {
+			path = strings.TrimSpace(path[3:])
+		}
+		if renameIndex := strings.LastIndex(path, " -> "); renameIndex >= 0 {
+			path = strings.TrimSpace(path[renameIndex+4:])
+		}
+		path = strings.Trim(path, `"`)
+		path = filepath.ToSlash(path)
+		if path == "" {
+			continue
+		}
+		dst[path] = struct{}{}
+	}
+}
+
+func filterContentMigrationWorkspaceFiles(items []taskcheckpoint.WorkspaceFile, allowed map[string]struct{}) []taskcheckpoint.WorkspaceFile {
+	if len(items) == 0 || len(allowed) == 0 {
+		return nil
+	}
+	filtered := make([]taskcheckpoint.WorkspaceFile, 0, len(items))
+	for _, item := range items {
+		if _, ok := allowed[normalizeWorkspaceRelativePath(item.Path)]; !ok {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
 }
 
 func buildTaskLabel(task repo.ProjectTask) string {
@@ -18892,6 +18955,11 @@ func (e *TurnEngine) sessionTaskDeliverablePath(ctx context.Context, sessionID u
 	if explicit := strings.TrimSpace(explicitDeliverablePath(taskRecord)); explicit != "" {
 		return explicit
 	}
+	if checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata); ok {
+		if targetPath := contentMigrationCheckpointPreferredOutputPath(taskRecord, checkpoint); targetPath != "" {
+			return targetPath
+		}
+	}
 	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
 		normalized := normalizeRecoveryCheckpointTargetForTask(taskRecord, checkpoint)
 		if targetPath := normalizeWorkspaceRelativePath(strings.TrimSpace(normalized.TargetPath)); targetPath != "" &&
@@ -18912,6 +18980,24 @@ func (e *TurnEngine) sessionTaskDeliverablePath(ctx context.Context, sessionID u
 		}
 	}
 	return strings.TrimSpace(preferredTaskDeliverablePath(taskRecord))
+}
+
+func contentMigrationCheckpointPreferredOutputPath(taskRecord repo.ProjectTask, checkpoint taskcheckpoint.ContentMigrationCheckpoint) string {
+	if len(checkpoint.Outputs) == 0 {
+		return ""
+	}
+	root := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
+	for _, output := range checkpoint.Outputs {
+		targetPath := normalizeWorkspaceRelativePath(output.Path)
+		if targetPath == "" {
+			continue
+		}
+		if root != "" && !workspacePathWithinRoot(targetPath, root) {
+			continue
+		}
+		return targetPath
+	}
+	return ""
 }
 
 func (e *TurnEngine) latestTaskHistoricalDeliverablePath(ctx context.Context, sessionID, taskID uuid.UUID) string {

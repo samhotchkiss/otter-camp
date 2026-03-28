@@ -19969,13 +19969,11 @@ func TestTurnEngineIntegrationContentMigrationContinuationUsesWorkspaceCheckpoin
 	}
 
 	taskSession, userMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "continue the content migration")
-	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	projectWorkspaceRoot := mustProjectWorkspaceRoot(t, ctx, fixture, project.ID)
+	mustInitWorkspaceGitRepo(t, projectWorkspaceRoot)
+	taskWorkspaceRoot, err := fixture.engine.taskWorkspaceRoot(ctx, taskRecord)
 	if err != nil {
-		t.Fatalf("load project: %v", err)
-	}
-	workspaceRoot, err := workspace.ProjectRoot("", projectRecord.Slug)
-	if err != nil {
-		t.Fatalf("workspace root: %v", err)
+		t.Fatalf("taskWorkspaceRoot: %v", err)
 	}
 
 	assembler, err := prompt.NewPromptAssembler(prompt.AssemblerOptions{Pool: fixture.pool})
@@ -20002,7 +20000,7 @@ func TestTurnEngineIntegrationContentMigrationContinuationUsesWorkspaceCheckpoin
 	}
 	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
 		rawRel := "artifacts/raw/post-1.html"
-		rawAbs := filepath.Join(workspaceRoot, filepath.FromSlash(rawRel))
+		rawAbs := filepath.Join(taskWorkspaceRoot, filepath.FromSlash(rawRel))
 		if err := os.MkdirAll(filepath.Dir(rawAbs), 0o755); err != nil {
 			return ToolResult{}, err
 		}
@@ -20044,7 +20042,7 @@ func TestTurnEngineIntegrationContentMigrationContinuationUsesWorkspaceCheckpoin
 		t.Fatalf("continuation prompt missing anti-generic-chat guard:\n%s", secondPrompt)
 	}
 
-	checkpointBody, err := os.ReadFile(filepath.Join(workspaceRoot, filepath.FromSlash(checkpointRel)))
+	checkpointBody, err := os.ReadFile(filepath.Join(taskWorkspaceRoot, filepath.FromSlash(checkpointRel)))
 	if err != nil {
 		t.Fatalf("read checkpoint file: %v", err)
 	}
@@ -20071,13 +20069,11 @@ func TestTurnEngineIntegrationContentMigrationResumeUsesPersistedCheckpointState
 	}
 
 	taskSession, userMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "start the migration")
-	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	projectWorkspaceRoot := mustProjectWorkspaceRoot(t, ctx, fixture, project.ID)
+	mustInitWorkspaceGitRepo(t, projectWorkspaceRoot)
+	taskWorkspaceRoot, err := fixture.engine.taskWorkspaceRoot(ctx, taskRecord)
 	if err != nil {
-		t.Fatalf("load project: %v", err)
-	}
-	workspaceRoot, err := workspace.ProjectRoot("", projectRecord.Slug)
-	if err != nil {
-		t.Fatalf("workspace root: %v", err)
+		t.Fatalf("taskWorkspaceRoot: %v", err)
 	}
 
 	assembler, err := prompt.NewPromptAssembler(prompt.AssemblerOptions{Pool: fixture.pool})
@@ -20119,7 +20115,7 @@ func TestTurnEngineIntegrationContentMigrationResumeUsesPersistedCheckpointState
 	}
 	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
 		rawRel := "artifacts/raw/post-1.html"
-		rawAbs := filepath.Join(workspaceRoot, filepath.FromSlash(rawRel))
+		rawAbs := filepath.Join(taskWorkspaceRoot, filepath.FromSlash(rawRel))
 		if err := os.MkdirAll(filepath.Dir(rawAbs), 0o755); err != nil {
 			return ToolResult{}, err
 		}
@@ -20140,7 +20136,7 @@ func TestTurnEngineIntegrationContentMigrationResumeUsesPersistedCheckpointState
 		onRunStarted(runID)
 		target, _ := call.Arguments["path"].(string)
 		content, _ := call.Arguments["content"].(string)
-		targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash(target))
+		targetAbs := filepath.Join(taskWorkspaceRoot, filepath.FromSlash(target))
 		if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
 			return ToolResult{}, err
 		}
@@ -20162,7 +20158,7 @@ func TestTurnEngineIntegrationContentMigrationResumeUsesPersistedCheckpointState
 	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, userMessage.ID); err != nil {
 		t.Fatalf("HandleUserMessage first run: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(outputRel))); err != nil {
+	if _, err := os.Stat(filepath.Join(taskWorkspaceRoot, filepath.FromSlash(outputRel))); err != nil {
 		t.Fatalf("expected migrated output file on disk: %v", err)
 	}
 
@@ -20215,13 +20211,11 @@ func TestTurnEngineIntegrationContentMigrationCheckpointPushesFirstOutputBeforeM
 	}
 
 	taskSession, userMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "continue the Sam.blog migration")
-	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	projectWorkspaceRoot := mustProjectWorkspaceRoot(t, ctx, fixture, project.ID)
+	mustInitWorkspaceGitRepo(t, projectWorkspaceRoot)
+	taskWorkspaceRoot, err := fixture.engine.taskWorkspaceRoot(ctx, taskRecord)
 	if err != nil {
-		t.Fatalf("load project: %v", err)
-	}
-	workspaceRoot, err := workspace.ProjectRoot("", projectRecord.Slug)
-	if err != nil {
-		t.Fatalf("workspace root: %v", err)
+		t.Fatalf("taskWorkspaceRoot: %v", err)
 	}
 
 	assembler, err := prompt.NewPromptAssembler(prompt.AssemblerOptions{Pool: fixture.pool})
@@ -20254,6 +20248,9 @@ func TestTurnEngineIntegrationContentMigrationCheckpointPushesFirstOutputBeforeM
 			if strings.Contains(flattened, rawMarker) {
 				t.Fatal("continuation prompt replayed raw fetch body instead of persisted checkpoint state")
 			}
+			if strings.Contains(flattened, "content/posts/from-parent-workspace.md") {
+				t.Fatalf("continuation prompt leaked parent workspace output into the task checkpoint state:\n%s", flattened)
+			}
 			checkpointRel := taskcheckpoint.CheckpointRelativePath(taskRecord.TaskNumber, taskRecord.ID)
 			if !strings.Contains(flattened, checkpointRel) {
 				t.Fatalf("continuation prompt missing checkpoint path %q:\n%s", checkpointRel, flattened)
@@ -20284,12 +20281,19 @@ func TestTurnEngineIntegrationContentMigrationCheckpointPushesFirstOutputBeforeM
 		}
 	}
 	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		parentOutputAbs := filepath.Join(projectWorkspaceRoot, "content/posts/from-parent-workspace.md")
+		if err := os.MkdirAll(filepath.Dir(parentOutputAbs), 0o755); err != nil {
+			return ToolResult{}, err
+		}
+		if err := os.WriteFile(parentOutputAbs, []byte("# Parent Workspace Output"), 0o644); err != nil {
+			return ToolResult{}, err
+		}
 		scriptFixtures := map[string]string{
 			"scrape_posts.py":    "print('scrape existing archive')",
 			"scripts/migrate.py": "print('convert persisted posts')",
 		}
 		for rel, body := range scriptFixtures {
-			scriptAbs := filepath.Join(workspaceRoot, filepath.FromSlash(rel))
+			scriptAbs := filepath.Join(taskWorkspaceRoot, filepath.FromSlash(rel))
 			if err := os.MkdirAll(filepath.Dir(scriptAbs), 0o755); err != nil {
 				return ToolResult{}, err
 			}
@@ -20298,7 +20302,7 @@ func TestTurnEngineIntegrationContentMigrationCheckpointPushesFirstOutputBeforeM
 			}
 		}
 		rawRel := "artifacts/raw/post-1.html"
-		rawAbs := filepath.Join(workspaceRoot, filepath.FromSlash(rawRel))
+		rawAbs := filepath.Join(taskWorkspaceRoot, filepath.FromSlash(rawRel))
 		if err := os.MkdirAll(filepath.Dir(rawAbs), 0o755); err != nil {
 			return ToolResult{}, err
 		}
@@ -20319,7 +20323,7 @@ func TestTurnEngineIntegrationContentMigrationCheckpointPushesFirstOutputBeforeM
 		onRunStarted(runID)
 		target, _ := call.Arguments["path"].(string)
 		content, _ := call.Arguments["content"].(string)
-		targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash(target))
+		targetAbs := filepath.Join(taskWorkspaceRoot, filepath.FromSlash(target))
 		if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
 			return ToolResult{}, err
 		}
@@ -20345,7 +20349,7 @@ func TestTurnEngineIntegrationContentMigrationCheckpointPushesFirstOutputBeforeM
 	if len(prompts) < 2 {
 		t.Fatalf("prompt count = %d, want at least 2 rounds", len(prompts))
 	}
-	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(outputRel))); err != nil {
+	if _, err := os.Stat(filepath.Join(taskWorkspaceRoot, filepath.FromSlash(outputRel))); err != nil {
 		t.Fatalf("expected migrated output file on disk: %v", err)
 	}
 }
