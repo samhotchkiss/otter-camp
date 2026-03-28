@@ -11080,6 +11080,131 @@ func TestHandleCompletedProjectExecutionContinuationTurnAutoQueuesAfterReadOnlyT
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnResumesBlockedReviewTaskBeforeQueueingDraft(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	blockedReviewTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	reviewNodeID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:              completedTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      10,
+				Title:           "Validate review path continuation",
+				WorkStatus:      "done",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+			blockedReviewTaskID: {
+				ID:                blockedReviewTaskID,
+				ProjectID:         projectID,
+				TaskNumber:        61,
+				Title:             "Fetch posts 1-12",
+				WorkStatus:        "blocked",
+				CurrentFlowNodeID: &reviewNodeID,
+				AssignedAgentID:   uuidPtr(uuid.New()),
+				FlowTemplateID:    uuidPtr(uuid.New()),
+				Metadata: mustJSONRaw(map[string]any{
+					"agent_turn_validation_guard": map[string]any{
+						"tool_name":       "flow.review_decision",
+						"failure_class":   "tool_validation",
+						"failure_code":    "review_decision_required",
+						"failure_reason":  "review turn completed without calling flow.review_decision",
+						"count":           3,
+						"block_threshold": 3,
+						"blocked":         true,
+					},
+				}),
+			},
+			draftTaskID: {
+				ID:              draftTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      19,
+				Title:           "Ship docs",
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+		},
+	}
+	taskTransitions := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = taskTransitions
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "I should resume the blocked review work instead of opening more draft tasks.",
+		SequenceNumber: 11,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant}
+	completedTurn := &repo.ChatTurn{ID: turnID, SessionID: fixture.session.ID}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected blocked review task to resume before draft queueing")
+	}
+	if len(taskTransitions.resumeCalls) != 1 || taskTransitions.resumeCalls[0].taskID != blockedReviewTaskID {
+		t.Fatalf("resumeCalls = %+v, want blocked review task resume", taskTransitions.resumeCalls)
+	}
+	if len(taskTransitions.transitionCalls) != 0 {
+		t.Fatalf("transitionCalls = %+v, want no draft queue transition when review resume is available", taskTransitions.transitionCalls)
+	}
+
+	updatedBlockedTask, err := taskRepo.GetByID(context.Background(), blockedReviewTaskID)
+	if err != nil {
+		t.Fatalf("GetByID blocked review task: %v", err)
+	}
+	if updatedBlockedTask.WorkStatus != "review" {
+		t.Fatalf("blocked review task work_status = %q, want review", updatedBlockedTask.WorkStatus)
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var sawSystemMessage bool
+	for _, msg := range storedMessages {
+		if strings.EqualFold(strings.TrimSpace(msg.Role), "system") && strings.Contains(msg.Content, "resumed blocked review lane task 61") {
+			sawSystemMessage = true
+			break
+		}
+	}
+	if !sawSystemMessage {
+		t.Fatal("expected system message recording resumed blocked review lane")
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnHandlesProjectContinuationResumeSource(t *testing.T) {
 	t.Parallel()
 
@@ -18465,6 +18590,75 @@ func TestProjectExecutionContinuationSnapshotSkipsDraftParentWithBlockedChildren
 	}
 	if !strings.Contains(snapshot.FocusTaskLine, "task 19 (Ship docs)") {
 		t.Fatalf("FocusTaskLine = %q, want standalone actionable draft", snapshot.FocusTaskLine)
+	}
+}
+
+func TestProjectExecutionContinuationSnapshotKeepsReviewDecisionBlockedChildrenAsExistingChildWork(t *testing.T) {
+	projectID := uuid.New()
+	assignedID := uuid.New()
+	parentDraftID := uuid.New()
+	childOneID := uuid.New()
+	childTwoID := uuid.New()
+	projectTasks := []repo.ProjectTask{
+		{
+			ID:              uuid.New(),
+			ProjectID:       projectID,
+			TaskNumber:      16,
+			Title:           "Validate API",
+			WorkStatus:      "in_progress",
+			AssignedAgentID: &assignedID,
+		},
+		{
+			ID:         uuid.New(),
+			ProjectID:  projectID,
+			TaskNumber: 19,
+			Title:      "Ship docs",
+			WorkStatus: "draft",
+		},
+		{
+			ID:              parentDraftID,
+			ProjectID:       projectID,
+			TaskNumber:      58,
+			Title:           "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/",
+			WorkStatus:      "draft",
+			AssignedAgentID: &assignedID,
+		},
+		{
+			ID:              childOneID,
+			ProjectID:       projectID,
+			TaskNumber:      61,
+			Title:           "Fetch posts 1-12",
+			WorkStatus:      "blocked",
+			AssignedAgentID: &assignedID,
+			Metadata:        json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+		},
+		{
+			ID:              childTwoID,
+			ProjectID:       projectID,
+			TaskNumber:      62,
+			Title:           "Fetch posts 13-24",
+			WorkStatus:      "blocked",
+			AssignedAgentID: &assignedID,
+			Metadata:        json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+		},
+	}
+	taskHintsByTask := buildProjectContinuationTaskHints(projectTasks, map[uuid.UUID]string{
+		childOneID: "review turn completed without calling flow.review_decision",
+		childTwoID: "review turn completed without calling flow.review_decision after repeated retries",
+	})
+
+	snapshot, _ := buildProjectExecutionContinuationSnapshot(projectTasks, taskHintsByTask, nil)
+	if strings.Contains(snapshot.ReplacementDraftLine, "task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/)") {
+		t.Fatalf("ReplacementDraftLine = %q, should not treat resumable review children as replacement work", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ChildActiveDraftLine, "task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/)") {
+		t.Fatalf("ChildActiveDraftLine = %q, want draft parent kept in existing-child bucket", snapshot.ChildActiveDraftLine)
+	}
+	if !strings.Contains(snapshot.ActiveTaskLine, "task 61 (Fetch posts 1-12)") || !strings.Contains(snapshot.ActiveTaskLine, "resume_policy=resume_review_decision") {
+		t.Fatalf("ActiveTaskLine = %q, want blocked review child lanes surfaced as resumable review work", snapshot.ActiveTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "task 19 (Ship docs)") {
+		t.Fatalf("FocusTaskLine = %q, want standalone actionable draft to remain focus", snapshot.FocusTaskLine)
 	}
 }
 
@@ -30723,6 +30917,7 @@ type fakeTaskTransitionService struct {
 	repo            *fakeTaskRepo
 	calls           []blockedTaskCall
 	transitionCalls []transitionTaskCall
+	resumeCalls     []resumeTaskCall
 	err             error
 }
 
@@ -30736,6 +30931,11 @@ type transitionTaskCall struct {
 	taskID   uuid.UUID
 	toStatus string
 	actor    tasksvc.Actor
+}
+
+type resumeTaskCall struct {
+	taskID uuid.UUID
+	actor  tasksvc.Actor
 }
 
 func (f *fakeTaskTransitionService) TransitionStatus(_ context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
@@ -30789,6 +30989,33 @@ func (f *fakeTaskTransitionService) MarkBlocked(_ context.Context, taskID uuid.U
 	}
 	blocked := tasksvc.ProjectTask{ID: taskID, WorkStatus: "blocked"}
 	return &blocked, nil
+}
+
+func (f *fakeTaskTransitionService) ResumeValidationBlockedTask(_ context.Context, taskID uuid.UUID, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.resumeCalls = append(f.resumeCalls, resumeTaskCall{
+		taskID: taskID,
+		actor:  actor,
+	})
+	targetStatus := "queued"
+	if f.repo != nil {
+		taskRecord, err := f.repo.GetByID(context.Background(), taskID)
+		if err == nil {
+			if taskRecord.CurrentFlowNodeID != nil && *taskRecord.CurrentFlowNodeID != uuid.Nil {
+				targetStatus = "review"
+			}
+			taskRecord.WorkStatus = targetStatus
+			updated, updateErr := f.repo.Update(context.Background(), taskRecord)
+			if updateErr == nil {
+				resumed := tasksvc.ProjectTask(updated)
+				return &resumed, nil
+			}
+		}
+	}
+	resumed := tasksvc.ProjectTask{ID: taskID, WorkStatus: targetStatus}
+	return &resumed, nil
 }
 
 type fakeFlowNodeRepo struct {

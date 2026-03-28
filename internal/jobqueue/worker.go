@@ -3006,8 +3006,9 @@ func projectContinuationBlockedTaskResumePolicyForWorker(reason string) string {
 		return "terminal_keep_blocked"
 	case strings.Contains(normalized, "recovery halted after recovered file.write"):
 		return "manual_recovery_repair"
-	case strings.Contains(normalized, "review turn completed without calling flow.review_decision"),
-		strings.Contains(normalized, "review turn repeatedly hit"):
+	case strings.Contains(normalized, "review turn completed without calling flow.review_decision"):
+		return "resume_review_decision"
+	case strings.Contains(normalized, "review turn repeatedly hit"):
 		return "needs_replacement_work"
 	default:
 		return ""
@@ -3154,6 +3155,9 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 		}
 		if strings.Contains(activeLine, "resume_policy=needs_replacement_work") {
 			lines = append(lines, "If a named blocked task above already shows resume_policy=needs_replacement_work, create or queue the smallest replacement or follow-on work needed to recover it instead of broad rediscovery.")
+		}
+		if strings.Contains(activeLine, "resume_policy=resume_review_decision") {
+			lines = append(lines, "If a named blocked task above already shows resume_policy=resume_review_decision, resume or requeue that exact review lane so it can call flow.review_decision; do not create replacement work for it.")
 		}
 		if strings.Contains(activeLine, "resume_policy=manual_recovery_repair") {
 			lines = append(lines, "If a named blocked task above already shows resume_policy=manual_recovery_repair, queue only the targeted manual repair needed for that deliverable instead of broader session or project listing.")

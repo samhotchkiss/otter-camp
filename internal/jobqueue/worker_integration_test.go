@@ -18116,6 +18116,150 @@ func TestJobWorkerProjectExecutionContinuationSnapshotPromotesBlockedChildParent
 	}
 }
 
+func TestJobWorkerProjectExecutionContinuationSnapshotKeepsReviewDecisionBlockedChildrenAsExistingChildWork(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "project-continuation-snapshot-review-blocked-children",
+		DisplayName: "Project Continuation Snapshot Review Blocked Children",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "project-continuation-snapshot-review-blocked-children-project",
+		DisplayName:    "Project Continuation Snapshot Review Blocked Children Project",
+		Description:    "Project for resumable review child snapshot coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "project-continuation-snapshot-review-blocked-children-template",
+		DisplayName:    "Project Continuation Snapshot Review Blocked Children Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	eventRepo := repo.NewProjectTaskEventRepo(pool)
+
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     19,
+		Title:          "Ship docs",
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	}); err != nil {
+		t.Fatalf("create standalone draft task: %v", err)
+	}
+
+	parentDescription := "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/."
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     58,
+		Title:          "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	for _, taskNumber := range []int{61, 62} {
+		childTitle := fmt.Sprintf("Review-blocked child %d", taskNumber)
+		childTask, createErr := taskRepo.Create(ctx, repo.ProjectTask{
+			OrganizationID: org.ID,
+			ProjectID:      project.ID,
+			TaskNumber:     taskNumber,
+			Title:          childTitle,
+			WorkStatus:     "blocked",
+			BlocksScope:    "task",
+			FlowTemplateID: &template.ID,
+			AssignedAgentID: func() *uuid.UUID {
+				id := agent.ID
+				return &id
+			}(),
+			CreatedByType: "system",
+			CreatedByID:   &agent.ID,
+			Metadata:      childMetadata,
+		})
+		if createErr != nil {
+			t.Fatalf("create child task %d: %v", taskNumber, createErr)
+		}
+		if _, recordErr := eventRepo.Record(ctx, repo.ProjectTaskEvent{
+			TaskID:    childTask.ID,
+			ProjectID: project.ID,
+			EventType: "status.changed",
+			ActorType: "system",
+			Payload:   json.RawMessage(`{"to_status":"blocked","blocker_reason":"review turn completed without calling flow.review_decision"}`),
+		}); recordErr != nil {
+			t.Fatalf("record blocked reason for child task %d: %v", taskNumber, recordErr)
+		}
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.ReplacementDraftLine, "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/") {
+		t.Fatalf("ReplacementDraftLine = %q, should not treat review-decision blocks as replacement work", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ChildActiveDraftLine, "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/") {
+		t.Fatalf("ChildActiveDraftLine = %q, want parent kept in existing-child bucket", snapshot.ChildActiveDraftLine)
+	}
+	if !strings.Contains(snapshot.ActiveTaskLine, "resume_policy=resume_review_decision") {
+		t.Fatalf("ActiveTaskLine = %q, want resumable review child policy surfaced", snapshot.ActiveTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "Ship docs") {
+		t.Fatalf("FocusTaskLine = %q, want standalone draft to remain continuation focus", snapshot.FocusTaskLine)
+	}
+}
+
 func TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedActiveReplacementContinuation(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

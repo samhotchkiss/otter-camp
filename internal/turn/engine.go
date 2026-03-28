@@ -410,6 +410,7 @@ type taskTransitionService interface {
 	TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
 	TransitionStatusWithPayload(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor, extraPayload map[string]any) (*tasksvc.ProjectTask, error)
 	MarkBlocked(ctx context.Context, taskID uuid.UUID, reason string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
+	ResumeValidationBlockedTask(ctx context.Context, taskID uuid.UUID, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
 }
 
 type flowNodeRepository interface {
@@ -4646,6 +4647,27 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 	if missingPath, found := projectContinuationMissingDependencyStopPath(messages, completedTurn.ID); found {
 		return e.retryProjectExecutionContinuationForMissingDependency(ctx, session, completedTurn, latestUser, missingPath)
 	}
+	if blockedReviewTask, ok, err := e.nextResumableBlockedProjectTask(ctx, session.ScopeID); err != nil {
+		return false, err
+	} else if ok {
+		resumed, resumeErr := e.taskTransitions.ResumeValidationBlockedTask(ctx, blockedReviewTask.ID, tasksvc.Actor{Type: "system"})
+		if resumeErr != nil {
+			return false, resumeErr
+		}
+		resumedLabel := projectBootstrapTaskLabel(blockedReviewTask)
+		if resumed != nil && resumed.ID != uuid.Nil {
+			if resumed.TaskNumber > 0 || strings.TrimSpace(resumed.Title) != "" {
+				resumedLabel = projectBootstrapTaskLabel(repo.ProjectTask(*resumed))
+			}
+		}
+		_, _ = e.appendSystemMessage(
+			ctx,
+			completedTurn.ID,
+			session.ID,
+			fmt.Sprintf("[Project continuation resumed blocked review lane %s so it can complete flow.review_decision instead of creating replacement work.]", resumedLabel),
+		)
+		return true, nil
+	}
 	nextTask, ok, err := e.nextRunnableDraftProjectTask(ctx, session.ScopeID)
 	if err != nil {
 		return false, err
@@ -7245,6 +7267,9 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		}
 		if strings.Contains(activeLine, "resume_policy=needs_replacement_work") {
 			lines = append(lines, "If a named blocked task above already shows resume_policy=needs_replacement_work, create or queue the smallest replacement or follow-on work needed to recover it instead of broad rediscovery.")
+		}
+		if strings.Contains(activeLine, "resume_policy=resume_review_decision") {
+			lines = append(lines, "If a named blocked task above already shows resume_policy=resume_review_decision, resume or requeue that exact review lane so it can call flow.review_decision; do not create replacement work for it.")
 		}
 		if strings.Contains(activeLine, "resume_policy=manual_recovery_repair") {
 			lines = append(lines, "If a named blocked task above already shows resume_policy=manual_recovery_repair, queue only the targeted manual repair needed for that deliverable instead of broader session or project listing.")
@@ -17411,6 +17436,9 @@ func buildTaskContinuationActionPrompt(summary string, snapshot taskExecutionCon
 		if strings.Contains(currentLine, "resume_policy=needs_replacement_work") {
 			lines = append(lines, "If the current task above already shows resume_policy=needs_replacement_work, create or queue only the smallest replacement or follow-on work needed to recover it instead of broad rediscovery.")
 		}
+		if strings.Contains(currentLine, "resume_policy=resume_review_decision") {
+			lines = append(lines, "If the current task above already shows resume_policy=resume_review_decision, resume that exact review lane and call flow.review_decision instead of creating replacement work or reopening broad rediscovery.")
+		}
 		if strings.Contains(currentLine, "resume_policy=manual_recovery_repair") {
 			lines = append(lines, "If the current task above already shows resume_policy=manual_recovery_repair, make only the targeted repair needed for that deliverable instead of broader browsing.")
 		}
@@ -17613,6 +17641,43 @@ func (e *TurnEngine) projectContinuationBlockedReasonsByTask(ctx context.Context
 		return reasons, nil
 	}
 	return repo.NewProjectTaskEventRepo(e.pool).LatestBlockedReasonsByTask(ctx, blockedTaskIDs)
+}
+
+func (e *TurnEngine) nextResumableBlockedProjectTask(ctx context.Context, projectID uuid.UUID) (repo.ProjectTask, bool, error) {
+	if e == nil || e.tasks == nil || projectID == uuid.Nil {
+		return repo.ProjectTask{}, false, nil
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, projectID)
+	if err != nil {
+		return repo.ProjectTask{}, false, err
+	}
+	blockedReasons, err := e.projectContinuationBlockedReasonsByTask(ctx, projectTasks)
+	if err != nil {
+		return repo.ProjectTask{}, false, err
+	}
+	var selected repo.ProjectTask
+	found := false
+	for _, task := range projectTasks {
+		if !projectContinuationTaskNeedsReviewResume(task, blockedReasons[task.ID]) {
+			continue
+		}
+		if !found || task.TaskNumber < selected.TaskNumber || (task.TaskNumber == selected.TaskNumber && task.ID.String() < selected.ID.String()) {
+			selected = task
+			found = true
+		}
+	}
+	return selected, found, nil
+}
+
+func projectContinuationTaskNeedsReviewResume(task repo.ProjectTask, blockedReason string) bool {
+	if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
+		return false
+	}
+	if guard, ok := tasksvc.ParseValidationGuard(task.Metadata); ok && guard.Blocked &&
+		strings.EqualFold(strings.TrimSpace(guard.FailureCode), "review_decision_required") {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(projectContinuationBlockedTaskResumePolicy(blockedReason)), "resume_review_decision")
 }
 
 func buildProjectContinuationTaskHints(tasks []repo.ProjectTask, blockedReasons map[uuid.UUID]string) map[uuid.UUID]projectContinuationTaskHints {
@@ -17902,8 +17967,9 @@ func projectContinuationBlockedTaskResumePolicy(reason string) string {
 		return "terminal_keep_blocked"
 	case strings.Contains(normalized, "recovery halted after recovered file.write"):
 		return "manual_recovery_repair"
-	case strings.Contains(normalized, "review turn completed without calling flow.review_decision"),
-		strings.Contains(normalized, "review turn repeatedly hit"):
+	case strings.Contains(normalized, "review turn completed without calling flow.review_decision"):
+		return "resume_review_decision"
+	case strings.Contains(normalized, "review turn repeatedly hit"):
 		return "needs_replacement_work"
 	default:
 		return ""
