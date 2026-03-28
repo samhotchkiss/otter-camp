@@ -310,30 +310,47 @@ func (s *Supervisor) detectResumableBlockedTasks(ctx context.Context) error {
 			ORDER BY fe.started_at ASC, fe.id ASC
 			LIMIT 1
 		) e ON true
-		LEFT JOIN LATERAL (
-			SELECT NULLIF(TRIM(BOTH FROM payload->>'blocker_reason'), '') AS blocker_reason
-			FROM project_task_event
-			WHERE task_id = t.id
-			  AND event_type = 'status.changed'
-			  AND COALESCE(payload->>'to_status', '') = 'blocked'
-			ORDER BY created_at DESC, id DESC
-			LIMIT 1
-		) latest_blocked ON true
-		LEFT JOIN chat_session s
-		  ON s.scope_type = 'project_task'
-		 AND s.scope_id = t.id
-		 AND s.status = 'active'
+			LEFT JOIN LATERAL (
+				SELECT
+					NULLIF(TRIM(BOTH FROM payload->>'blocker_reason'), '') AS blocker_reason,
+					COALESCE((payload->>'flow_rejection_max_visits')::boolean, false) AS flow_rejection_max_visits,
+					COALESCE((payload->>'flow_rejection_blocked_task')::boolean, false) AS flow_rejection_blocked_task
+				FROM project_task_event
+				WHERE task_id = t.id
+				  AND event_type = 'status.changed'
+				  AND COALESCE(payload->>'to_status', '') = 'blocked'
+				ORDER BY created_at DESC, id DESC
+				LIMIT 1
+			) latest_blocked ON true
+			LEFT JOIN LATERAL (
+				SELECT
+					NULLIF(TRIM(BOTH FROM payload->>'blocked_reason'), '') AS blocked_reason,
+					COALESCE((payload->>'max_visits_exceeded')::boolean, false) AS max_visits_exceeded
+				FROM project_task_event
+				WHERE task_id = t.id
+				  AND event_type = 'flow.rejected'
+				ORDER BY created_at DESC, id DESC
+				LIMIT 1
+			) latest_flow_rejected ON true
+			LEFT JOIN chat_session s
+			  ON s.scope_type = 'project_task'
+			 AND s.scope_id = t.id
+			 AND s.status = 'active'
 		 AND s.current_turn_id IS NOT NULL
 		WHERE p.status = 'active'
 		  AND COALESCE((p.settings->'pause'->>'is_paused')::boolean, false) = false
 		  AND t.work_status = 'blocked'
 		  AND t.updated_at < $1
-		  AND rs.id IS NULL
-		  AND s.id IS NULL
-		  AND COALESCE(t.metadata->'agent_turn_validation_guard'->>'failure_code', '') <> 'review_decision_required'
-		  AND COALESCE(latest_blocked.blocker_reason, '') NOT ILIKE 'review turn completed without calling flow.review_decision%'
-		ORDER BY t.updated_at ASC, t.id ASC
-	`, cutoff)
+			  AND rs.id IS NULL
+			  AND s.id IS NULL
+			  AND COALESCE(t.metadata->'agent_turn_validation_guard'->>'failure_code', '') <> 'review_decision_required'
+			  AND COALESCE(latest_blocked.blocker_reason, '') NOT ILIKE 'review turn completed without calling flow.review_decision%'
+			  AND COALESCE(latest_blocked.flow_rejection_max_visits, false) = false
+			  AND COALESCE(latest_blocked.flow_rejection_blocked_task, false) = false
+			  AND COALESCE(latest_flow_rejected.max_visits_exceeded, false) = false
+			  AND LOWER(COALESCE(latest_flow_rejected.blocked_reason, '')) <> 'flow rejection max visits exceeded'
+			ORDER BY t.updated_at ASC, t.id ASC
+		`, cutoff)
 	if err != nil {
 		return err
 	}

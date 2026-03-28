@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -145,6 +146,13 @@ func (s *service) maybeResumeLegacyNonSubstantiveFlowRejection(ctx context.Conte
 	if !strings.EqualFold(strings.TrimSpace(blockerReason), "flow rejection max visits exceeded") {
 		return taskResumeDecision{}, false, nil
 	}
+	explicitFlowBlock, err := s.hasExplicitFlowRejectionMaxVisitsBlock(ctx, taskRecord.ID)
+	if err != nil {
+		return taskResumeDecision{}, false, err
+	}
+	if explicitFlowBlock {
+		return taskResumeDecision{}, false, nil
+	}
 	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
 	if !ok || !hasDurableRecoveryCheckpoint(checkpoint) {
 		return taskResumeDecision{}, false, nil
@@ -192,6 +200,42 @@ func (s *service) maybeResumeLegacyNonSubstantiveFlowRejection(ctx context.Conte
 		}
 	}
 	return decision, true, nil
+}
+
+func (s *service) hasExplicitFlowRejectionMaxVisitsBlock(ctx context.Context, taskID uuid.UUID) (bool, error) {
+	if s == nil || s.pool == nil || taskID == uuid.Nil {
+		return false, nil
+	}
+
+	var explicit bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM project_task_event
+			WHERE task_id = $1
+			  AND (
+				(event_type = 'status.changed'
+					AND COALESCE(payload->>'to_status', '') = 'blocked'
+					AND (
+						COALESCE((payload->>'flow_rejection_max_visits')::boolean, false)
+						OR COALESCE((payload->>'flow_rejection_blocked_task')::boolean, false)
+					))
+				OR
+				(event_type = 'flow.rejected'
+					AND (
+						COALESCE((payload->>'max_visits_exceeded')::boolean, false)
+						OR LOWER(COALESCE(NULLIF(TRIM(BOTH FROM payload->>'blocked_reason'), ''), '')) = 'flow rejection max visits exceeded'
+					))
+			  )
+		)
+	`, taskID).Scan(&explicit)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return explicit, nil
 }
 
 func (s *service) reviewRejectRetryNodeID(ctx context.Context, taskRecord repo.ProjectTask) (uuid.UUID, bool) {

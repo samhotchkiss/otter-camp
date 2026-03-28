@@ -893,6 +893,20 @@ func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.U
 	}
 
 	blockerReason := s.loadLatestBlockedTaskReason(ctx, taskRecord.ID)
+	explicitFlowBlock, err := s.hasExplicitFlowRejectionMaxVisitsBlock(ctx, taskRecord.ID)
+	if err != nil {
+		return nil, err
+	}
+	if explicitFlowBlock {
+		reason := strings.TrimSpace(blockerReason)
+		if reason == "" {
+			reason = "flow rejection max visits exceeded"
+		}
+		return nil, TaskResumeBlockedStateError{
+			BlockerClass:  RecoveryBlockerClassFlowRejectionMaxVisits,
+			BlockerReason: reason,
+		}
+	}
 	checkpointRebuilt := false
 	taskRecord, checkpointRebuilt, err = s.maybeRepairDurableRecoveryCheckpoint(ctx, taskRecord, blockerReason)
 	if err != nil {

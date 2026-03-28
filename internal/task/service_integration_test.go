@@ -1392,6 +1392,128 @@ func TestTaskServiceIntegrationResumeValidationBlockedTaskRejectsFlowRejectionMa
 	}
 }
 
+func TestTaskServiceIntegrationResumeValidationBlockedTaskRejectsExplicitReviewFlowRejectionPollution(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	t.Setenv("OTTERCAMP_DATA_DIR", t.TempDir())
+
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	pmUser := seedTaskServiceUser(t, ctx, pool, org.ID, "pm-user", "admin")
+	pmAgent := seedTaskServiceAgent(t, ctx, pool, org.ID, "PM Agent", "staff", "pm", "human_user", pmUser.ID)
+	assignPMToProject(t, ctx, pool, pmAgent.ID, project.ID)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	svc := newTaskIntegrationService(t, pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	eventRepo := repo.NewProjectTaskEventRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Terminal review rejection pollution task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, template.ID)
+	if err != nil {
+		t.Fatalf("GetByTemplateOrdered: %v", err)
+	}
+	if len(nodes) < 2 {
+		t.Fatalf("nodes len = %d, want >= 2", len(nodes))
+	}
+	reviewNode := nodes[1]
+
+	taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	taskRecord.WorkStatus = "blocked"
+	taskRecord.CurrentFlowNodeID = &reviewNode.ID
+
+	const targetPath = "Work/terminal-review.md"
+	const artifactPath = ".ottercamp/recovery/Work/terminal-review.md"
+	const blockedReason = "flow rejection max visits exceeded"
+	targetBody := `**Rejected — task is now blocked (review path exhausted).**
+
+The rejection has been recorded and the task has been automatically blocked because the work-review loop has exceeded its allowed iterations.
+`
+	writeTaskRecoveryWorkspaceFiles(t, project.Slug, targetPath, artifactPath, targetBody, blockedReason)
+
+	checkpointedMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(taskRecord.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    targetPath,
+		ArtifactPath:  artifactPath,
+		FailureReason: "placeholder draft",
+		HaltTurnID:    uuid.NewString(),
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	taskRecord.Metadata = checkpointedMetadata
+	if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update task: %v", err)
+	}
+
+	blockedEventTime := time.Now().UTC().Add(-1 * time.Second)
+	flowRejectedTime := blockedEventTime.Add(500 * time.Millisecond)
+	if _, err := eventRepo.Record(ctx, repo.ProjectTaskEvent{
+		TaskID:     created.ID,
+		ProjectID:  project.ID,
+		EventType:  "status.changed",
+		ActorType:  "system",
+		FlowNodeID: &reviewNode.ID,
+		Payload: json.RawMessage(fmt.Sprintf(`{
+			"from_status":"review",
+			"to_status":"blocked",
+			"flow_rejection_max_visits":true,
+			"flow_rejection_blocked_task":true,
+			"attempted_reject_visit":12,
+			"created_at_override":"%s"
+		}`, blockedEventTime.Format(time.RFC3339Nano))),
+	}); err != nil {
+		t.Fatalf("Record status.changed: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE project_task_event SET created_at = $2 WHERE task_id = $1 AND event_type = 'status.changed' AND COALESCE(payload->>'to_status','') = 'blocked'`, created.ID, blockedEventTime); err != nil {
+		t.Fatalf("Update blocked event created_at: %v", err)
+	}
+
+	if _, err := eventRepo.Record(ctx, repo.ProjectTaskEvent{
+		TaskID:     created.ID,
+		ProjectID:  project.ID,
+		EventType:  "flow.rejected",
+		ActorType:  "system",
+		FlowNodeID: &reviewNode.ID,
+		Payload: json.RawMessage(fmt.Sprintf(`{
+			"blocked":true,
+			"blocked_reason":"flow rejection max visits exceeded",
+			"max_visits_exceeded":true,
+			"attempted_reject_visit":12,
+			"created_at_override":"%s"
+		}`, flowRejectedTime.Format(time.RFC3339Nano))),
+	}); err != nil {
+		t.Fatalf("Record flow.rejected: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE project_task_event SET created_at = $2 WHERE task_id = $1 AND event_type = 'flow.rejected'`, created.ID, flowRejectedTime); err != nil {
+		t.Fatalf("Update flow.rejected created_at: %v", err)
+	}
+
+	_, err = svc.ResumeValidationBlockedTask(ctx, created.ID, Actor{Type: "human_user", ID: pmUser.ID})
+	var resumeErr TaskResumeBlockedStateError
+	if !errors.As(err, &resumeErr) {
+		t.Fatalf("ResumeValidationBlockedTask err = %v, want TaskResumeBlockedStateError", err)
+	}
+	if resumeErr.BlockerClass != RecoveryBlockerClassFlowRejectionMaxVisits {
+		t.Fatalf("resume blocker_class = %q, want %q", resumeErr.BlockerClass, RecoveryBlockerClassFlowRejectionMaxVisits)
+	}
+	if resumeErr.BlockerReason != blockedReason {
+		t.Fatalf("resume blocker_reason = %q, want %q", resumeErr.BlockerReason, blockedReason)
+	}
+}
+
 func TestTaskServiceIntegrationResumeValidationBlockedTaskBypassesOutstandingProjectGate(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
