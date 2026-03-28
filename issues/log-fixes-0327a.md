@@ -596,3 +596,16 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationPromptFingerprintIncludesRepoVersion|HandleCompletedProjectExecutionContinuationTurnSuppressesRepeatedRediscoveryBlockedRetry)$' -count=1`
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerEnsureProjectContinuationMessage(AllowsRetryAfterRepoVersionChange|SuppressesRepeatedConsumedRediscoveryBlockedContinuation)$' -count=1`
   - fresh live proof: after the committed `3385` rebuild/restart, worker startup created continuation `1a3d5e8b-93f4-4dd3-982a-5711b04b633d` for PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`; turn `b2f8bb6d-1fa9-44a7-8a5d-fccab126428b` then called `task.update` successfully, moved task `43` to `in_progress`, and spawned active task session `0686f943-00df-4d20-ac56-9ea4edb0dee7`
+- 2026-03-28 05:00:19 MDT - skip explicit no-decompose crawl task decomposition
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go) so `Analyze(...)` respects explicit no-decompose / execute-directly directives, and `extractDeliverables(...)` now canonicalizes heading variants like `Exact Steps` / `Critical Rules` while skipping fenced code blocks
+  - this prevents procedural numbered steps and inline code from being persisted as child tasks when the brief already says the work must stay in one direct session
+  - added exact regression coverage in:
+    - [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go)
+    - [`internal/task/service_integration_test.go`](/Users/sam/dev/otter-camp/internal/task/service_integration_test.go)
+    - [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(ExtractDeliverablesIgnores(ProceduralStepsAndImportantSections|ExactStepsCriticalRulesAndCodeFence)|PrepareQueueDecompositionSkips(ConcreteDeliverableWithProceduralSections|ConcreteDeliverableWithExactStepsAndNoDecompose|SingleConcreteTemplateWithRequirements)|ValidateBoundedTaskSizeAllowsSingleConcreteTemplateWithRequirements)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/task -run 'TestTaskServiceIntegration(QueueAllowsSingleConcreteTemplateWithRequirements|QueueAllowsConcreteCrawlerTaskWithExactStepsAndNoDecompose|QueueRejectsOversizedUnsplittableWork)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/tools/native -run 'TestIntegrationTaskUpdateQueue(AllowsSingleConcreteTemplateWithRequirements|AllowsConcreteCrawlerTaskWithExactStepsAndNoDecompose|KeepsDecomposedParentDraftAndQueuesChildren)$' -count=1`
+  - live diagnosis behind the fix: Sam.blog task `49` had already decomposed into malformed children `50-54`, including procedural browser-step tasks and code child `54: import os, json`, even though the parent brief explicitly said not to decompose
+  - fresh production proof is pending the next natural creation or queue of a replacement crawl task with the same brief; the currently active malformed child tasks are pre-fix artifacts
