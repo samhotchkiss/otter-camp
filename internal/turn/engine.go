@@ -9762,6 +9762,7 @@ func (e *TurnEngine) appendReviewActionState(ctx context.Context, rt *turnRuntim
 		}
 		return true, nil
 	}
+	applySyntheticContinuationActionPrompt(rt, actionMessage)
 	rt.historyStartID = &actionMessage.ID
 	if err := e.persistTurnHistoryStart(ctx, rt, actionMessage.ID); err != nil {
 		return false, err
@@ -21473,6 +21474,7 @@ func (e *TurnEngine) retryReviewValidationLoop(ctx context.Context, rt *turnRunt
 	if err != nil {
 		return false, err
 	}
+	applySyntheticContinuationActionPrompt(rt, actionMessage)
 	rt.historyStartID = &actionMessage.ID
 	if err := e.persistTurnHistoryStart(ctx, rt, actionMessage.ID); err != nil {
 		return false, err

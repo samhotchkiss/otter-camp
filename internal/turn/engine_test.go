@@ -2801,6 +2801,7 @@ func TestAppendReviewActionStateRootsHistoryForReviewTask(t *testing.T) {
 	taskID := uuid.New()
 	executionID := uuid.New()
 	runID := uuid.New()
+	description := "Scrape all 35 technonymous.org blog posts listed in content/technonymous-index.json and save each as a clean Markdown file under content/posts/."
 	fixture.session.ScopeType = "project_task"
 	fixture.session.ScopeID = taskID
 	fixture.session.Metadata = mustRawJSON(t, map[string]any{
@@ -2809,9 +2810,11 @@ func TestAppendReviewActionStateRootsHistoryForReviewTask(t *testing.T) {
 	fixture.engine.tasks = &fakeTaskRepo{
 		items: map[uuid.UUID]repo.ProjectTask{
 			taskID: {
-				ID:         taskID,
-				ProjectID:  uuid.New(),
-				WorkStatus: "review",
+				ID:          taskID,
+				ProjectID:   uuid.New(),
+				Title:       "Scrape technonymous posts to markdown",
+				Description: &description,
+				WorkStatus:  "review",
 			},
 		},
 	}
@@ -2836,9 +2839,10 @@ func TestAppendReviewActionStateRootsHistoryForReviewTask(t *testing.T) {
 	})
 	fixture.messages.upsert(initialMessage)
 	rt := &turnRuntime{
-		session:          fixture.session,
-		turn:             turn,
-		initialMessageID: fixture.userMessageID,
+		session:            fixture.session,
+		turn:               turn,
+		initialMessageID:   fixture.userMessageID,
+		initialMessageText: "Review only.\nStart with the preferred deliverable target `content/technonymous-index.json`.",
 	}
 
 	appended, err := fixture.engine.appendReviewActionState(context.Background(), rt, false)
@@ -2851,9 +2855,15 @@ func TestAppendReviewActionStateRootsHistoryForReviewTask(t *testing.T) {
 	if rt.historyStartID == nil {
 		t.Fatal("historyStartID = nil, want synthetic review action message")
 	}
+	if rt.initialMessageID != *rt.historyStartID {
+		t.Fatalf("initialMessageID = %s, want %s", rt.initialMessageID, *rt.historyStartID)
+	}
 	message, getErr := fixture.messages.GetByID(context.Background(), *rt.historyStartID)
 	if getErr != nil {
 		t.Fatalf("GetByID historyStartID: %v", getErr)
+	}
+	if rt.initialMessageText != strings.TrimSpace(message.Content) {
+		t.Fatalf("initialMessageText = %q, want appended review action prompt", rt.initialMessageText)
 	}
 	if !strings.Contains(message.Content, "flow.review_decision") {
 		t.Fatalf("review action prompt = %q, want flow.review_decision guidance", message.Content)
@@ -2861,8 +2871,82 @@ func TestAppendReviewActionStateRootsHistoryForReviewTask(t *testing.T) {
 	if !strings.Contains(message.Content, executionID.String()) {
 		t.Fatalf("review action prompt = %q, want execution id %s", message.Content, executionID)
 	}
+	if !strings.Contains(message.Content, "preferred deliverable root `content/posts`") {
+		t.Fatalf("review action prompt = %q, want preferred deliverable root guidance", message.Content)
+	}
 	if promptRunID := runIDFromMetadata(message.Metadata); promptRunID == nil || *promptRunID != runID {
 		t.Fatalf("review action prompt run_id = %v, want %s", promptRunID, runID)
+	}
+}
+
+func TestRetryReviewValidationLoopRefreshesInitialPromptState(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Scrape all 35 technonymous.org blog posts listed in content/technonymous-index.json and save each as a clean Markdown file under content/posts/."
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				ProjectID:   uuid.New(),
+				Title:       "Scrape technonymous posts to markdown",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata:    json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+
+	turn := &chat.ChatTurn{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		Status:    "in_progress",
+	}
+	fixture.chat.turns[turn.ID] = turn
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turn.ID)
+
+	rt := &turnRuntime{
+		session:            fixture.session,
+		turn:               turn,
+		initialMessageID:   fixture.userMessageID,
+		initialMessageText: "Review only.\nStart with the preferred deliverable target `content/technonymous-index.json`.",
+	}
+	taskRecord, err := fixture.engine.tasks.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+
+	retried, err := fixture.engine.retryReviewValidationLoop(context.Background(), rt, taskRecord)
+	if err != nil {
+		t.Fatalf("retryReviewValidationLoop: %v", err)
+	}
+	if !retried {
+		t.Fatal("retryReviewValidationLoop = false, want true")
+	}
+	if rt.historyStartID == nil {
+		t.Fatal("historyStartID = nil, want retry review prompt")
+	}
+	if rt.initialMessageID != *rt.historyStartID {
+		t.Fatalf("initialMessageID = %s, want %s", rt.initialMessageID, *rt.historyStartID)
+	}
+	message, err := fixture.messages.GetByID(context.Background(), *rt.historyStartID)
+	if err != nil {
+		t.Fatalf("GetByID retry prompt: %v", err)
+	}
+	if rt.initialMessageText != strings.TrimSpace(message.Content) {
+		t.Fatalf("initialMessageText = %q, want appended retry review prompt", rt.initialMessageText)
+	}
+	if !strings.Contains(message.Content, "preferred deliverable root `content/posts`") {
+		t.Fatalf("retry prompt = %q, want preferred deliverable root guidance", message.Content)
+	}
+	if target := taskReviewPreferredDeliverableTarget(rt); target != "" {
+		t.Fatalf("taskReviewPreferredDeliverableTarget(...) = %q, want empty target for root-first prompt", target)
+	}
+	if root := taskReviewPreferredDeliverableRoot(rt); root != "content/posts" {
+		t.Fatalf("taskReviewPreferredDeliverableRoot(...) = %q, want %q", root, "content/posts")
 	}
 }
 

@@ -647,3 +647,16 @@
   - deployed by rebuilding `./bin/ottercamp`, restarting tmux `codex-e2e-20260324`, and confirming `./bin/ottercamp health --output json` returned `status=ok`
   - live diagnosis behind the fix: fresh task-56 review continuation summary `399` at `05:53:06 MDT` still named `content/technonymous-index.json` as the preferred deliverable target because the first `in content/...` match in the brief shadowed the later `under content/posts/` output root
   - fresh post-final-deploy production proof is pending because that pre-fix review session closed before another continuation could be emitted on the corrected binary
+- 2026-03-28 06:17:00 MDT - refresh review guard state after appending fresh task_review_action prompts
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so both review-retry append paths now call `applySyntheticContinuationActionPrompt(...)` after appending a fresh `task_review_action` user message:
+    - `appendReviewActionState(...)`
+    - `retryReviewValidationLoop(...)`
+  - this keeps `rt.initialMessageID` / `rt.initialMessageText` aligned with the newest synthetic review prompt, which is the prompt text the preferred-target and preferred-root review guards consult during the same turn
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - `TestAppendReviewActionStateRootsHistoryForReviewTask`
+    - `TestRetryReviewValidationLoopRefreshesInitialPromptState`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(AppendReviewActionStateRootsHistoryForReviewTask|RetryReviewValidationLoopRefreshesInitialPromptState|BuildTaskReviewActionPromptIgnoresHistoricalInputArtifactOutsidePreferredDeliverableRoot|PreferredTaskDeliverableRootSkipsDependencyArtifactAndUsesOutputRoot)$' -count=1`
+  - deployed by rebuilding `./bin/ottercamp`, restarting tmux `codex-e2e-20260324`, and confirming `./bin/ottercamp health --output json` returned `status=ok`
+  - live diagnosis behind the fix: task-56 retry turn `a826ec5e-bf3d-408b-8ee4-67e1782f1b0f` had a fresh root-aware prompt at message `51` and assistant response at message `52`, but the next guard error at message `53` still referenced `content/technonymous-index.json`, proving the runtime state had not been refreshed to the new prompt
+  - fresh post-deploy production proof is pending because tasks `56` and `57` had already drained to `blocked` with no active session after the restart, so there was no immediate retry on the corrected binary
