@@ -25,6 +25,9 @@ import (
 )
 
 var utf8ReplacementBytes = []byte("\uFFFD")
+var preferredDeliverableRootPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(?:under|in)\s+/?((?:content(?:/[A-Za-z0-9._-]+)+)/?)`),
+}
 
 type listedEntry struct {
 	name       string
@@ -32,6 +35,11 @@ type listedEntry struct {
 	entryType  string
 	sizeBytes  int64
 	modifiedAt string
+}
+
+type sessionRecoveryState struct {
+	targetPath string
+	reviewLane bool
 }
 
 func (e *NativeToolExecutor) handleFileRead(ctx context.Context, input map[string]any) (map[string]any, error) {
@@ -277,12 +285,18 @@ func (e *NativeToolExecutor) rejectRecoveryTargetReread(ctx context.Context, sco
 	if e == nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
 		return nil, false, nil
 	}
-	targetPath := e.latestRecoveryTargetPathForSession(ctx, scope)
+	recoveryState := e.sessionRecoveryState(ctx, scope)
+	targetPath := recoveryState.targetPath
 	if targetPath == "" {
 		return nil, false, nil
 	}
 	normalizedPath := normalizeWorkspacePath(relativePath)
 	if normalizedPath == "" || sameOrNestedWorkspacePath(normalizedPath, targetPath) {
+		return nil, false, nil
+	}
+	if allow, allowErr := e.allowReviewDeliverableRootInspection(ctx, scope, normalizedPath, targetPath, recoveryState.reviewLane); allowErr != nil {
+		return nil, false, allowErr
+	} else if allow {
 		return nil, false, nil
 	}
 	return map[string]any{
@@ -294,6 +308,139 @@ func (e *NativeToolExecutor) rejectRecoveryTargetReread(ctx context.Context, sco
 			normalizedPath,
 		),
 	}, true, nil
+}
+
+func (e *NativeToolExecutor) allowReviewDeliverableRootInspection(ctx context.Context, scope workspaceScope, normalizedPath, targetPath string, reviewLane bool) (bool, error) {
+	if e == nil || e.tasks == nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
+		return false, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *scope.taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") && !reviewLane {
+		return false, nil
+	}
+	rootPath := preferredTaskDeliverableRoot(taskRecord)
+	if rootPath == "" || !workspacePathWithinRoot(targetPath, rootPath) {
+		return false, nil
+	}
+	return workspacePathWithinRoot(normalizedPath, rootPath), nil
+}
+
+func preferredTaskDeliverableRoot(taskRecord repo.ProjectTask) string {
+	if taskRecord.Description == nil {
+		return ""
+	}
+	description := strings.TrimSpace(*taskRecord.Description)
+	for _, pattern := range preferredDeliverableRootPatterns {
+		matches := pattern.FindAllStringSubmatch(description, -1)
+		for _, match := range matches {
+			if len(match) < 2 {
+				continue
+			}
+			root := normalizeExplicitDeliverablePathCandidate(match[1])
+			if !looksLikePreferredDeliverableRootPath(root) {
+				continue
+			}
+			return root
+		}
+	}
+	return ""
+}
+
+func normalizeExplicitDeliverablePathCandidate(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	trimmed = strings.Trim(trimmed, "`'\"“”‘’()[]{}")
+	trimmed = strings.TrimRight(trimmed, ".,:;!?")
+	trimmed = strings.Trim(trimmed, "`'\"“”‘’()[]{}")
+	return normalizeWorkspacePath(trimmed)
+}
+
+func looksLikePreferredDeliverableRootPath(normalized string) bool {
+	normalized = normalizeWorkspacePath(normalized)
+	if normalized == "" {
+		return false
+	}
+	if !strings.HasPrefix(strings.ToLower(normalized), "content/") {
+		return false
+	}
+	return !strings.Contains(filepath.Base(normalized), ".")
+}
+
+func workspacePathWithinRoot(path, root string) bool {
+	path = normalizeWorkspacePath(path)
+	root = normalizeWorkspacePath(root)
+	if path == "" || root == "" {
+		return false
+	}
+	if path == root {
+		return true
+	}
+	return strings.HasPrefix(path, strings.TrimSuffix(root, "/")+"/")
+}
+
+func (e *NativeToolExecutor) sessionRecoveryState(ctx context.Context, scope workspaceScope) sessionRecoveryState {
+	if e == nil || e.messages == nil || scope.sessionID == nil || *scope.sessionID == uuid.Nil {
+		return sessionRecoveryState{}
+	}
+	messages, err := e.messages.ListBySession(ctx, *scope.sessionID)
+	if err != nil {
+		return sessionRecoveryState{}
+	}
+	state := sessionRecoveryState{
+		reviewLane: sessionMessagesContainReviewPrompt(messages),
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if !strings.EqualFold(strings.TrimSpace(messages[i].Role), "system") {
+			continue
+		}
+		if target := parseRecoveryTargetPath(messages[i].Content); target != "" {
+			state.targetPath = target
+			return state
+		}
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		role := strings.ToLower(strings.TrimSpace(messages[i].Role))
+		if role != "user" && role != "system" {
+			continue
+		}
+		if target := parsePromptDeliverableTarget(messages[i].Content); target != "" {
+			state.targetPath = target
+			return state
+		}
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if !strings.EqualFold(strings.TrimSpace(messages[i].Role), "tool_result") {
+			continue
+		}
+		if target := parseRecentDeliverableTargetFromToolResult(messages[i].Content); target != "" {
+			state.targetPath = target
+			return state
+		}
+	}
+	return state
+}
+
+func sessionMessagesContainReviewPrompt(messages []repo.ChatMessage) bool {
+	for i := len(messages) - 1; i >= 0; i-- {
+		role := strings.ToLower(strings.TrimSpace(messages[i].Role))
+		if role != "user" && role != "system" {
+			continue
+		}
+		if looksLikeReviewPrompt(messages[i].Content) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeReviewPrompt(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	return strings.HasPrefix(trimmed, "Review only.") && strings.Contains(trimmed, "flow.review_decision")
 }
 
 func substantiveExplicitDeliverableExists(workspaceRoot, deliverablePath string) (bool, error) {
@@ -346,39 +493,7 @@ func substantiveExplicitDeliverableExists(workspaceRoot, deliverablePath string)
 }
 
 func (e *NativeToolExecutor) latestRecoveryTargetPathForSession(ctx context.Context, scope workspaceScope) string {
-	if e == nil || e.messages == nil || scope.sessionID == nil || *scope.sessionID == uuid.Nil {
-		return ""
-	}
-	messages, err := e.messages.ListBySession(ctx, *scope.sessionID)
-	if err != nil {
-		return ""
-	}
-	for i := len(messages) - 1; i >= 0; i-- {
-		if !strings.EqualFold(strings.TrimSpace(messages[i].Role), "system") {
-			continue
-		}
-		if target := parseRecoveryTargetPath(messages[i].Content); target != "" {
-			return target
-		}
-	}
-	for i := len(messages) - 1; i >= 0; i-- {
-		role := strings.ToLower(strings.TrimSpace(messages[i].Role))
-		if role != "user" && role != "system" {
-			continue
-		}
-		if target := parsePromptDeliverableTarget(messages[i].Content); target != "" {
-			return target
-		}
-	}
-	for i := len(messages) - 1; i >= 0; i-- {
-		if !strings.EqualFold(strings.TrimSpace(messages[i].Role), "tool_result") {
-			continue
-		}
-		if target := parseRecentDeliverableTargetFromToolResult(messages[i].Content); target != "" {
-			return target
-		}
-	}
-	return ""
+	return e.sessionRecoveryState(ctx, scope).targetPath
 }
 
 func parsePromptDeliverableTarget(content string) string {

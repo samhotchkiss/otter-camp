@@ -23718,6 +23718,11 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 
 func (e *TurnEngine) reviewPromptDeliverableTarget(ctx context.Context, session *chat.ChatSession, taskRecord repo.ProjectTask) string {
 	rootPath := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
+	if rootPath != "" {
+		if checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata); ok && len(checkpoint.Outputs) > 1 {
+			return ""
+		}
+	}
 	targetWithinRoot := func(targetPath string) bool {
 		normalized := normalizeWorkspaceRelativePath(targetPath)
 		if normalized == "" {

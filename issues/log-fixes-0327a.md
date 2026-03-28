@@ -878,3 +878,26 @@
     - task-63 review session `075cf859-5b23-4077-8f0f-5f25236d36c0` regenerated its checkpoint at message `224` with `Outputs: content/posts/practice-eliminating-streaming-video.md ...`
     - the same session’s review prompt switched to the real markdown deliverable target `content/posts/practice-eliminating-streaming-video.md` at messages `226-234`
     - the old manifest-target family is no longer the hot review failure on that lane; the remaining waste is broader batch-review discovery after the first preferred file read
+- 2026-03-28 09:50:43 MDT - keep batch review on the deliverable root and let blocked review retries inspect that root
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `reviewPromptDeliverableTarget(...)` now intentionally returns no single-file target when a content-migration checkpoint has multiple outputs under the preferred deliverable root
+    - batch review prompts therefore stay on `Start with the preferred deliverable root \`content/posts\`` instead of nominating one representative markdown file as the preferred deliverable target
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestBuildTaskReviewActionPromptPrefersDeliverableRootForBatchContentMigrationOutputs`
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `rejectRecoveryTargetReread(...)` now derives both the recovery target and whether the session is still a review lane from a single message scan
+    - blocked review retries are now allowed to list/read within the declared deliverable root when the stale recovery target lives under that same root
+    - broad rereads outside the root still return `recovery_target_focus_required`
+  - changed [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go):
+    - added `TestFileListAllowsReviewDeliverableRootInspectionWithinRecoveryTargetRoot`
+    - added `TestFileListAllowsBlockedReviewLaneDeliverableRootInspectionWithinRecoveryTargetRoot`
+    - added `TestFileListStillRejectsReviewInspectionOutsideDeliverableRoot`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestBuildTaskReviewActionPromptPrefersDeliverableRootForBatchContentMigrationOutputs$' -count=1`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(FileList(AllowsReviewDeliverableRootInspectionWithinRecoveryTargetRoot|AllowsBlockedReviewLaneDeliverableRootInspectionWithinRecoveryTargetRoot|StillRejectsReviewInspectionOutsideDeliverableRoot)|LatestRecoveryTargetPathForSession(FallsBackToReviewPromptTarget|PrefersSystemRecoveryTarget)|FileReadRejectsPlaceholder(RecentReadTargetWithoutExplicitDeliverable|ReviewPromptTargetWithoutExplicitDeliverable))$' -count=1`
+  - live diagnosis behind the fix:
+    - pre-fix task-62 session `7e33dd11-d9a0-4799-9f4a-002e454b835e` blocked `file.read content/technonymous-index.json` and `file.list content/posts` at messages `311-312` with `recovery_target_focus_required`, even though the review retry prompt already named preferred deliverable root `content/posts`
+  - current live state after restart:
+    - the exact `file.list content/posts` call has not re-fired on the new binary yet
+    - the hot task-62 review session resumed at `09:50:08 MDT` and moved straight into direct deliverable reads at messages `321-326`
+    - the only `recovery_target_focus_required` rows in the last five minutes remained the pre-restart `09:46:28 MDT` rows `311-312`, so the old loop did not immediately reopen on the new runtime

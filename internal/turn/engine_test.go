@@ -35679,6 +35679,46 @@ func TestBuildTaskReviewActionPromptIgnoresRecoveryCheckpointOutsidePreferredDel
 	}
 }
 
+func TestBuildTaskReviewActionPromptPrefersDeliverableRootForBatchContentMigrationOutputs(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Fetch posts 25-35 from technonymous-index.json and save the markdown files under content/posts/."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  63,
+				Title:       "Fetch posts 25-35 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"bootstrap_first_wave_selected": true,
+					"content_migration_checkpoint": map[string]any{
+						"version": 1,
+						"outputs": []map[string]any{
+							{"path": "content/posts/practice-eliminating-streaming-video.md"},
+							{"path": "content/posts/practice-listen-to-albums.md"},
+						},
+					},
+				}),
+			},
+		},
+	}
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "Start with the preferred deliverable root `content/posts`") {
+		t.Fatalf("prompt = %q, want preferred deliverable root guidance", prompt)
+	}
+	if strings.Contains(prompt, "Start with the preferred deliverable target `content/posts/practice-eliminating-streaming-video.md`") {
+		t.Fatalf("prompt = %q, did not want single-file target guidance for batch outputs", prompt)
+	}
+}
+
 func TestBuildTaskReviewActionPromptSpecializesOrchestrationOnlyParentReview(t *testing.T) {
 	t.Parallel()
 

@@ -117,6 +117,181 @@ func TestLatestRecoveryTargetPathForSessionPrefersSystemRecoveryTarget(t *testin
 	}
 }
 
+func TestFileListAllowsReviewDeliverableRootInspectionWithinRecoveryTargetRoot(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "content/posts/practice-eliminating-streaming-video.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(content/posts): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte("# Practice eliminating streaming video\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "content", "posts", "practice-listen-to-albums.md"), []byte("# Practice listen to albums\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(sibling): %v", err)
+	}
+
+	description := "Fetch posts 25-35 from technonymous-index.json via web_fetch and save the markdown files under content/posts/."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Fetch posts 25-35 from technonymous-index.json via web_fetch and save the markdown files under content/posts/",
+			Description:    &description,
+			WorkStatus:     "review",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "system",
+				Content:   "[Recovery resume state]\nTarget file: content/posts/practice-eliminating-streaming-video.md\n",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.list", map[string]any{"path": "content/posts"})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.list): %v", err)
+	}
+	if got := out["error"]; got != nil {
+		t.Fatalf("error = %v, want nil", got)
+	}
+	if got := out["total"]; got != 2 {
+		t.Fatalf("total = %v, want 2", got)
+	}
+}
+
+func TestFileListAllowsBlockedReviewLaneDeliverableRootInspectionWithinRecoveryTargetRoot(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "content/posts/practice-eliminating-streaming-video.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(content/posts): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte("# Practice eliminating streaming video\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "content", "posts", "practice-listen-to-albums.md"), []byte("# Practice listen to albums\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(sibling): %v", err)
+	}
+
+	description := "Fetch posts 25-35 from technonymous-index.json via web_fetch and save the markdown files under content/posts/."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Fetch posts 25-35 from technonymous-index.json via web_fetch and save the markdown files under content/posts/",
+			Description:    &description,
+			WorkStatus:     "blocked",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "system",
+				Content:   "[Recovery resume state]\nTarget file: content/posts/practice-eliminating-streaming-video.md\n",
+			},
+			{
+				SessionID: sessionID,
+				Role:      "user",
+				Content: "Review only.\n" +
+					"Start with the preferred deliverable root `content/posts`. Inspect that output root directly before broader workspace, git, or task rediscovery.\n" +
+					"Use flow.review_decision with the active flow_node_execution_id to approve or reject this review step.",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.list", map[string]any{"path": "content/posts"})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.list): %v", err)
+	}
+	if got := out["error"]; got != nil {
+		t.Fatalf("error = %v, want nil", got)
+	}
+	if got := out["total"]; got != 2 {
+		t.Fatalf("total = %v, want 2", got)
+	}
+}
+
+func TestFileListStillRejectsReviewInspectionOutsideDeliverableRoot(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "content/posts/practice-eliminating-streaming-video.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(content/posts): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte("# Practice eliminating streaming video\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+
+	description := "Fetch posts 25-35 from technonymous-index.json via web_fetch and save the markdown files under content/posts/."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Fetch posts 25-35 from technonymous-index.json via web_fetch and save the markdown files under content/posts/",
+			Description:    &description,
+			WorkStatus:     "review",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "system",
+				Content:   "[Recovery resume state]\nTarget file: content/posts/practice-eliminating-streaming-video.md\n",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.list", map[string]any{"path": "."})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.list): %v", err)
+	}
+	if got := out["error"]; got != "recovery_target_focus_required" {
+		t.Fatalf("error = %v, want recovery_target_focus_required", got)
+	}
+	if got := out["deliverable_path"]; got != targetPath {
+		t.Fatalf("deliverable_path = %v, want %s", got, targetPath)
+	}
+}
+
 func TestFileReadRejectsPlaceholderRecentReadTargetWithoutExplicitDeliverable(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()
