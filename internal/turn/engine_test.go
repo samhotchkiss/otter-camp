@@ -12083,6 +12083,53 @@ func TestShouldBlockTaskReviewPreferredDeliverableFirstTool(t *testing.T) {
 	}
 }
 
+func TestShouldBlockTaskReviewCompanionPlanningArtifactToolWithoutExplicitContract(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Do not continue implementation, do not write deliverable files, and do not summarize what you plan to review.\n" +
+			"Do not invent companion planning-artifact requirements from neighboring tasks, generic playbook assumptions, or filenames alone. If the current task metadata does not carry an explicit artifact contract, review the actual deliverable files against this task's title and description only.\n" +
+			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
+	}
+
+	blocked, reason := shouldBlockTaskReviewCompanionPlanningArtifactTool(rt, "file.read", map[string]any{"path": "planning/prd-spec/oc-34-prd.md"})
+	if !blocked {
+		t.Fatal("expected no-contract review to block planning artifact file.read")
+	}
+	if !strings.Contains(reason, "no explicit companion planning-artifact contract") {
+		t.Fatalf("guard reason = %q, want no-contract guidance", reason)
+	}
+	if !strings.Contains(reason, "flow.review_decision") {
+		t.Fatalf("guard reason = %q, want review-decision guidance", reason)
+	}
+
+	if blocked, _ := shouldBlockTaskReviewCompanionPlanningArtifactTool(rt, "file.read", map[string]any{"path": "content/posts/2025-07-29-hello-world.md"}); blocked {
+		t.Fatal("expected real deliverable read to remain allowed")
+	}
+}
+
+func TestShouldNotBlockTaskReviewCompanionPlanningArtifactToolForPlanningDeliverableTarget(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `planning/sambot-feature-spec.md`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `planning/sambot-feature-spec.md` is missing.\n" +
+			"If reading `planning/sambot-feature-spec.md` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.\n" +
+			"Do not continue implementation, do not write deliverable files, and do not summarize what you plan to review.\n" +
+			"Do not invent companion planning-artifact requirements from neighboring tasks, generic playbook assumptions, or filenames alone. If the current task metadata does not carry an explicit artifact contract, review the actual deliverable files against this task's title and description only.\n" +
+			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
+	}
+
+	if blocked, reason := shouldBlockTaskReviewCompanionPlanningArtifactTool(rt, "file.read", map[string]any{"path": "planning/sambot-feature-spec.md"}); blocked {
+		t.Fatalf("expected named planning deliverable to remain allowed, reason = %q", reason)
+	}
+}
+
 func TestShouldNotBlockTaskReviewPreferredDeliverableFirstToolForOrchestrationParent(t *testing.T) {
 	parentTaskID := uuid.New()
 	rt := &turnRuntime{

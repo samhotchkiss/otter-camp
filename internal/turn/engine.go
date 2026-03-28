@@ -12524,6 +12524,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := shouldBlockTaskReviewCompanionPlanningArtifactTool(rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt, name, arguments) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -24390,6 +24398,27 @@ func shouldBlockTaskReviewPreferredDeliverableFirstTool(rt *turnRuntime, toolNam
 	}
 }
 
+func shouldBlockTaskReviewCompanionPlanningArtifactTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if !taskReviewCompanionPlanningArtifactBlockApplies(rt) {
+		return false, ""
+	}
+	normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
+	switch normalizedToolName {
+	case "file.read", "file_read", "file.list", "file_list", "file.search", "file_search":
+	default:
+		return false, ""
+	}
+	path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+	if path == "" || !projectBootstrapRecoveryReadsPlanningPath(map[string]any{"path": path}) {
+		return false, ""
+	}
+	targetPath := taskReviewPreferredDeliverableTarget(rt)
+	if targetPath != "" && sameWorkspaceRelativePath(path, targetPath) {
+		return false, ""
+	}
+	return true, buildTaskReviewCompanionPlanningArtifactGuardError(targetPath, normalizedToolName, path)
+}
+
 func taskReviewPromptActive(rt *turnRuntime) bool {
 	if rt == nil || rt.session == nil {
 		return false
@@ -24406,6 +24435,17 @@ func taskReviewPreferredDeliverableFirstApplies(rt *turnRuntime) bool {
 		return false
 	}
 	return !strings.Contains(strings.TrimSpace(rt.initialMessageText), "This task is an orchestration-only parent.")
+}
+
+func taskReviewCompanionPlanningArtifactBlockApplies(rt *turnRuntime) bool {
+	if !taskReviewPromptActive(rt) {
+		return false
+	}
+	initial := strings.TrimSpace(rt.initialMessageText)
+	if strings.Contains(initial, "This task is an orchestration-only parent.") {
+		return false
+	}
+	return strings.Contains(initial, "Do not invent companion planning-artifact requirements")
 }
 
 func taskReviewPreferredDeliverableTarget(rt *turnRuntime) string {
@@ -25031,6 +25071,18 @@ func buildTaskReviewPreferredDeliverableFirstGuardError(targetPath, toolName str
 	default:
 		return fmt.Sprintf("this review prompt already names preferred deliverable target `%s`. Do not inspect sibling files before reading `%s` directly. Read `%s` first, then call flow.review_decision reject immediately if it is missing or a placeholder.", targetPath, targetPath, targetPath)
 	}
+}
+
+func buildTaskReviewCompanionPlanningArtifactGuardError(targetPath, toolName, path string) string {
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	path = normalizeWorkspaceRelativePath(path)
+	if targetPath != "" {
+		return fmt.Sprintf("this review prompt already says the task has no explicit companion planning-artifact contract. Do not inspect planning artifact `%s` with %s now. Review the actual deliverable `%s` and any directly related output files instead, then call flow.review_decision.", path, toolName, targetPath)
+	}
+	if path == "" {
+		return fmt.Sprintf("this review prompt already says the task has no explicit companion planning-artifact contract. Do not inspect planning/ files with %s now. Review the actual deliverable files instead, then call flow.review_decision.", toolName)
+	}
+	return fmt.Sprintf("this review prompt already says the task has no explicit companion planning-artifact contract. Do not inspect planning artifact `%s` with %s now. Review the actual deliverable files instead, then call flow.review_decision.", path, toolName)
 }
 
 func shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt *turnRuntime, blocked bool) bool {
