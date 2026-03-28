@@ -13447,6 +13447,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := shouldBlockTaskReviewDirtyWorkspaceRetryTool(rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -26432,6 +26440,18 @@ func shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt *turnRuntime, c
 	return true, buildTaskReviewPreferredDeliverableBatchReadGuardError(targetPath)
 }
 
+func shouldBlockTaskReviewDirtyWorkspaceRetryTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if !taskReviewDirtyWorkspaceRejectOnlyApplies(rt) {
+		return false, ""
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "flow.review_decision", "flow_review_decision":
+		return false, ""
+	default:
+		return true, buildTaskReviewDirtyWorkspaceRetryGuardError(toolName)
+	}
+}
+
 func shouldBlockTaskReviewRepeatedCheckpointOutputTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
 	if !taskReviewPromptActive(rt) {
 		return false, ""
@@ -26816,6 +26836,15 @@ func taskReviewPreferredDeliverableFirstApplies(rt *turnRuntime) bool {
 		return false
 	}
 	return !strings.Contains(strings.TrimSpace(rt.initialMessageText), "This task is an orchestration-only parent.")
+}
+
+func taskReviewDirtyWorkspaceRejectOnlyApplies(rt *turnRuntime) bool {
+	if !taskReviewPromptActive(rt) {
+		return false
+	}
+	initial := strings.TrimSpace(rt.initialMessageText)
+	return strings.Contains(initial, "workspace is still dirty") &&
+		strings.Contains(initial, "reissue flow.review_decision immediately with decision=reject")
 }
 
 func taskReviewPromptNamesCheckpointOutputSet(rt *turnRuntime, rootPath string) bool {
@@ -27819,6 +27848,14 @@ func buildTaskReviewPreferredDeliverableBatchReadGuardError(targetPath string) s
 		return "this review batch already reads the preferred deliverable target. Do not inspect sibling files in the same step. Read the preferred target first, then call flow.review_decision reject immediately if that read returns not_found, placeholder_deliverable, or mismatched_deliverable_context."
 	}
 	return fmt.Sprintf("this review batch already reads the preferred deliverable target `%s`. Do not inspect sibling files in the same step. Read `%s` first, then call flow.review_decision reject immediately if that read returns not_found, placeholder_deliverable, or mismatched_deliverable_context.", targetPath, targetPath)
+}
+
+func buildTaskReviewDirtyWorkspaceRetryGuardError(toolName string) string {
+	toolName = strings.TrimSpace(toolName)
+	if toolName == "" {
+		return "this review retry already failed approval because the workspace is still dirty. Do not inspect more files or repo/task state now. Call flow.review_decision reject immediately using the existing dirty-workspace evidence and concise findings."
+	}
+	return fmt.Sprintf("this review retry already failed approval because the workspace is still dirty. Do not inspect more files or repo/task state with %s now. Call flow.review_decision reject immediately using the existing dirty-workspace evidence and concise findings.", toolName)
 }
 
 func buildTaskReviewPreferredDeliverableFirstGuardError(targetPath, toolName string) string {

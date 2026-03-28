@@ -14110,6 +14110,57 @@ func TestShouldBlockTaskStatusMessageTool(t *testing.T) {
 	}
 }
 
+func TestShouldBlockTaskReviewDirtyWorkspaceRetryTool(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Inspect the current deliverables and use flow.review_decision to approve or reject this review step.\n" +
+			"Your previous approve attempt for this exact review step failed because the workspace is still dirty.\n" +
+			"Inspect the dirty deliverable state and reissue flow.review_decision immediately with decision=reject and concise findings for flow_node_execution_id " + uuid.NewString() + ".\n" +
+			"Do not reply with narration, a plan, or placeholder arguments.",
+	}
+
+	for _, tc := range []struct {
+		name      string
+		toolName  string
+		arguments map[string]any
+	}{
+		{name: "file read", toolName: "file.read", arguments: map[string]any{"path": "content/posts/post-1.md"}},
+		{name: "task get", toolName: "task.get", arguments: map[string]any{"task_id": uuid.NewString()}},
+		{name: "git status", toolName: "git.status"},
+	} {
+		blocked, reason := shouldBlockTaskReviewDirtyWorkspaceRetryTool(rt, tc.toolName, tc.arguments)
+		if !blocked {
+			t.Fatalf("expected %s to be blocked in dirty-workspace reject-only retry", tc.name)
+		}
+		if !strings.Contains(reason, "workspace is still dirty") {
+			t.Fatalf("%s guard reason = %q, want dirty-workspace guidance", tc.name, reason)
+		}
+		if !strings.Contains(reason, "flow.review_decision reject") {
+			t.Fatalf("%s guard reason = %q, want reject guidance", tc.name, reason)
+		}
+	}
+
+	if blocked, reason := shouldBlockTaskReviewDirtyWorkspaceRetryTool(rt, "flow.review_decision", map[string]any{
+		"flow_node_execution_id": uuid.NewString(),
+		"decision":               "reject",
+	}); blocked {
+		t.Fatalf("flow.review_decision should remain allowed, reason = %q", reason)
+	}
+
+	cleanRT := &turnRuntime{
+		session: rt.session,
+		initialMessageText: "Review only.\n" +
+			"Inspect the current deliverables and use flow.review_decision to approve or reject this review step.",
+	}
+	if blocked, _ := shouldBlockTaskReviewDirtyWorkspaceRetryTool(cleanRT, "file.read", map[string]any{"path": "content/posts/post-1.md"}); blocked {
+		t.Fatal("expected ordinary review prompt to keep file.read available")
+	}
+}
+
 func TestShouldBlockTaskPlaceholderDeliverableFollowOnTool(t *testing.T) {
 	rt := &turnRuntime{
 		session: &chat.ChatSession{

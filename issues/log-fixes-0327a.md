@@ -1123,3 +1123,23 @@
   - result:
     - markdown-batch reviews stop centering on same-root dependency artifacts like `post-index.json`
     - the next remaining seam is review-decision efficiency after the right outputs are already in scope
+- 2026-03-28 12:33:23 MDT - `pending` `Block dirty-workspace review retries from rereading the workspace`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `taskReviewDirtyWorkspaceRejectOnlyApplies(...)` to recognize the exact retry prompt state that already says `workspace is still dirty` and `reissue flow.review_decision immediately with decision=reject`
+    - added `shouldBlockTaskReviewDirtyWorkspaceRetryTool(...)` so that retry state becomes reject-only at tool validation time and all non-`flow.review_decision` tools are blocked
+    - wired that guard into review tool dispatch before the broader preferred-deliverable review guards
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldBlockTaskReviewDirtyWorkspaceRetryTool`
+    - kept the existing dirty-workspace rewrite regression `TestMaybeRewriteDirtyWorkspaceReviewApprovalToolCalls`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(MaybeRewriteDirtyWorkspaceReviewApprovalToolCalls|ShouldBlockTaskReviewDirtyWorkspaceRetryTool|ShouldBlockTaskReviewPreferredDeliverableSiblingReadTool)$' -count=1`
+  - deploy state:
+    - rebuilt and restarted tmux `codex-e2e-20260324`
+    - `./bin/ottercamp health --output json` returned `data.status=ok`
+  - fresh live proof on task `10`:
+    - dirty-workspace retry prompt `215` in session `d901ca6f-d4b5-4ded-8f31-3da57de44b54` still carried the reject-only wording
+    - assistant `217` tried `git.status` with `Let me inspect the dirty workspace state...`
+    - tool result `218` immediately returned the new guard error telling the lane to call `flow.review_decision reject` instead of inspecting repo/task state
+  - result:
+    - dirty-workspace review retries stop spending a full extra turn rereading files or repo state after the runtime already told them to reject immediately
