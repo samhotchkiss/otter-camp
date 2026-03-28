@@ -220,6 +220,136 @@ func TestWorkspaceGitServiceMergeReturnsConflictAndAborts(t *testing.T) {
 	}
 }
 
+func TestWorkspaceGitServiceMergeResetsManagedWorkspaceBeforeMerge(t *testing.T) {
+	ctx := context.Background()
+	projectID := uuid.New()
+	dataDir := t.TempDir()
+	repoRoot := filepath.Join(dataDir, "workspaces", "sam-blog")
+	if err := os.MkdirAll(repoRoot, 0o755); err != nil {
+		t.Fatalf("mkdir repo root: %v", err)
+	}
+	initWorkspaceGitRepo(t, ctx, repoRoot)
+
+	writeWorkspaceGitFile(t, repoRoot, "content/posts/post.md", "base\n")
+	workspaceGitCmd(t, ctx, repoRoot, "add", "-A")
+	workspaceGitCmd(t, ctx, repoRoot, "commit", "-m", "base")
+
+	workspaceGitCmd(t, ctx, repoRoot, "checkout", "-b", "task/56")
+	writeWorkspaceGitFile(t, repoRoot, "content/posts/post.md", "merged output\n")
+	workspaceGitCmd(t, ctx, repoRoot, "add", "content/posts/post.md")
+	workspaceGitCmd(t, ctx, repoRoot, "commit", "-m", "task update")
+	workspaceGitCmd(t, ctx, repoRoot, "checkout", "main")
+
+	writeWorkspaceGitFile(t, repoRoot, "content/posts/post.md", "dirty local workspace\n")
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".ottercamp", "recovery"), 0o755); err != nil {
+		t.Fatalf("mkdir recovery: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".ottercamp", "recovery", "scratch.txt"), []byte("junk\n"), 0o644); err != nil {
+		t.Fatalf("write recovery scratch: %v", err)
+	}
+
+	service, err := NewWorkspaceGitService(WorkspaceGitServiceOptions{
+		Projects: &workspaceGitProjectRepoStub{
+			projects: map[uuid.UUID]repo.Project{
+				projectID: {ID: projectID, Slug: "sam-blog"},
+			},
+		},
+		Environments: &workspaceGitEnvironmentRepoStub{
+			byProject: map[uuid.UUID][]repo.ProjectEnvironment{
+				projectID: {{
+					ID:           uuid.New(),
+					ProjectID:    projectID,
+					IsActive:     true,
+					RepoPath:     workspaceGitStringPointer(repoRoot),
+					TargetBranch: "main",
+				}},
+			},
+		},
+		DataDir: dataDir,
+	})
+	if err != nil {
+		t.Fatalf("NewWorkspaceGitService: %v", err)
+	}
+
+	if err := service.Merge(ctx, projectID, "task/56", "main"); err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+
+	got := readWorkspaceGitFile(t, filepath.Join(repoRoot, "content/posts/post.md"))
+	if got != "merged output\n" {
+		t.Fatalf("merged file content = %q, want %q", got, "merged output\n")
+	}
+	if status := workspaceGitCmd(t, ctx, repoRoot, "status", "--porcelain"); status != "" {
+		t.Fatalf("git status = %q, want clean after managed merge reset", status)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, ".ottercamp", "recovery")); !os.IsNotExist(err) {
+		t.Fatalf(".ottercamp/recovery exists after managed merge cleanup, err=%v", err)
+	}
+}
+
+func TestWorkspaceGitServiceMergeDoesNotResetExternalWorkspaceBeforeMerge(t *testing.T) {
+	ctx := context.Background()
+	projectID := uuid.New()
+	repoRoot := t.TempDir()
+	dataDir := t.TempDir()
+	initWorkspaceGitRepo(t, ctx, repoRoot)
+
+	writeWorkspaceGitFile(t, repoRoot, "content/posts/post.md", "base\n")
+	workspaceGitCmd(t, ctx, repoRoot, "add", "-A")
+	workspaceGitCmd(t, ctx, repoRoot, "commit", "-m", "base")
+
+	workspaceGitCmd(t, ctx, repoRoot, "checkout", "-b", "task/56")
+	writeWorkspaceGitFile(t, repoRoot, "content/posts/post.md", "merged output\n")
+	workspaceGitCmd(t, ctx, repoRoot, "add", "content/posts/post.md")
+	workspaceGitCmd(t, ctx, repoRoot, "commit", "-m", "task update")
+	workspaceGitCmd(t, ctx, repoRoot, "checkout", "main")
+
+	writeWorkspaceGitFile(t, repoRoot, "content/posts/post.md", "dirty external workspace\n")
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".ottercamp", "recovery"), 0o755); err != nil {
+		t.Fatalf("mkdir recovery: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".ottercamp", "recovery", "scratch.txt"), []byte("junk\n"), 0o644); err != nil {
+		t.Fatalf("write recovery scratch: %v", err)
+	}
+
+	service, err := NewWorkspaceGitService(WorkspaceGitServiceOptions{
+		Projects: &workspaceGitProjectRepoStub{
+			projects: map[uuid.UUID]repo.Project{
+				projectID: {ID: projectID, Slug: "sam-blog"},
+			},
+		},
+		Environments: &workspaceGitEnvironmentRepoStub{
+			byProject: map[uuid.UUID][]repo.ProjectEnvironment{
+				projectID: {{
+					ID:           uuid.New(),
+					ProjectID:    projectID,
+					IsActive:     true,
+					RepoPath:     workspaceGitStringPointer(repoRoot),
+					TargetBranch: "main",
+				}},
+			},
+		},
+		DataDir: dataDir,
+	})
+	if err != nil {
+		t.Fatalf("NewWorkspaceGitService: %v", err)
+	}
+
+	err = service.Merge(ctx, projectID, "task/56", "main")
+	if err == nil {
+		t.Fatal("Merge err = nil, want dirty external workspace failure")
+	}
+	if !strings.Contains(err.Error(), "local changes") {
+		t.Fatalf("Merge err = %v, want local changes failure", err)
+	}
+	if got := readWorkspaceGitFile(t, filepath.Join(repoRoot, "content/posts/post.md")); got != "dirty external workspace\n" {
+		t.Fatalf("external workspace content = %q, want %q", got, "dirty external workspace\n")
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, ".ottercamp", "recovery", "scratch.txt")); err != nil {
+		t.Fatalf("expected external recovery scratch to remain, err=%v", err)
+	}
+}
+
 func TestWorkspaceGitServiceMergeAllowsUnrelatedHistories(t *testing.T) {
 	ctx := context.Background()
 	projectID := uuid.New()

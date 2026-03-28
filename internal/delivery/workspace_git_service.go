@@ -73,11 +73,22 @@ func (g *WorkspaceGitService) Merge(ctx context.Context, projectID uuid.UUID, br
 	if err := ensureDeliveryGitIdentity(ctx, repoRoot); err != nil {
 		return err
 	}
+	managedWorkspace := deliveryIsManagedWorkspaceRoot(g.dataDir, repoRoot)
+	if managedWorkspace {
+		if err := deliveryResetManagedWorkspace(ctx, repoRoot); err != nil {
+			return err
+		}
+	}
 	if _, err := deliveryGitOutput(ctx, repoRoot, "show-ref", "--verify", "--quiet", "refs/heads/"+trimmedBranch); err != nil {
 		return err
 	}
 	if err := deliveryCheckoutBranch(ctx, repoRoot, trimmedTarget); err != nil {
 		return err
+	}
+	if managedWorkspace {
+		if err := deliveryResetManagedWorkspace(ctx, repoRoot); err != nil {
+			return err
+		}
 	}
 	if strings.EqualFold(trimmedBranch, trimmedTarget) {
 		return nil
@@ -297,6 +308,33 @@ func deliverySeedTargetBranchFromSource(ctx context.Context, repoRoot, targetBra
 	return err
 }
 
+func deliveryIsManagedWorkspaceRoot(dataDir, repoRoot string) bool {
+	root := filepath.Clean(strings.TrimSpace(repoRoot))
+	if root == "" {
+		return false
+	}
+	managedBase := filepath.Join(workspace.ResolveDataDir(dataDir), "workspaces")
+	rel, err := filepath.Rel(managedBase, root)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
+}
+
+func deliveryResetManagedWorkspace(ctx context.Context, repoRoot string) error {
+	hasHeadCommit, err := deliveryGitRepoHasHeadCommit(ctx, repoRoot)
+	if err != nil {
+		return err
+	}
+	if hasHeadCommit {
+		if _, err := deliveryGitOutput(ctx, repoRoot, "reset", "--hard", "HEAD"); err != nil {
+			return err
+		}
+	}
+	_, err = deliveryGitOutput(ctx, repoRoot, "clean", "-fdx")
+	return err
+}
+
 func deliveryGitBranchesShareHistory(ctx context.Context, repoRoot, targetBranch, sourceBranch string) (bool, error) {
 	_, err := deliveryGitOutput(ctx, repoRoot, "merge-base", strings.TrimSpace(targetBranch), strings.TrimSpace(sourceBranch))
 	if err == nil {
@@ -343,6 +381,16 @@ func deliveryGitUnknownRevision(err error) bool {
 	normalized := strings.ToLower(strings.TrimSpace(err.Error()))
 	return strings.Contains(normalized, "ambiguous argument 'head'") ||
 		strings.Contains(normalized, "needed a single revision")
+}
+
+func deliveryGitRepoHasHeadCommit(ctx context.Context, repoRoot string) (bool, error) {
+	if _, err := deliveryGitOutput(ctx, repoRoot, "rev-parse", "--verify", "HEAD^{commit}"); err != nil {
+		if deliveryGitMissingRef(err) || deliveryGitUnknownRevision(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func deliveryGitNoMergeBase(err error) bool {

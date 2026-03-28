@@ -1603,3 +1603,24 @@
   - fresh production proof:
     - new PM continuation turn `c943a2c5-aae1-467a-b161-5b84935d0c7c` on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` emitted system message `4749` documenting the non-resumable `flow_rejection_max_visits` stop and then created/queued replacement task `70` for batch `1-12`
     - the old `consumer handler failed` replay for seq `380850` did not recur on the new binary
+- 2026-03-28 17:43:08 MDT - Finished: reset managed parent workspaces before merge promotion.
+  - live diagnosis:
+    - worker startup was correctly enqueueing missing merge jobs, but merge job `502f68fe-72d6-4c20-acab-0df8e9b03658` for merge queue entry `804136ec-5dfe-411f-b397-fe9d5f12b007` kept dead-lettering because the parent workspace `sam-blog-rebuild-restart-12` was dirty with tracked `content/posts/*.md` changes plus `.ottercamp/recovery/`
+    - the merge worker wiring was already correct; the failure was in the workspace git service merging directly into a dirty managed workspace
+  - changed [`internal/delivery/workspace_git_service.go`](/Users/sam/dev/otter-camp/internal/delivery/workspace_git_service.go):
+    - merges into OtterCamp-managed parent workspaces under `OTTERCAMP_DATA_DIR/workspaces/...` now reset tracked changes and `git clean -fdx` runtime residue before checkout/merge
+    - external bound repos are explicitly not auto-cleaned; they keep the old dirty-workspace failure semantics
+  - changed [`internal/delivery/workspace_git_service_test.go`](/Users/sam/dev/otter-camp/internal/delivery/workspace_git_service_test.go):
+    - added `TestWorkspaceGitServiceMergeResetsManagedWorkspaceBeforeMerge`
+    - added `TestWorkspaceGitServiceMergeDoesNotResetExternalWorkspaceBeforeMerge`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3457`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/delivery -run 'TestWorkspaceGitServiceMerge(MergesBranchIntoBoundRepoPath|SeedsEmptyTargetBranchFromTaskBranch|ReturnsConflictAndAborts|ResetsManagedWorkspaceBeforeMerge|DoesNotResetExternalWorkspaceBeforeMerge|AllowsUnrelatedHistories)$' -count=1`
+  - deploy status:
+    - rebuilt/restarted tmux `codex-e2e-20260324`; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+  - fresh production proof:
+    - parent workspace `git status --short` is now clean
+    - startup-enqueued merge job `d39f1029-9ada-4b00-a46f-9bfb6108afa6` completed `done` on the first attempt
+    - merge queue entry `804136ec-5dfe-411f-b397-fe9d5f12b007` is now `merged`
+    - worker log recorded `merge completed without default remote; skipping push enqueue`
