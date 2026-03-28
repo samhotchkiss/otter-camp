@@ -37,6 +37,35 @@ func TestFileReadTruncation(t *testing.T) {
 	}
 }
 
+func TestFileReadOffsetWindow(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "window.txt"), []byte("0123456789abcdef"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	out, err := executor.Execute(testExecCtx(), "file.read", map[string]any{
+		"path":         "window.txt",
+		"offset_bytes": 4,
+		"max_bytes":    6,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := out["content"]; got != "456789" {
+		t.Fatalf("content = %v, want 456789", got)
+	}
+	if got := out["offset_bytes"]; got != 4 {
+		t.Fatalf("offset_bytes = %v, want 4", got)
+	}
+	if got := out["bytes_read"]; got != 6 {
+		t.Fatalf("bytes_read = %v, want 6", got)
+	}
+	if out["truncated"] != true {
+		t.Fatalf("truncated = %v, want true", out["truncated"])
+	}
+}
+
 func TestFileReadSymlinkEscapeBlocked(t *testing.T) {
 	root := t.TempDir()
 	outsideDir := t.TempDir()

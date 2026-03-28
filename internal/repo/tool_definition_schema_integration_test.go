@@ -38,7 +38,7 @@ func TestKeyToolSchemasExposeRequiredParameters(t *testing.T) {
 	}
 
 	checks := []schemaCheck{
-		{name: "file.read", requiredKeys: []string{"path"}, propertyKeys: []string{"path", "encoding", "max_bytes"}},
+		{name: "file.read", requiredKeys: []string{"path"}, propertyKeys: []string{"path", "encoding", "max_bytes", "offset_bytes"}},
 		{name: "memory.query", requiredKeys: []string{"query"}, propertyKeys: []string{"query", "scope", "limit"}},
 		{name: "task.list", propertyKeys: []string{"project_id", "parent_task_id", "status", "limit", "cursor", "include_meta_drafts"}},
 		{name: "task.create", requiredKeys: []string{"project_id", "title"}, propertyKeys: []string{"project_id", "parent_task_id", "title", "description", "planning_artifacts", "planning_override_reason", "planning_follow_on_stop_reason"}},

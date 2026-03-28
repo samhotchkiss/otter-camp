@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
@@ -14,6 +16,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
+	"github.com/samhotchkiss/otter-camp/internal/tools/native"
 )
 
 func TestToolBrokerDispatchTier2PipelineIntegration(t *testing.T) {
@@ -64,6 +67,70 @@ func TestToolBrokerDispatchTier2PipelineIntegration(t *testing.T) {
 	}
 	if stored.Status != "completed" {
 		t.Fatalf("status = %q, want completed", stored.Status)
+	}
+}
+
+func TestToolBrokerDispatchFileReadPersistsOffsetWindowIntegration(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "window.txt"), []byte("0123456789abcdef"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	org := seedControlPlaneOrg(t, ctx, pool)
+	agentRecord := seedBrokerAgent(t, ctx, pool, org.ID)
+	runRecord, step, attempt := seedBrokerRunContext(t, ctx, pool, org.ID)
+
+	broker, err := NewToolBroker(ToolBrokerOptions{
+		Pool:   pool,
+		Policy: &integrationPolicyService{decision: CapabilityDecision{Allowed: true}},
+		Native: native.NewExecutor(native.ExecutorOptions{WorkspaceRoot: root}),
+	})
+	if err != nil {
+		t.Fatalf("NewToolBroker: %v", err)
+	}
+
+	execRecord, dispatchErr := broker.Dispatch(ctx, DispatchInput{
+		RunID:        &runRecord.ID,
+		RunStepID:    &step.ID,
+		RunAttemptID: &attempt.ID,
+		AgentID:      agentRecord.ID,
+		ToolName:     "file.read",
+		ToolTier:     "tier1",
+		Input: map[string]any{
+			"path":         "window.txt",
+			"offset_bytes": 4,
+			"max_bytes":    6,
+		},
+	})
+	if dispatchErr != nil {
+		t.Fatalf("Dispatch: %v", dispatchErr)
+	}
+	if got := execRecord.Output; got == nil {
+		t.Fatal("execution output = nil, want populated")
+	}
+
+	stored, err := NewToolExecutionRepository(pool).Get(ctx, execRecord.ID)
+	if err != nil {
+		t.Fatalf("Get tool_execution: %v", err)
+	}
+	var output map[string]any
+	if err := json.Unmarshal(stored.Output, &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if got := output["content"]; got != "456789" {
+		t.Fatalf("content = %v, want 456789", got)
+	}
+	if got := output["offset_bytes"]; got != float64(4) {
+		t.Fatalf("offset_bytes = %v, want 4", got)
+	}
+	if got := output["bytes_read"]; got != float64(6) {
+		t.Fatalf("bytes_read = %v, want 6", got)
+	}
+	if got := output["truncated"]; got != true {
+		t.Fatalf("truncated = %v, want true", got)
 	}
 }
 

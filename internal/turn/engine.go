@@ -9509,7 +9509,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 		} else if rewritten {
 			response.ToolCalls = rewrittenToolCalls
 		}
-		if rewrittenToolCalls, rewritten := maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(rt, response.ToolCalls); rewritten {
+		if rewrittenToolCalls, rewritten, rewriteErr := e.maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(ctx, rt, response.ToolCalls); rewriteErr != nil {
+			return rewriteErr
+		} else if rewritten {
 			response.ToolCalls = rewrittenToolCalls
 		}
 		if synthesizedToolCalls, synthesized, synthErr := e.maybeSynthesizeTaskExecutionFileWriteToolCalls(ctx, rt, response.Content, response.ToolCalls); synthErr != nil {
@@ -23200,6 +23202,7 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 		if targetPath != "" {
 			lines = append(lines, fmt.Sprintf("Start with the preferred deliverable target `%s`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `%s` is missing.", targetPath, targetPath))
 			lines = append(lines, fmt.Sprintf("If `%s` may be large, start with `file.read` using `path=%s` and `max_bytes=%d` instead of an unconstrained full-file read. Use narrower follow-up inspection only if that bounded read is insufficient.", targetPath, targetPath, taskReviewPreferredDeliverableReadMaxBytes))
+			lines = append(lines, fmt.Sprintf("If that first bounded read is truncated and you need the tail, use a follow-up `file.read` on `%s` with `offset_bytes` near `byte_size-%d` instead of rereading from byte 0.", targetPath, taskReviewPreferredDeliverableReadMaxBytes))
 			lines = append(lines, fmt.Sprintf("If reading `%s` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.", targetPath))
 		} else if rootPath != "" {
 			lines = append(lines, fmt.Sprintf("Start with the preferred deliverable root `%s`. Inspect that output root directly before broad workspace discovery, and do not begin with task.get, git.log, or dependency-file reads outside `%s` unless `%s` itself is missing.", rootPath, rootPath, rootPath))
@@ -25450,13 +25453,17 @@ func shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt *turnRuntime, c
 	return true, buildTaskReviewPreferredDeliverableBatchReadGuardError(targetPath)
 }
 
-func maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(rt *turnRuntime, toolCalls []ModelToolCall) ([]ModelToolCall, bool) {
+func (e *TurnEngine) maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(ctx context.Context, rt *turnRuntime, toolCalls []ModelToolCall) ([]ModelToolCall, bool, error) {
 	if !taskReviewPreferredDeliverableFirstApplies(rt) || len(toolCalls) == 0 {
-		return toolCalls, false
+		return toolCalls, false, nil
 	}
 	targetPath := taskReviewPreferredDeliverableTarget(rt)
 	if targetPath == "" {
-		return toolCalls, false
+		return toolCalls, false, nil
+	}
+	tailOffset, hasTailOffset, err := e.taskReviewPreferredDeliverableTailReadOffset(ctx, rt, targetPath)
+	if err != nil {
+		return nil, false, err
 	}
 
 	rewritten := false
@@ -25475,23 +25482,98 @@ func maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(rt *turnRuntime, to
 			continue
 		}
 
+		callCopy := call
+		changedCall := false
+		explicitOffsetBytes := intValue(call.Arguments["offset_bytes"])
+		if hasTailOffset && explicitOffsetBytes <= 0 {
+			if callCopy.Arguments == nil {
+				callCopy.Arguments = map[string]any{}
+			} else {
+				callCopy.Arguments = cloneMap(call.Arguments)
+			}
+			callCopy.Arguments["offset_bytes"] = tailOffset
+			changedCall = true
+		}
+
 		explicitMaxBytes := intValue(call.Arguments["max_bytes"])
-		if explicitMaxBytes > 0 && explicitMaxBytes <= taskReviewPreferredDeliverableReadMaxBytes {
-			out = append(out, call)
+		if explicitMaxBytes <= 0 || explicitMaxBytes > taskReviewPreferredDeliverableReadMaxBytes {
+			if !changedCall {
+				if callCopy.Arguments == nil {
+					callCopy.Arguments = map[string]any{}
+				} else {
+					callCopy.Arguments = cloneMap(call.Arguments)
+				}
+			}
+			callCopy.Arguments["max_bytes"] = taskReviewPreferredDeliverableReadMaxBytes
+			changedCall = true
+		}
+
+		if changedCall {
+			callCopy.Name = "file.read"
+			out = append(out, callCopy)
+			rewritten = true
 			continue
 		}
 
-		callCopy := call
-		callCopy.Name = "file.read"
-		callCopy.Arguments = cloneMap(call.Arguments)
-		callCopy.Arguments["max_bytes"] = taskReviewPreferredDeliverableReadMaxBytes
-		out = append(out, callCopy)
-		rewritten = true
+		out = append(out, call)
 	}
 	if !rewritten {
-		return toolCalls, false
+		return toolCalls, false, nil
 	}
-	return out, true
+	return out, true, nil
+}
+
+func (e *TurnEngine) taskReviewPreferredDeliverableTailReadOffset(ctx context.Context, rt *turnRuntime, targetPath string) (int, bool, error) {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.session.ID == uuid.Nil {
+		return 0, false, nil
+	}
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return 0, false, err
+	}
+
+	headReadTruncated := false
+	tailReadSeen := false
+	byteSize := 0
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || strings.TrimSpace(errText) != "" || !strings.EqualFold(strings.TrimSpace(toolName), "file.read") {
+			continue
+		}
+		path := normalizeWorkspaceRelativePath(anyString(output["path"]))
+		if path == "" || !sameWorkspaceRelativePath(path, targetPath) {
+			continue
+		}
+		if size := intValue(output["byte_size"]); size > byteSize {
+			byteSize = size
+		}
+		offsetBytes := intValue(output["offset_bytes"])
+		if offsetBytes < 0 {
+			offsetBytes = 0
+		}
+		readBytes := intValue(output["bytes_read"])
+		if readBytes <= 0 {
+			readBytes = len([]byte(anyString(output["content"])))
+		}
+		truncated, _ := boolValue(output["truncated"])
+		if offsetBytes == 0 && truncated && readBytes > 0 {
+			headReadTruncated = true
+		}
+		if offsetBytes > 0 && readBytes > 0 {
+			tailReadSeen = true
+		}
+	}
+	if !headReadTruncated || tailReadSeen || byteSize <= taskReviewPreferredDeliverableReadMaxBytes {
+		return 0, false, nil
+	}
+	tailOffset := byteSize - taskReviewPreferredDeliverableReadMaxBytes
+	if tailOffset <= 0 {
+		return 0, false, nil
+	}
+	return tailOffset, true, nil
 }
 
 func shouldBlockTaskReviewPreferredDeliverableFirstTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {

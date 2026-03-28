@@ -64,6 +64,10 @@ func (e *NativeToolExecutor) handleFileRead(ctx context.Context, input map[strin
 	}
 
 	maxBytes := clamp(readInt(input, "max_bytes", defaultReadMaxBytes), 1, hardReadMaxBytes)
+	offsetBytes := readInt(input, "offset_bytes", 0)
+	if offsetBytes < 0 {
+		offsetBytes = 0
+	}
 	encoding := "utf8"
 	if raw, ok := readString(input, "encoding"); ok && strings.EqualFold(raw, "base64") {
 		encoding = "base64"
@@ -82,6 +86,12 @@ func (e *NativeToolExecutor) handleFileRead(ctx context.Context, input map[strin
 	if err != nil {
 		return nil, err
 	}
+	if int64(offsetBytes) > stat.Size() {
+		offsetBytes = int(stat.Size())
+	}
+	if _, err := file.Seek(int64(offsetBytes), io.SeekStart); err != nil {
+		return nil, err
+	}
 
 	limited := io.LimitReader(file, int64(maxBytes)+1)
 	payload, err := io.ReadAll(limited)
@@ -93,6 +103,7 @@ func (e *NativeToolExecutor) handleFileRead(ctx context.Context, input map[strin
 		payload = payload[:maxBytes]
 		truncated = true
 	}
+	bytesRead := len(payload)
 
 	content := sanitizeUTF8TextBytes(payload)
 	if encoding == "base64" {
@@ -126,11 +137,13 @@ func (e *NativeToolExecutor) handleFileRead(ctx context.Context, input map[strin
 	}
 
 	return map[string]any{
-		"content":   content,
-		"encoding":  encoding,
-		"byte_size": stat.Size(),
-		"truncated": truncated,
-		"path":      renderedPath,
+		"content":      content,
+		"encoding":     encoding,
+		"byte_size":    stat.Size(),
+		"bytes_read":   bytesRead,
+		"offset_bytes": offsetBytes,
+		"truncated":    truncated,
+		"path":         renderedPath,
 	}, nil
 }
 

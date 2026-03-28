@@ -4265,6 +4265,7 @@ func TestMaybeRewriteDirtyWorkspaceReviewApprovalToolCalls(t *testing.T) {
 }
 
 func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsAddsMaxBytes(t *testing.T) {
+	engine := &TurnEngine{}
 	rt := &turnRuntime{
 		session: &chat.ChatSession{
 			ScopeType: "project_task",
@@ -4293,7 +4294,10 @@ func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsAddsMaxBytes(t *
 		},
 	}
 
-	rewritten, changed := maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(rt, toolCalls)
+	rewritten, changed, err := engine.maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(context.Background(), rt, toolCalls)
+	if err != nil {
+		t.Fatalf("maybeRewriteTaskReviewPreferredDeliverableReadToolCalls: %v", err)
+	}
 	if !changed {
 		t.Fatal("changed = false, want true")
 	}
@@ -4312,6 +4316,7 @@ func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsAddsMaxBytes(t *
 }
 
 func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsPreservesSmallerExplicitLimit(t *testing.T) {
+	engine := &TurnEngine{}
 	rt := &turnRuntime{
 		session: &chat.ChatSession{
 			ScopeType: "project_task",
@@ -4331,7 +4336,10 @@ func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsPreservesSmaller
 		},
 	}}
 
-	rewritten, changed := maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(rt, toolCalls)
+	rewritten, changed, err := engine.maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(context.Background(), rt, toolCalls)
+	if err != nil {
+		t.Fatalf("maybeRewriteTaskReviewPreferredDeliverableReadToolCalls: %v", err)
+	}
 	if changed {
 		t.Fatal("changed = true, want false when a smaller explicit max_bytes is already present")
 	}
@@ -4340,6 +4348,61 @@ func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsPreservesSmaller
 	}
 	if got := intValue(rewritten[0].Arguments["max_bytes"]); got != 1024 {
 		t.Fatalf("max_bytes = %d, want 1024 preserved", got)
+	}
+}
+
+func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsUsesTailOffsetAfterTruncatedHeadRead(t *testing.T) {
+	messages := newFakeMessageRepo()
+	sessionID := uuid.New()
+	messages.create(repo.ChatMessage{
+		SessionID: sessionID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustMarshalJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":         "content/technonymous-index.json",
+				"content":      strings.Repeat("x", taskReviewPreferredDeliverableReadMaxBytes),
+				"byte_size":    23010,
+				"bytes_read":   taskReviewPreferredDeliverableReadMaxBytes,
+				"offset_bytes": 0,
+				"truncated":    true,
+			},
+		})),
+	})
+	engine := &TurnEngine{messages: messages}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        sessionID,
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `content/technonymous-index.json`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `content/technonymous-index.json` is missing.\n" +
+			"If `content/technonymous-index.json` may be large, start with `file.read` using `path=content/technonymous-index.json` and `max_bytes=8192` instead of an unconstrained full-file read. Use narrower follow-up inspection only if that bounded read is insufficient.\n" +
+			"If that first bounded read is truncated and you need the tail, use a follow-up `file.read` on `content/technonymous-index.json` with `offset_bytes` near `byte_size-8192` instead of rereading from byte 0.\n" +
+			"If reading `content/technonymous-index.json` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.",
+	}
+	toolCalls := []ModelToolCall{{
+		ID:   "read-target",
+		Name: "file.read",
+		Arguments: map[string]any{
+			"path": "content/technonymous-index.json",
+		},
+	}}
+
+	rewritten, changed, err := engine.maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(context.Background(), rt, toolCalls)
+	if err != nil {
+		t.Fatalf("maybeRewriteTaskReviewPreferredDeliverableReadToolCalls: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	if got := intValue(rewritten[0].Arguments["offset_bytes"]); got != 14818 {
+		t.Fatalf("offset_bytes = %d, want 14818", got)
+	}
+	if got := intValue(rewritten[0].Arguments["max_bytes"]); got != taskReviewPreferredDeliverableReadMaxBytes {
+		t.Fatalf("max_bytes = %d, want %d", got, taskReviewPreferredDeliverableReadMaxBytes)
 	}
 }
 

@@ -530,3 +530,17 @@
     - `TestShouldStopAfterBlockedTaskExecutionSiblingMutation`
   - verified with `gofmt -w internal/turn/engine.go internal/turn/engine_test.go` and `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChild(DetailFetch|Write)|ShouldNotBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChildListingFetch|ShouldStopAfterBlockedTaskExecutionSiblingMutation)$' -count=1`
   - live diagnosis behind the fix: task `46` session `5073a26f-0352-49b5-80c8-536f7531fbbe` was still trying to write `content/technonymous-index.json` from the discovery/listing lane even though sibling write work already existed
+- 2026-03-28 03:35:43 MDT - add tail-window support for preferred-deliverable review rereads
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go) so `file.read` now accepts `offset_bytes` and returns both `offset_bytes` and `bytes_read` in the tool result
+  - added migration [`0131_file_read_offset_schema.sql`](/Users/sam/dev/otter-camp/migrations/0131_file_read_offset_schema.sql) and widened [`internal/repo/tool_definition_schema_integration_test.go`](/Users/sam/dev/otter-camp/internal/repo/tool_definition_schema_integration_test.go) so the live `file.read` schema now advertises `offset_bytes`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so async task-review lanes detect a prior truncated preferred-deliverable head read and auto-rewrite the next same-target reread to a tail window (`offset_bytes=byte_size-8192`) instead of paying for another byte-0 reread
+  - updated the review prompt guidance so large preferred deliverables now explicitly tell the model to use `offset_bytes` for tail inspection when the first bounded read is truncated
+  - added focused coverage in:
+    - [`internal/tools/native/file_git_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_git_test.go): `TestFileReadOffsetWindow`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): `TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsUsesTailOffsetAfterTruncatedHeadRead`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'TestFileRead(Truncation|OffsetWindow)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCalls(AddsMaxBytes|PreservesSmallerExplicitLimit|UsesTailOffsetAfterTruncatedHeadRead)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/repo -run 'TestKeyToolSchemasExposeRequiredParameters$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/controlplane -run 'TestToolBrokerDispatch(FileReadPersistsOffsetWindowIntegration|Tier2PipelineIntegration)$' -count=1`
+  - fresh live proof for the new tail-read rewrite is still pending the next natural task-48 review turn on the rebuilt runtime
