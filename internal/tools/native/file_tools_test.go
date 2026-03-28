@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
@@ -114,6 +115,53 @@ func TestLatestRecoveryTargetPathForSessionPrefersSystemRecoveryTarget(t *testin
 	got := executor.latestRecoveryTargetPathForSession(context.Background(), workspaceScope{sessionID: &sessionID})
 	if got != "Work/OC-13-report.md" {
 		t.Fatalf("latestRecoveryTargetPathForSession(...) = %q, want %q", got, "Work/OC-13-report.md")
+	}
+}
+
+func TestLatestRecoveryTargetPathForSessionPrefersMetadataBatchOutputOverDependencyArtifactHistory(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+
+	description := "Read content/technonymous-index.json. For each of the first 12 URLs in the post_urls array, save the article text as clean markdown files under content/posts/. Deliverable: markdown files in content/posts/."
+	metadata, err := json.Marshal(map[string]any{
+		"content_migration_checkpoint": taskcheckpoint.ContentMigrationCheckpoint{
+			Outputs: []taskcheckpoint.WorkspaceFile{
+				{Path: "content/posts/stop-preparing-your-kids-for-jobs.md"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(metadata): %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Fetch posts 1-12 from technonymous index and save as markdown",
+			Description:    &description,
+			Metadata:       metadata,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "tool_result",
+				Content:   `{"tool_name":"file.read","output":{"path":"content/technonymous-index.json"}}`,
+			},
+		},
+	}
+
+	got := executor.latestRecoveryTargetPathForSession(context.Background(), workspaceScope{sessionID: &sessionID, taskID: &taskID})
+	if got != "content/posts/stop-preparing-your-kids-for-jobs.md" {
+		t.Fatalf("latestRecoveryTargetPathForSession(...) = %q, want %q", got, "content/posts/stop-preparing-your-kids-for-jobs.md")
 	}
 }
 
@@ -356,6 +404,76 @@ func TestFileListStillRejectsReviewInspectionOutsideDeliverableRoot(t *testing.T
 	}
 	if got := out["deliverable_path"]; got != targetPath {
 		t.Fatalf("deliverable_path = %v, want %s", got, targetPath)
+	}
+}
+
+func TestFileReadAllowsBatchOutputWhenMetadataRecoveryTargetOverridesDependencyArtifactHistory(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+
+	if err := os.MkdirAll(filepath.Join(root, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(content/posts): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "content", "technonymous-index.json"), []byte(`{"post_urls":["https://example.com/p/one"]}`), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(index): %v", err)
+	}
+	targetPath := "content/posts/stop-preparing-your-kids-for-jobs.md"
+	targetBody := "---\ntitle: Stop Preparing Your Kids for Jobs\nsource_url: https://example.com/p/one\n---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte(targetBody), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+
+	description := "Read content/technonymous-index.json. For each of the first 12 URLs in the post_urls array, save the article text as clean markdown files under content/posts/. Deliverable: markdown files in content/posts/."
+	metadata, err := json.Marshal(map[string]any{
+		"content_migration_checkpoint": taskcheckpoint.ContentMigrationCheckpoint{
+			Outputs: []taskcheckpoint.WorkspaceFile{
+				{Path: targetPath},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(metadata): %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Fetch posts 1-12 from technonymous index and save as markdown",
+			Description:    &description,
+			Metadata:       metadata,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "tool_result",
+				Content:   `{"tool_name":"file.read","output":{"path":"content/technonymous-index.json"}}`,
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != nil {
+		t.Fatalf("error = %v, want nil", got)
+	}
+	if got := out["path"]; got != targetPath {
+		t.Fatalf("path = %v, want %s", got, targetPath)
 	}
 }
 

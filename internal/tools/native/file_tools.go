@@ -210,17 +210,15 @@ func (e *NativeToolExecutor) rejectMismatchedTaskDeliverableRead(ctx context.Con
 		}
 		return nil, false, err
 	}
-	targetPath := parseExplicitDeliverablePath(taskRecord)
-	if targetPath == "" {
-		if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
-			targetPath = normalizeWorkspacePath(checkpoint.TargetPath)
-		}
-	}
+	targetPath := preferredRecoveryTargetForTask(taskRecord)
 	if targetPath == "" {
 		targetPath = e.latestRecoveryTargetPathForSession(ctx, scope)
 	}
 	normalizedPath := normalizeWorkspacePath(relativePath)
 	if normalizedPath == "" || targetPath == "" || !sameOrNestedWorkspacePath(normalizedPath, targetPath) {
+		return nil, false, nil
+	}
+	if taskAllowsPerItemDeliverableInspection(taskRecord, normalizedPath) {
 		return nil, false, nil
 	}
 	if !taskDraftSemanticallyMismatchesScope(taskRecord, content) {
@@ -286,7 +284,7 @@ func (e *NativeToolExecutor) rejectRecoveryTargetReread(ctx context.Context, sco
 		return nil, false, nil
 	}
 	recoveryState := e.sessionRecoveryState(ctx, scope)
-	targetPath := recoveryState.targetPath
+	targetPath := e.latestRecoveryTargetPathForSession(ctx, scope)
 	if targetPath == "" {
 		return nil, false, nil
 	}
@@ -502,6 +500,14 @@ func substantiveExplicitDeliverableExists(workspaceRoot, deliverablePath string)
 }
 
 func (e *NativeToolExecutor) latestRecoveryTargetPathForSession(ctx context.Context, scope workspaceScope) string {
+	if e != nil && e.tasks != nil && scope.taskID != nil && *scope.taskID != uuid.Nil {
+		taskRecord, err := e.tasks.GetByID(ctx, *scope.taskID)
+		if err == nil {
+			if target := preferredRecoveryTargetForTask(taskRecord); target != "" {
+				return target
+			}
+		}
+	}
 	return e.sessionRecoveryState(ctx, scope).targetPath
 }
 
@@ -589,6 +595,115 @@ func parsePlaceholderDeliverableTarget(content string) string {
 		return normalizeWorkspacePath(target)
 	}
 	return ""
+}
+
+func preferredRecoveryTargetForTask(taskRecord repo.ProjectTask) string {
+	if checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata); ok {
+		if target := contentMigrationCheckpointPreferredOutputPath(taskRecord, checkpoint); target != "" {
+			return target
+		}
+	}
+	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
+		if target := normalizeRecoveryCheckpointTargetForTask(taskRecord, checkpoint.TargetPath); target != "" {
+			return target
+		}
+	}
+	if explicit := parseExplicitDeliverablePath(taskRecord); explicit != "" && deliverableTargetMatchesTaskContract(taskRecord, explicit) {
+		return explicit
+	}
+	return ""
+}
+
+func contentMigrationCheckpointPreferredOutputPath(taskRecord repo.ProjectTask, checkpoint taskcheckpoint.ContentMigrationCheckpoint) string {
+	root := preferredTaskDeliverableRoot(taskRecord)
+	for _, output := range checkpoint.Outputs {
+		target := normalizeWorkspacePath(output.Path)
+		if target == "" {
+			continue
+		}
+		if !deliverableTargetMatchesTaskContract(taskRecord, target) {
+			continue
+		}
+		if root != "" && !workspacePathWithinRoot(target, root) {
+			continue
+		}
+		return target
+	}
+	return ""
+}
+
+func normalizeRecoveryCheckpointTargetForTask(taskRecord repo.ProjectTask, rawTarget string) string {
+	target := normalizeWorkspacePath(rawTarget)
+	if target == "" {
+		return ""
+	}
+	if deliverableTargetMatchesTaskContract(taskRecord, target) {
+		return target
+	}
+	if checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata); ok {
+		if preferred := contentMigrationCheckpointPreferredOutputPath(taskRecord, checkpoint); preferred != "" {
+			return preferred
+		}
+	}
+	return ""
+}
+
+func deliverableTargetMatchesTaskContract(taskRecord repo.ProjectTask, target string) bool {
+	target = normalizeWorkspacePath(target)
+	if target == "" {
+		return false
+	}
+	root := preferredTaskDeliverableRoot(taskRecord)
+	if root != "" {
+		if !workspacePathWithinRoot(target, root) {
+			return false
+		}
+		if taskExpectsMarkdownDeliverables(taskRecord) {
+			return strings.HasSuffix(strings.ToLower(target), ".md")
+		}
+		return true
+	}
+	return looksLikeExplicitDeliverablePath(target, target)
+}
+
+func taskExpectsMarkdownDeliverables(taskRecord repo.ProjectTask) bool {
+	if taskRecord.Description == nil {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	return strings.Contains(lower, "markdown file") ||
+		strings.Contains(lower, "markdown files") ||
+		strings.Contains(lower, "save as markdown") ||
+		strings.Contains(lower, "save the article text as a clean markdown")
+}
+
+func taskAllowsPerItemDeliverableInspection(taskRecord repo.ProjectTask, candidate string) bool {
+	candidate = normalizeWorkspacePath(candidate)
+	if candidate == "" {
+		return false
+	}
+	root := preferredTaskDeliverableRoot(taskRecord)
+	if root == "" || !workspacePathWithinRoot(candidate, root) {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	if taskRecord.Description != nil {
+		text += " " + strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	if strings.Contains(text, "deliverable:") && strings.Contains(text, "files") {
+		return true
+	}
+	if !strings.Contains(text, "for each") {
+		return false
+	}
+	return taskExpectsMarkdownDeliverables(taskRecord) &&
+		containsAnySubstring(text,
+			"post_urls",
+			"save each",
+			"save the markdown files",
+			"under "+strings.ToLower(root),
+			"in "+strings.ToLower(root),
+		)
 }
 
 func looksLikeRejectedDeliverablePlaceholder(content string) bool {

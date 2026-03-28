@@ -1160,3 +1160,24 @@
     - fresh production proof for the new synthesis branch is still pending because the dirty-workspace canary sessions (`d901ca6f-d4b5-4ded-8f31-3da57de44b54`, then `1139b4a5-49e7-41e7-87a6-cf7bbd27b724`) rolled over during restart before another full non-decision tool attempt completed on the newest binary
   - result:
     - the remaining dirty-workspace retry path should now collapse straight to `flow.review_decision reject` instead of paying even one blocked `git.status` / `git.diff` / `cli.execute` attempt first
+- 2026-03-28 12:56:50 MDT - `pending` `Prefer metadata recovery targets in native file tools`
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `latestRecoveryTargetPathForSession(...)` now prefers metadata-derived targets through `preferredRecoveryTargetForTask(...)` before falling back to session-history recovery guesses
+    - added `contentMigrationCheckpointPreferredOutputPath(...)` and `normalizeRecoveryCheckpointTargetForTask(...)` so content-migration checkpoints and recovery checkpoints normalize onto task-contract outputs under the preferred deliverable root
+    - `rejectRecoveryTargetReread(...)` now uses that normalized metadata-preferred target
+    - `rejectMismatchedTaskDeliverableRead(...)` now uses the same metadata-preferred target and skips semantic mismatch enforcement for per-item batch markdown outputs under a declared deliverable root
+  - changed [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go):
+    - added `TestLatestRecoveryTargetPathForSessionPrefersMetadataBatchOutputOverDependencyArtifactHistory`
+    - added `TestFileReadAllowsBatchOutputWhenMetadataRecoveryTargetOverridesDependencyArtifactHistory`
+  - verified with:
+    - `gofmt -w internal/tools/native/file_tools.go internal/tools/native/file_tools_test.go`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(LatestRecoveryTargetPathForSession(PrefersSystemRecoveryTarget|PrefersMetadataBatchOutputOverDependencyArtifactHistory)|File(ReadAllowsBatchOutputWhenMetadataRecoveryTargetOverridesDependencyArtifactHistory|ListAllowsReviewDeliverableRootInspectionWithinRecoveryTargetRoot|ListAllowsBlockedReviewLaneDeliverableRootInspectionWithinRecoveryTargetRoot|ListAllowsBlockedReviewNodeDeliverableRootInspectionWithinRecoveryTargetRoot|ListStillRejectsReviewInspectionOutsideDeliverableRoot))$' -count=1`
+  - deploy state:
+    - rebuilt and restarted tmux `codex-e2e-20260324`
+    - `./bin/ottercamp health --output json` returned `data.status=ok`
+  - fresh live state on task `61`:
+    - the old native dependency-target redirect is still visible only in pre-fix tool results `9` and `10` on session `3844d628-4139-4770-8745-f1208e19c1d3`
+    - the first post-restart retry turn `9935f294-2769-495d-845b-3b7151d9f3ee` no longer re-emitted `mismatched_deliverable_context`, and sequences `29-39` proceeded with direct writes to `content/posts/stop-preparing-your-kids-for-jobs.md` plus follow-on `cli.execute` writes instead of bouncing back to `content/technonymous-index.json`
+  - result:
+    - native recovery focus now respects metadata-derived batch outputs and deliverable-root contracts
+    - the remaining task-61 churn is duplicate-write / continuation efficiency, not stale dependency-artifact rereads
