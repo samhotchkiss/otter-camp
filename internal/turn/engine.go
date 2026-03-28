@@ -14042,6 +14042,12 @@ func (e *TurnEngine) handleRecoveryCLIExecuteWithoutCommand(ctx context.Context,
 	if !isRecoveryCLIExecuteWithoutCommand(call) {
 		return false, false, nil
 	}
+	targetPath, _, _ := e.recoveryFileOutputContext(ctx, rt)
+	if e.recoveryCheckpointShowsRepeatedSuccessfulFileWriteChurn(ctx, rt, targetPath) {
+		if halted, err := e.haltRecoveryCLIExecuteWithoutCommand(ctx, rt); halted || err != nil {
+			return halted, true, err
+		}
+	}
 	if rewritten, err := e.rewriteRecoveryCLIExecuteWithoutCommandToFileWrite(ctx, rt, &call); rewritten || err != nil {
 		return rewritten, false, err
 	}
@@ -19941,6 +19947,25 @@ func (e *TurnEngine) recoveryCheckpointShowsMissingCommand(ctx context.Context, 
 		return false
 	}
 	return taskcheckpoint.RecoveryFileWriteFailureIsMissingCommand(checkpoint.FailureReason)
+}
+
+func (e *TurnEngine) recoveryCheckpointShowsRepeatedSuccessfulFileWriteChurn(ctx context.Context, rt *turnRuntime, targetPath string) bool {
+	if e == nil || rt == nil {
+		return false
+	}
+	checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt)
+	if !ok {
+		return false
+	}
+	if target := strings.TrimSpace(targetPath); target != "" {
+		checkpointTarget := strings.TrimSpace(checkpoint.TargetPath)
+		if checkpointTarget != "" && !sameWorkspaceRelativePath(checkpointTarget, target) {
+			return false
+		}
+	}
+	lower := strings.ToLower(strings.TrimSpace(checkpoint.FailureReason))
+	return strings.Contains(lower, "repeated successful file.write rewrote") &&
+		strings.Contains(lower, "in the same turn")
 }
 
 func (e *TurnEngine) recoveryCheckpointPriorFailureReasons(ctx context.Context, rt *turnRuntime, currentReason string) []string {
