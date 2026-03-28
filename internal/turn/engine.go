@@ -23717,9 +23717,23 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 }
 
 func (e *TurnEngine) reviewPromptDeliverableTarget(ctx context.Context, session *chat.ChatSession, taskRecord repo.ProjectTask) string {
+	rootPath := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
+	targetWithinRoot := func(targetPath string) bool {
+		normalized := normalizeWorkspaceRelativePath(targetPath)
+		if normalized == "" {
+			return false
+		}
+		if rootPath == "" {
+			return true
+		}
+		return workspacePathWithinRoot(normalized, rootPath)
+	}
 	if session != nil {
 		if targetPath := strings.TrimSpace(e.sessionTaskDeliverablePath(ctx, session.ID, taskRecord)); targetPath != "" {
-			return targetPath
+			if targetWithinRoot(targetPath) {
+				return targetPath
+			}
+			return ""
 		}
 	}
 	if targetPath := strings.TrimSpace(preferredTaskDeliverablePath(taskRecord)); targetPath != "" {
@@ -23727,7 +23741,10 @@ func (e *TurnEngine) reviewPromptDeliverableTarget(ctx context.Context, session 
 	}
 	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
 		if targetPath := normalizeWorkspaceRelativePath(checkpoint.TargetPath); targetPath != "" {
-			return targetPath
+			if targetWithinRoot(targetPath) {
+				return targetPath
+			}
+			return ""
 		}
 	}
 	if e == nil || e.messages == nil || session == nil || session.ID == uuid.Nil {

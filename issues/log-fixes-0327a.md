@@ -866,3 +866,15 @@
   - live diagnosis behind the fix:
     - task-63 checkpoint messages `47`, `95`, and `124` still said `no migrated output files are on disk yet`
     - the checkpoint file on disk under `task-63/.ottercamp/checkpoints/oc-63-content-migration.md` showed `## Outputs (none)` even though the written markdown files already existed and predated that checkpoint
+- 2026-03-28 09:34:40 MDT - keep review prompts inside the declared deliverable root when recovery metadata drifts back to an input artifact
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `reviewPromptDeliverableTarget(...)` now refuses any candidate target outside `preferredTaskDeliverableRoot(...)`
+    - for batch migration tasks like `Fetch posts ... under content/posts/`, a stale recovery checkpoint on `content/technonymous-index.json` now falls back to preferred-root review guidance instead of turning the input manifest into the preferred review target
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestBuildTaskReviewActionPromptIgnoresRecoveryCheckpointOutsidePreferredDeliverableRoot`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestBuildTaskReviewActionPrompt(IgnoresHistoricalInputArtifactOutsidePreferredDeliverableRoot|IgnoresRecoveryCheckpointOutsidePreferredDeliverableRoot|IncludesPreferredDeliverableRoot|IncludesPreferredDeliverableTarget)$' -count=1`
+  - fresh live proof after restart:
+    - task-63 review session `075cf859-5b23-4077-8f0f-5f25236d36c0` regenerated its checkpoint at message `224` with `Outputs: content/posts/practice-eliminating-streaming-video.md ...`
+    - the same session’s review prompt switched to the real markdown deliverable target `content/posts/practice-eliminating-streaming-video.md` at messages `226-234`
+    - the old manifest-target family is no longer the hot review failure on that lane; the remaining waste is broader batch-review discovery after the first preferred file read

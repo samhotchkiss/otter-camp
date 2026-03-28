@@ -35642,6 +35642,43 @@ func TestBuildTaskReviewActionPromptIgnoresHistoricalInputArtifactOutsidePreferr
 	}
 }
 
+func TestBuildTaskReviewActionPromptIgnoresRecoveryCheckpointOutsidePreferredDeliverableRoot(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Using the scraped post index, extract full content (title, body, date, tags) from each technonymous.org post and convert to markdown files with frontmatter. Commit to the Sam.blog repo under /content/posts/."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  63,
+				Title:       "Scrape technonymous.org posts to markdown",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"bootstrap_first_wave_selected": true,
+					"recovery_file_write_checkpoint": map[string]any{
+						"version":     1,
+						"target_path": "content/technonymous-index.json",
+					},
+				}),
+			},
+		},
+	}
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "Start with the preferred deliverable root `content/posts`") {
+		t.Fatalf("prompt = %q, want preferred deliverable root guidance", prompt)
+	}
+	if strings.Contains(prompt, "Start with the preferred deliverable target `content/technonymous-index.json`") {
+		t.Fatalf("prompt = %q, did not want recovery checkpoint outside preferred root to become preferred review target", prompt)
+	}
+}
+
 func TestBuildTaskReviewActionPromptSpecializesOrchestrationOnlyParentReview(t *testing.T) {
 	t.Parallel()
 
