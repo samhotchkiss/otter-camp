@@ -177,6 +177,7 @@ var preferredDeliverableRootPatterns = []*regexp.Regexp{
 
 const reviewRepeatedFileReadNotFoundTurnStopSubstring = "[Repeated identical file.read validation failure in this turn (2/3): not_found."
 const projectContinuationRediscoveryGuardPrefix = "[Project continuation rediscovery guard blocked only broad rereads."
+const projectContinuationMissingDependencyGuardPrefix = "[Project continuation found that prerequisite artifact `"
 
 var errTurnBranchAttachedToMainWorktree = errors.New("branch attached to main worktree")
 
@@ -4637,6 +4638,9 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 		return false, err
 	}
 	if !ok {
+		if missingPath, found := projectContinuationMissingDependencyStopPath(messages, completedTurn.ID); found {
+			return e.retryProjectExecutionContinuationForMissingDependency(ctx, session, completedTurn, latestUser, missingPath)
+		}
 		if genericAssistant {
 			return e.retryGenericProjectExecutionContinuation(ctx, session, completedTurn, latestUser)
 		}
@@ -4722,6 +4726,80 @@ func (e *TurnEngine) retryGenericProjectExecutionContinuation(
 		return false, err
 	}
 	return enqueued, nil
+}
+
+func (e *TurnEngine) retryProjectExecutionContinuationForMissingDependency(
+	ctx context.Context,
+	session *chat.ChatSession,
+	latestCompleted *repo.ChatTurn,
+	latestUser *repo.ChatMessage,
+	missingPath string,
+) (bool, error) {
+	if e == nil || session == nil || latestCompleted == nil || latestUser == nil {
+		return false, nil
+	}
+	if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
+		return false, nil
+	}
+	missingPath = strings.TrimSpace(missingPath)
+	if missingPath == "" {
+		return false, nil
+	}
+	completedTaskID, _ := parseUUIDAny(messageMetadataMap(latestUser.Metadata)["completed_task_id"])
+	var completedTask repo.ProjectTask
+	if completedTaskID != uuid.Nil && e.tasks != nil {
+		if taskRecord, err := e.tasks.GetByID(ctx, completedTaskID); err == nil {
+			completedTask = taskRecord
+		}
+	}
+	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	snapshot, err := e.projectExecutionContinuationSnapshot(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	agentID := latestCompleted.RespondingID
+	retryPrompt := buildProjectExecutionContinuationMissingDependencyRetryPrompt(completedTask, remainingDraftTasks, snapshot, missingPath)
+	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	if err != nil {
+		return false, err
+	}
+	if retryMessage == nil {
+		return true, nil
+	}
+	nextPayload := AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  retryMessage.ID,
+		RetryCount: latestCompleted.RetryCount + 1,
+	}
+	if agentID != uuid.Nil {
+		nextPayload.AgentID = &agentID
+	}
+	runAfter := e.now().Add(defaultAutoContinueDelay).UTC()
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	if err != nil {
+		return false, err
+	}
+	return enqueued, nil
+}
+
+func buildProjectExecutionContinuationMissingDependencyRetryPrompt(
+	completedTask repo.ProjectTask,
+	remainingDraftTasks int,
+	snapshot projectExecutionContinuationSnapshot,
+	missingPath string,
+) string {
+	missingPath = strings.TrimSpace(missingPath)
+	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot)
+	if missingPath == "" {
+		return retryPrompt
+	}
+	return retryPrompt +
+		fmt.Sprintf(" Your last continuation turn confirmed prerequisite artifact `%s` is still missing.", missingPath) +
+		fmt.Sprintf(" Do not browse external sources, do not reread broad project or workspace context, and do not write `%s` from the project session.", missingPath) +
+		fmt.Sprintf(" Your next assistant action must create, queue, or advance the smallest bounded replacement task that produces `%s`, or report one concrete blocker sentence if that handoff is impossible.", missingPath)
 }
 
 func (e *TurnEngine) countProjectDraftTasks(ctx context.Context, projectID uuid.UUID) (int, error) {
@@ -6901,6 +6979,38 @@ func projectExecutionContinuationPromptFingerprint(completedTaskID uuid.UUID, co
 	return strconv.FormatUint(hasher.Sum64(), 16)
 }
 
+func projectContinuationMissingDependencyStopPath(messages []repo.ChatMessage, turnID uuid.UUID) (string, bool) {
+	if turnID == uuid.Nil {
+		return "", false
+	}
+	for _, message := range messagesForTurn(messages, turnID) {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		if path, ok := projectContinuationMissingDependencyStopPathFromSystemMessage(message.Content); ok {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+func projectContinuationMissingDependencyStopPathFromSystemMessage(content string) (string, bool) {
+	trimmed := strings.TrimSpace(content)
+	if !strings.HasPrefix(trimmed, projectContinuationMissingDependencyGuardPrefix) {
+		return "", false
+	}
+	remainder := strings.TrimPrefix(trimmed, projectContinuationMissingDependencyGuardPrefix)
+	end := strings.Index(remainder, "`")
+	if end <= 0 {
+		return "", false
+	}
+	path := strings.TrimSpace(remainder[:end])
+	if path == "" {
+		return "", false
+	}
+	return path, true
+}
+
 func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx context.Context, sessionID, completedTaskID uuid.UUID, fingerprint string) (bool, error) {
 	if e == nil || e.messages == nil || e.chat == nil || sessionID == uuid.Nil || strings.TrimSpace(fingerprint) == "" {
 		return false, nil
@@ -6939,7 +7049,11 @@ func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx cont
 			if !strings.EqualFold(strings.TrimSpace(turnMessage.Role), "system") {
 				continue
 			}
-			if strings.HasPrefix(strings.TrimSpace(turnMessage.Content), projectContinuationRediscoveryGuardPrefix) {
+			trimmed := strings.TrimSpace(turnMessage.Content)
+			if strings.HasPrefix(trimmed, projectContinuationRediscoveryGuardPrefix) {
+				return true, nil
+			}
+			if _, ok := projectContinuationMissingDependencyStopPathFromSystemMessage(trimmed); ok {
 				return true, nil
 			}
 		}

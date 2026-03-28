@@ -10654,6 +10654,274 @@ func TestHandleCompletedProjectExecutionContinuationTurnSuppressesRepeatedRedisc
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnRetriesMissingDependencyStopWithFreshMessage(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	turnID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 34,
+				Title:      "Coordinate Technonymous import recovery",
+				WorkStatus: "done",
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "I need to confirm whether `content/technonymous-index.json` exists before I queue the next recovery step.",
+		SequenceNumber: 11,
+	}
+	toolResult := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "tool_result",
+		Status:         "final",
+		Content:        `{"tool_name":"file.read","output":{"error":"not_found"}}`,
+		SequenceNumber: 12,
+	}
+	systemMessage := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "system",
+		Status:         "final",
+		Content:        "[Project continuation found that prerequisite artifact `content/technonymous-index.json` is still missing. Queue or advance the smallest replacement task that produces it instead of browsing external sources or writing the file from the project session.]",
+		SequenceNumber: 13,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant, *toolResult, *systemMessage}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected missing-dependency stop to enqueue a fresh retry message")
+	}
+
+	jobs := fixture.enqueuer.jobs
+	if len(jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload.MessageID == userMessageID {
+		t.Fatal("retry reused original continuation message, want fresh message id")
+	}
+	if jobs[0].payload.RetryCount != 1 {
+		t.Fatalf("retry_count = %d, want 1", jobs[0].payload.RetryCount)
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var retryMessage *repo.ChatMessage
+	for i := range storedMessages {
+		msg := &storedMessages[i]
+		if msg.ID == jobs[0].payload.MessageID {
+			retryMessage = msg
+			break
+		}
+	}
+	if retryMessage == nil {
+		t.Fatal("missing appended retry continuation message")
+	}
+	if !strings.Contains(retryMessage.Content, "confirmed prerequisite artifact `content/technonymous-index.json` is still missing") {
+		t.Fatalf("retry message = %q, want missing-dependency coaching", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "must create, queue, or advance the smallest bounded replacement task") {
+		t.Fatalf("retry message = %q, want bounded replacement-task guidance", retryMessage.Content)
+	}
+}
+
+func TestHandleCompletedProjectExecutionContinuationTurnSuppressesRepeatedMissingDependencyRetry(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	turnID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 34,
+				Title:      "Coordinate Technonymous import recovery",
+				WorkStatus: "done",
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "I need to confirm whether `content/technonymous-index.json` exists before I queue the next recovery step.",
+		SequenceNumber: 11,
+	}
+	toolResult := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "tool_result",
+		Status:         "final",
+		Content:        `{"tool_name":"file.read","output":{"error":"not_found"}}`,
+		SequenceNumber: 12,
+	}
+	systemMessage := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "system",
+		Status:         "final",
+		Content:        "[Project continuation found that prerequisite artifact `content/technonymous-index.json` is still missing. Queue or advance the smallest replacement task that produces it instead of browsing external sources or writing the file from the project session.]",
+		SequenceNumber: 13,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant, *toolResult, *systemMessage}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   1,
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	retryPrompt := buildProjectExecutionContinuationMissingDependencyRetryPrompt(
+		taskRepo.items[completedTaskID],
+		0,
+		snapshot,
+		"content/technonymous-index.json",
+	)
+	fingerprint := projectExecutionContinuationPromptFingerprint(completedTaskID, retryPrompt)
+
+	priorTurn, err := fixture.chat.CreateTurn(context.Background(), fixture.session.ID, fixture.chat.participants[0].ParticipantID)
+	if err != nil {
+		t.Fatalf("CreateTurn prior: %v", err)
+	}
+	if err := fixture.chat.StartTurn(context.Background(), priorTurn.ID); err != nil {
+		t.Fatalf("StartTurn prior: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	if _, err := fixture.chat.SetStopReason(context.Background(), priorTurn.ID, &stopReason); err != nil {
+		t.Fatalf("SetStopReason prior: %v", err)
+	}
+	if err := fixture.chat.FailTurn(context.Background(), priorTurn.ID, "missing dependency still absent"); err != nil {
+		t.Fatalf("FailTurn prior: %v", err)
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurn.ID,
+		Role:      "user",
+		Status:    "failed",
+		Content:   retryPrompt,
+		Metadata: mustJSONRaw(map[string]any{
+			"source":                            projectExecutionContinuationSource,
+			"auto_continue":                     true,
+			"completed_task_id":                 completedTaskID.String(),
+			"continuation_snapshot_fingerprint": fingerprint,
+		}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurn.ID,
+		Role:      "system",
+		Status:    "final",
+		Content:   "[Project continuation found that prerequisite artifact `content/technonymous-index.json` is still missing. Queue or advance the smallest replacement task that produces it instead of browsing external sources or writing the file from the project session.]",
+	})
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected repeated missing-dependency continuation to be handled")
+	}
+	if len(fixture.enqueuer.jobs) != 0 {
+		t.Fatalf("enqueued jobs = %d, want 0 when identical missing-dependency retry is suppressed", len(fixture.enqueuer.jobs))
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var retryCount int
+	for _, msg := range storedMessages {
+		metadata := messageMetadataMap(msg.Metadata)
+		if strings.EqualFold(strings.TrimSpace(msg.Role), "user") &&
+			strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), projectExecutionContinuationSource) &&
+			strings.TrimSpace(stringValue(metadata["continuation_snapshot_fingerprint"])) == fingerprint {
+			retryCount++
+		}
+	}
+	if retryCount != 1 {
+		t.Fatalf("project continuation messages with fingerprint %s = %d, want 1", fingerprint, retryCount)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnRetriesDependencyErrorCoachingReplyWithFreshMessage(t *testing.T) {
 	t.Parallel()
 
