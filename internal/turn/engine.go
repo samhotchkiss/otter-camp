@@ -9780,6 +9780,7 @@ func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt 
 	if err != nil {
 		return err
 	}
+	historyStartID := message.ID
 	if shouldAppendTaskContinuationActionPrompt(rt.session) {
 		if reviewPrompt, reviewMetadata, ok, promptErr := e.taskReviewContinuationActionPrompt(ctx, rt, previousTurn); promptErr != nil {
 			return promptErr
@@ -9789,32 +9790,37 @@ func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt 
 				return appendErr
 			}
 			if shouldAppend {
-				if _, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+				actionMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
 					SessionID: rt.session.ID,
 					TurnID:    &rt.turn.ID,
 					Role:      "user",
 					Content:   reviewPrompt,
 					Metadata:  reviewMetadata,
-				}); err != nil {
+				})
+				if err != nil {
 					return err
 				}
+				historyStartID = actionMessage.ID
 			}
-			return nil
+			rt.historyStartID = &historyStartID
+			return e.persistTurnHistoryStart(ctx, rt, historyStartID)
 		}
 		shouldAppend, appendErr := e.shouldAppendSyntheticUserPrompt(ctx, rt.session.ID, taskContinuationResumeMessageSource)
 		if appendErr != nil {
 			return appendErr
 		}
 		if shouldAppend {
-			if _, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+			actionMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
 				SessionID: rt.session.ID,
 				TurnID:    &rt.turn.ID,
 				Role:      "user",
 				Content:   buildTaskContinuationActionPrompt(summary),
 				Metadata:  syntheticContinuationActionMessageMetadata(rt.session, taskContinuationResumeMessageSource),
-			}); err != nil {
+			})
+			if err != nil {
 				return err
 			}
+			historyStartID = actionMessage.ID
 		}
 	}
 	if shouldAppendProjectContinuationActionPrompt(rt.session) {
@@ -9827,15 +9833,17 @@ func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt 
 			if snapshotErr != nil {
 				return snapshotErr
 			}
-			if _, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+			actionMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
 				SessionID: rt.session.ID,
 				TurnID:    &rt.turn.ID,
 				Role:      "user",
 				Content:   buildProjectContinuationActionPrompt(summary, snapshot),
 				Metadata:  syntheticContinuationActionMessageMetadata(rt.session, "project_continuation_resume"),
-			}); err != nil {
+			})
+			if err != nil {
 				return err
 			}
+			historyStartID = actionMessage.ID
 		}
 	}
 	if shouldAppendOrganizationContinuationActionPrompt(rt.session) {
@@ -9844,19 +9852,21 @@ func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt 
 			return appendErr
 		}
 		if shouldAppend {
-			if _, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+			actionMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
 				SessionID: rt.session.ID,
 				TurnID:    &rt.turn.ID,
 				Role:      "user",
 				Content:   buildOrganizationContinuationActionPrompt(summary),
 				Metadata:  syntheticContinuationActionMessageMetadata(rt.session, "organization_continuation_resume"),
-			}); err != nil {
+			})
+			if err != nil {
 				return err
 			}
+			historyStartID = actionMessage.ID
 		}
 	}
-	rt.historyStartID = &message.ID
-	if err := e.persistTurnHistoryStart(ctx, rt, message.ID); err != nil {
+	rt.historyStartID = &historyStartID
+	if err := e.persistTurnHistoryStart(ctx, rt, historyStartID); err != nil {
 		return err
 	}
 	return nil

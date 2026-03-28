@@ -15525,6 +15525,93 @@ func TestBuildProjectExecutionContinuationPrompt(t *testing.T) {
 	}
 }
 
+func TestAppendContinuationSummaryAndActionRootsProjectContinuationAtSyntheticUserPrompt(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	turn := &chat.ChatTurn{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   fixture.chat.participants[0].ParticipantID,
+		Status:         "in_progress",
+	}
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.chat.turns[turn.ID] = turn
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turn.ID)
+	parentDraftID := uuid.New()
+	assigneeID := uuid.New()
+	flowTemplateID := uuid.New()
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			uuid.New(): {
+				ID:              uuid.New(),
+				ProjectID:       projectID,
+				TaskNumber:      35,
+				Title:           "Scrape batch 1",
+				WorkStatus:      "blocked",
+				AssignedAgentID: &assigneeID,
+				FlowTemplateID:  &flowTemplateID,
+			},
+			uuid.New(): {
+				ID:              uuid.New(),
+				ProjectID:       projectID,
+				TaskNumber:      36,
+				Title:           "Scrape batch 2",
+				WorkStatus:      "review",
+				AssignedAgentID: &assigneeID,
+				FlowTemplateID:  &flowTemplateID,
+			},
+			parentDraftID: {
+				ID:             parentDraftID,
+				ProjectID:      projectID,
+				TaskNumber:     34,
+				Title:          "Scrape and import posts",
+				WorkStatus:     "draft",
+				FlowTemplateID: &flowTemplateID,
+			},
+			uuid.New(): {
+				ID:         uuid.New(),
+				ProjectID:  projectID,
+				TaskNumber: 37,
+				Title:      "Child scrape 1",
+				WorkStatus: "in_progress",
+				Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn:    turn,
+	}
+
+	if err := fixture.engine.appendContinuationSummaryAndAction(context.Background(), rt, nil, "Project execution is already underway."); err != nil {
+		t.Fatalf("appendContinuationSummaryAndAction: %v", err)
+	}
+	if rt.historyStartID == nil {
+		t.Fatal("historyStartID = nil, want synthetic project continuation prompt")
+	}
+	message, err := fixture.messages.GetByID(context.Background(), *rt.historyStartID)
+	if err != nil {
+		t.Fatalf("GetByID historyStartID: %v", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+		t.Fatalf("historyStart role = %q, want user", message.Role)
+	}
+	if got := strings.TrimSpace(stringValue(messageMetadataMap(message.Metadata)["source"])); got != "project_continuation_resume" {
+		t.Fatalf("historyStart source = %q, want project_continuation_resume", got)
+	}
+	if !strings.Contains(message.Content, "Draft parent tasks already have active child work:") {
+		t.Fatalf("historyStart content = %q, want child-active draft guidance", message.Content)
+	}
+	if !strings.Contains(message.Content, "Do not queue, re-decompose, or broadly rediscover those parent draft tasks again") {
+		t.Fatalf("historyStart content = %q, want parent-draft anti-rediscovery guidance", message.Content)
+	}
+}
+
 func TestProjectExecutionContinuationFallbackSummary(t *testing.T) {
 	summary := projectExecutionContinuationFallbackSummary()
 
