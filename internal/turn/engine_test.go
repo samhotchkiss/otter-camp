@@ -32442,6 +32442,48 @@ func TestLatestRecoveryTargetPathForSessionFallsBackToRecentToolResultDeliverabl
 	}
 }
 
+func TestRecoveryTargetPathForSessionPrefersTaskMetadataOverCheckpointArtifactHistory(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Read content/technonymous-index.json. For each of the last 11 URLs in the post_urls array (indices 24-34), use web_fetch to retrieve the page content, then save the article text as clean markdown files under content/posts/.\n\nDeliverable: 11 markdown files in content/posts/."
+	taskRecord := repo.ProjectTask{
+		ID:          taskID,
+		TaskNumber:  63,
+		Title:       "Fetch posts 25-35 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+		Description: &description,
+		Metadata: mustRawJSON(t, map[string]any{
+			"content_migration_checkpoint": map[string]any{
+				"version": 1,
+				"outputs": []map[string]any{
+					{"path": "content/posts/the-water-is-nearing-a-boil.md"},
+					{"path": "content/posts/how-to-cook-a-steak-and-why-it-matters.md"},
+				},
+			},
+			"recovery_file_write_checkpoint": map[string]any{
+				"failure_reason": "repeated recovery target focus failures for .ottercamp/checkpoints/oc-63-content-migration.md across explicit resume attempts; latest recovery_target_focus_required",
+			},
+		}),
+	}
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks.(*fakeTaskRepo).items = map[uuid.UUID]repo.ProjectTask{
+		taskID: taskRecord,
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"file.write","output":{"path":".ottercamp/checkpoints/oc-63-content-migration.md"}}`,
+	})
+
+	if got := fixture.engine.recoveryTargetPathForSession(context.Background(), fixture.session); got != "content/posts/the-water-is-nearing-a-boil.md" {
+		t.Fatalf("recoveryTargetPathForSession(...) = %q, want %q", got, "content/posts/the-water-is-nearing-a-boil.md")
+	}
+}
+
 func TestSessionTaskDeliverablePathPrefersCheckpointTargetOverInferredReportPath(t *testing.T) {
 	t.Parallel()
 
@@ -32687,6 +32729,60 @@ func TestRecoverySynthesizedFileWriteTargetPathPrefersExplicitRecoveryTargetOver
 
 	if got := fixture.engine.recoverySynthesizedFileWriteTargetPath(context.Background(), rt); got != "content/posts/stop-preparing-your-kids-for-jobs.md" {
 		t.Fatalf("recoverySynthesizedFileWriteTargetPath(...) = %q, want explicit recovery target", got)
+	}
+}
+
+func TestRecoverySynthesizedFileWriteTargetPathPrefersBatchOutputOverCheckpointHistory(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	description := "Read content/technonymous-index.json. For each of the last 11 URLs in the post_urls array (indices 24-34), use web_fetch to retrieve the page content, then save the article text as a clean Markdown file under content/posts/. Deliverable: 11 markdown files in content/posts/. Commit all files when done."
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:          taskID,
+			TaskNumber:  63,
+			Title:       "Fetch posts 25-35 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+			Description: &description,
+			WorkStatus:  "blocked",
+			Metadata: mustRawJSON(t, map[string]any{
+				"content_migration_checkpoint": map[string]any{
+					"version": 1,
+					"outputs": []map[string]any{
+						{"path": "content/posts/every-convenience-is-a-small-step.md"},
+						{"path": "content/posts/practice-into-the-wild-water.md"},
+					},
+				},
+				"recovery_file_write_checkpoint": map[string]any{
+					"failure_reason": "repeated recovery target focus failures for .ottercamp/checkpoints/oc-63-content-migration.md across explicit resume attempts; latest recovery_target_focus_required",
+				},
+			}),
+		},
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"file.write","output":{"path":".ottercamp/checkpoints/oc-63-content-migration.md"}}`,
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	if got := fixture.engine.recoverySynthesizedFileWriteTargetPath(context.Background(), rt); got != "content/posts/every-convenience-is-a-small-step.md" {
+		t.Fatalf("recoverySynthesizedFileWriteTargetPath(...) = %q, want %q", got, "content/posts/every-convenience-is-a-small-step.md")
 	}
 }
 
@@ -33621,6 +33717,46 @@ func TestRecoveryFileWriteDraftRejectReasonRejectsDeliverableCompletionSummaryWi
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReasonRejectsContentMigrationCheckpointSummaryWithoutBody(t *testing.T) {
+	t.Parallel()
+
+	content := strings.TrimSpace(`
+All 11 files already exist in ` + "`content/posts/`" + ` according to the checkpoint.
+
+1. ` + "`content/posts/every-convenience-is-a-small-step.md`" + `
+2. ` + "`content/posts/practice-into-the-wild-water.md`" + `
+3. ` + "`content/posts/stop-preparing-your-kids-for-jobs.md`" + `
+
+The previous flow step was rejected, so let me verify the quality of each file and then proceed.
+I'll spot-check several before reporting back.
+`)
+
+	reason := recoveryFileWriteDraftRejectReason(content, "content/posts/every-convenience-is-a-small-step.md")
+	if !strings.Contains(reason, "content-migration checkpoint summary") {
+		t.Fatalf("reason = %q, want content-migration summary rejection", reason)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsContentMigrationRecoveryNoteWithoutBody(t *testing.T) {
+	t.Parallel()
+
+	content := strings.TrimSpace(`
+I keep making the critical error of writing the continuation summary text into the markdown file instead of the actual article content. Let me stop and approach this correctly.
+
+The continuation summary is NOT the file content. I need to:
+1. Read the index to get the actual URLs
+2. Fetch each URL to get the actual article content
+3. Write the actual article markdown
+
+Let me start fresh with the correct approach:
+`)
+
+	reason := recoveryFileWriteDraftRejectReason(content, "content/posts/every-convenience-is-a-small-step.md")
+	if !strings.Contains(reason, "recovery-step narration") {
+		t.Fatalf("reason = %q, want recovery-note rejection", reason)
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReasonRejectsRecoveryGuidanceSummaryPlaceholder(t *testing.T) {
 	t.Parallel()
 
@@ -34423,6 +34559,168 @@ Validate duplicate email handling and duplicate key rejection.
 	}
 	if !strings.Contains(state.targetDraftRejectedReason, "different task") {
 		t.Fatalf("targetDraftRejectedReason = %q, want different-task rejection", state.targetDraftRejectedReason)
+	}
+}
+
+func TestLoadRecoveryResumeStateRejectsContentMigrationCheckpointSummaryDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	projectSlug := "content-migration-recovery"
+	orgSlug := "acme"
+	description := "Read content/technonymous-index.json. For each of the last 11 URLs in the post_urls array (indices 24-34), use web_fetch to retrieve the page content, then save the article text as clean markdown files under content/posts/."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.dataDir = t.TempDir()
+	fixture.engine.tasks = &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			TaskNumber:     63,
+			Title:          "Fetch posts 25-35 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+			Description:    &description,
+			WorkStatus:     "blocked",
+			Metadata: mustRawJSON(t, map[string]any{
+				"recovery_file_write_checkpoint": map[string]any{
+					"version":        1,
+					"target_path":    "content/posts/every-convenience-is-a-small-step.md",
+					"failure_reason": "repeated recovery target focus failures for .ottercamp/checkpoints/oc-63-content-migration.md across explicit resume attempts; latest recovery_target_focus_required",
+				},
+			}),
+		},
+	}}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: orgID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		orgID: {ID: orgID, Slug: orgSlug},
+	}}
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "system",
+		Status:    "final",
+		Content: strings.TrimSpace(`[Continuation summary]
+All 11 files already exist in ` + "`content/posts/`" + ` according to the checkpoint.
+
+1. ` + "`content/posts/every-convenience-is-a-small-step.md`" + `
+2. ` + "`content/posts/practice-into-the-wild-water.md`" + `
+3. ` + "`content/posts/stop-preparing-your-kids-for-jobs.md`" + `
+
+The previous flow step was rejected, so let me verify the quality of each file and then proceed.
+I'll spot-check several before reporting back.`),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	state, ok := fixture.engine.loadRecoveryResumeState(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery resume state")
+	}
+	if strings.Contains(state.summaryDraft, "files already exist in `content/posts/`") {
+		t.Fatalf("summaryDraft = %q, want checkpoint summary to be rejected and omitted", state.summaryDraft)
+	}
+	if !strings.Contains(state.summaryDraftRejectedReason, "content-migration checkpoint summary") {
+		t.Fatalf("summaryDraftRejectedReason = %q, want content-migration summary rejection", state.summaryDraftRejectedReason)
+	}
+	if !strings.Contains(state.summaryDraft, "## Validation Criteria") {
+		t.Fatalf("summaryDraft = %q, want safe inferred scaffold fallback", state.summaryDraft)
+	}
+}
+
+func TestLoadRecoveryResumeStateRejectsContentMigrationRecoveryNoteDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	projectSlug := "content-migration-recovery-note"
+	orgSlug := "acme"
+	description := "Read content/technonymous-index.json. For each of the last 11 URLs in the post_urls array (indices 24-34), use web_fetch to retrieve the page content, then save the article text as clean markdown files under content/posts/."
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			TaskNumber:     63,
+			Title:          "Fetch posts 25-35 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+			Description:    &description,
+			WorkStatus:     "blocked",
+			Metadata: mustRawJSON(t, map[string]any{
+				"recovery_file_write_checkpoint": map[string]any{
+					"version":        1,
+					"target_path":    "content/posts/every-convenience-is-a-small-step.md",
+					"failure_reason": "repeated recovery target focus failures for content/posts/every-convenience-is-a-small-step.md across explicit resume attempts; latest recovery_target_focus_required",
+				},
+			}),
+		},
+	}}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: orgID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		orgID: {ID: orgID, Slug: orgSlug},
+	}}
+
+	targetAbs := filepath.Join(dataDir, "workspaces", projectSlug, "content", "posts", "every-convenience-is-a-small-step.md")
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	recoveryNote := strings.TrimSpace(`
+I keep making the critical error of writing the continuation summary text into the markdown file instead of the actual article content. Let me stop and approach this correctly.
+
+The continuation summary is NOT the file content. I need to:
+1. Read the index to get the actual URLs
+2. Fetch each URL to get the actual article content
+3. Write the actual article markdown
+
+Let me start fresh with the correct approach:
+`)
+	if err := os.WriteFile(targetAbs, []byte(recoveryNote), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	state, ok := fixture.engine.loadRecoveryResumeState(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery resume state")
+	}
+	if state.targetDraft != "" {
+		t.Fatalf("targetDraft = %q, want recovery note to be rejected", state.targetDraft)
+	}
+	if !strings.Contains(state.targetDraftRejectedReason, "recovery-step narration") {
+		t.Fatalf("targetDraftRejectedReason = %q, want recovery-note rejection", state.targetDraftRejectedReason)
+	}
+	if !strings.Contains(state.summaryDraft, "## Validation Criteria") {
+		t.Fatalf("summaryDraft = %q, want safe inferred scaffold fallback", state.summaryDraft)
 	}
 }
 

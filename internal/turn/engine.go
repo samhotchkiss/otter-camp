@@ -8230,7 +8230,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		recoveryTurn:            isRecoveryResumeMessage(message),
 	}
 	if runtime.recoveryTurn {
-		runtime.recoveryTargetPath = e.latestRecoveryTargetPathForSession(ctx, session.ID)
+		runtime.recoveryTargetPath = e.recoveryTargetPathForSession(ctx, session)
 	}
 	runtime.projectIdentity = e.loadProjectIdentityForMessage(ctx, sessionID, messageID)
 	if runtime.projectIdentity == nil {
@@ -10576,7 +10576,7 @@ func (e *TurnEngine) taskExecutionContinuationSummary(ctx context.Context, rt *t
 	if e == nil || rt == nil || rt.session == nil || !shouldAppendTaskContinuationActionPrompt(rt.session) {
 		return "", false
 	}
-	targetPath := e.latestRecoveryTargetPathForSession(ctx, rt.session.ID)
+	targetPath := e.recoveryTargetPathForSession(ctx, rt.session)
 	if draft, ok := e.latestPriorSubstantiveAssistantDraftContent(ctx, rt, targetPath); ok {
 		return compactContinuationSummary(draft), true
 	}
@@ -17326,8 +17326,12 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 		}
 	}
 	if strings.TrimSpace(state.targetDraft) == "" && strings.TrimSpace(state.artifactDraft) == "" {
-		if summaryDraft, ok := e.latestContinuationSummaryDraftContent(ctx, rt, state.targetPath); ok {
-			state.summaryDraft = summaryDraft
+		if summaryDraft, ok := e.latestContinuationSummaryDraftCandidateContent(ctx, rt); ok {
+			state.summaryDraft, state.summaryDraftRejectedReason = recoveryResumeDraftForPrompt(
+				state.failureReason,
+				state.targetPath,
+				summaryDraft,
+			)
 		}
 	}
 	if haveTaskRecord && recoveryDraftClearlyBelongsToDifferentTask(taskRecord, state.targetPath, state.summaryDraft) {
@@ -19072,13 +19076,19 @@ func (e *TurnEngine) recoveryPersistedDraftContent(ctx context.Context, rt *turn
 		return "", "", false
 	}
 	if draft := strings.TrimSpace(state.targetDraft); draft != "" && strings.TrimSpace(state.targetDraftRejectedReason) == "" {
-		return draft, "", true
+		if rejectReason := strings.TrimSpace(recoveryFileWriteDraftRejectReason(draft, targetPath)); rejectReason == "" {
+			return draft, "", true
+		}
 	}
 	if draft := strings.TrimSpace(state.artifactDraft); draft != "" && strings.TrimSpace(state.artifactDraftRejectedReason) == "" {
-		return draft, "", true
+		if rejectReason := strings.TrimSpace(recoveryFileWriteDraftRejectReason(draft, targetPath)); rejectReason == "" {
+			return draft, "", true
+		}
 	}
 	if draft := strings.TrimSpace(state.summaryDraft); draft != "" && strings.TrimSpace(state.summaryDraftRejectedReason) == "" {
-		return draft, "", true
+		if rejectReason := strings.TrimSpace(recoveryFileWriteDraftRejectReason(draft, targetPath)); rejectReason == "" {
+			return draft, "", true
+		}
 	}
 	return "", "", false
 }
@@ -19160,6 +19170,20 @@ func (e *TurnEngine) latestPriorRecoveryArtifactDraftContent(ctx context.Context
 }
 
 func (e *TurnEngine) latestContinuationSummaryDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
+	content, ok := e.latestContinuationSummaryDraftCandidateContent(ctx, rt)
+	if !ok {
+		return "", false
+	}
+	if reason := recoveryFileWriteDraftRejectReason(content, targetPath); reason != "" {
+		return "", false
+	}
+	if !looksLikeRecoveryFileDraft(content) {
+		return "", false
+	}
+	return content, true
+}
+
+func (e *TurnEngine) latestContinuationSummaryDraftCandidateContent(ctx context.Context, rt *turnRuntime) (string, bool) {
 	if e == nil || e.messages == nil || rt == nil || rt.session == nil {
 		return "", false
 	}
@@ -19177,12 +19201,6 @@ func (e *TurnEngine) latestContinuationSummaryDraftContent(ctx context.Context, 
 		}
 		content := continuationSummaryDraftContent(message.Content)
 		if content == "" {
-			continue
-		}
-		if reason := recoveryFileWriteDraftRejectReason(content, targetPath); reason != "" {
-			continue
-		}
-		if !looksLikeRecoveryFileDraft(content) {
 			continue
 		}
 		return content, true
@@ -19228,6 +19246,22 @@ func (e *TurnEngine) latestRecoveryTargetPathForSession(ctx context.Context, ses
 		}
 	}
 	return ""
+}
+
+func (e *TurnEngine) recoveryTargetPathForSession(ctx context.Context, session *chat.ChatSession) string {
+	if e == nil || session == nil {
+		return ""
+	}
+	if e.tasks != nil && strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+		if taskID := resolveTaskID(session); taskID != nil && *taskID != uuid.Nil {
+			if taskRecord, err := e.tasks.GetByID(ctx, *taskID); err == nil {
+				if target := metadataPreferredRecoveryTargetPathForTask(taskRecord); target != "" {
+					return target
+				}
+			}
+		}
+	}
+	return e.latestRecoveryTargetPathForSession(ctx, session.ID)
 }
 
 func parseRecoveryResumeTargetPath(content string) string {
@@ -19337,6 +19371,26 @@ func (e *TurnEngine) sessionTaskDeliverablePath(ctx context.Context, sessionID u
 		}
 	}
 	return strings.TrimSpace(preferredTaskDeliverablePath(taskRecord))
+}
+
+func metadataPreferredRecoveryTargetPathForTask(taskRecord repo.ProjectTask) string {
+	if checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata); ok {
+		if targetPath := contentMigrationCheckpointPreferredOutputPath(taskRecord, checkpoint); targetPath != "" {
+			return targetPath
+		}
+	}
+	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
+		normalized := normalizeRecoveryCheckpointTargetForTask(taskRecord, checkpoint)
+		if targetPath := normalizeWorkspaceRelativePath(strings.TrimSpace(normalized.TargetPath)); targetPath != "" &&
+			looksLikeExplicitDeliverablePath(targetPath, normalized.TargetPath) {
+			return targetPath
+		}
+	}
+	if explicit := strings.TrimSpace(explicitDeliverablePath(taskRecord)); explicit != "" &&
+		shouldReuseHistoricalDeliverableTargetForTask(taskRecord, explicit) {
+		return explicit
+	}
+	return ""
 }
 
 func contentMigrationCheckpointPreferredOutputPath(taskRecord repo.ProjectTask, checkpoint taskcheckpoint.ContentMigrationCheckpoint) string {
@@ -19919,6 +19973,12 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	}
 	if looksLikeExecutionSpecCompletionMemoWithoutArtifacts(path, trimmed) {
 		return fmt.Sprintf("assistant draft for %s wrote a self-certified execution-spec completion memo without concrete artifact evidence", path)
+	}
+	if looksLikeContentMigrationRecoveryNoteWithoutBody(path, trimmed) {
+		return fmt.Sprintf("assistant draft for %s repeated recovery-step narration instead of the file body", path)
+	}
+	if looksLikeContentMigrationCheckpointSummaryWithoutBody(path, trimmed) {
+		return fmt.Sprintf("assistant draft for %s repeated a content-migration checkpoint summary instead of the file body", path)
 	}
 	if looksLikeDeliverableCompletionSummaryWithoutBody(path, trimmed) {
 		return fmt.Sprintf("assistant draft for %s wrote a completion summary about deliverables/review readiness instead of the actual file body", path)
@@ -20505,6 +20565,61 @@ func looksLikeDeliverableCompletionSummaryWithoutBody(targetPath, content string
 		"## setup",
 		"## acceptance criteria",
 		"## execution steps",
+	) {
+		return false
+	}
+	return true
+}
+
+func looksLikeContentMigrationCheckpointSummaryWithoutBody(targetPath, content string) bool {
+	path := strings.ToLower(strings.TrimSpace(targetPath))
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || !strings.HasPrefix(path, "content/posts/") {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.Count(lower, ".md") < 3 {
+		return false
+	}
+	if !containsAny(lower,
+		"files already exist in `content/posts/",
+		"files already exist in content/posts/",
+		"according to the checkpoint",
+		"the checkpoint shows",
+	) {
+		return false
+	}
+	if !containsAny(lower,
+		"the previous flow step was rejected",
+		"let me verify the quality of each file",
+		"i'll spot-check several",
+		"i will spot-check several",
+		"spot-check several before",
+	) {
+		return false
+	}
+	return true
+}
+
+func looksLikeContentMigrationRecoveryNoteWithoutBody(targetPath, content string) bool {
+	path := strings.ToLower(strings.TrimSpace(targetPath))
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || !strings.HasPrefix(path, "content/posts/") {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if !containsAny(lower,
+		"i keep making the critical error of writing the continuation summary text",
+		"the continuation summary is not the file content",
+		"let me stop and approach this correctly",
+		"let me start fresh with the correct approach",
+	) {
+		return false
+	}
+	if !containsAny(lower,
+		"read the index",
+		"fetch each url",
+		"write the actual article markdown",
 	) {
 		return false
 	}

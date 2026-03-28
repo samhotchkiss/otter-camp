@@ -1181,3 +1181,41 @@
   - result:
     - native recovery focus now respects metadata-derived batch outputs and deliverable-root contracts
     - the remaining task-61 churn is duplicate-write / continuation efficiency, not stale dependency-artifact rereads
+- 2026-03-28 13:14:32 MDT - `pending` `Harden recovery resumes against content-migration checkpoint summaries`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - active recovery turns now use `recoveryTargetPathForSession(...)`, which prefers task metadata for `project_task` sessions before falling back to raw session history
+    - added `metadataPreferredRecoveryTargetPathForTask(...)` so content-migration checkpoints, normalized recovery checkpoints, and explicit deliverables can override stale checkpoint-artifact history
+    - `loadRecoveryResumeState(...)` now evaluates continuation-summary candidates through `recoveryResumeDraftForPrompt(...)`, preserving the reject reason and omitting bad checkpoint/status prose from recovery prompts
+    - `recoveryPersistedDraftContent(...)` now revalidates target/artifact/summary drafts with the current reject heuristics before letting recovery synthesize a `file.write`
+    - `recoveryFileWriteDraftRejectReason(...)` now rejects the specific content-migration checkpoint/status-summary shape for `content/posts/...` targets via `looksLikeContentMigrationCheckpointSummaryWithoutBody(...)`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestRecoveryTargetPathForSessionPrefersTaskMetadataOverCheckpointArtifactHistory`
+    - added `TestRecoverySynthesizedFileWriteTargetPathPrefersBatchOutputOverCheckpointHistory`
+    - added `TestRecoveryFileWriteDraftRejectReasonRejectsContentMigrationCheckpointSummaryWithoutBody`
+    - added `TestLoadRecoveryResumeStateRejectsContentMigrationCheckpointSummaryDraft`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(RecoveryTargetPathForSessionPrefersTaskMetadataOverCheckpointArtifactHistory|RecoverySynthesizedFileWriteTargetPathPrefersBatchOutputOverCheckpointHistory|RecoveryFileWriteDraftRejectReasonRejectsContentMigrationCheckpointSummaryWithoutBody|LoadRecoveryResumeStateRejectsContentMigrationCheckpointSummaryDraft)$' -count=1`
+  - live proof before the fix:
+    - task `63` session `64e6354b-93c8-4222-b73c-96de0876b201`, turn `2a93ae85-a8c1-43b8-a2ca-cf2c762c3fea`, had already switched to the real output target under `content/posts/`
+    - the lane then synthesized `file.write content/posts/every-convenience-is-a-small-step.md` from the recovery system message’s `Continuation summary draft:` block, assistant `149` noticed the corruption, and tool result `150` repeated the same write
+  - expected result after deploy:
+    - recovery resumes for content-migration tasks keep the metadata-derived output target
+    - checkpoint/status summaries stop qualifying as reusable durable drafts, so the engine no longer rewrites real `content/posts/...` deliverables with checkpoint prose
+- 2026-03-28 13:24:18 MDT - `pending` `Reject self-reflective recovery notes for content-migration drafts`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `looksLikeContentMigrationRecoveryNoteWithoutBody(...)`
+    - `recoveryFileWriteDraftRejectReason(...)` now rejects self-reflective content-migration recovery notes like `I keep making the critical error ... read the index ... fetch each URL ... write the actual article markdown` for `content/posts/...` targets
+    - this applies both when loading recovery-state drafts from the target file and when revalidating persisted drafts before synthesized `file.write`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestRecoveryFileWriteDraftRejectReasonRejectsContentMigrationRecoveryNoteWithoutBody`
+    - added `TestLoadRecoveryResumeStateRejectsContentMigrationRecoveryNoteDraft`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(RecoveryTargetPathForSessionPrefersTaskMetadataOverCheckpointArtifactHistory|RecoverySynthesizedFileWriteTargetPathPrefersBatchOutputOverCheckpointHistory|RecoveryFileWriteDraftRejectReasonRejectsContentMigration(CheckpointSummary|RecoveryNote)WithoutBody|LoadRecoveryResumeStateRejectsContentMigration(CheckpointSummary|RecoveryNote)Draft)$' -count=1`
+  - live proof before the fix:
+    - task `63` session `64e6354b-93c8-4222-b73c-96de0876b201` recovery prompt `198` now omitted the old checkpoint summary, but still embedded a 415-byte self-reflective target draft about the previous error pattern
+    - assistant `200` fetched the real article, while tool result `203` still rewrote `content/posts/every-convenience-is-a-small-step.md` with that recovery note instead of article markdown
+  - expected result after deploy:
+    - content-migration recovery turns stop treating self-reflective “I need to fetch/write the article” notes as substantive drafts
+    - the next retry must either write real article content or continue from a safe scaffold, not replay the recovery note into the deliverable path
