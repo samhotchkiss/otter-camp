@@ -14653,6 +14653,146 @@ func TestContinuationTurnUsesDeterministicActiveRequestSummaryForAsyncOrganizati
 	}
 }
 
+func TestContinuationTurnUsesDeterministicActiveRequestSummaryForAsyncProjectSession(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}},
+	}
+	fixture.engine.tasks = &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{}}
+
+	currentRequest := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Recover the blocked HTML template tasks by reusing existing deliverables and creating the smallest replacement tasks needed to finish the remaining templates.",
+	})
+	fixture.userMessageID = currentRequest.ID
+
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			t.Fatalf("unexpected continuation_summary model call")
+		}
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, currentRequest.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if fixture.model.continuationSummaryCalls != 0 {
+		t.Fatalf("continuation summary calls = %d, want 0", fixture.model.continuationSummaryCalls)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var summaryMessage *repo.ChatMessage
+	for i := range messages {
+		message := messages[i]
+		if strings.Contains(message.Content, "[Continuation summary]") {
+			copyMessage := message
+			summaryMessage = &copyMessage
+		}
+	}
+	if summaryMessage == nil {
+		t.Fatal("continuation summary message missing")
+	}
+	if !strings.Contains(summaryMessage.Content, "Active project request:") {
+		t.Fatalf("continuation summary = %q, want deterministic active project request summary", summaryMessage.Content)
+	}
+	if !strings.Contains(summaryMessage.Content, currentRequest.Content) {
+		t.Fatalf("continuation summary = %q, want original request content", summaryMessage.Content)
+	}
+}
+
+func TestContinuationTurnUsesPriorRealRequestWhenTriggeredBySyntheticProjectContinuationPrompt(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}},
+	}
+	fixture.engine.tasks = &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{}}
+
+	realRequest := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Recover the blocked HTML template tasks by reusing existing deliverables and creating the smallest replacement tasks needed to finish the remaining templates.",
+	})
+	summaryMessage := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "system",
+		Status:    "final",
+		Content:   "[Continuation summary] Active project request: Recover the blocked HTML template tasks by reusing existing deliverables and creating the smallest replacement tasks needed to finish the remaining templates.",
+	})
+	continuationPrompt := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Continue the active project execution now from the continuation summary above. Your next response must take direct project action instead of generic chat.",
+		Metadata:  json.RawMessage(`{"source":"project_continuation_resume","synthetic_user_message":true}`),
+	})
+	fixture.userMessageID = continuationPrompt.ID
+	_ = summaryMessage
+
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			t.Fatalf("unexpected continuation_summary model call")
+		}
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, continuationPrompt.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var continuationSummary *repo.ChatMessage
+	for i := range messages {
+		message := messages[i]
+		if strings.Contains(message.Content, "[Continuation summary]") && message.ID != summaryMessage.ID {
+			copyMessage := message
+			continuationSummary = &copyMessage
+		}
+	}
+	if continuationSummary == nil {
+		t.Fatal("continuation summary message missing")
+	}
+	if !strings.Contains(continuationSummary.Content, realRequest.Content) {
+		t.Fatalf("continuation summary = %q, want original request content", continuationSummary.Content)
+	}
+	if strings.Contains(continuationSummary.Content, continuationPrompt.Content) {
+		t.Fatalf("continuation summary = %q, should not summarize synthetic continuation prompt", continuationSummary.Content)
+	}
+}
+
 func TestContinuationTurnUsesPriorRealRequestWhenTriggeredBySyntheticOrganizationContinuationPrompt(t *testing.T) {
 	t.Parallel()
 
@@ -25976,6 +26116,12 @@ This document defines archive, results, and related-post wireframes.`,
 			targetPath: "templates/template-07-dark-mode-developer.html",
 			want:       "tool-recovery troubleshooting",
 		},
+		{
+			name:       "rejects review rejection prose written into html deliverable",
+			content:    "The file read returned `mismatched_deliverable_context`. Per the review protocol, this is a stop condition — the deliverable does not match the task's scope. I will reject the review immediately using this evidence.",
+			targetPath: "templates/template-07-dark-mode-developer.html",
+			want:       "reviewer assessment or rejection commentary",
+		},
 	}
 
 	for _, tc := range cases {
@@ -28468,6 +28614,43 @@ Generated: 2026-03-23T06:21:48Z
 	}
 	if got, ok := call.Arguments["create_dirs"].(bool); !ok || !got {
 		t.Fatalf("create_dirs = %v, want true", call.Arguments["create_dirs"])
+	}
+}
+
+func TestLatestSubstantiveAssistantFinalForTurnIgnoresTemplateReviewRejectionProse(t *testing.T) {
+	t.Parallel()
+
+	turnID := uuid.New()
+	messages := []repo.ChatMessage{
+		{
+			ID:             uuid.New(),
+			TurnID:         &turnID,
+			Role:           "assistant",
+			Status:         "final",
+			SequenceNumber: 10,
+			Content: strings.TrimSpace(`<!DOCTYPE html>
+<html>
+  <body>
+    <main>Recovered template body</main>
+  </body>
+</html>`),
+		},
+		{
+			ID:             uuid.New(),
+			TurnID:         &turnID,
+			Role:           "assistant",
+			Status:         "final",
+			SequenceNumber: 11,
+			Content:        "The file read returned `mismatched_deliverable_context`. Per the review protocol, this is a stop condition — the deliverable does not match the task's scope. I will reject the review immediately using this evidence.",
+		},
+	}
+
+	got := latestSubstantiveAssistantFinalForTurn(messages, turnID, "templates/template-07-dark-mode-developer.html")
+	if got == nil {
+		t.Fatal("expected substantive assistant draft")
+	}
+	if got.SequenceNumber != 10 {
+		t.Fatalf("sequence_number = %d, want 10", got.SequenceNumber)
 	}
 }
 

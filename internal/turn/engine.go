@@ -9690,6 +9690,9 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 			return e.appendContinuationSummaryAndAction(ctx, rt, currentTurn, summary)
 		}
 	}
+	if summary, ok := e.projectActiveRequestContinuationSummary(ctx, rt); ok {
+		return e.appendContinuationSummaryAndAction(ctx, rt, currentTurn, summary)
+	}
 	if summary, ok := e.organizationActiveRequestContinuationSummary(ctx, rt); ok {
 		return e.appendContinuationSummaryAndAction(ctx, rt, currentTurn, summary)
 	}
@@ -9753,6 +9756,31 @@ func (e *TurnEngine) organizationActiveRequestContinuationSummary(ctx context.Co
 	return "Active organization request: " + request, true
 }
 
+func (e *TurnEngine) projectActiveRequestContinuationSummary(ctx context.Context, rt *turnRuntime) (string, bool) {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.initialMessageID == uuid.Nil {
+		return "", false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return "", false
+	}
+
+	message, err := e.messages.GetByID(ctx, rt.initialMessageID)
+	if err != nil || !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+		return "", false
+	}
+	if projectContinuationResumeMessageRootsHistory(message) {
+		if prior, ok := e.latestSubstantiveProjectRequestMessage(ctx, rt.session.ID, message); ok {
+			message = prior
+		}
+	}
+	request := normalizeInstructionText(message.Content)
+	if strings.TrimSpace(request) == "" {
+		return "", false
+	}
+	return "Active project request: " + request, true
+}
+
 func (e *TurnEngine) taskActiveRequestContinuationSummary(ctx context.Context, rt *turnRuntime) (string, bool) {
 	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.initialMessageID == uuid.Nil {
 		return "", false
@@ -9796,6 +9824,36 @@ func (e *TurnEngine) latestSubstantiveOrganizationRequestMessage(ctx context.Con
 			continue
 		}
 		if organizationContinuationResumeMessage(message) {
+			continue
+		}
+		if message.SequenceNumber >= before.SequenceNumber {
+			continue
+		}
+		if strings.TrimSpace(normalizeInstructionText(message.Content)) == "" {
+			continue
+		}
+		candidate = message
+	}
+	if candidate.ID == uuid.Nil {
+		return repo.ChatMessage{}, false
+	}
+	return candidate, true
+}
+
+func (e *TurnEngine) latestSubstantiveProjectRequestMessage(ctx context.Context, sessionID uuid.UUID, before repo.ChatMessage) (repo.ChatMessage, bool) {
+	if e == nil || e.messages == nil || sessionID == uuid.Nil {
+		return repo.ChatMessage{}, false
+	}
+	messages, err := e.messages.ListBySession(ctx, sessionID)
+	if err != nil {
+		return repo.ChatMessage{}, false
+	}
+	var candidate repo.ChatMessage
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			continue
+		}
+		if projectContinuationResumeMessageRootsHistory(message) {
 			continue
 		}
 		if message.SequenceNumber >= before.SequenceNumber {
@@ -10071,6 +10129,8 @@ func continuationSummaryLooksUnavailable(summary string) bool {
 		"i do not see any active task context",
 		"i don't see a durable draft",
 		"i do not see a durable draft",
+		"i don't have direct access to project history in this conversation",
+		"i do not have direct access to project history in this conversation",
 		"no continuation summary or task session history was included in this message",
 		"please provide the substantive draft",
 		"please provide the substantive draft or recovery artifact",
@@ -18607,10 +18667,6 @@ func looksLikeReviewerAssessmentInDeliverable(targetPath, content string) bool {
 		strings.HasPrefix(path, ".ottercamp/reviews/") {
 		return false
 	}
-	if !strings.HasPrefix(path, "work/") &&
-		!strings.HasPrefix(path, "test/") {
-		return false
-	}
 	if !containsAny(lower,
 		"i have a complete picture",
 		"the evidence is clear",
@@ -18634,6 +18690,12 @@ func looksLikeReviewerAssessmentInDeliverable(targetPath, content string) bool {
 		"review cycle #",
 		"reviewer rejection summary",
 		"previous reviewer's rejection summary",
+		"per the review protocol",
+		"mismatched_deliverable_context",
+		"placeholder_deliverable",
+		"i will reject the review",
+		"i will reject this review",
+		"reject the review immediately",
 	) {
 		return false
 	}
@@ -18661,6 +18723,9 @@ func looksLikeReviewerAssessmentInDeliverable(targetPath, content string) bool {
 		"further rejection cycles are unlikely",
 		"work file content |",
 		"core deliverable (",
+		"deliverable does not match the task's scope",
+		"using this evidence",
+		"this is a stop condition",
 	)
 }
 
