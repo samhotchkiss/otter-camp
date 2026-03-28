@@ -3328,6 +3328,46 @@ func TestHandleTurnCompletedEventRetriesReviewTurnWithoutDecisionRefreshesTaskRe
 	}
 }
 
+func TestReviewRetryPromptForRepeatedCheckpointOutputRereads(t *testing.T) {
+	executionID := uuid.New()
+	priorTurnID := uuid.New()
+	currentTurnID := uuid.New()
+	latestCompleted := &repo.ChatTurn{ID: currentTurnID}
+	latestUser := &repo.ChatMessage{
+		Content: "Review only.\n" +
+			"Start with the preferred deliverable root `content/posts`. Inspect that output root directly before broad workspace discovery, and do not begin with task.get, git.log, or dependency-file reads outside `content/posts` unless `content/posts` itself is missing.\n" +
+			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/mister-rogers-and-the-forgotten-art.md`, `content/posts/jenny-can-i-have-my-privacy-back.md`, and 11 more. Review only that output set under `content/posts`; do not reread dependency artifacts outside `content/posts` to map the batch unless every checkpoint output is missing.\n" +
+			"Use flow_node_execution_id " + executionID.String() + " in flow.review_decision.",
+	}
+
+	makeRead := func(turnID uuid.UUID, path string) repo.ChatMessage {
+		return repo.ChatMessage{
+			ID:      uuid.New(),
+			TurnID:  &turnID,
+			Role:    "tool_result",
+			Content: fmt.Sprintf(`{"tool_name":"file.read","output":{"path":"%s","byte_size":2048,"bytes_read":2048}}`, path),
+		}
+	}
+
+	messages := []repo.ChatMessage{
+		makeRead(priorTurnID, "content/posts/mister-rogers-and-the-forgotten-art.md"),
+		makeRead(priorTurnID, "content/posts/jenny-can-i-have-my-privacy-back.md"),
+		makeRead(currentTurnID, "content/posts/mister-rogers-and-the-forgotten-art.md"),
+		makeRead(currentTurnID, "content/posts/jenny-can-i-have-my-privacy-back.md"),
+	}
+
+	retryPrompt, ok := reviewRetryPromptForRepeatedCheckpointOutputRereads(messages, latestCompleted, latestUser, executionID, "base prompt")
+	if !ok {
+		t.Fatal("expected repeated checkpoint output rereads to produce a retry prompt")
+	}
+	if !strings.Contains(retryPrompt, "Do not reread these already-inspected checkpoint outputs this turn: `content/posts/mister-rogers-and-the-forgotten-art.md`, `content/posts/jenny-can-i-have-my-privacy-back.md`.") {
+		t.Fatalf("retry prompt = %q, want explicit already-inspected outputs", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "call flow.review_decision now with flow_node_execution_id "+executionID.String()) {
+		t.Fatalf("retry prompt = %q, want immediate review_decision guidance", retryPrompt)
+	}
+}
+
 func TestHandleTurnCompletedEventRetriesReviewTurnWithoutDecisionRestoresRunIDFromSessionHistory(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	base := time.Unix(1700000001, 0).UTC()
@@ -14171,6 +14211,45 @@ func TestShouldBlockTaskReviewPreferredDeliverableSiblingReadTool(t *testing.T) 
 
 	if blocked, _ := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, []ModelToolCall{calls[1]}, "file.read", map[string]any{"path": "planning/discovery-plan/oc-24-validation-plan.md"}); blocked {
 		t.Fatal("expected sibling read to remain allowed when the same batch does not include the preferred deliverable target")
+	}
+}
+
+func TestShouldBlockTaskReviewRepeatedCheckpointOutputTool(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable root `content/posts`. Inspect that output root directly before broad workspace discovery, and do not begin with task.get, git.log, or dependency-file reads outside `content/posts` unless `content/posts` itself is missing.\n" +
+			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/post-1.md`, `content/posts/post-2.md`, and 10 more. Review only that output set under `content/posts`; do not reread dependency artifacts outside `content/posts` to map the batch unless every checkpoint output is missing.\n" +
+			"Checkpoint outputs already inspected in earlier review turns under `content/posts`.\n" +
+			"Do not reread these already-inspected checkpoint outputs this turn: `content/posts/post-1.md`, `content/posts/post-2.md`.\n" +
+			"Use the evidence already gathered across this review session and call flow.review_decision now.\n" +
+			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
+	}
+
+	blocked, reason := shouldBlockTaskReviewRepeatedCheckpointOutputTool(rt, "file.read", map[string]any{"path": "content/posts/post-1.md"})
+	if !blocked {
+		t.Fatal("expected repeated checkpoint output read to be blocked")
+	}
+	if !strings.Contains(reason, "already inspected checkpoint output `content/posts/post-1.md`") {
+		t.Fatalf("guard reason = %q, want repeated output guidance", reason)
+	}
+
+	blocked, reason = shouldBlockTaskReviewRepeatedCheckpointOutputTool(rt, "file.list", map[string]any{"path": "content/posts"})
+	if !blocked {
+		t.Fatal("expected deliverable-root relist to be blocked after repeated checkpoint rereads")
+	}
+	if !strings.Contains(reason, "Do not re-list `content/posts` again") {
+		t.Fatalf("guard reason = %q, want relist guidance", reason)
+	}
+
+	if blocked, _ := shouldBlockTaskReviewRepeatedCheckpointOutputTool(rt, "file.read", map[string]any{"path": "content/posts/post-3.md"}); blocked {
+		t.Fatal("expected unread checkpoint output to remain available for one final spot-check")
+	}
+	if blocked, _ := shouldBlockTaskReviewRepeatedCheckpointOutputTool(rt, "file.read", map[string]any{"path": "content/posts/post-1.md", "offset_bytes": 1024}); blocked {
+		t.Fatal("expected tail read to remain available when explicitly requested")
 	}
 }
 

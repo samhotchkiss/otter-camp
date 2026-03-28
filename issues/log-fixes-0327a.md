@@ -973,3 +973,18 @@
     - task `61` moved from `blocked` to `review` at `10:54:00 MDT`
     - new task session `bbce4cab-c9d9-4c1d-91e4-4934735dfa25` opened for task `61`
     - that session immediately started turn `6` (`dbe62b3f-9f11-48f8-86e7-1917e691e352`) at `10:54:00 MDT`
+- 2026-03-28 11:20:11 MDT - stop batch-review retries from rereading the same checkpoint outputs
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `reviewApprovalRetryPrompt(...)` now computes the base review prompt once and routes through a new `reviewRetryPromptForRepeatedCheckpointOutputRereads(...)` helper
+    - repeated review retries now detect successful `file.read` results under the preferred deliverable root that were already read in earlier turns for the same session
+    - the refreshed retry prompt now names those already-inspected checkpoint outputs explicitly, tells the reviewer not to reread them from byte `0`, and tells the reviewer not to relist the same deliverable root just to resample the batch
+    - added `shouldBlockTaskReviewRepeatedCheckpointOutputTool(...)` plus prompt parsing helpers so the next retry turn blocks exact rereads of those named outputs and blocks relisting the same deliverable root
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestReviewRetryPromptForRepeatedCheckpointOutputRereads`
+    - added `TestShouldBlockTaskReviewRepeatedCheckpointOutputTool`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ReviewRetryPromptForRepeatedCheckpointOutputRereads|ShouldBlockTaskReviewRepeatedCheckpointOutputTool|HandleTurnCompletedEventRetriesReviewTurnWithoutDecisionRefreshesTaskReviewPrompt|ShouldBlockTaskReviewPreferredDeliverableSiblingReadTool|ShouldBlockTaskReviewPreferredDeliverableRootDependencyReadWithCheckpointOutputSet)$' -count=1`
+  - deploy state:
+    - rebuilt and restarted tmux `codex-e2e-20260324`
+    - `./bin/ottercamp health --output json` returned `data.status=ok`
+    - fresh live proof for the exact new reread-block branch is still pending because task-62 was already inside pre-patch turn `49` at restart time, so the first post-deploy retry prompt has not fired yet

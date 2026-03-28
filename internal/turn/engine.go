@@ -171,6 +171,7 @@ var projectContinuationPromptTaskIDPattern = regexp.MustCompile(`id=([0-9a-fA-F-
 var projectContinuationPromptLeafTaskIDPattern = regexp.MustCompile(`leaf_task_id=([0-9a-fA-F-]{36})`)
 var projectContinuationPromptDependencyPathPattern = regexp.MustCompile(`(?:depends_on_path|deliverable_path)=([^\s]+)`)
 var projectContinuationWorkspacePathPattern = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\b`)
+var workspacePathInBackticksPattern = regexp.MustCompile("`([^`]+)`")
 var explicitDeliverablePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
@@ -1937,36 +1938,40 @@ func (e *TurnEngine) reviewApprovalRetryPrompt(ctx context.Context, session *cha
 	if executionID == uuid.Nil {
 		return "", false, nil
 	}
+	basePrompt := e.buildTaskReviewActionPrompt(ctx, session)
 	messages, err := e.messages.ListBySession(ctx, session.ID)
 	if err != nil {
 		return "", false, err
 	}
 	if !latestReviewApprovalAttemptBlockedOnDirtyWorkspace(messages, executionID) {
-		if retryPrompt, ok := reviewRetryPromptForMissingPreferredDeliverable(messages, latestCompleted, latestUser, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+		if retryPrompt, ok := reviewRetryPromptForMissingPreferredDeliverable(messages, latestCompleted, latestUser, executionID, basePrompt); ok {
 			return retryPrompt, true, nil
 		}
-		if retryPrompt, ok := reviewRetryPromptForOrchestrationParentMissingDirectChildren(messages, latestCompleted, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+		if retryPrompt, ok := reviewRetryPromptForRepeatedCheckpointOutputRereads(messages, latestCompleted, latestUser, executionID, basePrompt); ok {
 			return retryPrompt, true, nil
 		}
-		if retryPrompt, ok := reviewRetryPromptForPersistedOrchestrationParentMissingDirectChildren(messages, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+		if retryPrompt, ok := reviewRetryPromptForOrchestrationParentMissingDirectChildren(messages, latestCompleted, latestUser, taskRecord, executionID, basePrompt); ok {
 			return retryPrompt, true, nil
 		}
-		if retryPrompt, ok := reviewRetryPromptForOrchestrationParentIncompleteDirectChildren(messages, latestCompleted, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+		if retryPrompt, ok := reviewRetryPromptForPersistedOrchestrationParentMissingDirectChildren(messages, latestUser, taskRecord, executionID, basePrompt); ok {
 			return retryPrompt, true, nil
 		}
-		if retryPrompt, ok := reviewRetryPromptForPersistedOrchestrationParentIncompleteDirectChildren(messages, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+		if retryPrompt, ok := reviewRetryPromptForOrchestrationParentIncompleteDirectChildren(messages, latestCompleted, latestUser, taskRecord, executionID, basePrompt); ok {
 			return retryPrompt, true, nil
 		}
-		if retryPrompt, ok := reviewRetryPromptForOrchestrationParentChildEvidence(messages, latestCompleted, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+		if retryPrompt, ok := reviewRetryPromptForPersistedOrchestrationParentIncompleteDirectChildren(messages, latestUser, taskRecord, executionID, basePrompt); ok {
 			return retryPrompt, true, nil
 		}
-		if retryPrompt, ok := reviewRetryPromptForMissingRequiredTests(messages, latestCompleted, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+		if retryPrompt, ok := reviewRetryPromptForOrchestrationParentChildEvidence(messages, latestCompleted, latestUser, taskRecord, executionID, basePrompt); ok {
 			return retryPrompt, true, nil
 		}
-		if retryPrompt, ok := reviewRetryPromptForPersistedMissingRequiredTests(messages, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+		if retryPrompt, ok := reviewRetryPromptForMissingRequiredTests(messages, latestCompleted, taskRecord, executionID, basePrompt); ok {
 			return retryPrompt, true, nil
 		}
-		if retryPrompt, ok := reviewRetryPromptForMissingSecondaryPlanningArtifacts(messages, latestCompleted, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+		if retryPrompt, ok := reviewRetryPromptForPersistedMissingRequiredTests(messages, latestUser, taskRecord, executionID, basePrompt); ok {
+			return retryPrompt, true, nil
+		}
+		if retryPrompt, ok := reviewRetryPromptForMissingSecondaryPlanningArtifacts(messages, latestCompleted, latestUser, taskRecord, executionID, basePrompt); ok {
 			return retryPrompt, true, nil
 		}
 		return "", false, nil
@@ -1975,7 +1980,6 @@ func (e *TurnEngine) reviewApprovalRetryPrompt(ctx context.Context, session *cha
 	if err != nil {
 		return "", false, err
 	}
-	basePrompt := e.buildTaskReviewActionPrompt(ctx, session)
 	if !clean {
 		retryPrompt := basePrompt +
 			"\nYour previous approve attempt for this exact review step failed because the workspace is still dirty." +
@@ -2642,6 +2646,44 @@ func reviewRetryPromptForMissingPreferredDeliverable(messages []repo.ChatMessage
 	return retryPrompt, true
 }
 
+func reviewRetryPromptForRepeatedCheckpointOutputRereads(messages []repo.ChatMessage, latestCompleted *repo.ChatTurn, latestUser *repo.ChatMessage, executionID uuid.UUID, basePrompt string) (string, bool) {
+	if latestCompleted == nil || latestCompleted.ID == uuid.Nil || latestUser == nil || executionID == uuid.Nil {
+		return "", false
+	}
+	rootPath := parsePromptDeliverableRoot(latestUser.Content)
+	if rootPath == "" || !strings.Contains(latestUser.Content, "The checkpoint already identifies the task-owned outputs under `"+rootPath+"`") {
+		return "", false
+	}
+	turnMessages := messagesForTurn(messages, latestCompleted.ID)
+	currentPaths := successfulReviewReadPathsWithinRoot(turnMessages, rootPath)
+	if len(currentPaths) < 2 {
+		return "", false
+	}
+	previousPaths := successfulReviewReadPathsBeforeTurn(messages, latestCompleted.ID, rootPath)
+	if len(previousPaths) == 0 {
+		return "", false
+	}
+	repeatedPaths := make([]string, 0, len(currentPaths))
+	for _, path := range currentPaths {
+		if _, ok := previousPaths[path]; ok {
+			repeatedPaths = append(repeatedPaths, path)
+		}
+	}
+	if len(repeatedPaths) < 2 {
+		return "", false
+	}
+
+	retryPrompt := basePrompt +
+		"\nCheckpoint outputs already inspected in earlier review turns under `" + rootPath + "`." +
+		"\nDo not reread these already-inspected checkpoint outputs this turn: " + quotedPathList(repeatedPaths, 4) + "." +
+		" Those files were already read successfully in earlier review turns for this same review step." +
+		" Do not reread those files from byte 0 again, and do not re-list `" + rootPath + "` just to sample the same batch." +
+		" Use the evidence already gathered across this review session and call flow.review_decision now with flow_node_execution_id " + executionID.String() + "." +
+		" If one final spot-check is truly required, inspect at most one different output under `" + rootPath + "` that is not already named above." +
+		" Do not reply with a review plan or generic explanation."
+	return retryPrompt, true
+}
+
 func reviewRetryPromptForMissingSecondaryPlanningArtifacts(messages []repo.ChatMessage, latestCompleted *repo.ChatTurn, latestUser *repo.ChatMessage, taskRecord repo.ProjectTask, executionID uuid.UUID, basePrompt string) (string, bool) {
 	if latestCompleted == nil || latestCompleted.ID == uuid.Nil || latestUser == nil || executionID == uuid.Nil {
 		return "", false
@@ -2793,6 +2835,75 @@ func reviewTurnPlannedPlanningReadPaths(turnMessages []repo.ChatMessage) []strin
 				return paths
 			}
 		}
+	}
+	return paths
+}
+
+func successfulReviewReadPathsWithinRoot(messages []repo.ChatMessage, rootPath string) []string {
+	rootPath = normalizeWorkspaceRelativePath(rootPath)
+	if rootPath == "" || len(messages) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	paths := make([]string, 0, 4)
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || !strings.EqualFold(strings.TrimSpace(toolName), "file.read") {
+			continue
+		}
+		if errorCode := normalizeValidationFailureCode(errText); errorCode != "" {
+			continue
+		}
+		path := normalizeWorkspaceRelativePath(anyString(output["path"]))
+		if path == "" || !workspacePathWithinRoot(path, rootPath) || intValue(output["byte_size"]) <= 0 {
+			continue
+		}
+		if offsetBytes := intValue(output["offset_bytes"]); offsetBytes > 0 {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+func successfulReviewReadPathsBeforeTurn(messages []repo.ChatMessage, currentTurnID uuid.UUID, rootPath string) map[string]struct{} {
+	rootPath = normalizeWorkspaceRelativePath(rootPath)
+	if rootPath == "" || currentTurnID == uuid.Nil || len(messages) == 0 {
+		return nil
+	}
+	paths := make(map[string]struct{})
+	for _, message := range messages {
+		if message.TurnID == nil || *message.TurnID == currentTurnID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || !strings.EqualFold(strings.TrimSpace(toolName), "file.read") {
+			continue
+		}
+		if errorCode := normalizeValidationFailureCode(errText); errorCode != "" {
+			continue
+		}
+		path := normalizeWorkspaceRelativePath(anyString(output["path"]))
+		if path == "" || !workspacePathWithinRoot(path, rootPath) || intValue(output["byte_size"]) <= 0 {
+			continue
+		}
+		if offsetBytes := intValue(output["offset_bytes"]); offsetBytes > 0 {
+			continue
+		}
+		paths[path] = struct{}{}
+	}
+	if len(paths) == 0 {
+		return nil
 	}
 	return paths
 }
@@ -13337,6 +13448,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			continue
 		}
 		if blocked, reason := shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt, calls, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
+		if blocked, reason := shouldBlockTaskReviewRepeatedCheckpointOutputTool(rt, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
 				Name:       name,
@@ -26134,6 +26253,38 @@ func shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt *turnRuntime, c
 	return true, buildTaskReviewPreferredDeliverableBatchReadGuardError(targetPath)
 }
 
+func shouldBlockTaskReviewRepeatedCheckpointOutputTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if !taskReviewPromptActive(rt) {
+		return false, ""
+	}
+	repeatedPaths := parseReviewPromptRepeatedCheckpointOutputPaths(strings.TrimSpace(rt.initialMessageText))
+	if len(repeatedPaths) == 0 {
+		return false, ""
+	}
+	rootPath := taskReviewPreferredDeliverableRoot(rt)
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "file.read", "file_read":
+		path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+		if path == "" {
+			return false, ""
+		}
+		if intValue(arguments["offset_bytes"]) > 0 {
+			return false, ""
+		}
+		for _, repeated := range repeatedPaths {
+			if sameWorkspaceRelativePath(path, repeated) {
+				return true, buildTaskReviewRepeatedCheckpointOutputGuardError(rootPath, path, "file.read")
+			}
+		}
+	case "file.list", "file_list":
+		path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+		if rootPath != "" && sameWorkspaceRelativePath(path, rootPath) {
+			return true, buildTaskReviewRepeatedCheckpointOutputGuardError(rootPath, path, "file.list")
+		}
+	}
+	return false, ""
+}
+
 func (e *TurnEngine) maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(ctx context.Context, rt *turnRuntime, toolCalls []ModelToolCall) ([]ModelToolCall, bool, error) {
 	if !taskReviewPreferredDeliverableFirstApplies(rt) || len(toolCalls) == 0 {
 		return toolCalls, false, nil
@@ -26397,6 +26548,38 @@ func shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt *turnRuntime, too
 	default:
 		return false, ""
 	}
+}
+
+func parseReviewPromptRepeatedCheckpointOutputPaths(content string) []string {
+	const marker = "Do not reread these already-inspected checkpoint outputs this turn:"
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, marker) {
+			continue
+		}
+		matches := workspacePathInBackticksPattern.FindAllStringSubmatch(trimmed, -1)
+		if len(matches) == 0 {
+			return nil
+		}
+		seen := make(map[string]struct{}, len(matches))
+		paths := make([]string, 0, len(matches))
+		for _, match := range matches {
+			if len(match) < 2 {
+				continue
+			}
+			path := normalizeWorkspaceRelativePath(match[1])
+			if path == "" {
+				continue
+			}
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+		}
+		return paths
+	}
+	return nil
 }
 
 func shouldBlockTaskReviewCompanionPlanningArtifactTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
@@ -27478,6 +27661,19 @@ func buildTaskReviewPreferredDeliverableRootCheckpointOutputGuardError(rootPath,
 		return fmt.Sprintf("this review prompt already names preferred deliverable root `%s` and the checkpoint output set under `%s`. Review those task-owned outputs directly instead of rereading dependency artifacts to map the batch.", rootPath, rootPath)
 	}
 	return fmt.Sprintf("this review prompt already names preferred deliverable root `%s` and the checkpoint output set under `%s`. Do not inspect outside-root dependency artifact `%s` with %s to map the batch. Review the checkpoint outputs under `%s` directly, then call flow.review_decision once you have enough evidence.", rootPath, rootPath, path, toolName, rootPath)
+}
+
+func buildTaskReviewRepeatedCheckpointOutputGuardError(rootPath, path, toolName string) string {
+	if strings.EqualFold(strings.TrimSpace(toolName), "file.list") {
+		if rootPath == "" {
+			return "this review session already inspected checkpoint outputs in earlier turns. Do not re-list the same deliverable root again just to sample the batch; use the evidence already gathered and call flow.review_decision, or inspect at most one different output if a final spot-check is still necessary."
+		}
+		return fmt.Sprintf("this review session already inspected checkpoint outputs under `%s` in earlier turns. Do not re-list `%s` again just to sample the same batch; use the evidence already gathered and call flow.review_decision, or inspect at most one different output under `%s` if a final spot-check is still necessary.", rootPath, rootPath, rootPath)
+	}
+	if rootPath == "" {
+		return fmt.Sprintf("this review session already inspected checkpoint output `%s` in earlier turns. Do not reread `%s` from byte 0 again; use the evidence already gathered and call flow.review_decision, or inspect at most one different output if a final spot-check is still necessary.", path, path)
+	}
+	return fmt.Sprintf("this review session already inspected checkpoint output `%s` under `%s` in earlier turns. Do not reread `%s` from byte 0 again; use the evidence already gathered and call flow.review_decision, or inspect at most one different output under `%s` if a final spot-check is still necessary.", path, rootPath, path, rootPath)
 }
 
 func buildTaskReviewCompanionPlanningArtifactGuardError(targetPath, toolName, path string) string {
