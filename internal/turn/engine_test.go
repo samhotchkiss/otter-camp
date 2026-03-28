@@ -8827,7 +8827,9 @@ func TestShouldBlockTaskExecutionSiblingResponsibilityToolForWriteFocusedChildLa
 	}
 
 	rt := &turnRuntime{session: fixture.session}
-	blocked, reason := fixture.engine.shouldBlockTaskExecutionSiblingResponsibilityTool(context.Background(), rt, "web.fetch")
+	blocked, reason := fixture.engine.shouldBlockTaskExecutionSiblingResponsibilityTool(context.Background(), rt, "web.fetch", map[string]any{
+		"url": "https://technonymous.org",
+	})
 	if !blocked {
 		t.Fatal("blocked = false, want true for write-focused child lane")
 	}
@@ -8836,7 +8838,7 @@ func TestShouldBlockTaskExecutionSiblingResponsibilityToolForWriteFocusedChildLa
 	}
 }
 
-func TestShouldNotBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChildLane(t *testing.T) {
+func TestShouldBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChildDetailFetch(t *testing.T) {
 	t.Parallel()
 
 	fixture := newUnitFixture(t, "async")
@@ -8880,9 +8882,66 @@ func TestShouldNotBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChildLa
 	}
 
 	rt := &turnRuntime{session: fixture.session}
-	blocked, reason := fixture.engine.shouldBlockTaskExecutionSiblingResponsibilityTool(context.Background(), rt, "web.fetch")
+	blocked, reason := fixture.engine.shouldBlockTaskExecutionSiblingResponsibilityTool(context.Background(), rt, "web.fetch", map[string]any{
+		"url": "https://technonymous.org/p/stop-preparing-your-kids-for-jobs",
+	})
+	if !blocked {
+		t.Fatal("blocked = false, want true for discovery-focused child detail fetch")
+	}
+	if !strings.Contains(reason, "discovery/listing lane") || !strings.Contains(reason, "task 41") {
+		t.Fatalf("reason = %q, want discovery-lane sibling guidance", reason)
+	}
+}
+
+func TestShouldNotBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChildListingFetch(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentID := uuid.New()
+	currentID := uuid.New()
+	siblingID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+	flowTemplateID := uuid.New()
+	currentDescription := "Navigate to technonymous.org using browser tools"
+	siblingDescription := "Write the results to content/technonymous-index.json"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = currentID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			currentID: {
+				ID:              currentID,
+				ProjectID:       projectID,
+				TaskNumber:      40,
+				Title:           "Navigate to technonymous.org using browser tools",
+				Description:     &currentDescription,
+				WorkStatus:      "blocked",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+				Metadata:        mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentID.String()}),
+			},
+			siblingID: {
+				ID:              siblingID,
+				ProjectID:       projectID,
+				TaskNumber:      41,
+				Title:           "Write the results to content/technonymous-index.json",
+				Description:     &siblingDescription,
+				WorkStatus:      "blocked",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+				Metadata:        mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentID.String()}),
+			},
+		},
+	}
+
+	rt := &turnRuntime{session: fixture.session}
+	blocked, reason := fixture.engine.shouldBlockTaskExecutionSiblingResponsibilityTool(context.Background(), rt, "web.fetch", map[string]any{
+		"url": "https://technonymous.org/archive",
+	})
 	if blocked {
-		t.Fatalf("blocked = true, want false for discovery-focused child lane: %q", reason)
+		t.Fatalf("blocked = true, want false for discovery-focused child listing fetch: %q", reason)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -12835,7 +12836,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
-		if blocked, reason := e.shouldBlockTaskExecutionSiblingResponsibilityTool(ctx, rt, name); blocked {
+		if blocked, reason := e.shouldBlockTaskExecutionSiblingResponsibilityTool(ctx, rt, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
 				Name:       name,
@@ -24821,7 +24822,7 @@ func (e *TurnEngine) shouldBlockTaskExecutionBroadContextTool(ctx context.Contex
 	}
 }
 
-func (e *TurnEngine) shouldBlockTaskExecutionSiblingResponsibilityTool(ctx context.Context, rt *turnRuntime, toolName string) (bool, string) {
+func (e *TurnEngine) shouldBlockTaskExecutionSiblingResponsibilityTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
 	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
 		return false, ""
 	}
@@ -24842,23 +24843,31 @@ func (e *TurnEngine) shouldBlockTaskExecutionSiblingResponsibilityTool(ctx conte
 	if err != nil {
 		return false, ""
 	}
-	if !taskExecutionWriteFocusedChildTask(taskRecord) {
-		return false, ""
-	}
 	siblings, err := e.taskExecutionSiblingTasks(ctx, taskRecord)
 	if err != nil {
 		return false, ""
 	}
 	discoverySiblings := make([]repo.ProjectTask, 0, len(siblings))
+	writeSiblings := make([]repo.ProjectTask, 0, len(siblings))
 	for _, sibling := range siblings {
 		if taskExecutionDiscoveryFocusedChildTask(sibling) {
 			discoverySiblings = append(discoverySiblings, sibling)
 		}
+		if taskExecutionWriteFocusedChildTask(sibling) {
+			writeSiblings = append(writeSiblings, sibling)
+		}
 	}
-	if len(discoverySiblings) == 0 {
+	if taskExecutionWriteFocusedChildTask(taskRecord) && len(discoverySiblings) > 0 {
+		return true, buildTaskExecutionSiblingResponsibilityToolGuardError(taskRecord, discoverySiblings)
+	}
+	if !taskExecutionDiscoveryFocusedChildTask(taskRecord) || len(writeSiblings) == 0 || taskExecutionAllowsDetailContentFetch(taskRecord) {
 		return false, ""
 	}
-	return true, buildTaskExecutionSiblingResponsibilityToolGuardError(taskRecord, discoverySiblings)
+	rawURL := strings.TrimSpace(anyString(arguments["url"]))
+	if !taskExecutionDiscoveryDetailFetchURL(rawURL) {
+		return false, ""
+	}
+	return true, buildTaskExecutionDiscoveryDetailFetchGuardError(taskRecord, writeSiblings, rawURL)
 }
 
 func (e *TurnEngine) taskExecutionSiblingTasks(ctx context.Context, taskRecord repo.ProjectTask) ([]repo.ProjectTask, error) {
@@ -24920,6 +24929,40 @@ func taskExecutionDiscoveryFocusedChildTask(taskRecord repo.ProjectTask) bool {
 		"listing",
 		"archive",
 	)
+}
+
+func taskExecutionAllowsDetailContentFetch(taskRecord repo.ProjectTask) bool {
+	text := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	if taskRecord.Description != nil {
+		text += " " + strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	return containsAny(text,
+		"full content",
+		"full post",
+		"full text",
+		"article body",
+		"post body",
+		"page body",
+	)
+}
+
+func taskExecutionDiscoveryDetailFetchURL(rawURL string) bool {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return false
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	cleaned := strings.ToLower(path.Clean(strings.TrimSpace(parsed.Path)))
+	switch cleaned {
+	case "", ".", "/":
+		return false
+	case "/archive", "/about", "/notes", "/podcast", "/leaderboard":
+		return false
+	}
+	return strings.HasPrefix(cleaned, "/p/")
 }
 
 func taskExecutionAllowsLimitedProjectContext(taskRecord repo.ProjectTask) bool {
@@ -25592,6 +25635,31 @@ func buildTaskExecutionSiblingResponsibilityToolGuardError(taskRecord repo.Proje
 		return fmt.Sprintf("task execution should stay inside the write-focused child lane for %s. Do not browse external sources from this lane when sibling discovery/navigation work already exists; use or unblock the prerequisite output instead.", current)
 	}
 	return fmt.Sprintf("task execution should stay inside the write-focused child lane for %s. Sibling discovery/navigation work already exists in %s. Do not browse external sources from this lane; use or unblock that prerequisite output instead.", current, strings.Join(labels, ", "))
+}
+
+func buildTaskExecutionDiscoveryDetailFetchGuardError(taskRecord repo.ProjectTask, siblings []repo.ProjectTask, rawURL string) string {
+	current := projectBootstrapTaskLabel(taskRecord)
+	if strings.TrimSpace(current) == "" {
+		current = "the current task"
+	}
+	labels := make([]string, 0, len(siblings))
+	for _, sibling := range siblings {
+		label := projectBootstrapTaskLabel(sibling)
+		if strings.TrimSpace(label) == "" {
+			label = strings.TrimSpace(sibling.Title)
+		}
+		if strings.TrimSpace(label) == "" {
+			continue
+		}
+		labels = append(labels, label)
+		if len(labels) >= 3 {
+			break
+		}
+	}
+	if len(labels) == 0 {
+		return fmt.Sprintf("task execution should keep %s in the discovery/listing lane. Do not fetch full detail pages like %q from this lane when a sibling already owns the write step; stop after archive/listing evidence instead.", current, rawURL)
+	}
+	return fmt.Sprintf("task execution should keep %s in the discovery/listing lane. Sibling write work already exists in %s, so do not fetch full detail pages like %q from this lane; stop after archive/listing evidence and hand the URLs/titles to the write lane instead.", current, strings.Join(labels, ", "), rawURL)
 }
 
 func buildOrchestrationParentReviewTaskListGuardError(taskRecord repo.ProjectTask) string {
