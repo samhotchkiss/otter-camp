@@ -709,6 +709,76 @@ func TestIntegrationFileListRejectsRecoveryWorkspaceRereadOutsideTarget(t *testi
 	}
 }
 
+func TestIntegrationFileListAllowsBlockedReviewNodeDeliverableRootInspectionWithinRecoveryTargetRoot(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	flowTemplate := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
+	description := "Read content/technonymous-index.json. For each of the next 12 URLs in the post_urls array (indices 12–23), use web_fetch to retrieve the page content, then save the article text as a clean Markdown file under content/posts/. Deliverable: 12 markdown files in content/posts/."
+	plan := taskplan.Analyze("Fetch posts 13-24 from Technonymous index", &description)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Title:          "Fetch posts 13-24 from Technonymous index",
+		Description:    &description,
+		Metadata:       taskplan.ApplyMetadata(nil, plan),
+		FlowTemplateID: &flowTemplate.ID,
+		WorkStatus:     "blocked",
+	})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	workspaceRoot := t.TempDir()
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, flowTemplate.ID)
+	if err != nil {
+		t.Fatalf("load flow nodes: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("flow node count = %d, want 1", len(nodes))
+	}
+	reviewNode := nodes[0]
+	reviewNode.NodeType = "review"
+	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
+		t.Fatalf("update review node: %v", err)
+	}
+	if _, err := repo.NewProjectTaskRepo(pool).SetFlowNode(ctx, task.ID, &reviewNode.ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: workspaceRoot})
+	execCtx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "system",
+		Status:    "final",
+		Content:   "[Recovery resume state]\nTarget file: content/posts/mister-rogers-and-the-forgotten-art.md\n",
+	}); err != nil {
+		t.Fatalf("create recovery system message: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("mkdir content/posts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "content", "posts", "mister-rogers-and-the-forgotten-art.md"), []byte("# Mister Rogers and the Forgotten Art\n"), 0o644); err != nil {
+		t.Fatalf("write target post: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "content", "posts", "practice-listen-to-albums.md"), []byte("# Practice listen to albums\n"), 0o644); err != nil {
+		t.Fatalf("write sibling post: %v", err)
+	}
+
+	out, err := executor.Execute(execCtx, "file.list", map[string]any{"path": "content/posts"})
+	if err != nil {
+		t.Fatalf("file.list: %v", err)
+	}
+	if got := out["error"]; got != nil {
+		t.Fatalf("error = %v, want nil", got)
+	}
+	if got := out["total"]; got != 2 {
+		t.Fatalf("total = %v, want 2", got)
+	}
+}
+
 func TestIntegrationFileSearchRejectsRecoveryWorkspaceRereadOutsideTarget(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)

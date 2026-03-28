@@ -901,3 +901,25 @@
     - the exact `file.list content/posts` call has not re-fired on the new binary yet
     - the hot task-62 review session resumed at `09:50:08 MDT` and moved straight into direct deliverable reads at messages `321-326`
     - the only `recovery_target_focus_required` rows in the last five minutes remained the pre-restart `09:46:28 MDT` rows `311-312`, so the old loop did not immediately reopen on the new runtime
+- 2026-03-28 10:12:30 MDT - keep blocked review continuations on the reviewer and allow review-node root inspection in native file tools
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `resolveTaskScopeReviewAgent(...)` now recognizes `current_flow_node_id -> NodeType=review` as a review lane even when `work_status` is temporarily `blocked`
+    - `continueTurn(...)` now re-resolves the next session agent before creating a continuation turn and swaps `rt.agent` to that reviewer when the lane changes
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestResolveSessionAgentForSessionRoutesBlockedReviewNodeTaskToDistinctReviewer`
+    - added `TestContinueTurnReroutesBlockedReviewNodeTaskToReviewer`
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `allowReviewDeliverableRootInspection(...)` now treats `current_flow_node_id -> review` as equivalent to `work_status=review` for the blocked review-root exception
+  - changed [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go):
+    - added `TestFileListAllowsBlockedReviewNodeDeliverableRootInspectionWithinRecoveryTargetRoot`
+  - changed [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go):
+    - added `TestIntegrationFileListAllowsBlockedReviewNodeDeliverableRootInspectionWithinRecoveryTargetRoot`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ResolveSessionAgentForSessionRoutes(ReviewTaskToDistinctReviewer|BlockedReviewNodeTaskToDistinctReviewer)|ContinueTurnReroutesBlockedReviewNodeTaskToReviewer)$' -count=1`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(FileList(AllowsReviewDeliverableRootInspectionWithinRecoveryTargetRoot|AllowsBlockedReviewLaneDeliverableRootInspectionWithinRecoveryTargetRoot|AllowsBlockedReviewNodeDeliverableRootInspectionWithinRecoveryTargetRoot|StillRejectsReviewInspectionOutsideDeliverableRoot)|LatestRecoveryTargetPathForSession(FallsBackToReviewPromptTarget|PrefersSystemRecoveryTarget)|FileReadRejectsPlaceholder(RecentReadTargetWithoutExplicitDeliverable|ReviewPromptTargetWithoutExplicitDeliverable))$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/tools/native -run 'TestIntegrationFileListAllowsBlockedReviewNodeDeliverableRootInspectionWithinRecoveryTargetRoot$' -count=1`
+  - fresh live proof after restart on task-62 session `7e33dd11-d9a0-4799-9f4a-002e454b835e`:
+    - reviewer agent `4baab484-4e4f-49c7-a347-dd50d91c6edc` now owns turns `39-41` and the current model invocations
+    - `file.list content/posts` at `10:10:34 MDT` returned `13` entries instead of `recovery_target_focus_required`
+    - the same retry then read the deliverable files directly (`content/posts/mister-rogers-and-the-forgotten-art.md`, `.../the-next-thing-will-be-better.md`, `.../the-arithmetic-of-dying.md`, etc.)
+    - the only remaining guarded reads on that retry were the non-deliverable artifacts `content/technonymous-index.json` and `.ottercamp/checkpoints/oc-62-content-migration.md`

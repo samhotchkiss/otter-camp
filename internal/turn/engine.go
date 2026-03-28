@@ -10160,13 +10160,21 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 			nextTurnNumber = item.TurnNumber + 1
 		}
 	}
+	nextAgentID := rt.agent.ID
+	if resolvedAgentID, resolveErr := e.resolveSessionAgentForSession(ctx, rt.session); resolveErr != nil {
+		if !errors.Is(resolveErr, repo.ErrNotFound) {
+			return resolveErr
+		}
+	} else if resolvedAgentID != uuid.Nil {
+		nextAgentID = resolvedAgentID
+	}
 
 	created, err := e.turns.Create(ctx, repo.ChatTurn{
 		SessionID:      rt.session.ID,
 		TurnNumber:     nextTurnNumber,
 		CycleID:        cycleID,
 		RespondingType: "agent",
-		RespondingID:   rt.agent.ID,
+		RespondingID:   nextAgentID,
 		Status:         "pending",
 	})
 	if err != nil {
@@ -10196,6 +10204,13 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	rt.modelRetryUsed = 0
 	rt.invocationAttempt = 0
 	rt.stopReason = ""
+	if nextAgentID != uuid.Nil && nextAgentID != rt.agent.ID {
+		nextAgent, err := e.agents.GetByID(ctx, nextAgentID)
+		if err != nil {
+			return err
+		}
+		rt.agent = nextAgent
+	}
 	if checkpointed, err := e.appendContentMigrationCheckpoint(ctx, rt); err != nil {
 		return err
 	} else if checkpointed {
@@ -28022,7 +28037,18 @@ func (e *TurnEngine) resolveTaskScopeAssignedAgent(ctx context.Context, session 
 }
 
 func (e *TurnEngine) resolveTaskScopeReviewAgent(ctx context.Context, taskRecord repo.ProjectTask) (uuid.UUID, bool, error) {
-	if e == nil || e.assignments == nil || !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") || taskRecord.ProjectID == uuid.Nil {
+	if e == nil || e.assignments == nil || taskRecord.ProjectID == uuid.Nil {
+		return uuid.Nil, false, nil
+	}
+	reviewLane := strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review")
+	if !reviewLane && e.flowNodes != nil && taskRecord.CurrentFlowNodeID != nil && *taskRecord.CurrentFlowNodeID != uuid.Nil {
+		currentNode, err := e.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
+		if err != nil && !errors.Is(err, repo.ErrNotFound) {
+			return uuid.Nil, false, err
+		}
+		reviewLane = err == nil && strings.EqualFold(strings.TrimSpace(currentNode.NodeType), "review")
+	}
+	if !reviewLane {
 		return uuid.Nil, false, nil
 	}
 

@@ -238,6 +238,73 @@ func TestFileListAllowsBlockedReviewLaneDeliverableRootInspectionWithinRecoveryT
 	}
 }
 
+func TestFileListAllowsBlockedReviewNodeDeliverableRootInspectionWithinRecoveryTargetRoot(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	reviewNodeID := uuid.New()
+	targetPath := "content/posts/practice-eliminating-streaming-video.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(content/posts): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte("# Practice eliminating streaming video\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "content", "posts", "practice-listen-to-albums.md"), []byte("# Practice listen to albums\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(sibling): %v", err)
+	}
+
+	description := "Fetch posts 25-35 from technonymous-index.json via web_fetch and save the markdown files under content/posts/."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:                taskID,
+			OrganizationID:    orgID,
+			ProjectID:         projectID,
+			Title:             "Fetch posts 25-35 from technonymous-index.json via web_fetch and save the markdown files under content/posts/",
+			Description:       &description,
+			WorkStatus:        "blocked",
+			CurrentFlowNodeID: &reviewNodeID,
+		},
+	}
+	executor.flowNodes = &mockFlowNodeRepo{
+		nodes: map[uuid.UUID]repo.FlowNode{
+			reviewNodeID: {
+				ID:       reviewNodeID,
+				NodeType: "review",
+			},
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "system",
+				Content:   "[Recovery resume state]\nTarget file: content/posts/practice-eliminating-streaming-video.md\n",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.list", map[string]any{"path": "content/posts"})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.list): %v", err)
+	}
+	if got := out["error"]; got != nil {
+		t.Fatalf("error = %v, want nil", got)
+	}
+	if got := out["total"]; got != 2 {
+		t.Fatalf("total = %v, want 2", got)
+	}
+}
+
 func TestFileListStillRejectsReviewInspectionOutsideDeliverableRoot(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

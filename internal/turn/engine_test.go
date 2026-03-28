@@ -6676,6 +6676,85 @@ func TestContinueTurnStopsWhenProjectPaused(t *testing.T) {
 	}
 }
 
+func TestContinueTurnReroutesBlockedReviewNodeTaskToReviewer(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	projectID := uuid.New()
+	reviewNodeID := uuid.New()
+	workerID := fixture.chat.participants[0].ParticipantID
+	reviewerID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				WorkStatus:        "blocked",
+				AssignedAgentID:   &workerID,
+				CurrentFlowNodeID: &reviewNodeID,
+			},
+		},
+	}
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			reviewNodeID: {
+				ID:       reviewNodeID,
+				NodeType: "review",
+			},
+		},
+	}
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		list: []repo.AgentProjectAssignment{
+			{ProjectID: projectID, AgentID: workerID, IsActive: true, Role: "worker"},
+			{ProjectID: projectID, AgentID: reviewerID, IsActive: true, Role: "reviewer"},
+		},
+	}
+	fixture.engine.agents = &fakeAgentRepo{
+		agent: repo.Agent{ID: workerID, OrganizationID: fixture.session.OrganizationID},
+		items: map[uuid.UUID]repo.Agent{
+			workerID:   {ID: workerID, OrganizationID: fixture.session.OrganizationID},
+			reviewerID: {ID: reviewerID, OrganizationID: fixture.session.OrganizationID},
+		},
+	}
+
+	turn, err := fixture.chat.CreateTurn(context.Background(), fixture.session.ID, workerID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := fixture.chat.StartTurn(context.Background(), turn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		agent:            repo.Agent{ID: workerID, OrganizationID: fixture.session.OrganizationID},
+		turn:             turn,
+		initialMessageID: fixture.userMessageID,
+		stopReason:       stopReasonMaxToolCalls,
+	}
+	if err := fixture.engine.continueTurn(context.Background(), rt); err != nil {
+		t.Fatalf("continueTurn: %v", err)
+	}
+
+	if len(fixture.chat.turnOrder) != 2 {
+		t.Fatalf("turn count = %d, want 2", len(fixture.chat.turnOrder))
+	}
+	nextTurn := fixture.chat.turnByID(fixture.chat.turnOrder[1])
+	if nextTurn == nil {
+		t.Fatal("missing next turn")
+	}
+	if nextTurn.RespondingID != reviewerID {
+		t.Fatalf("next turn responding_id = %s, want reviewer %s", nextTurn.RespondingID, reviewerID)
+	}
+	if rt.agent.ID != reviewerID {
+		t.Fatalf("runtime agent = %s, want reviewer %s", rt.agent.ID, reviewerID)
+	}
+}
+
 func TestHandleUserMessageEventSkipsClosedSession(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	fixture.session.Status = "closed"
@@ -7108,6 +7187,52 @@ func TestResolveSessionAgentForSessionRoutesReviewTaskToDistinctReviewer(t *test
 			{ProjectID: projectID, AgentID: workerID, IsActive: true, Role: "worker"},
 			{ProjectID: projectID, AgentID: reviewerID, IsActive: true, Role: "reviewer"},
 			{ProjectID: projectID, AgentID: pmID, IsActive: true, Role: "project_manager"},
+		},
+	}
+
+	agentID, err := fixture.engine.resolveSessionAgentForSession(context.Background(), fixture.session)
+	if err != nil {
+		t.Fatalf("resolveSessionAgentForSession: %v", err)
+	}
+	if agentID != reviewerID {
+		t.Fatalf("agent_id = %s, want reviewer %s", agentID, reviewerID)
+	}
+}
+
+func TestResolveSessionAgentForSessionRoutesBlockedReviewNodeTaskToDistinctReviewer(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	workerID := uuid.New()
+	reviewerID := uuid.New()
+	reviewNodeID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				WorkStatus:        "blocked",
+				AssignedAgentID:   &workerID,
+				CurrentFlowNodeID: &reviewNodeID,
+			},
+		},
+	}
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			reviewNodeID: {
+				ID:       reviewNodeID,
+				NodeType: "review",
+			},
+		},
+	}
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		list: []repo.AgentProjectAssignment{
+			{ProjectID: projectID, AgentID: workerID, IsActive: true, Role: "worker"},
+			{ProjectID: projectID, AgentID: reviewerID, IsActive: true, Role: "reviewer"},
 		},
 	}
 

@@ -322,7 +322,16 @@ func (e *NativeToolExecutor) allowReviewDeliverableRootInspection(ctx context.Co
 		return false, err
 	}
 	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") && !reviewLane {
-		return false, nil
+		if e.flowNodes != nil && taskRecord.CurrentFlowNodeID != nil && *taskRecord.CurrentFlowNodeID != uuid.Nil {
+			node, nodeErr := e.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
+			if nodeErr != nil && !errors.Is(nodeErr, repo.ErrNotFound) {
+				return false, nodeErr
+			}
+			reviewLane = nodeErr == nil && strings.EqualFold(strings.TrimSpace(node.NodeType), "review")
+		}
+		if !reviewLane {
+			return false, nil
+		}
 	}
 	rootPath := preferredTaskDeliverableRoot(taskRecord)
 	if rootPath == "" || !workspacePathWithinRoot(targetPath, rootPath) {
