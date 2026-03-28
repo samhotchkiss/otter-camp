@@ -18260,6 +18260,162 @@ func TestJobWorkerProjectExecutionContinuationSnapshotKeepsReviewDecisionBlocked
 	}
 }
 
+func TestJobWorkerProjectExecutionContinuationSnapshotPrefersReviewGuardAndCompletedBatchCoverage(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "project-continuation-snapshot-review-guard-and-completed-batch",
+		DisplayName: "Project Continuation Snapshot Review Guard And Completed Batch",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "project-continuation-snapshot-review-guard-and-completed-batch-project",
+		DisplayName:    "Project Continuation Snapshot Review Guard And Completed Batch Project",
+		Description:    "Project for completed batch coverage and review guard snapshot behavior",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "project-continuation-snapshot-review-guard-and-completed-batch-template",
+		DisplayName:    "Project Continuation Snapshot Review Guard And Completed Batch Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	eventRepo := repo.NewProjectTaskEventRepo(pool)
+
+	blockedMetadata, err := json.Marshal(map[string]any{
+		"agent_turn_validation_guard": map[string]any{
+			"tool_name":       "cli.execute",
+			"failure_class":   "tool_validation",
+			"failure_code":    "review_action_required",
+			"failure_reason":  "review_action_required",
+			"count":           1,
+			"blocked":         true,
+			"block_threshold": 3,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal blocked metadata: %v", err)
+	}
+	blockedTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     65,
+		Title:          "Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/",
+		WorkStatus:     "blocked",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata:      blockedMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create blocked task: %v", err)
+	}
+	olderBlockedBatchTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     63,
+		Title:          "Fetch posts 25-35 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+		WorkStatus:     "blocked",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create older blocked batch task: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     67,
+		Title:          "Fetch posts 25-35 from content/technonymous-index.json and save as markdown in content/posts/",
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	}); err != nil {
+		t.Fatalf("create completed batch task: %v", err)
+	}
+	if _, err := eventRepo.Record(ctx, repo.ProjectTaskEvent{
+		TaskID:    blockedTask.ID,
+		ProjectID: project.ID,
+		EventType: "flow.rejected",
+		ActorType: "system",
+		Payload:   json.RawMessage(`{"blocked_reason":"flow rejection max visits exceeded"}`),
+	}); err != nil {
+		t.Fatalf("record blocked reason: %v", err)
+	}
+	if _, err := eventRepo.Record(ctx, repo.ProjectTaskEvent{
+		TaskID:    olderBlockedBatchTask.ID,
+		ProjectID: project.ID,
+		EventType: "flow.rejected",
+		ActorType: "system",
+		Payload:   json.RawMessage(`{"blocked_reason":"flow rejection max visits exceeded"}`),
+	}); err != nil {
+		t.Fatalf("record older blocked batch reason: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if !strings.Contains(snapshot.ActiveTaskLine, "Fetch posts 1-12") || !strings.Contains(snapshot.ActiveTaskLine, "resume_policy=resume_review_decision") {
+		t.Fatalf("ActiveTaskLine = %q, want review guard resume policy to override stale blocked reason", snapshot.ActiveTaskLine)
+	}
+	if !strings.Contains(snapshot.CompletedTaskLine, "Fetch posts 25-35") || !strings.Contains(snapshot.CompletedTaskLine, "batch_range=25-35") {
+		t.Fatalf("CompletedTaskLine = %q, want completed batch coverage surfaced", snapshot.CompletedTaskLine)
+	}
+}
+
 func TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedActiveReplacementContinuation(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

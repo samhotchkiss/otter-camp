@@ -49,11 +49,14 @@ func TestRejitteredRateLimitedRunAfterClampsOversizedRunAfter(t *testing.T) {
 func TestBuildProjectExecutionContinuationPromptForWorkerIncludesBlockerReuseGuidance(t *testing.T) {
 	prompt := buildProjectExecutionContinuationPromptForWorker(38, "Import batch review", 0, projectExecutionContinuationSnapshotForWorker{
 		ProjectLine:    "Active project id: 123",
-		ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 38 (Import batch review) id=aaa title=\"Import batch review\" work_status=blocked deliverable_root=content/posts depends_on_path=content/technonymous-index.json resume_policy=needs_replacement_work blocker=\"review turn repeatedly hit file.read not_found across 3 consecutive turns\"",
+		ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 38 (Import batch review) id=aaa title=\"Import batch review\" work_status=blocked deliverable_root=content/posts depends_on_path=content/technonymous-index.json flow_template_id=ft-1 resume_policy=needs_replacement_work blocker=\"review turn repeatedly hit file.read not_found across 3 consecutive turns\"",
 	})
 
 	if !strings.Contains(prompt, "The active project id above is not a task_id.") {
 		t.Fatalf("prompt = %q, want project-id-is-not-task guidance", prompt)
+	}
+	if !strings.Contains(prompt, "do not call flow.list_templates just to reconfirm template availability") {
+		t.Fatalf("prompt = %q, want no-flow-template-rediscovery guidance", prompt)
 	}
 	if !strings.Contains(prompt, "act directly on that blocker summary") {
 		t.Fatalf("prompt = %q, want blocker reuse guidance", prompt)
@@ -144,6 +147,7 @@ func TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompletedBatchS
 		2,
 		projectExecutionContinuationSnapshotForWorker{
 			ProjectLine:          "Active project id: 123",
+			CompletedTaskLine:    "Recently completed bounded tasks already in the tree: task 67 (Fetch posts 25-35) id=bbb work_status=done deliverable_root=content/posts depends_on_path=content/technonymous-index.json batch_range=25-35",
 			ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 44 (Replacement scrape batch) id=aaa title=\"Replacement scrape batch\" work_status=draft deliverable_root=content/posts batch_range=25-35 replaceable_blocked_child_tasks=1",
 		},
 	)
@@ -159,5 +163,14 @@ func TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompletedBatchS
 	}
 	if !strings.Contains(prompt, "do not reread that prerequisite just to verify batch_range=25-35") {
 		t.Fatalf("prompt = %q, want no dependency reread guidance for completed batch", prompt)
+	}
+	if !strings.Contains(prompt, "Do not call task.list with status=done or other broad project filters just to verify batch_range=25-35") {
+		t.Fatalf("prompt = %q, want no broad task.list verification guidance for completed batch", prompt)
+	}
+	if !strings.Contains(prompt, "Recently completed bounded tasks already in the tree: task 67") {
+		t.Fatalf("prompt = %q, want completed batch coverage surfaced in prompt body", prompt)
+	}
+	if !strings.Contains(prompt, "Do not create or queue replacement work for a batch_range already listed in the completed-task snapshot above") {
+		t.Fatalf("prompt = %q, want completed batch replacement suppression guidance", prompt)
 	}
 }

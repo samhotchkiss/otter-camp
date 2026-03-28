@@ -19472,6 +19472,76 @@ func TestProjectExecutionContinuationSnapshotKeepsReviewDecisionBlockedChildrenA
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotPrefersValidationGuardReviewResumePolicy(t *testing.T) {
+	projectID := uuid.New()
+	assignedID := uuid.New()
+	taskID := uuid.New()
+	projectTasks := []repo.ProjectTask{
+		{
+			ID:              taskID,
+			ProjectID:       projectID,
+			TaskNumber:      65,
+			Title:           "Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/",
+			WorkStatus:      "blocked",
+			AssignedAgentID: &assignedID,
+			Metadata: mustJSONRaw(map[string]any{
+				tasksvc.ValidationGuardMetadataKey: tasksvc.ValidationGuardState{
+					ToolName:      "cli.execute",
+					FailureClass:  "tool_validation",
+					FailureCode:   "review_action_required",
+					FailureReason: "review_action_required",
+					Count:         1,
+					Blocked:       false,
+				},
+			}),
+		},
+	}
+	taskHintsByTask := buildProjectContinuationTaskHints(projectTasks, map[uuid.UUID]string{
+		taskID: "flow rejection max visits exceeded",
+	})
+
+	snapshot, _ := buildProjectExecutionContinuationSnapshot(projectTasks, taskHintsByTask, nil)
+	if !strings.Contains(snapshot.ActiveTaskLine, "resume_policy=resume_review_decision") {
+		t.Fatalf("ActiveTaskLine = %q, want validation-guard review resume policy to override stale blocked reason", snapshot.ActiveTaskLine)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "resume_policy=terminal_keep_blocked") {
+		t.Fatalf("ActiveTaskLine = %q, should not keep stale terminal policy when review guard is active", snapshot.ActiveTaskLine)
+	}
+}
+
+func TestProjectExecutionContinuationSnapshotIncludesRelevantCompletedBatchCoverage(t *testing.T) {
+	projectID := uuid.New()
+	assignedID := uuid.New()
+	blockedBatchID := uuid.New()
+	doneBatchID := uuid.New()
+	projectTasks := []repo.ProjectTask{
+		{
+			ID:              blockedBatchID,
+			ProjectID:       projectID,
+			TaskNumber:      63,
+			Title:           "Fetch posts 25-35 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+			WorkStatus:      "blocked",
+			AssignedAgentID: &assignedID,
+		},
+		{
+			ID:              doneBatchID,
+			ProjectID:       projectID,
+			TaskNumber:      67,
+			Title:           "Fetch posts 25-35 from content/technonymous-index.json and save as markdown in content/posts/",
+			WorkStatus:      "done",
+			AssignedAgentID: &assignedID,
+		},
+	}
+	taskHintsByTask := buildProjectContinuationTaskHints(projectTasks, map[uuid.UUID]string{
+		blockedBatchID: "flow rejection max visits exceeded",
+	})
+
+	snapshot, _ := buildProjectExecutionContinuationSnapshot(projectTasks, taskHintsByTask, nil)
+	if !strings.Contains(snapshot.CompletedTaskLine, "task 67 (Fetch posts 25-35") || !strings.Contains(snapshot.CompletedTaskLine, "batch_range=25-35") {
+		t.Fatalf("CompletedTaskLine = %q, want recent completed batch surfaced for same delivery family", snapshot.CompletedTaskLine)
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotIgnoresMalformedNoDecomposeChildren(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()
@@ -19848,7 +19918,7 @@ func TestBuildProjectExecutionContinuationPrompt(t *testing.T) {
 
 	prompt := buildProjectExecutionContinuationPrompt(task, 4, projectExecutionContinuationSnapshot{
 		ProjectLine:          "Active project id: 123",
-		ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 16 (Validate API) id=aaa title=\"Validate API\" work_status=in_progress assigned_agent_id=worker-1",
+		ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 16 (Validate API) id=aaa title=\"Validate API\" work_status=in_progress assigned_agent_id=worker-1 flow_template_id=ft-1",
 		LeafActiveTaskLine:   "Active leaf tasks already have no child tasks to inspect: task 16 (Validate API) leaf_task_id=aaa",
 		DraftTaskLine:        "Actionable draft tasks already in the tree: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft assigned_agent_id=missing flow_template_id=missing",
 		ChildActiveDraftLine: "Draft parent tasks already have child work: task 21 (Theme rollout) id=ccc title=\"Theme rollout\" work_status=draft assigned_agent_id=missing flow_template_id=missing active_child_tasks=2",
@@ -19888,6 +19958,9 @@ func TestBuildProjectExecutionContinuationPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "Do not begin with session.list, task.list, task.get, file.list on the workspace root, git.log, or git.status") {
 		t.Fatalf("prompt = %q, want active-task anti-rediscovery guidance", prompt)
 	}
+	if !strings.Contains(prompt, "do not call flow.list_templates just to reconfirm template availability") {
+		t.Fatalf("prompt = %q, want no-flow-template-rediscovery guidance", prompt)
+	}
 	if !strings.Contains(prompt, "Active leaf tasks already have no child tasks to inspect:") {
 		t.Fatalf("prompt = %q, want leaf-task snapshot", prompt)
 	}
@@ -19922,6 +19995,7 @@ func TestBuildProjectExecutionContinuationPromptIncludesCompletedBatchSupersessi
 
 	prompt := buildProjectExecutionContinuationPrompt(task, 2, projectExecutionContinuationSnapshot{
 		ProjectLine:          "Active project id: 123",
+		CompletedTaskLine:    "Recently completed bounded tasks already in the tree: task 67 (Fetch posts 25-35) id=bbb work_status=done deliverable_root=content/posts depends_on_path=content/technonymous-index.json batch_range=25-35",
 		ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 44 (Replacement scrape batch) id=aaa title=\"Replacement scrape batch\" work_status=draft deliverable_root=content/posts batch_range=25-35 replaceable_blocked_child_tasks=1",
 	})
 
@@ -19936,6 +20010,15 @@ func TestBuildProjectExecutionContinuationPromptIncludesCompletedBatchSupersessi
 	}
 	if !strings.Contains(prompt, "do not reread that prerequisite just to verify batch_range=25-35") {
 		t.Fatalf("prompt = %q, want no dependency reread guidance for completed batch", prompt)
+	}
+	if !strings.Contains(prompt, "Do not call task.list with status=done or other broad project filters just to verify batch_range=25-35") {
+		t.Fatalf("prompt = %q, want no broad task.list verification guidance for completed batch", prompt)
+	}
+	if !strings.Contains(prompt, "Recently completed bounded tasks already in the tree: task 67") {
+		t.Fatalf("prompt = %q, want completed batch coverage surfaced in prompt body", prompt)
+	}
+	if !strings.Contains(prompt, "Do not create or queue replacement work for a batch_range already listed in the completed-task snapshot above") {
+		t.Fatalf("prompt = %q, want completed batch replacement suppression guidance", prompt)
 	}
 }
 

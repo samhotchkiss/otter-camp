@@ -1489,3 +1489,36 @@
     - direct partial live proof landed on Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`: after `3445`, continuation prompt `4595` no longer led into `file.read content/technonymous-index.json`; assistant `4596` only emitted the still-blocked `file.list content/posts` plus `task.list(status=done, project_id=...)` pair
   - expected result after deploy:
     - once a PM continuation already knows `batch_range=13-24` just completed, it stops rereading `content/technonymous-index.json` to verify that fact and moves directly to the next unresolved batch/blocker
+- 2026-03-28 16:33:23 MDT - `Surface completed PM batch coverage and align review-resume hints`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - project continuation snapshots now surface a `Recently completed bounded tasks already in the tree:` line for relevant same-family done tasks
+    - completed-batch family matching now falls back to `batch_range=...` when deliverable/dependency hints are sparse
+    - project continuation prompts now explicitly say not to create or queue replacement work for a batch already listed in the completed-task snapshot
+    - `projectContinuationTaskResumePolicy(...)` now honors persisted validation-guard failures `review_action_required` / `review_decision_required`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - worker-authored PM continuation snapshots now carry the same completed-task coverage line
+    - worker-side prompt guidance now includes the same completed-batch replacement suppression
+    - worker-side resume-policy derivation now honors persisted review-action validation guards too
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestProjectExecutionContinuationSnapshotPrefersValidationGuardReviewResumePolicy`
+    - added `TestProjectExecutionContinuationSnapshotIncludesRelevantCompletedBatchCoverage`
+    - widened `TestBuildProjectExecutionContinuationPromptIncludesCompletedBatchSupersessionGuidance` to assert completed-task snapshot text and replacement suppression guidance
+  - changed [`internal/jobqueue/worker_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_test.go):
+    - widened `TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompletedBatchSupersessionGuidance` to assert the completed-task snapshot text and replacement suppression guidance
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerProjectExecutionContinuationSnapshotPrefersReviewGuardAndCompletedBatchCoverage`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3447`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go internal/jobqueue/worker.go internal/jobqueue/worker_test.go internal/jobqueue/worker_integration_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshot(KeepsReviewDecisionBlockedChildrenAsExistingChildWork|PrefersValidationGuardReviewResumePolicy|IncludesRelevantCompletedBatchCoverage)|BuildProjectExecutionContinuationPrompt|BuildProjectExecutionContinuationPromptIncludesCompletedBatchSupersessionGuidance|HandleCompletedProjectExecutionContinuationTurnResumesBlockedReviewTaskBeforeQueueingDraft)$' -count=1`
+    - `GOFLAGS='' go test ./internal/jobqueue -run 'TestBuildProjectExecutionContinuationPromptForWorker(IncludesBlockerReuseGuidance|IncludesLeafTaskGuidance|IncludesCompletedBatchSupersessionGuidance)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(KeepsReviewDecisionBlockedChildrenAsExistingChildWork|PrefersReviewGuardAndCompletedBatchCoverage)$' -count=1`
+  - deploy status:
+    - rebuilt/restarted tmux `codex-e2e-20260324`; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+    - direct live proof landed on Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`:
+      - prompt `4608` now names task `65` as `resume_policy=resume_review_decision`
+      - prompt `4608` also carries completed same-family batch coverage for tasks `67`, `66`, and `64`
+      - PM no longer created another duplicate `25-35` replacement; it created and queued only task `68` for the still-missing `1-12` batch at `4619-4623`
+  - expected result after deploy:
+    - PM continuations stop reopening already-completed sibling batches and instead narrow onto the one remaining unresolved batch or exact review-resume lane

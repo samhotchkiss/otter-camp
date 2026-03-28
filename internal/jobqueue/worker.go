@@ -2610,6 +2610,7 @@ func looksLikeProjectContinuationMetaDraftForWorker(title string, description *s
 type projectExecutionContinuationSnapshotForWorker struct {
 	ProjectLine          string
 	ActiveTaskLine       string
+	CompletedTaskLine    string
 	LeafActiveTaskLine   string
 	DraftTaskLine        string
 	ReplacementDraftLine string
@@ -2668,21 +2669,30 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 	childActivity := projectContinuationChildTaskActivityForWorker(projectTasks, taskHintsByTask)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDsForWorker(projectTasks)
 	activeTasks := make([]string, 0, 4)
+	completedTasks := make([]string, 0, 4)
 	leafActiveTasks := make([]string, 0, 4)
 	draftTasks := make([]string, 0, 4)
 	replacementDraftTasks := make([]string, 0, 4)
 	childActiveDraftTasks := make([]string, 0, 4)
+	completedBatchFamilies := projectContinuationRelevantCompletedBatchFamiliesForWorker(projectTasks, taskHintsByTask, malformedChildTaskIDs)
 	focusTask := ""
 	for _, task := range projectTasks {
 		if _, skip := malformedChildTaskIDs[task.ID]; skip {
 			continue
 		}
 		status := strings.ToLower(strings.TrimSpace(task.WorkStatus))
-		if status == "" || status == "done" || status == "cancelled" {
+		if status == "" || status == "cancelled" {
 			continue
 		}
 		activity := childActivity[task.ID]
-		taskRef := projectExecutionContinuationTaskRefForWorker(task, activity, taskHintsByTask[task.ID])
+		hints := taskHintsByTask[task.ID]
+		taskRef := projectExecutionContinuationTaskRefForWorker(task, activity, hints)
+		if status == "done" {
+			if projectContinuationTaskMatchesCompletedBatchFamiliesForWorker(hints, completedBatchFamilies) && len(completedTasks) < 4 {
+				completedTasks = append(completedTasks, taskRef)
+			}
+			continue
+		}
 		if isActionableProjectDraftTaskForWorker(task) {
 			if activity.childTaskCount > 0 || activity.malformedChildTaskCount > 0 {
 				if projectContinuationDraftTaskNeedsFreshReplacementChildWorkForWorker(activity) {
@@ -2717,6 +2727,9 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 	if len(activeTasks) > 0 {
 		snapshot.ActiveTaskLine = "Already-active non-terminal tasks in the tree: " + strings.Join(activeTasks, "; ")
 	}
+	if len(completedTasks) > 0 {
+		snapshot.CompletedTaskLine = "Recently completed bounded tasks already in the tree: " + strings.Join(completedTasks, "; ")
+	}
 	if len(leafActiveTasks) > 0 {
 		snapshot.LeafActiveTaskLine = "Active leaf tasks already have no child tasks to inspect: " + strings.Join(leafActiveTasks, "; ")
 	}
@@ -2733,6 +2746,60 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 		snapshot.FocusTaskLine = "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: " + focusTask
 	}
 	return snapshot, nil
+}
+
+func projectContinuationRelevantCompletedBatchFamiliesForWorker(
+	projectTasks []repo.ProjectTask,
+	taskHintsByTask map[uuid.UUID]projectContinuationTaskHintsForWorker,
+	malformedChildTaskIDs map[uuid.UUID]struct{},
+) map[string]struct{} {
+	families := make(map[string]struct{})
+	for _, task := range projectTasks {
+		if _, skip := malformedChildTaskIDs[task.ID]; skip {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(task.WorkStatus))
+		if status == "" || status == "done" || status == "cancelled" {
+			continue
+		}
+		hints := taskHintsByTask[task.ID]
+		if strings.TrimSpace(hints.BatchRange) == "" {
+			continue
+		}
+		for _, key := range projectContinuationBatchFamilyKeysForWorker(hints) {
+			families[key] = struct{}{}
+		}
+	}
+	return families
+}
+
+func projectContinuationTaskMatchesCompletedBatchFamiliesForWorker(hints projectContinuationTaskHintsForWorker, families map[string]struct{}) bool {
+	if len(families) == 0 || strings.TrimSpace(hints.BatchRange) == "" {
+		return false
+	}
+	for _, key := range projectContinuationBatchFamilyKeysForWorker(hints) {
+		if _, ok := families[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func projectContinuationBatchFamilyKeysForWorker(hints projectContinuationTaskHintsForWorker) []string {
+	keys := make([]string, 0, 4)
+	if deliverablePath := strings.ToLower(strings.TrimSpace(hints.DeliverablePath)); deliverablePath != "" {
+		keys = append(keys, "path:"+deliverablePath)
+	}
+	if deliverableRoot := strings.ToLower(strings.TrimSpace(hints.DeliverableRoot)); deliverableRoot != "" {
+		keys = append(keys, "root:"+deliverableRoot)
+	}
+	if dependsOnPath := strings.ToLower(strings.TrimSpace(hints.DependsOnPath)); dependsOnPath != "" {
+		keys = append(keys, "depends:"+dependsOnPath)
+	}
+	if batchRange := strings.TrimSpace(hints.BatchRange); batchRange != "" {
+		keys = append(keys, "batch:"+batchRange)
+	}
+	return keys
 }
 
 func (w *Worker) projectContinuationTaskHintsByTask(ctx context.Context, tasks []repo.ProjectTask) (map[uuid.UUID]projectContinuationTaskHintsForWorker, error) {
@@ -2772,7 +2839,7 @@ func buildProjectContinuationTaskHintsForWorker(tasks []repo.ProjectTask, blocke
 		deliverablePath, deliverableRoot := projectContinuationTaskDeliverableHintsForWorker(task, tasksByID)
 		hintsByTask[task.ID] = projectContinuationTaskHintsForWorker{
 			BlockedReason:   blockedReason,
-			ResumePolicy:    projectContinuationBlockedTaskResumePolicyForWorker(blockedReason),
+			ResumePolicy:    projectContinuationTaskResumePolicyForWorker(task, blockedReason),
 			DeliverablePath: deliverablePath,
 			DeliverableRoot: deliverableRoot,
 			DependsOnPath:   projectContinuationTaskDependencyHintPathForWorker(task, tasks),
@@ -3049,6 +3116,39 @@ func projectContinuationBlockedTaskResumePolicyForWorker(reason string) string {
 	}
 }
 
+func projectContinuationTaskResumePolicyForWorker(task repo.ProjectTask, blockedReason string) string {
+	if failureCode, blocked := projectContinuationValidationGuardFailureCodeForWorker(task.Metadata); blocked {
+		switch strings.ToLower(strings.TrimSpace(failureCode)) {
+		case "review_action_required", "review_decision_required":
+			return "resume_review_decision"
+		}
+	}
+	return projectContinuationBlockedTaskResumePolicyForWorker(blockedReason)
+}
+
+func projectContinuationValidationGuardFailureCodeForWorker(metadata json.RawMessage) (string, bool) {
+	if len(metadata) == 0 || !json.Valid(metadata) {
+		return "", false
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return "", false
+	}
+	raw := payload["agent_turn_validation_guard"]
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", false
+	}
+	var guard struct {
+		FailureCode string `json:"failure_code"`
+		Blocked     bool   `json:"blocked"`
+		Count       int    `json:"count"`
+	}
+	if err := json.Unmarshal(raw, &guard); err != nil {
+		return "", false
+	}
+	return guard.FailureCode, guard.Blocked || guard.Count > 0
+}
+
 func explicitDeliverablePathForWorker(task repo.ProjectTask) string {
 	if task.Description == nil {
 		return ""
@@ -3206,6 +3306,13 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 		if strings.Contains(activeLine, "depends_on_path=") {
 			lines = append(lines, "If a named active task above already shows depends_on_path=..., inspect that prerequisite artifact first instead of broad search.")
 		}
+		if strings.Contains(activeLine, "flow_template_id=") && !strings.Contains(activeLine, "flow_template_id=missing") {
+			lines = append(lines, "If the named tasks above already show concrete flow_template_id values, do not call flow.list_templates just to reconfirm template availability.")
+		}
+	}
+	if completedLine := strings.TrimSpace(snapshot.CompletedTaskLine); completedLine != "" {
+		lines = append(lines, completedLine)
+		lines = append(lines, "Do not create or queue replacement work for a batch_range already listed in the completed-task snapshot above unless that completed task failed to produce its deliverables.")
 	}
 	if leafLine := strings.TrimSpace(snapshot.LeafActiveTaskLine); leafLine != "" {
 		lines = append(lines, leafLine)
@@ -3260,6 +3367,7 @@ func projectExecutionSnapshotContainsBatchRangeForWorker(snapshot projectExecuti
 	needle := "batch_range=" + batchRange
 	for _, line := range []string{
 		snapshot.ActiveTaskLine,
+		snapshot.CompletedTaskLine,
 		snapshot.LeafActiveTaskLine,
 		snapshot.DraftTaskLine,
 		snapshot.ReplacementDraftLine,
@@ -3310,6 +3418,7 @@ func buildProjectExecutionContinuationPromptForWorker(completedTaskNumber int, c
 			"If older blocked, replacement-eligible, or already-active tasks above also show batch_range="+completedBatchRange+", treat those older lanes as superseded by the latest completed batch unless the completed task itself failed to produce the batch deliverables.",
 			"Do not create another replacement task for batch_range="+completedBatchRange+" just because earlier lanes for that same batch are still blocked or stale.",
 			"If the named tasks above still share a prerequisite artifact like depends_on_path=..., do not reread that prerequisite just to verify batch_range="+completedBatchRange+". Treat the completed task plus the named task refs as sufficient evidence and move directly to the next unresolved batch or blocker.",
+			"Do not call task.list with status=done or other broad project filters just to verify batch_range="+completedBatchRange+". The named task refs above already show which batches are complete, blocked, or still actionable.",
 		)
 	}
 	return strings.Join(lines, " ")
