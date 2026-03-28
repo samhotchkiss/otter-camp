@@ -32370,6 +32370,33 @@ func TestSessionTaskDeliverablePathPrefersContentMigrationOutputOverStaleRecover
 	}
 }
 
+func TestSessionTaskDeliverablePathRejectsSameRootDependencyArtifactFromPromptHistoryForMarkdownBatch(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Using the index from the indexing task, scrape posts 11-20 from technonymous.org via browser tools. Extract full content (title, body text, date, categories/tags, images). Save each post as a markdown file with YAML frontmatter under content/technonymous/. Commit to the repo."
+	taskRecord := repo.ProjectTask{
+		ID:          taskID,
+		TaskNumber:  12,
+		Title:       "Scrape technonymous.org posts batch 2 (posts 11-20)",
+		Description: &description,
+	}
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "final",
+		Content:   "Review only.\nStart with the preferred deliverable target `content/technonymous/post-index.json`.\nUse flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
+	})
+
+	if got := fixture.engine.sessionTaskDeliverablePath(context.Background(), fixture.session.ID, taskRecord); got != "" {
+		t.Fatalf("sessionTaskDeliverablePath(...) = %q, want empty because same-root dependency artifact should be ignored", got)
+	}
+}
+
 func TestNormalizeRecoveryCheckpointTargetForTaskClearsDependencyArtifactOutsidePreferredDeliverableRoot(t *testing.T) {
 	t.Parallel()
 
@@ -32412,6 +32439,24 @@ func TestShouldReuseHistoricalDeliverableTargetForTaskRejectsInputArtifactOutsid
 	}
 	if !shouldReuseHistoricalDeliverableTargetForTask(taskRecord, "content/posts/2026-02-03-stop-preparing-your-kids-for-jobs.md") {
 		t.Fatal("expected deliverable file under preferred root to remain eligible")
+	}
+}
+
+func TestShouldReuseHistoricalDeliverableTargetForTaskRejectsSameRootDependencyArtifactForMarkdownBatch(t *testing.T) {
+	t.Parallel()
+
+	description := "Using the index from the indexing task, scrape posts 11-20 from technonymous.org via browser tools. Extract full content (title, body text, date, categories/tags, images). Save each post as a markdown file with YAML frontmatter under content/technonymous/."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  12,
+		Title:       "Scrape technonymous.org posts batch 2 (posts 11-20)",
+		Description: &description,
+	}
+
+	if shouldReuseHistoricalDeliverableTargetForTask(taskRecord, "content/technonymous/post-index.json") {
+		t.Fatal("expected same-root dependency artifact to be ignored for markdown batch tasks")
+	}
+	if !shouldReuseHistoricalDeliverableTargetForTask(taskRecord, "content/technonymous/the-end-of-commercial-software.md") {
+		t.Fatal("expected markdown deliverable under preferred root to remain eligible")
 	}
 }
 
@@ -36451,6 +36496,49 @@ func TestBuildTaskReviewActionPromptIgnoresHistoricalInputArtifactOutsidePreferr
 	}
 	if strings.Contains(prompt, "Start with the preferred deliverable target `content/technonymous-index.json`") {
 		t.Fatalf("prompt = %q, did not want historical input artifact to become preferred review target", prompt)
+	}
+}
+
+func TestBuildTaskReviewActionPromptIgnoresHistoricalInputArtifactInsidePreferredDeliverableRootForMarkdownBatch(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Using the index from the indexing task, scrape posts 11-20 from technonymous.org via browser tools. Extract full content (title, body text, date, categories/tags, images). Save each post as a markdown file with YAML frontmatter under content/technonymous/."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  12,
+				Title:       "Scrape technonymous.org posts batch 2 (posts 11-20)",
+				Description: &description,
+				WorkStatus:  "review",
+			},
+		},
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":      "content/technonymous/post-index.json",
+				"byte_size": 2488,
+				"content":   "{\"total_posts\":12}",
+			},
+		})),
+	})
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "Start with the preferred deliverable root `content/technonymous`") {
+		t.Fatalf("prompt = %q, want preferred deliverable root guidance", prompt)
+	}
+	if strings.Contains(prompt, "Start with the preferred deliverable target `content/technonymous/post-index.json`") {
+		t.Fatalf("prompt = %q, did not want same-root dependency artifact to become preferred review target", prompt)
 	}
 }
 

@@ -16764,11 +16764,44 @@ func shouldReuseHistoricalDeliverableTargetForTask(taskRecord repo.ProjectTask, 
 	if candidate == "" {
 		return false
 	}
+	if !deliverableTargetMatchesTaskContract(taskRecord, candidate) {
+		return false
+	}
 	root := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
 	if root == "" {
 		return true
 	}
 	return workspacePathWithinRoot(candidate, root)
+}
+
+func deliverableTargetMatchesTaskContract(taskRecord repo.ProjectTask, candidate string) bool {
+	candidate = normalizeWorkspaceRelativePath(candidate)
+	if candidate == "" {
+		return false
+	}
+	if !taskExpectsMarkdownDeliverables(taskRecord) {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(path.Ext(candidate))) {
+	case ".md", ".markdown":
+		return true
+	default:
+		return false
+	}
+}
+
+func taskExpectsMarkdownDeliverables(taskRecord repo.ProjectTask) bool {
+	text := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	if taskRecord.Description != nil {
+		text += " " + strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	return containsAny(text,
+		"markdown file",
+		"markdown files",
+		"save as markdown",
+		"save each post as a markdown file",
+		"yaml frontmatter",
+	)
 }
 
 func inferredTaskExecutionLogTargetPath(taskRecord repo.ProjectTask) (string, bool) {
@@ -19288,6 +19321,9 @@ func contentMigrationCheckpointPreferredOutputPath(taskRecord repo.ProjectTask, 
 	for _, output := range checkpoint.Outputs {
 		targetPath := normalizeWorkspaceRelativePath(output.Path)
 		if targetPath == "" {
+			continue
+		}
+		if !deliverableTargetMatchesTaskContract(taskRecord, targetPath) {
 			continue
 		}
 		if root != "" && !workspacePathWithinRoot(targetPath, root) {
@@ -24111,15 +24147,18 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 
 func (e *TurnEngine) reviewPromptDeliverableTarget(ctx context.Context, session *chat.ChatSession, taskRecord repo.ProjectTask) string {
 	rootPath := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
-	if rootPath != "" {
-		if checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata); ok && len(checkpoint.Outputs) > 1 {
-			return ""
-		}
-	}
-	targetWithinRoot := func(targetPath string) bool {
+	targetEligible := func(targetPath string) bool {
 		normalized := normalizeWorkspaceRelativePath(targetPath)
 		if normalized == "" {
 			return false
+		}
+		if !deliverableTargetMatchesTaskContract(taskRecord, normalized) {
+			return false
+		}
+		if rootPath != "" {
+			if checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata); ok && len(checkpoint.Outputs) > 1 {
+				return false
+			}
 		}
 		if rootPath == "" {
 			return true
@@ -24128,18 +24167,21 @@ func (e *TurnEngine) reviewPromptDeliverableTarget(ctx context.Context, session 
 	}
 	if session != nil {
 		if targetPath := strings.TrimSpace(e.sessionTaskDeliverablePath(ctx, session.ID, taskRecord)); targetPath != "" {
-			if targetWithinRoot(targetPath) {
+			if targetEligible(targetPath) {
 				return targetPath
 			}
 			return ""
 		}
 	}
 	if targetPath := strings.TrimSpace(preferredTaskDeliverablePath(taskRecord)); targetPath != "" {
-		return targetPath
+		if targetEligible(targetPath) {
+			return targetPath
+		}
+		return ""
 	}
 	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
 		if targetPath := normalizeWorkspaceRelativePath(checkpoint.TargetPath); targetPath != "" {
-			if targetWithinRoot(targetPath) {
+			if targetEligible(targetPath) {
 				return targetPath
 			}
 			return ""
@@ -24162,7 +24204,7 @@ func (e *TurnEngine) reviewPromptDeliverableTarget(ctx context.Context, session 
 			continue
 		}
 		if targetPath := normalizeWorkspaceRelativePath(anyString(output["deliverable_path"])); targetPath != "" {
-			if shouldReuseHistoricalDeliverableTargetForTask(taskRecord, targetPath) {
+			if targetEligible(targetPath) && shouldReuseHistoricalDeliverableTargetForTask(taskRecord, targetPath) {
 				return targetPath
 			}
 			continue
@@ -24170,7 +24212,7 @@ func (e *TurnEngine) reviewPromptDeliverableTarget(ctx context.Context, session 
 		switch strings.ToLower(strings.TrimSpace(toolName)) {
 		case "file.read", "file.write":
 			if targetPath := normalizeWorkspaceRelativePath(anyString(output["path"])); targetPath != "" {
-				if shouldReuseHistoricalDeliverableTargetForTask(taskRecord, targetPath) {
+				if targetEligible(targetPath) && shouldReuseHistoricalDeliverableTargetForTask(taskRecord, targetPath) {
 					return targetPath
 				}
 			}

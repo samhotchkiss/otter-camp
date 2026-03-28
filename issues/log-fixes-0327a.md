@@ -1100,3 +1100,26 @@
   - result:
     - explicit recovery turns now repair the named target file rather than a sibling checkpoint output
     - the remaining cost center is review completion / decision efficiency, not recovery target drift
+- 2026-03-28 12:26:20 MDT - `pending` `Ignore same-root dependency artifacts in review targets`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `deliverableTargetMatchesTaskContract(...)` and `taskExpectsMarkdownDeliverables(...)` so markdown-batch tasks reject non-markdown deliverable targets even when those files live inside the preferred deliverable root
+    - `shouldReuseHistoricalDeliverableTargetForTask(...)` now applies that contract check before accepting historical/session target reuse
+    - `contentMigrationCheckpointPreferredOutputPath(...)` now skips contract-mismatched outputs
+    - `reviewPromptDeliverableTarget(...)` now clamps every candidate path through the same contract check before turning it into the preferred review target
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldReuseHistoricalDeliverableTargetForTaskRejectsSameRootDependencyArtifactForMarkdownBatch`
+    - added `TestSessionTaskDeliverablePathRejectsSameRootDependencyArtifactFromPromptHistoryForMarkdownBatch`
+    - added `TestBuildTaskReviewActionPromptIgnoresHistoricalInputArtifactInsidePreferredDeliverableRootForMarkdownBatch`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(SessionTaskDeliverablePathRejectsSameRootDependencyArtifactFromPromptHistoryForMarkdownBatch|ShouldReuseHistoricalDeliverableTargetForTaskRejects(SameRootDependencyArtifactForMarkdownBatch|InputArtifactOutsidePreferredRoot)|BuildTaskReviewActionPromptIgnoresHistoricalInputArtifact(InsidePreferredDeliverableRootForMarkdownBatch|OutsidePreferredDeliverableRoot)|BuildTaskReviewActionPromptIgnoresRecoveryCheckpointOutsidePreferredDeliverableRoot|BuildTaskReviewActionPromptPrefersDeliverableRootForBatchContentMigrationOutputs|SessionTaskDeliverablePathPrefersContentMigrationOutputOverStaleRecoveryCheckpoint)$' -count=1`
+  - deploy state:
+    - rebuilt and restarted tmux `codex-e2e-20260324`
+    - `./bin/ottercamp health --output json` returned `data.status=ok`
+  - fresh live proof on task `12`:
+    - pre-fix retry prompt `577` in session `45746345-e9ae-4f38-94db-40b5dc790e7e` still named `content/technonymous/post-index.json` as the preferred review target
+    - post-fix retry prompt `585` in the same session now starts with preferred deliverable root `content/technonymous`
+    - assistant `586` listed that root, tool result `587` showed only `post-index.json`, and assistant `588` explicitly recognized it as a dependency/source artifact rather than the task deliverable
+  - result:
+    - markdown-batch reviews stop centering on same-root dependency artifacts like `post-index.json`
+    - the next remaining seam is review-decision efficiency after the right outputs are already in scope
