@@ -17541,6 +17541,414 @@ func TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedActi
 	}
 }
 
+func TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedBoundedSizeContinuation(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "ensure-project-continuation-suppresses-bounded-size",
+		DisplayName: "Ensure Project Continuation Suppresses Bounded Size",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "ensure-project-continuation-suppresses-bounded-size-project",
+		DisplayName:    "Ensure Project Continuation Suppresses Bounded Size Project",
+		Description:    "Project for repeated continuation bounded-size suppression coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "ensure-project-continuation-suppresses-bounded-size-template",
+		DisplayName:    "Ensure Project Continuation Suppresses Bounded Size Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	doneTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     47,
+		Title:          "Use cli_execute with python3 to write the file if file_write is intercepted",
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     43,
+		Title:          "Build a single HTML layout template (template 8 of 10) for Sam.blog — replacement for blocked OC-38",
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	}); err != nil {
+		t.Fatalf("create bounded-size draft task: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	remainingDrafts, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	fingerprint := projectExecutionContinuationFingerprintForWorker(doneTask.ID, remainingDrafts, snapshot)
+	metadata, err := json.Marshal(map[string]any{
+		"source":                 "project_execution_continuation",
+		"auto_continue":          true,
+		"synthetic_user_message": true,
+		"completed_task_id":      doneTask.ID.String(),
+		projectContinuationSnapshotFingerprintKey: fingerprint,
+	})
+	if err != nil {
+		t.Fatalf("marshal continuation metadata: %v", err)
+	}
+	staleMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "pending",
+		Metadata:  metadata,
+	})
+	if err != nil {
+		t.Fatalf("create stale continuation message: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	completedTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StopReason:       &stopReason,
+		TriggerMessageID: &staleMessage.ID,
+		RetryCount:       2,
+	})
+	if err != nil {
+		t.Fatalf("create completed continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &completedTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation found that the remaining draft work still violates the bounded size policy. Split it into smaller reviewable child tasks instead of trying to queue the broad parent again.]",
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create bounded-size stop message: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &completedTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation found remaining draft task 43 (Build a single HTML layout template (template 8 of 10) for Sam.blog — replacement for blocked OC-38) but could not auto-queue it because it violates the bounded size policy: task exceeds bounded size policy (estimated 65 minutes > 60 minute limit): split the work into smaller reviewable tasks before queueing]",
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create remaining draft bounded-size message: %v", err)
+	}
+
+	messageID, suppressed, err := worker.ensureProjectContinuationMessageDecision(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ensureProjectContinuationMessageDecision: %v", err)
+	}
+	if !suppressed {
+		t.Fatal("suppressed = false, want true")
+	}
+	if messageID != uuid.Nil {
+		t.Fatalf("messageID = %s, want nil when repeated bounded-size continuation is suppressed", messageID)
+	}
+
+	var (
+		status       string
+		errorMessage string
+		pendingCount int
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, staleMessage.ID).Scan(&status, &errorMessage); err != nil {
+		t.Fatalf("query stale continuation message: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("stale continuation status = %q, want failed", status)
+	}
+	if !strings.Contains(errorMessage, "suppressed repeated identical project continuation") {
+		t.Fatalf("stale continuation error = %q, want repeated bounded-size suppression", errorMessage)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_message
+		WHERE session_id = $1
+		  AND role = 'user'
+		  AND status = 'pending'
+		  AND COALESCE(metadata->>'source', '') = 'project_execution_continuation'
+	`, session.ID).Scan(&pendingCount); err != nil {
+		t.Fatalf("count pending continuation messages: %v", err)
+	}
+	if pendingCount != 0 {
+		t.Fatalf("pending continuation messages = %d, want 0 after suppression", pendingCount)
+	}
+}
+
+func TestJobWorkerEnsureProjectContinuationMessageSuppressesStalePendingBoundedSizeDuplicate(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "ensure-project-continuation-suppresses-stale-pending-bounded-size",
+		DisplayName: "Ensure Project Continuation Suppresses Stale Pending Bounded Size",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "ensure-project-continuation-suppresses-stale-pending-bounded-size-project",
+		DisplayName:    "Ensure Project Continuation Suppresses Stale Pending Bounded Size Project",
+		Description:    "Project for stale pending bounded-size continuation suppression coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "ensure-project-continuation-suppresses-stale-pending-bounded-size-template",
+		DisplayName:    "Ensure Project Continuation Suppresses Stale Pending Bounded Size Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	doneTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     47,
+		Title:          "Use cli_execute with python3 to write the file if file_write is intercepted",
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     43,
+		Title:          "Build a single HTML layout template (template 8 of 10) for Sam.blog — replacement for blocked OC-38",
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	}); err != nil {
+		t.Fatalf("create bounded-size draft task: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	remainingDrafts, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	fingerprint := projectExecutionContinuationFingerprintForWorker(doneTask.ID, remainingDrafts, snapshot)
+	metadata, err := json.Marshal(map[string]any{
+		"source":                 "project_execution_continuation",
+		"auto_continue":          true,
+		"synthetic_user_message": true,
+		"completed_task_id":      doneTask.ID.String(),
+		projectContinuationSnapshotFingerprintKey: fingerprint,
+	})
+	if err != nil {
+		t.Fatalf("marshal continuation metadata: %v", err)
+	}
+	consumedMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "failed",
+		Metadata:  metadata,
+	})
+	if err != nil {
+		t.Fatalf("create consumed continuation message: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	completedTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StopReason:       &stopReason,
+		TriggerMessageID: &consumedMessage.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create completed continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &completedTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation found that the remaining draft work still violates the bounded size policy. Split it into smaller reviewable child tasks instead of trying to queue the broad parent again.]",
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create bounded-size stop message: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &completedTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation found remaining draft task 43 (Build a single HTML layout template (template 8 of 10) for Sam.blog — replacement for blocked OC-38) but could not auto-queue it because it violates the bounded size policy: task exceeds bounded size policy (estimated 65 minutes > 60 minute limit): split the work into smaller reviewable tasks before queueing]",
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create remaining draft bounded-size message: %v", err)
+	}
+	stalePendingMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "pending",
+		Metadata:  metadata,
+	})
+	if err != nil {
+		t.Fatalf("create stale pending continuation message: %v", err)
+	}
+
+	messageID, suppressed, err := worker.ensureProjectContinuationMessageDecision(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ensureProjectContinuationMessageDecision: %v", err)
+	}
+	if !suppressed {
+		t.Fatal("suppressed = false, want true")
+	}
+	if messageID != uuid.Nil {
+		t.Fatalf("messageID = %s, want nil when stale pending duplicate is suppressed", messageID)
+	}
+
+	var (
+		status       string
+		errorMessage string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, stalePendingMessage.ID).Scan(&status, &errorMessage); err != nil {
+		t.Fatalf("query stale pending continuation message: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("stale pending continuation status = %q, want failed", status)
+	}
+	if !strings.Contains(errorMessage, "suppressed repeated identical project continuation") {
+		t.Fatalf("stale pending continuation error = %q, want repeated bounded-size suppression", errorMessage)
+	}
+}
+
 func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -17688,6 +18096,232 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFail
 		Status:    "pending",
 	}); err != nil {
 		t.Fatalf("create continuation rediscovery guard message: %v", err)
+	}
+	bootstrapMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project bootstrap from the persisted state above.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_bootstrap","synthetic_user_message":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create stale bootstrap continuation message: %v", err)
+	}
+
+	repaired, err := worker.RequeueActiveProjectSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveProjectSessionsWithoutTurns: %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired = %d, want 1", repaired)
+	}
+
+	var (
+		bootstrapStatus       string
+		bootstrapErrorMessage string
+		pendingMessages       int
+		pendingJobs           int
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, bootstrapMessage.ID).Scan(&bootstrapStatus, &bootstrapErrorMessage); err != nil {
+		t.Fatalf("query stale bootstrap continuation message: %v", err)
+	}
+	if bootstrapStatus != "failed" {
+		t.Fatalf("stale bootstrap status = %q, want failed", bootstrapStatus)
+	}
+	if !strings.Contains(bootstrapErrorMessage, "project bootstrap already complete") {
+		t.Fatalf("stale bootstrap error = %q, want bootstrap completion retirement", bootstrapErrorMessage)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_message
+		WHERE session_id = $1
+		  AND role = 'user'
+		  AND status = 'pending'
+		  AND COALESCE(metadata->>'source', '') = 'project_execution_continuation'
+	`, session.ID).Scan(&pendingMessages); err != nil {
+		t.Fatalf("count pending continuation messages: %v", err)
+	}
+	if pendingMessages != 0 {
+		t.Fatalf("pending continuation messages = %d, want 0 after suppression", pendingMessages)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status IN ('pending', 'claimed')
+		  AND (payload->>'session_id')::uuid = $1
+	`, session.ID).Scan(&pendingJobs); err != nil {
+		t.Fatalf("count pending jobs: %v", err)
+	}
+	if pendingJobs != 0 {
+		t.Fatalf("pending jobs = %d, want 0 after suppression", pendingJobs)
+	}
+}
+
+func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedBoundedSizeContinuation(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-project-session-suppresses-bounded-size",
+		DisplayName: "Requeue Active Project Session Suppresses Bounded Size",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-project-session-suppresses-bounded-size-project",
+		DisplayName:    "Requeue Active Project Session Suppresses Bounded Size Project",
+		Description:    "Project for repeated continuation bounded-size requeue suppression coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "requeue-active-project-session-suppresses-bounded-size-template",
+		DisplayName:    "Requeue Active Project Session Suppresses Bounded Size Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	doneTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     47,
+		Title:          "Use cli_execute with python3 to write the file if file_write is intercepted",
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     43,
+		Title:          "Build a single HTML layout template (template 8 of 10) for Sam.blog — replacement for blocked OC-38",
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	}); err != nil {
+		t.Fatalf("create bounded-size draft task: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	remainingDrafts, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	fingerprint := projectExecutionContinuationFingerprintForWorker(doneTask.ID, remainingDrafts, snapshot)
+	metadata, err := json.Marshal(map[string]any{
+		"source":                 "project_execution_continuation",
+		"auto_continue":          true,
+		"synthetic_user_message": true,
+		"completed_task_id":      doneTask.ID.String(),
+		projectContinuationSnapshotFingerprintKey: fingerprint,
+	})
+	if err != nil {
+		t.Fatalf("marshal continuation metadata: %v", err)
+	}
+	staleMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "failed",
+		Metadata:  metadata,
+	})
+	if err != nil {
+		t.Fatalf("create stale continuation message: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	completedTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StopReason:       &stopReason,
+		TriggerMessageID: &staleMessage.ID,
+		RetryCount:       2,
+	})
+	if err != nil {
+		t.Fatalf("create completed continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &completedTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation found that the remaining draft work still violates the bounded size policy. Split it into smaller reviewable child tasks instead of trying to queue the broad parent again.]",
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create bounded-size stop message: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &completedTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation found remaining draft task 43 (Build a single HTML layout template (template 8 of 10) for Sam.blog — replacement for blocked OC-38) but could not auto-queue it because it violates the bounded size policy: task exceeds bounded size policy (estimated 65 minutes > 60 minute limit): split the work into smaller reviewable tasks before queueing]",
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create remaining draft bounded-size message: %v", err)
 	}
 	bootstrapMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
 		SessionID: session.ID,
