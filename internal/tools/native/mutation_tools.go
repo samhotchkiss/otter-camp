@@ -33,6 +33,7 @@ import (
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
@@ -44,6 +45,7 @@ var parentChildOrdinalTitlePattern = regexp.MustCompile(`^([a-z]+)\s+(\d+)\s*:`)
 var malformedParameterEchoPattern = regexp.MustCompile(`(?is)(<parameter\s+name\s*=\s*"[^"]+"\s*>|,?\s*antml:parameter>)`)
 var explicitDeliverablePathPattern = regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`)
 var bootstrapWaveFamilyTitlePattern = regexp.MustCompile(`(?i)\b(?:[a-z0-9]+-)?(fw|lw)\s*[-:]?\s*(\d+)\b`)
+var contentMigrationCheckpointTaskPathPattern = regexp.MustCompile(`(?i)^\.ottercamp/checkpoints/oc-(\d+)-content-migration\.md$`)
 
 var errInvalidExecutableFlowTemplate = errors.New(flowTemplateValidationMessage)
 
@@ -6474,19 +6476,18 @@ func (e *NativeToolExecutor) createCanonicalExecutionCommit(ctx context.Context,
 		branchName = fmt.Sprintf("task/%d", taskRecord.TaskNumber)
 	}
 	baseSHA := repo.FlowExecutionEntryHeadSHAFromMetadata(execution.Metadata)
+	if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") && strings.EqualFold(strings.TrimSpace(decision), "approve") {
+		return flowcommit.CommitEmptyFromBase(ctx, root, branchName, baseSHA, canonicalExecutionCommitMessage(taskRecord, node, execution.VisitNumber, decision, summary))
+	}
 	return flowcommit.CommitAllFromBase(ctx, root, branchName, baseSHA, canonicalExecutionCommitMessage(taskRecord, node, execution.VisitNumber, decision, summary), true)
 }
 
 func (e *NativeToolExecutor) reviewExecutionWorkspaceDirty(ctx context.Context, taskID uuid.UUID) (bool, error) {
-	taskRecord, err := e.tasks.GetByID(ctx, taskID)
+	entries, err := e.reviewExecutionWorkspaceDirtyEntries(ctx, taskID)
 	if err != nil {
 		return false, err
 	}
-	root, err := e.taskWorkspaceRoot(ctx, taskRecord)
-	if err != nil {
-		return false, err
-	}
-	return flowcommit.WorktreeDirty(ctx, root)
+	return len(entries) != 0, nil
 }
 
 func (e *NativeToolExecutor) autoCommitMissingWorkBeforeReviewApproval(ctx context.Context, reviewExecution repo.FlowNodeExecution) (bool, error) {
@@ -6555,6 +6556,25 @@ func (e *NativeToolExecutor) autoCommitMissingWorkBeforeReviewApproval(ctx conte
 }
 
 func (e *NativeToolExecutor) reviewExecutionWorkspaceDirtyPaths(ctx context.Context, taskID uuid.UUID) ([]string, error) {
+	entries, err := e.reviewExecutionWorkspaceDirtyEntries(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Path != "" {
+			paths = append(paths, entry.Path)
+		}
+	}
+	return paths, nil
+}
+
+type gitStatusEntry struct {
+	Status string
+	Path   string
+}
+
+func (e *NativeToolExecutor) reviewExecutionWorkspaceDirtyEntries(ctx context.Context, taskID uuid.UUID) ([]gitStatusEntry, error) {
 	taskRecord, err := e.tasks.GetByID(ctx, taskID)
 	if err != nil {
 		return nil, err
@@ -6563,13 +6583,31 @@ func (e *NativeToolExecutor) reviewExecutionWorkspaceDirtyPaths(ctx context.Cont
 	if err != nil {
 		return nil, err
 	}
+	entries, err := gitStatusEntries(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	blocking := make([]gitStatusEntry, 0, len(entries))
+	for _, entry := range entries {
+		if reviewApprovalAmbientDirtyEntry(taskRecord, entry) {
+			continue
+		}
+		blocking = append(blocking, entry)
+	}
+	return blocking, nil
+}
+
+func gitStatusEntries(ctx context.Context, root string) ([]gitStatusEntry, error) {
+	if err := ensureGitWorkspaceForStatus(ctx, root); err != nil {
+		return nil, err
+	}
 	cmd := exec.CommandContext(ctx, "git", "-C", root, "status", "--porcelain")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
 	lines := strings.Split(string(output), "\n")
-	paths := make([]string, 0, len(lines))
+	entries := make([]gitStatusEntry, 0, len(lines))
 	for _, line := range lines {
 		line = strings.TrimRight(line, "\r")
 		if strings.TrimSpace(line) == "" {
@@ -6578,16 +6616,99 @@ func (e *NativeToolExecutor) reviewExecutionWorkspaceDirtyPaths(ctx context.Cont
 		if len(line) < 4 {
 			continue
 		}
+		status := strings.TrimSpace(line[:2])
 		path := strings.TrimSpace(line[3:])
 		if idx := strings.Index(path, " -> "); idx >= 0 {
 			path = strings.TrimSpace(path[idx+4:])
 		}
 		path = normalizeWorkspacePath(path)
 		if path != "" {
-			paths = append(paths, path)
+			entries = append(entries, gitStatusEntry{
+				Status: status,
+				Path:   path,
+			})
 		}
 	}
-	return paths, nil
+	return entries, nil
+}
+
+func ensureGitWorkspaceForStatus(ctx context.Context, root string) error {
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
+	gitDir := filepath.Join(root, ".git")
+	if info, err := os.Stat(gitDir); err == nil && (info.IsDir() || info.Mode().IsRegular()) {
+		return nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "init", "-b", "main")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		trimmed := strings.TrimSpace(string(output))
+		if trimmed == "" {
+			return err
+		}
+		return fmt.Errorf("%w: %s", err, trimmed)
+	}
+	return nil
+}
+
+func reviewApprovalAmbientDirtyEntry(taskRecord repo.ProjectTask, entry gitStatusEntry) bool {
+	if strings.TrimSpace(entry.Status) != "??" {
+		return false
+	}
+	path := normalizeWorkspacePath(entry.Path)
+	if path == "" {
+		return false
+	}
+	if siblingContentMigrationCheckpointPath(taskRecord, path) {
+		return true
+	}
+	outputs := currentTaskContentMigrationOutputSet(taskRecord)
+	if len(outputs) == 0 {
+		return false
+	}
+	if _, ok := outputs[path]; ok {
+		return false
+	}
+	root := preferredTaskDeliverableRoot(taskRecord)
+	if root == "" {
+		for output := range outputs {
+			dir := normalizeWorkspacePath(filepath.ToSlash(filepath.Dir(output)))
+			if dir != "" && dir != "." {
+				root = dir
+				break
+			}
+		}
+	}
+	return root != "" && workspacePathWithinRoot(path, root)
+}
+
+func siblingContentMigrationCheckpointPath(taskRecord repo.ProjectTask, path string) bool {
+	matches := contentMigrationCheckpointTaskPathPattern.FindStringSubmatch(normalizeWorkspacePath(path))
+	if len(matches) != 2 {
+		return false
+	}
+	taskNumber, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return false
+	}
+	return taskNumber != 0 && taskNumber != taskRecord.TaskNumber
+}
+
+func currentTaskContentMigrationOutputSet(taskRecord repo.ProjectTask) map[string]struct{} {
+	checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata)
+	if !ok || len(checkpoint.Outputs) == 0 {
+		return nil
+	}
+	outputs := make(map[string]struct{}, len(checkpoint.Outputs))
+	for _, output := range checkpoint.Outputs {
+		normalized := normalizeWorkspacePath(output.Path)
+		if normalized != "" {
+			outputs[normalized] = struct{}{}
+		}
+	}
+	return outputs
 }
 
 func reviewScopedWorkspacePath(path string) bool {

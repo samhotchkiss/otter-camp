@@ -83,6 +83,74 @@ func WorktreeDirty(ctx context.Context, repoRoot string) (bool, error) {
 	return strings.TrimSpace(status) != "", nil
 }
 
+func CommitEmptyFromBase(ctx context.Context, repoRoot, branchName, baseSHA, message string) (CommitResult, error) {
+	root := filepath.Clean(strings.TrimSpace(repoRoot))
+	if root == "" {
+		return CommitResult{}, fmt.Errorf("repo root is required")
+	}
+	trimmedBranch := strings.TrimSpace(branchName)
+	if trimmedBranch == "" {
+		trimmedBranch = "main"
+	}
+	if err := ensureGitWorkspace(ctx, root); err != nil {
+		return CommitResult{}, err
+	}
+	if err := ensureIdentity(ctx, root); err != nil {
+		return CommitResult{}, err
+	}
+
+	trimmedBase := strings.TrimSpace(baseSHA)
+	if trimmedBase == "" {
+		if err := checkoutBranch(ctx, root, trimmedBranch); err != nil {
+			return CommitResult{}, err
+		}
+		if _, err := gitOutput(ctx, root, "commit", "--allow-empty", "-m", strings.TrimSpace(message)); err != nil {
+			return CommitResult{}, err
+		}
+		sha, err := gitOutput(ctx, root, "rev-parse", "HEAD")
+		if err != nil {
+			return CommitResult{}, err
+		}
+		trimmedSHA := strings.TrimSpace(sha)
+		shortSHA := trimmedSHA
+		if len(shortSHA) > 7 {
+			shortSHA = shortSHA[:7]
+		}
+		return CommitResult{
+			SHA:         trimmedSHA,
+			ShortSHA:    shortSHA,
+			FilesStaged: 0,
+			BranchName:  trimmedBranch,
+		}, nil
+	}
+
+	treeSHA, err := gitOutput(ctx, root, "rev-parse", trimmedBase+"^{tree}")
+	if err != nil {
+		return CommitResult{}, err
+	}
+	sha, err := gitOutput(ctx, root, "commit-tree", strings.TrimSpace(treeSHA), "-p", trimmedBase, "-m", strings.TrimSpace(message))
+	if err != nil {
+		return CommitResult{}, err
+	}
+	trimmedSHA := strings.TrimSpace(sha)
+	if _, err := gitOutput(ctx, root, "update-ref", "refs/heads/"+trimmedBranch, trimmedSHA); err != nil {
+		return CommitResult{}, err
+	}
+	if err := checkoutBranch(ctx, root, trimmedBranch); err != nil {
+		return CommitResult{}, err
+	}
+	shortSHA := trimmedSHA
+	if len(shortSHA) > 7 {
+		shortSHA = shortSHA[:7]
+	}
+	return CommitResult{
+		SHA:         trimmedSHA,
+		ShortSHA:    shortSHA,
+		FilesStaged: 0,
+		BranchName:  trimmedBranch,
+	}, nil
+}
+
 func HeadSHA(ctx context.Context, repoRoot string) (string, error) {
 	root := filepath.Clean(strings.TrimSpace(repoRoot))
 	if root == "" {

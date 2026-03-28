@@ -31,6 +31,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
@@ -11096,6 +11097,158 @@ func TestIntegrationFlowReviewDecisionApproveRejectsDirtyWorkspace(t *testing.T)
 	}
 	if decision, ok := repo.FlowExecutionReviewDecisionFromMetadata(updatedExecution.Metadata); ok && decision != nil {
 		t.Fatalf("review decision metadata = %#v, want absent after dirty-workspace approval failure", decision)
+	}
+}
+
+func TestIntegrationFlowReviewDecisionApproveIgnoresAmbientSiblingUntrackedFiles(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &projectRecord.OrganizationID,
+		ProjectID:      &project.ID,
+		Slug:           "ambient-review-flow-" + strings.ToLower(uuid.NewString()[:8]),
+		DisplayName:    "Ambient Review Flow " + uuid.NewString()[:8],
+		Description:    "test ambient sibling review approval handling",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	workNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create review node: %v", err)
+	}
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
+		t.Fatalf("update work node: %v", err)
+	}
+	template.StartNodeID = &workNode.ID
+	if _, err := templateRepo.Update(ctx, template); err != nil {
+		t.Fatalf("update template: %v", err)
+	}
+
+	description := "Read content/technonymous-index.json. For each of the next 12 URLs in the post_urls array, save the article text as clean markdown files under content/posts/. Deliverable: markdown files in content/posts/."
+	metadata, err := taskcheckpoint.MergeContentMigrationCheckpoint(nil, taskcheckpoint.ContentMigrationCheckpoint{
+		Outputs: []taskcheckpoint.WorkspaceFile{
+			{Path: "content/posts/owned-review-output.md"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("merge content migration checkpoint metadata: %v", err)
+	}
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Description:    &description,
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "review",
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+		Metadata: metadata,
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(ctx, task.ID, &reviewNode.ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	if _, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  workNode.ID,
+		VisitNumber: 1,
+		Status:      "completed",
+	}); err != nil {
+		t.Fatalf("seed completed work visit: %v", err)
+	}
+	reviewExecution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  reviewNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create review execution: %v", err)
+	}
+
+	workspaceRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, ".ottercamp", "checkpoints"), 0o755); err != nil {
+		t.Fatalf("mkdir checkpoints dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("mkdir content/posts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, ".ottercamp", "checkpoints", "oc-61-content-migration.md"), []byte("sibling checkpoint"), 0o644); err != nil {
+		t.Fatalf("write sibling checkpoint: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "content", "posts", "sibling-batch-output.md"), []byte("# Sibling batch output\n"), 0o644); err != nil {
+		t.Fatalf("write sibling batch output: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: workspaceRoot})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "flow.review_decision", map[string]any{
+		"flow_node_execution_id": reviewExecution.ID.String(),
+		"decision":               "approve",
+	})
+	if err != nil {
+		t.Fatalf("flow.review_decision approve: %v", err)
+	}
+	if out["next_node_id"] != nil {
+		t.Fatalf("next_node_id = %v, want nil because approval completed the flow", out["next_node_id"])
+	}
+
+	updatedExecution, err := executionRepo.GetByID(ctx, reviewExecution.ID)
+	if err != nil {
+		t.Fatalf("load updated execution: %v", err)
+	}
+	if updatedExecution.CommitSHA == nil || strings.TrimSpace(*updatedExecution.CommitSHA) == "" {
+		t.Fatalf("review commit_sha = %v, want non-empty canonical commit", updatedExecution.CommitSHA)
+	}
+
+	messageBytes, err := exec.Command("git", "-C", workspaceRoot, "log", "-1", "--pretty=%B").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log latest commit: %v: %s", err, strings.TrimSpace(string(messageBytes)))
+	}
+	message := strings.TrimSpace(string(messageBytes))
+	if !strings.Contains(message, "flow(review:review#1): approve") {
+		t.Fatalf("latest commit message = %q, want approval commit header", message)
+	}
+	diffBytes, err := exec.Command("git", "-C", workspaceRoot, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git diff-tree latest commit: %v: %s", err, strings.TrimSpace(string(diffBytes)))
+	}
+	if diff := strings.TrimSpace(string(diffBytes)); diff != "" {
+		t.Fatalf("latest approval commit changed files = %q, want empty review commit", diff)
 	}
 }
 

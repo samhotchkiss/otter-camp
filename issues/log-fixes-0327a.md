@@ -923,3 +923,20 @@
     - `file.list content/posts` at `10:10:34 MDT` returned `13` entries instead of `recovery_target_focus_required`
     - the same retry then read the deliverable files directly (`content/posts/mister-rogers-and-the-forgotten-art.md`, `.../the-next-thing-will-be-better.md`, `.../the-arithmetic-of-dying.md`, etc.)
     - the only remaining guarded reads on that retry were the non-deliverable artifacts `content/technonymous-index.json` and `.ottercamp/checkpoints/oc-62-content-migration.md`
+- 2026-03-28 10:39:45 MDT - ignore ambient sibling untracked files during review approval and make the review approval commit truly empty
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - review approval now parses detailed `git status --porcelain` entries instead of a raw dirty boolean
+    - ambient untracked sibling content-migration checkpoint files (`.ottercamp/checkpoints/oc-<other>-content-migration.md`) no longer block approval
+    - untracked files under the task’s content-migration deliverable root are ignored when they are outside the current task’s own checkpoint output set
+  - changed [`internal/flowcommit/git.go`](/Users/sam/dev/otter-camp/internal/flowcommit/git.go):
+    - added `CommitEmptyFromBase(...)`
+    - review approvals now use that empty commit path instead of staging the full worktree
+  - changed [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go):
+    - added `TestIntegrationFlowReviewDecisionApproveIgnoresAmbientSiblingUntrackedFiles`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/flowcommit -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/tools/native -run 'TestIntegrationFlowReviewDecisionApprove(RejectsDirtyWorkspace|IgnoresAmbientSiblingUntrackedFiles|AutoCommitsMissingWorkBeforeEmptyReviewCommit)$' -count=1`
+  - deploy state:
+    - rebuilt and restarted tmux `codex-e2e-20260324`
+    - `./bin/ottercamp health --output json` returned `data.status=ok`
+    - fresh live proof for the exact ambient-sibling approval filter is still pending because task-62, the only known hot reproduction lane, had already closed before the new binary came up
