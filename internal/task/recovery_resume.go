@@ -84,6 +84,12 @@ func classifyTaskResumeDecision(taskRecord repo.ProjectTask, blockerReason strin
 		return taskResumeDecision{blockerClass: RecoveryBlockerClassNotBlocked}
 	}
 	blockerReason = strings.TrimSpace(blockerReason)
+	if recoveryResumeReasonMatchesTerminalMalformedChild(blockerReason) {
+		return taskResumeDecision{
+			blockerClass:  RecoveryBlockerClassBlockedWithoutResumableState,
+			blockerReason: blockerReason,
+		}
+	}
 	if guard, ok := ParseValidationGuard(taskRecord.Metadata); ok && guard.Blocked {
 		guardCopy := guard
 		return taskResumeDecision{
@@ -356,6 +362,19 @@ func recoveryResumeReasonMatchesReviewDecisionRequired(blockerReason string) boo
 	}
 	prefix := reviewDecisionRequiredFailureReason + ":"
 	return strings.HasPrefix(strings.ToLower(normalized), strings.ToLower(prefix))
+}
+
+func recoveryResumeReasonMatchesTerminalMalformedChild(blockerReason string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(blockerReason))
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "parent explicitly forbids decomposition") &&
+		strings.Contains(normalized, "malformed child lane") {
+		return true
+	}
+	return strings.Contains(normalized, "procedural child of") &&
+		strings.Contains(normalized, "instead of this malformed lane")
 }
 
 func RecoveryCheckpointRequiresManualResolution(blockerReason string) bool {

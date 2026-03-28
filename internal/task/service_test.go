@@ -546,6 +546,36 @@ func TestClassifyTaskResumeDecisionAllowsHistoricalReviewDecisionBlockerWithDeta
 	}
 }
 
+func TestClassifyTaskResumeDecisionRejectsTerminalMalformedChildEvenWithValidationGuard(t *testing.T) {
+	metadata, err := MergeValidationGuardMetadata(json.RawMessage(`{}`), ValidationGuardState{
+		Fingerprint:        "cli.execute:command_is_required",
+		AttemptFingerprint: "cli.execute:command_is_required:attempt",
+		ToolName:           "cli.execute",
+		FailureClass:       "tool_validation",
+		FailureCode:        "command_is_required",
+		FailureReason:      "command is required",
+		Count:              3,
+		BlockThreshold:     3,
+		Blocked:            true,
+	})
+	if err != nil {
+		t.Fatalf("MergeValidationGuardMetadata: %v", err)
+	}
+
+	decision := classifyTaskResumeDecision(repo.ProjectTask{
+		ID:         uuid.New(),
+		WorkStatus: "blocked",
+		Metadata:   metadata,
+	}, "OC-59 was created as a procedural child of OC-58 with only tool instructions instead of a bounded deliverable; resume the bounded work from the parent task or create a real replacement child task instead of this malformed lane")
+
+	if decision.resumable {
+		t.Fatal("decision.resumable = true, want false")
+	}
+	if decision.blockerClass != RecoveryBlockerClassBlockedWithoutResumableState {
+		t.Fatalf("blockerClass = %q, want %q", decision.blockerClass, RecoveryBlockerClassBlockedWithoutResumableState)
+	}
+}
+
 func TestResumeValidationBlockedTaskRejectsNonBlockedTask(t *testing.T) {
 	taskID := uuid.New()
 	taskRepo := &fakeTaskRepo{

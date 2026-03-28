@@ -988,3 +988,19 @@
     - rebuilt and restarted tmux `codex-e2e-20260324`
     - `./bin/ottercamp health --output json` returned `data.status=ok`
     - fresh live proof for the exact new reread-block branch is still pending because task-62 was already inside pre-patch turn `49` at restart time, so the first post-deploy retry prompt has not fired yet
+- 2026-03-28 11:31:00 MDT - stop supervisor recovery from reopening terminal malformed-child task lanes
+  - changed [`internal/task/recovery_resume.go`](/Users/sam/dev/otter-camp/internal/task/recovery_resume.go):
+    - `classifyTaskResumeDecision(...)` now checks malformed-child / parent-forbids-decomposition blocker reasons before validation-guard auto-resume
+    - added `recoveryResumeReasonMatchesTerminalMalformedChild(...)` so stale guards like `command_is_required` no longer win over a newer terminal malformed-child block reason
+  - changed [`internal/task/service_test.go`](/Users/sam/dev/otter-camp/internal/task/service_test.go):
+    - added `TestClassifyTaskResumeDecisionRejectsTerminalMalformedChildEvenWithValidationGuard`
+  - changed [`internal/turn/engine_integration_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_integration_test.go):
+    - widened `TestTurnEngineIntegrationMalformedProceduralChildKickoffPreflightBlocksBeforeModelCall` so it explicitly verifies `ResumeValidationBlockedTask(...)` returns `TaskResumeBlockedStateError` with `RecoveryBlockerClassBlockedWithoutResumableState`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/task -run 'Test(ClassifyTaskResumeDecisionRejectsTerminalMalformedChildEvenWithValidationGuard|ResumeValidationBlockedTaskRequiresResumableBlockedState|ClassifyTaskResumeDecisionAllowsHistoricalReviewDecisionBlockerWithoutGuard)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationMalformedProceduralChildKickoffPreflightBlocksBeforeModelCall$' -count=1`
+  - fresh live proof after rebuild/restart:
+    - runtime health returned `data.status=ok`
+    - task `59` session `760f56d5-9a3f-4cee-b8e7-2dbb9ff768bc` closed at `11:28:34 MDT` with the malformed-child halt
+    - after a full supervisor window, task `59` was still `blocked` at `11:30:42 MDT`
+    - no new `11:30` replacement session appeared, and pending/claimed `agent_turn` jobs for task `59` were `0`

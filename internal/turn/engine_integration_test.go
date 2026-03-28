@@ -85,6 +85,13 @@ func (f *failSpecificQueueTransitionService) MarkBlocked(ctx context.Context, ta
 	return f.base.MarkBlocked(ctx, taskID, reason, actor)
 }
 
+func (f *failSpecificQueueTransitionService) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.UUID, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
+	if f.base == nil {
+		return nil, errors.New("missing base transition service")
+	}
+	return f.base.ResumeValidationBlockedTask(ctx, taskID, actor)
+}
+
 func TestTurnEngineIntegrationFullTurnCycle(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
@@ -11664,6 +11671,22 @@ func TestTurnEngineIntegrationMalformedProceduralChildKickoffPreflightBlocksBefo
 	}
 	if !foundSystemMessage {
 		t.Fatal("missing malformed procedural child preflight system message")
+	}
+
+	taskService, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     fixture.pool,
+		EventBus: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	_, err = taskService.ResumeValidationBlockedTask(ctx, childTask.ID, tasksvc.Actor{Type: "system"})
+	var resumeErr tasksvc.TaskResumeBlockedStateError
+	if !errors.As(err, &resumeErr) {
+		t.Fatalf("ResumeValidationBlockedTask err = %v, want TaskResumeBlockedStateError", err)
+	}
+	if resumeErr.BlockerClass != tasksvc.RecoveryBlockerClassBlockedWithoutResumableState {
+		t.Fatalf("resume blocker_class = %q, want %q", resumeErr.BlockerClass, tasksvc.RecoveryBlockerClassBlockedWithoutResumableState)
 	}
 }
 
