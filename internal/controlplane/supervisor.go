@@ -294,8 +294,11 @@ func (s *Supervisor) detectResumableBlockedTasks(ctx context.Context) error {
 
 	cutoff := s.clock.Now().UTC().Add(-resumableBlockedTaskGraceLimit)
 	rows, err := s.pool.Query(ctx, `
-		SELECT t.id, COALESCE(e.id, '00000000-0000-0000-0000-000000000000'::uuid) AS execution_id
-		FROM project_task t
+			SELECT
+				t.id,
+				COALESCE(e.id, '00000000-0000-0000-0000-000000000000'::uuid) AS execution_id,
+				COALESCE(latest_blocked.blocker_reason, '') AS blocker_reason
+			FROM project_task t
 		JOIN project p
 		  ON p.id = t.project_id
 		LEFT JOIN runtime_state rs
@@ -359,8 +362,12 @@ func (s *Supervisor) detectResumableBlockedTasks(ctx context.Context) error {
 	actor := tasksvc.Actor{Type: "supervisor", AllowFlowRuntimeBypass: true}
 	for rows.Next() {
 		var taskID, executionID uuid.UUID
-		if scanErr := rows.Scan(&taskID, &executionID); scanErr != nil {
+		var blockerReason string
+		if scanErr := rows.Scan(&taskID, &executionID, &blockerReason); scanErr != nil {
 			return scanErr
+		}
+		if tasksvc.RecoveryCheckpointRequiresManualResolution(blockerReason) {
+			continue
 		}
 		if executionID != uuid.Nil {
 			if err := s.abandonActiveExecution(ctx, executionID); err != nil {

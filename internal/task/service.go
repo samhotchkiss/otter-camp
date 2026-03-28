@@ -912,6 +912,18 @@ func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.U
 	if err != nil {
 		return nil, err
 	}
+	if !strings.EqualFold(strings.TrimSpace(actor.Type), "human_user") {
+		if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok && hasDurableRecoveryCheckpoint(checkpoint) && RecoveryCheckpointRequiresManualResolution(blockerReason) {
+			blockerClass := taskcheckpoint.RecoveryFileWriteBlockerClass(&checkpoint)
+			if blockerClass == "" {
+				blockerClass = RecoveryBlockerClassDurableRecoveryCheckpoint
+			}
+			return nil, TaskResumeBlockedStateError{
+				BlockerClass:  blockerClass,
+				BlockerReason: blockerReason,
+			}
+		}
+	}
 
 	decision := classifyTaskResumeDecision(taskRecord, blockerReason)
 	if strings.EqualFold(strings.TrimSpace(blockerReason), "flow rejection max visits exceeded") {

@@ -1587,6 +1587,81 @@ func TestTaskServiceIntegrationResumeValidationBlockedTaskBypassesOutstandingPro
 	}
 }
 
+func TestTaskServiceIntegrationResumeValidationBlockedTaskSystemActorStaysBlockedForManualRecoveryRepair(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	pmUser := seedTaskServiceUser(t, ctx, pool, org.ID, "resume-manual-repair-pm", "admin")
+	pmAgent := seedTaskServiceAgent(t, ctx, pool, org.ID, "Resume Manual Repair PM", "staff", "pm", "human_user", pmUser.ID)
+	assignPMToProject(t, ctx, pool, pmAgent.ID, project.ID)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	svc := newTaskIntegrationService(t, pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Split-screen template recovery",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "in_progress", Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+		t.Fatalf("TransitionStatus in_progress: %v", err)
+	}
+
+	blockedTask, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID task before checkpoint: %v", err)
+	}
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(blockedTask.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		Version:             1,
+		BlockerClass:        taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint,
+		TargetPath:          "templates/layout-07-split-screen.html",
+		ArtifactPath:        ".ottercamp/recovery/templates/layout-07-split-screen.html",
+		FailureReason:       "file.write content appears to be task narration about planning to write the deliverable, not the deliverable body itself. Write the concrete file contents directly.",
+		PriorFailureReasons: []string{"deterministic tool validation loop blocked after 3 identical failures: file.write (non_substantive_content)"},
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	blockedTask.Metadata = metadata
+	if _, err := taskRepo.Update(ctx, blockedTask); err != nil {
+		t.Fatalf("Update blocked task checkpoint: %v", err)
+	}
+
+	blockerReason := "recovery halted after recovered file.write for templates/layout-07-split-screen.html failed: file.write content appears to be task narration about planning to write the deliverable, not the deliverable body itself. Write the concrete file contents directly.; resume from .ottercamp/recovery/templates/layout-07-split-screen.html and re-queue only after resolving that failure"
+	if _, err := svc.MarkBlocked(ctx, created.ID, blockerReason, Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+
+	_, err = svc.ResumeValidationBlockedTask(ctx, created.ID, Actor{Type: "system"})
+	var resumeErr TaskResumeBlockedStateError
+	if !errors.As(err, &resumeErr) {
+		t.Fatalf("ResumeValidationBlockedTask err = %v, want TaskResumeBlockedStateError", err)
+	}
+	if resumeErr.BlockerClass != RecoveryBlockerClassDurableRecoveryCheckpoint {
+		t.Fatalf("resume blocker_class = %q, want %q", resumeErr.BlockerClass, RecoveryBlockerClassDurableRecoveryCheckpoint)
+	}
+	if resumeErr.BlockerReason != blockerReason {
+		t.Fatalf("resume blocker_reason = %q, want %q", resumeErr.BlockerReason, blockerReason)
+	}
+
+	current, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID current task: %v", err)
+	}
+	if current.WorkStatus != "blocked" {
+		t.Fatalf("current work_status = %q, want blocked", current.WorkStatus)
+	}
+}
+
 func TestTaskServiceIntegrationResumeValidationBlockedTaskRepairsLegacyFlowRejectionScaffold(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

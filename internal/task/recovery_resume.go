@@ -358,6 +358,16 @@ func recoveryResumeReasonMatchesReviewDecisionRequired(blockerReason string) boo
 	return strings.HasPrefix(strings.ToLower(normalized), strings.ToLower(prefix))
 }
 
+func RecoveryCheckpointRequiresManualResolution(blockerReason string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(blockerReason))
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(normalized, "re-queue only after resolving that failure") ||
+		strings.Contains(normalized, "resolve that write failure before re-queueing") ||
+		strings.Contains(normalized, "re-queue only after concrete content exists")
+}
+
 func hasDurableRecoveryCheckpoint(checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) bool {
 	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
 	return taskcheckpoint.RecoveryFileWriteBlockerClass(&checkpoint) != "" ||
