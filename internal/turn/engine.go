@@ -4636,14 +4636,14 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 	}
 	assistantContent := strings.TrimSpace(assistant.Content)
 	genericAssistant := assistantContent == "" || looksLikeGenericTaskRecoveryReply(assistantContent)
+	if missingPath, found := projectContinuationMissingDependencyStopPath(messages, completedTurn.ID); found {
+		return e.retryProjectExecutionContinuationForMissingDependency(ctx, session, completedTurn, latestUser, missingPath)
+	}
 	nextTask, ok, err := e.nextRunnableDraftProjectTask(ctx, session.ScopeID)
 	if err != nil {
 		return false, err
 	}
 	if !ok {
-		if missingPath, found := projectContinuationMissingDependencyStopPath(messages, completedTurn.ID); found {
-			return e.retryProjectExecutionContinuationForMissingDependency(ctx, session, completedTurn, latestUser, missingPath)
-		}
 		if genericAssistant {
 			return e.retryGenericProjectExecutionContinuation(ctx, session, completedTurn, latestUser)
 		}
@@ -4776,6 +4776,40 @@ func (e *TurnEngine) retryProjectExecutionContinuationForMissingDependency(
 		)
 		return true, nil
 	}
+	if nextTask, ok, err := e.nextRunnableDraftProjectTaskForPriorityPaths(ctx, session.ScopeID, singleProjectContinuationPriorityPath(missingPath)); err != nil {
+		return false, err
+	} else if ok {
+		updated, transitionErr := e.taskTransitions.TransitionStatus(ctx, nextTask.ID, "queued", tasksvc.Actor{Type: "system"})
+		if transitionErr != nil {
+			if errors.Is(transitionErr, taskdecomp.ErrBoundedTaskTooLarge) {
+				_, _ = e.appendSystemMessage(
+					ctx,
+					latestCompleted.ID,
+					session.ID,
+					fmt.Sprintf(
+						"[Project continuation found matching draft %s for prerequisite artifact `%s`, but could not auto-queue it because it violates the bounded size policy: %s]",
+						projectBootstrapTaskLabel(nextTask),
+						missingPath,
+						strings.TrimSpace(transitionErr.Error()),
+					),
+				)
+				return true, nil
+			}
+			return false, transitionErr
+		}
+		queuedTask := repo.ProjectTask(*updated)
+		_, _ = e.appendSystemMessage(
+			ctx,
+			latestCompleted.ID,
+			session.ID,
+			fmt.Sprintf(
+				"[Project continuation auto-queued %s because it is the smallest runnable draft that restores prerequisite artifact `%s`.]",
+				projectBootstrapTaskLabel(queuedTask),
+				missingPath,
+			),
+		)
+		return true, nil
+	}
 	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
 	if err != nil {
 		return false, err
@@ -4856,6 +4890,14 @@ func projectContinuationProducerTaskRefsForPath(
 		}
 	}
 	return refs
+}
+
+func singleProjectContinuationPriorityPath(path string) map[string]struct{} {
+	normalized := normalizeWorkspaceRelativePath(path)
+	if normalized == "" {
+		return nil
+	}
+	return map[string]struct{}{normalized: {}}
 }
 
 func projectContinuationTaskLikelyProducesPath(task repo.ProjectTask, hints projectContinuationTaskHints, normalizedPath string) bool {
@@ -5088,6 +5130,10 @@ func successfulToolResultIsReadOnly(toolName string, message repo.ChatMessage, t
 }
 
 func (e *TurnEngine) nextRunnableDraftProjectTask(ctx context.Context, projectID uuid.UUID) (repo.ProjectTask, bool, error) {
+	return e.nextRunnableDraftProjectTaskForPriorityPaths(ctx, projectID, nil)
+}
+
+func (e *TurnEngine) nextRunnableDraftProjectTaskForPriorityPaths(ctx context.Context, projectID uuid.UUID, priorityPaths map[string]struct{}) (repo.ProjectTask, bool, error) {
 	if e == nil || e.tasks == nil || e.pool == nil || projectID == uuid.Nil {
 		return repo.ProjectTask{}, false, nil
 	}
@@ -5102,8 +5148,12 @@ func (e *TurnEngine) nextRunnableDraftProjectTask(ctx context.Context, projectID
 		return projectTasks[i].TaskNumber < projectTasks[j].TaskNumber
 	})
 	childActivity := projectContinuationChildTaskActivity(projectTasks)
+	taskHintsByTask := buildProjectContinuationTaskHints(projectTasks, nil)
 	for _, task := range projectTasks {
 		if !isProjectContinuationActionableDraftTask(task, childActivity[task.ID]) || taskLooksLikeOrchestrationOnlyParent(task) {
+			continue
+		}
+		if len(priorityPaths) > 0 && !projectContinuationTaskMatchesPriorityPaths(task, taskHintsByTask[task.ID], priorityPaths) {
 			continue
 		}
 		if task.AssignedAgentID == nil || *task.AssignedAgentID == uuid.Nil || task.FlowTemplateID == nil || *task.FlowTemplateID == uuid.Nil {

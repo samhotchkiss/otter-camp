@@ -10957,7 +10957,9 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesMissingDependency
 
 	projectID := uuid.New()
 	completedTaskID := uuid.New()
+	unrelatedDraftTaskID := uuid.New()
 	turnID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
 
 	fixture := newUnitFixture(t, "async")
 	fixture.engine.pool = testdb.New(t)
@@ -10972,6 +10974,15 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesMissingDependency
 				TaskNumber: 34,
 				Title:      "Coordinate Technonymous import recovery",
 				WorkStatus: "done",
+			},
+			unrelatedDraftTaskID: {
+				ID:              unrelatedDraftTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      19,
+				Title:           "Build template layout option 8",
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
 			},
 		},
 	}
@@ -11045,6 +11056,13 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesMissingDependency
 	if jobs[0].payload.RetryCount != 1 {
 		t.Fatalf("retry_count = %d, want 1", jobs[0].payload.RetryCount)
 	}
+	unrelatedDraft, err := taskRepo.GetByID(context.Background(), unrelatedDraftTaskID)
+	if err != nil {
+		t.Fatalf("GetByID unrelated draft task: %v", err)
+	}
+	if unrelatedDraft.WorkStatus != "draft" {
+		t.Fatalf("unrelated draft task work_status = %q, want draft", unrelatedDraft.WorkStatus)
+	}
 
 	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
 	if err != nil {
@@ -11067,6 +11085,11 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesMissingDependency
 	if !strings.Contains(retryMessage.Content, "must create, queue, or advance the smallest bounded replacement task") {
 		t.Fatalf("retry message = %q, want bounded replacement-task guidance", retryMessage.Content)
 	}
+	for _, msg := range storedMessages {
+		if strings.Contains(msg.Content, "task 19") && strings.Contains(msg.Content, "bounded size policy") {
+			t.Fatalf("unexpected unrelated draft auto-queue message: %q", msg.Content)
+		}
+	}
 }
 
 func TestHandleCompletedProjectExecutionContinuationTurnSkipsMissingDependencyRetryWhenActiveReplacementExists(t *testing.T) {
@@ -11074,8 +11097,10 @@ func TestHandleCompletedProjectExecutionContinuationTurnSkipsMissingDependencyRe
 
 	projectID := uuid.New()
 	completedTaskID := uuid.New()
+	unrelatedDraftTaskID := uuid.New()
 	activeReplacementTaskID := uuid.New()
 	turnID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
 
 	fixture := newUnitFixture(t, "async")
 	fixture.engine.pool = testdb.New(t)
@@ -11091,6 +11116,15 @@ func TestHandleCompletedProjectExecutionContinuationTurnSkipsMissingDependencyRe
 				TaskNumber: 34,
 				Title:      "Coordinate Technonymous import recovery",
 				WorkStatus: "done",
+			},
+			unrelatedDraftTaskID: {
+				ID:              unrelatedDraftTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      19,
+				Title:           "Build template layout option 8",
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
 			},
 			activeReplacementTaskID: {
 				ID:          activeReplacementTaskID,
@@ -11164,6 +11198,13 @@ func TestHandleCompletedProjectExecutionContinuationTurnSkipsMissingDependencyRe
 	if len(fixture.enqueuer.jobs) != 0 {
 		t.Fatalf("enqueued jobs = %d, want 0 when active replacement work already exists", len(fixture.enqueuer.jobs))
 	}
+	unrelatedDraft, err := taskRepo.GetByID(context.Background(), unrelatedDraftTaskID)
+	if err != nil {
+		t.Fatalf("GetByID unrelated draft task: %v", err)
+	}
+	if unrelatedDraft.WorkStatus != "draft" {
+		t.Fatalf("unrelated draft task work_status = %q, want draft", unrelatedDraft.WorkStatus)
+	}
 
 	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
 	if err != nil {
@@ -11185,6 +11226,149 @@ func TestHandleCompletedProjectExecutionContinuationTurnSkipsMissingDependencyRe
 	}
 	if !sawCoverageMessage {
 		t.Fatal("expected system message noting active replacement work for missing dependency")
+	}
+}
+
+func TestHandleCompletedProjectExecutionContinuationTurnAutoQueuesMatchingMissingDependencyDraftInsteadOfUnrelatedDraft(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	unrelatedDraftTaskID := uuid.New()
+	matchingDraftTaskID := uuid.New()
+	turnID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	matchingDescription := "Output a JSON index at content/technonymous-index.json"
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 34,
+				Title:      "Coordinate Technonymous import recovery",
+				WorkStatus: "done",
+			},
+			unrelatedDraftTaskID: {
+				ID:              unrelatedDraftTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      19,
+				Title:           "Build template layout option 8",
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+			matchingDraftTaskID: {
+				ID:              matchingDraftTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      39,
+				Title:           "Rebuild the Technonymous URL index",
+				Description:     &matchingDescription,
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "I need to confirm whether `content/technonymous-index.json` exists before I queue the next recovery step.",
+		SequenceNumber: 11,
+	}
+	toolResult := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "tool_result",
+		Status:         "final",
+		Content:        `{"tool_name":"file.read","output":{"error":"not_found"}}`,
+		SequenceNumber: 12,
+	}
+	systemMessage := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "system",
+		Status:         "final",
+		Content:        "[Project continuation found that prerequisite artifact `content/technonymous-index.json` is still missing. Queue or advance the smallest replacement task that produces it instead of browsing external sources or writing the file from the project session.]",
+		SequenceNumber: 13,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant, *toolResult, *systemMessage}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected matching missing-dependency draft to be auto-queued")
+	}
+	if len(fixture.enqueuer.jobs) != 0 {
+		t.Fatalf("enqueued jobs = %d, want 0 when matching draft can be auto-queued immediately", len(fixture.enqueuer.jobs))
+	}
+
+	unrelatedDraft, err := taskRepo.GetByID(context.Background(), unrelatedDraftTaskID)
+	if err != nil {
+		t.Fatalf("GetByID unrelated draft task: %v", err)
+	}
+	if unrelatedDraft.WorkStatus != "draft" {
+		t.Fatalf("unrelated draft task work_status = %q, want draft", unrelatedDraft.WorkStatus)
+	}
+	matchingDraft, err := taskRepo.GetByID(context.Background(), matchingDraftTaskID)
+	if err != nil {
+		t.Fatalf("GetByID matching draft task: %v", err)
+	}
+	if matchingDraft.WorkStatus != "queued" {
+		t.Fatalf("matching draft task work_status = %q, want queued", matchingDraft.WorkStatus)
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var sawQueueMessage bool
+	for _, msg := range storedMessages {
+		if strings.Contains(msg.Content, "task 39") &&
+			strings.Contains(msg.Content, "restores prerequisite artifact `content/technonymous-index.json`") {
+			sawQueueMessage = true
+		}
+		if strings.Contains(msg.Content, "task 19") && strings.Contains(msg.Content, "auto-queued") {
+			t.Fatalf("unexpected unrelated draft auto-queue message: %q", msg.Content)
+		}
+	}
+	if !sawQueueMessage {
+		t.Fatal("expected system message recording focused missing-dependency auto-queue")
 	}
 }
 
