@@ -286,6 +286,127 @@ func TestFileListAllowsBlockedReviewLaneDeliverableRootInspectionWithinRecoveryT
 	}
 }
 
+func TestFileListAllowsExecutionDeliverableRootInspectionWithinRecoveryTargetRootForBatchTask(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "content/posts/practice-one-screen-at-a-time.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(content/posts): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte("# Practice one screen at a time\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "content", "posts", "discomfort-is-growth.md"), []byte("# Discomfort Is Growth\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(sibling): %v", err)
+	}
+
+	description := "Read content/technonymous-index.json. For each of the next 12 URLs in the post_urls array (indices 12-23), use web_fetch to retrieve the page content, then save the article text as clean markdown files under content/posts/."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Replacement: Fetch posts 13-24 from technonymous-index.json and save as markdown under content/posts/",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "system",
+				Content:   "[Recovery resume state]\nTarget file: content/posts/practice-one-screen-at-a-time.md\n",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.list", map[string]any{"path": "content/posts"})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.list): %v", err)
+	}
+	if got := out["error"]; got != nil {
+		t.Fatalf("error = %v, want nil", got)
+	}
+	if got := out["total"]; got != 2 {
+		t.Fatalf("total = %v, want 2", got)
+	}
+}
+
+func TestFileReadAllowsExecutionSiblingDeliverableInspectionWithinRecoveryTargetRootForBatchTask(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "content/posts/practice-one-screen-at-a-time.md"
+	siblingPath := "content/posts/discomfort-is-growth.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(content/posts): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte("# Practice one screen at a time\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(siblingPath)), []byte("# Discomfort Is Growth\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(sibling): %v", err)
+	}
+
+	description := "Read content/technonymous-index.json. For each of the next 12 URLs in the post_urls array (indices 12-23), use web_fetch to retrieve the page content, then save the article text as clean markdown files under content/posts/."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Replacement: Fetch posts 13-24 from technonymous-index.json and save as markdown under content/posts/",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "system",
+				Content:   "[Recovery resume state]\nTarget file: content/posts/practice-one-screen-at-a-time.md\n",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	if got := executor.latestRecoveryTargetPathForSession(context.Background(), workspaceScope{sessionID: &sessionID, taskID: &taskID}); got != targetPath {
+		t.Fatalf("latestRecoveryTargetPathForSession(...) = %q, want %q", got, targetPath)
+	}
+	if !taskAllowsBatchRecoveryRootInspection(executor.tasks.(*mockTaskRepo).task, siblingPath, targetPath) {
+		t.Fatal("expected batch recovery sibling inspection to be allowed for execution task")
+	}
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": siblingPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != nil {
+		t.Fatalf("error = %v, out=%v, want nil", got, out)
+	}
+	if got := out["path"]; got != siblingPath {
+		t.Fatalf("path = %v, want %q", got, siblingPath)
+	}
+}
+
 func TestFileListAllowsBlockedReviewNodeDeliverableRootInspectionWithinRecoveryTargetRoot(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

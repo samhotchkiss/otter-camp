@@ -1219,3 +1219,23 @@
   - expected result after deploy:
     - content-migration recovery turns stop treating self-reflective “I need to fetch/write the article” notes as substantive drafts
     - the next retry must either write real article content or continue from a safe scaffold, not replay the recovery note into the deliverable path
+- 2026-03-28 13:33:09 MDT - `Allow batch deliverable-root inspection during execution recovery`
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - broadened `allowRecoveryDeliverableRootInspection(...)` so shared-root batch allowances are checked before the review-only gate
+    - added `taskAllowsBatchRecoveryRootInspection(...)` for execution lanes whose task contract clearly describes multi-output markdown work under a single deliverable root (`post_urls`, `for each`, `content/posts/...`)
+    - preserved the existing review-root allowances for review lanes and review nodes
+  - changed [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go):
+    - added `TestFileListAllowsExecutionDeliverableRootInspectionWithinRecoveryTargetRootForBatchTask`
+    - added `TestFileReadAllowsExecutionSiblingDeliverableInspectionWithinRecoveryTargetRootForBatchTask`
+  - verified with:
+    - `gofmt -w internal/tools/native/file_tools.go internal/tools/native/file_tools_test.go`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(FileListAllows(ReviewDeliverableRootInspectionWithinRecoveryTargetRoot|BlockedReviewLaneDeliverableRootInspectionWithinRecoveryTargetRoot|BlockedReviewNodeDeliverableRootInspectionWithinRecoveryTargetRoot|ExecutionDeliverableRootInspectionWithinRecoveryTargetRootForBatchTask)|FileReadAllows(ExecutionSiblingDeliverableInspectionWithinRecoveryTargetRootForBatchTask|BatchOutputWhenMetadataRecoveryTargetOverridesDependencyArtifactHistory))$' -count=1`
+  - live proof before the fix:
+    - task `64` session `13c7bcb5-0b90-44b0-a694-a883624d1819` got `recovery_target_focus_required` on native `file.list(content/posts)` at tool result `42`
+    - the lane then routed around native file tools with `cli.execute` listings/readbacks (`44`, `46`, `48`) and escalated toward a Python bulk-writer plan at assistant `72`
+  - deploy status:
+    - rebuilt and restarted tmux `codex-e2e-20260324`; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+    - task `64` session `13c7bcb5-0b90-44b0-a694-a883624d1819` is on fresh turn `6e9b4bbd-97d0-4ec1-8097-95c0d7abd6d2`, but direct post-deploy proof is still pending because that retry has not emitted fresh tool calls yet
+  - expected result after deploy:
+    - batch execution recovery can inspect sibling markdown deliverables inside the shared root with native `file.list` / `file.read`
+    - those lanes stop burning shell turns just to recover frontmatter/body format from files already under the right deliverable root

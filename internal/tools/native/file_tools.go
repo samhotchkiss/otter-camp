@@ -292,7 +292,7 @@ func (e *NativeToolExecutor) rejectRecoveryTargetReread(ctx context.Context, sco
 	if normalizedPath == "" || sameOrNestedWorkspacePath(normalizedPath, targetPath) {
 		return nil, false, nil
 	}
-	if allow, allowErr := e.allowReviewDeliverableRootInspection(ctx, scope, normalizedPath, targetPath, recoveryState.reviewLane); allowErr != nil {
+	if allow, allowErr := e.allowRecoveryDeliverableRootInspection(ctx, scope, normalizedPath, targetPath, recoveryState.reviewLane); allowErr != nil {
 		return nil, false, allowErr
 	} else if allow {
 		return nil, false, nil
@@ -308,7 +308,7 @@ func (e *NativeToolExecutor) rejectRecoveryTargetReread(ctx context.Context, sco
 	}, true, nil
 }
 
-func (e *NativeToolExecutor) allowReviewDeliverableRootInspection(ctx context.Context, scope workspaceScope, normalizedPath, targetPath string, reviewLane bool) (bool, error) {
+func (e *NativeToolExecutor) allowRecoveryDeliverableRootInspection(ctx context.Context, scope workspaceScope, normalizedPath, targetPath string, reviewLane bool) (bool, error) {
 	if e == nil || e.tasks == nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
 		return false, nil
 	}
@@ -319,6 +319,15 @@ func (e *NativeToolExecutor) allowReviewDeliverableRootInspection(ctx context.Co
 		}
 		return false, err
 	}
+	rootPath := preferredTaskDeliverableRoot(taskRecord)
+	if rootPath == "" || !workspacePathWithinRoot(targetPath, rootPath) {
+		return false, nil
+	}
+	if taskAllowsPerItemDeliverableInspection(taskRecord, normalizedPath) ||
+		taskAllowsBatchRecoveryRootInspection(taskRecord, normalizedPath, targetPath) {
+		return true, nil
+	}
+	reviewLane = reviewLane || strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review")
 	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") && !reviewLane {
 		if e.flowNodes != nil && taskRecord.CurrentFlowNodeID != nil && *taskRecord.CurrentFlowNodeID != uuid.Nil {
 			node, nodeErr := e.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
@@ -331,8 +340,7 @@ func (e *NativeToolExecutor) allowReviewDeliverableRootInspection(ctx context.Co
 			return false, nil
 		}
 	}
-	rootPath := preferredTaskDeliverableRoot(taskRecord)
-	if rootPath == "" || !workspacePathWithinRoot(targetPath, rootPath) {
+	if !reviewLane {
 		return false, nil
 	}
 	return workspacePathWithinRoot(normalizedPath, rootPath), nil
@@ -704,6 +712,31 @@ func taskAllowsPerItemDeliverableInspection(taskRecord repo.ProjectTask, candida
 			"under "+strings.ToLower(root),
 			"in "+strings.ToLower(root),
 		)
+}
+
+func taskAllowsBatchRecoveryRootInspection(taskRecord repo.ProjectTask, candidate, targetPath string) bool {
+	candidate = normalizeWorkspacePath(candidate)
+	targetPath = normalizeWorkspacePath(targetPath)
+	if candidate == "" || targetPath == "" {
+		return false
+	}
+	root := preferredTaskDeliverableRoot(taskRecord)
+	if root == "" || !workspacePathWithinRoot(candidate, root) || !workspacePathWithinRoot(targetPath, root) {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	if taskRecord.Description != nil {
+		text += " " + strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	if !taskExpectsMarkdownDeliverables(taskRecord) {
+		return false
+	}
+	return containsAnySubstring(text,
+		"post_urls",
+		"for each",
+		"save as markdown",
+		"markdown files",
+	)
 }
 
 func looksLikeRejectedDeliverablePlaceholder(content string) bool {
