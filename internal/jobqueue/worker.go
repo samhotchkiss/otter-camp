@@ -300,6 +300,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if repaired > 0 {
 		w.logger.Info("job queue: closed terminal project_task async sessions on startup", "count", repaired)
 	}
+	if repaired, err := w.CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup blocked project_task abandoned session cleanup failed", "error", err)
+		}
+	} else if repaired > 0 {
+		w.logger.Info("job queue: closed blocked project_task async sessions without live execution on startup", "count", repaired)
+	}
 	if purged, err := w.PurgeStaleAgentTurnJobs(runCtx); err != nil {
 		if runCtx.Err() == nil {
 			w.logger.Error("startup stale agent_turn purge failed", "error", err)
@@ -4592,6 +4599,89 @@ func (w *Worker) CloseTerminalProjectTaskAsyncSessions(ctx context.Context) (int
 	return ct.RowsAffected(), nil
 }
 
+func (w *Worker) CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ctx context.Context) (int64, error) {
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET status = 'cancelled',
+		    cancel_requested_at = now(),
+		    completed_at = now(),
+		    stop_reason = 'session_closed'
+		WHERE session_id IN (
+			SELECT cs.id
+			FROM chat_session cs
+			JOIN project_task pt ON pt.id = cs.scope_id
+			WHERE cs.status = 'active'
+			  AND cs.mode = 'async'
+			  AND cs.scope_type = 'project_task'
+			  AND pt.work_status = 'blocked'
+			  AND EXISTS (
+			    SELECT 1
+			    FROM flow_node_execution fne_abandoned
+			    WHERE fne_abandoned.session_id = cs.id
+			      AND fne_abandoned.status = 'abandoned'
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM flow_node_execution fne_active
+			    WHERE fne_active.session_id = cs.id
+			      AND fne_active.status = 'active'
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM job_queue jq
+			    WHERE jq.job_type = $1
+			      AND jq.status IN ('pending', 'claimed')
+			      AND (jq.payload->>'session_id')::uuid = cs.id
+			  )
+		)
+		  AND status IN ('pending', 'in_progress')
+	`, agentTurnJobType); err != nil {
+		return 0, fmt.Errorf("cancel blocked project_task session turns without live execution: %w", err)
+	}
+
+	ct, err := w.pool.Exec(ctx, `
+		UPDATE chat_session cs
+		SET status = 'closed',
+		    closed_at = now(),
+		    current_turn_id = NULL
+		FROM project_task pt
+		WHERE cs.status = 'active'
+		  AND cs.mode = 'async'
+		  AND cs.scope_type = 'project_task'
+		  AND pt.id = cs.scope_id
+		  AND pt.work_status = 'blocked'
+		  AND EXISTS (
+		    SELECT 1
+		    FROM flow_node_execution fne_abandoned
+		    WHERE fne_abandoned.session_id = cs.id
+		      AND fne_abandoned.status = 'abandoned'
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM flow_node_execution fne_active
+		    WHERE fne_active.session_id = cs.id
+		      AND fne_active.status = 'active'
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    WHERE ct.session_id = cs.id
+		      AND ct.status IN ('pending', 'in_progress')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = $1
+		      AND jq.status IN ('pending', 'claimed')
+		      AND (jq.payload->>'session_id')::uuid = cs.id
+		  )
+	`, agentTurnJobType)
+	if err != nil {
+		return 0, fmt.Errorf("close blocked project_task async sessions without live execution: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
 func (w *Worker) RetireClosedAsyncSessionRuns(ctx context.Context) (int64, error) {
 	ct, err := w.pool.Exec(ctx, `
 		UPDATE run r
@@ -6046,6 +6136,11 @@ func (w *Worker) runStaleClaimRecovery(ctx context.Context) {
 				w.logger.Error("terminal project_task session cleanup failed", "error", err)
 			} else if repaired > 0 {
 				w.logger.Info("job queue: closed terminal project_task async sessions", "count", repaired)
+			}
+			if repaired, err := w.CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("blocked project_task abandoned session cleanup failed", "error", err)
+			} else if repaired > 0 {
+				w.logger.Info("job queue: closed blocked project_task async sessions without live execution", "count", repaired)
 			}
 			if repaired, err := w.RetireClosedAsyncSessionRuns(ctx); err != nil && ctx.Err() == nil {
 				w.logger.Error("closed async session run cleanup failed", "error", err)

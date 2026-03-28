@@ -409,3 +409,18 @@
   - verified with `gofmt -w internal/turn/engine.go internal/turn/engine_test.go` and `go test ./internal/turn -run 'Test(ShouldBlockTaskExecutionSiblingResponsibilityToolForWriteFocusedChildLane|ShouldNotBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChildLane|BuildTaskContinuationActionPromptTreatsDocumentSummaryAsDraft|BuildTaskContinuationActionPromptIncludesChildTaskSnapshotGuidance|TaskExecutionContinuationSnapshotIncludesParentContractAndSiblingHints|TaskContinuationRootMessageStartsAssemblyAtTriggerMessage|ContinuationTurnNormalizesGenericNoContextSummary|ShouldBlockTaskExecutionBroadContextTool|ShouldBlockTaskExecutionBroadContextToolAllowsOrchestrationValidationContextReads)$' -count=1`
   - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `data.status=ok`
   - live status: deployed on the new runtime, but fresh production proof is still pending because the hot Sam.blog task sessions `bcbc53cd-99fa-476f-a50c-b4ba26dd0b7e` (task `40`) and `1e7d7f89-27b7-4170-b585-7f7dadcd9868` (task `41`) did not replay on the post-restart binary; both sessions stayed active with no pending/claimed `agent_turn` jobs during the immediate watch window
+- 2026-03-28 01:35:37 MDT - `pending` `Close blocked task sessions after execution ownership is abandoned`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) to add `CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(...)`
+  - wired that cleanup into both worker startup and the periodic maintenance loop immediately before closed-session run retirement
+  - the new rule is intentionally narrow: it only closes active async `project_task` sessions when:
+    - the task is already `blocked`
+    - the session owns at least one `flow_node_execution` with `status='abandoned'`
+    - the session owns no `flow_node_execution` with `status='active'`
+    - there is no pending/claimed `agent_turn` job for the session
+  - the cleanup also cancels any orphan `pending`/`in_progress` turn under that dead session with `stop_reason='session_closed'`
+  - added focused integration coverage in [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - `TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution`
+    - `TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionSkipsPendingAgentTurn`
+  - verified with `gofmt -w internal/jobqueue/worker.go internal/jobqueue/worker_integration_test.go` and `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(SkipsPendingAgentTurn)?|RequeueActiveExecutionSessionsWithoutTurns(ForTaskQueueKickoff|CreatesMissingTaskQueueKickoff)|RetireClosedAsyncSessionRuns(FailsNonTerminalTaskRuns|CompletesDoneTaskRuns))$' -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
+  - live proof: on the new runtime, Sam.blog task `40` session `bcbc53cd-99fa-476f-a50c-b4ba26dd0b7e` and task `41` session `1e7d7f89-27b7-4170-b585-7f7dadcd9868` both closed at `2026-03-28 01:37:45 MDT`; each still points at an owned `flow_node_execution` with `status='abandoned'`, so the cleanup now retires those dead async task sessions instead of leaving them active indefinitely
