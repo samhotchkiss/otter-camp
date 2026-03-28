@@ -172,6 +172,8 @@ const (
 var projectContinuationPromptTaskIDPattern = regexp.MustCompile(`id=([0-9a-fA-F-]{36})`)
 var projectContinuationPromptLeafTaskIDPattern = regexp.MustCompile(`leaf_task_id=([0-9a-fA-F-]{36})`)
 var projectContinuationPromptDependencyPathPattern = regexp.MustCompile(`(?:depends_on_path|deliverable_path)=([^\s]+)`)
+var projectContinuationBatchRangePattern = regexp.MustCompile(`(?i)\bposts?\s+(\d{1,3})\s*[–-]\s*(\d{1,3})\b`)
+var projectContinuationCompletedBatchRangePattern = regexp.MustCompile(`\bThat completed task covers batch_range=([0-9]{1,3}-[0-9]{1,3})\b`)
 var projectContinuationWorkspacePathPattern = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\b`)
 var workspacePathInBackticksPattern = regexp.MustCompile("`([^`]+)`")
 var explicitDeliverablePathPatterns = []*regexp.Regexp{
@@ -7376,6 +7378,7 @@ func buildProjectBootstrapContinuationPrompt(autoTurnCount int) string {
 func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExecutionContinuationSnapshot) []string {
 	if projectLine := strings.TrimSpace(snapshot.ProjectLine); projectLine != "" {
 		lines = append(lines, projectLine)
+		lines = append(lines, "The active project id above is not a task_id. Do not pass it to task.get; use only the named task ids from the snapshot below when a task-specific action is actually required.")
 	}
 	if activeLine := strings.TrimSpace(snapshot.ActiveTaskLine); activeLine != "" {
 		lines = append(lines, activeLine)
@@ -7450,6 +7453,35 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 	return lines
 }
 
+func projectExecutionSnapshotContainsBatchRange(snapshot projectExecutionContinuationSnapshot, batchRange string) bool {
+	batchRange = strings.TrimSpace(batchRange)
+	if batchRange == "" {
+		return false
+	}
+	needle := "batch_range=" + batchRange
+	for _, line := range []string{
+		snapshot.ActiveTaskLine,
+		snapshot.LeafActiveTaskLine,
+		snapshot.DraftTaskLine,
+		snapshot.ReplacementDraftLine,
+		snapshot.ChildActiveDraftLine,
+		snapshot.FocusTaskLine,
+	} {
+		if strings.Contains(line, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func projectContinuationCompletedBatchRangeFromPrompt(content string) string {
+	matches := projectContinuationCompletedBatchRangePattern.FindStringSubmatch(content)
+	if len(matches) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(matches[1])
+}
+
 func buildProjectExecutionContinuationPrompt(completedTask repo.ProjectTask, remainingDraftTasks int, snapshot projectExecutionContinuationSnapshot) string {
 	lines := []string{
 		"Continue the active project execution now.",
@@ -7457,6 +7489,10 @@ func buildProjectExecutionContinuationPrompt(completedTask repo.ProjectTask, rem
 	}
 	if completedTask.TaskNumber > 0 || strings.TrimSpace(completedTask.Title) != "" {
 		lines = append(lines, fmt.Sprintf("The latest completed task was %s.", projectBootstrapTaskLabel(completedTask)))
+	}
+	completedBatchRange := projectContinuationTaskBatchRange(completedTask)
+	if completedBatchRange != "" {
+		lines = append(lines, "That completed task covers batch_range="+completedBatchRange+".")
 	}
 	if remainingDraftTasks > 0 {
 		lines = append(lines, fmt.Sprintf("There are %d remaining draft project tasks that still need selection, orchestration, or promotion.", remainingDraftTasks))
@@ -7472,6 +7508,13 @@ func buildProjectExecutionContinuationPrompt(completedTask repo.ProjectTask, rem
 		"If the remaining work is blocked on a concrete prerequisite, report that blocker in one sentence instead of narrating intent.",
 	)
 	lines = appendProjectExecutionSnapshotGuidance(lines, snapshot)
+	if completedBatchRange != "" && projectExecutionSnapshotContainsBatchRange(snapshot, completedBatchRange) {
+		lines = append(lines,
+			"If older blocked, replacement-eligible, or already-active tasks above also show batch_range="+completedBatchRange+", treat those older lanes as superseded by the latest completed batch unless the completed task itself failed to produce the batch deliverables.",
+			"Do not create another replacement task for batch_range="+completedBatchRange+" just because earlier lanes for that same batch are still blocked or stale.",
+			"If the named tasks above still share a prerequisite artifact like depends_on_path=..., do not reread that prerequisite just to verify batch_range="+completedBatchRange+". Treat the completed task plus the named task refs as sufficient evidence and move directly to the next unresolved batch or blocker.",
+		)
+	}
 	return strings.Join(lines, " ")
 }
 
@@ -17816,6 +17859,7 @@ type projectContinuationTaskHints struct {
 	DeliverablePath string
 	DeliverableRoot string
 	DependsOnPath   string
+	BatchRange      string
 }
 
 const projectContinuationBlockerExcerptLimit = 120
@@ -18026,9 +18070,37 @@ func buildProjectContinuationTaskHints(tasks []repo.ProjectTask, blockedReasons 
 			DeliverablePath: deliverablePath,
 			DeliverableRoot: deliverableRoot,
 			DependsOnPath:   projectContinuationTaskDependencyHintPath(task, tasks),
+			BatchRange:      projectContinuationTaskBatchRange(task),
 		}
 	}
 	return hintsByTask
+}
+
+func projectContinuationTaskBatchRange(task repo.ProjectTask) string {
+	text := strings.TrimSpace(task.Title)
+	if task.Description != nil {
+		description := strings.TrimSpace(*task.Description)
+		if description != "" {
+			if text != "" {
+				text += "\n"
+			}
+			text += description
+		}
+	}
+	return projectContinuationBatchRangeFromText(text)
+}
+
+func projectContinuationBatchRangeFromText(text string) string {
+	matches := projectContinuationBatchRangePattern.FindStringSubmatch(text)
+	if len(matches) < 3 {
+		return ""
+	}
+	start := strings.TrimSpace(matches[1])
+	end := strings.TrimSpace(matches[2])
+	if start == "" || end == "" {
+		return ""
+	}
+	return start + "-" + end
 }
 
 func projectContinuationTaskDeliverableHints(task repo.ProjectTask, tasksByID map[uuid.UUID]repo.ProjectTask) (string, string) {
@@ -18236,6 +18308,9 @@ func projectExecutionContinuationTaskRef(task repo.ProjectTask, activity project
 	if dependsOnPath := strings.TrimSpace(hints.DependsOnPath); dependsOnPath != "" &&
 		(strings.TrimSpace(hints.DeliverablePath) == "" || !sameWorkspaceRelativePath(dependsOnPath, hints.DeliverablePath)) {
 		parts = append(parts, "depends_on_path="+dependsOnPath)
+	}
+	if batchRange := strings.TrimSpace(hints.BatchRange); batchRange != "" {
+		parts = append(parts, "batch_range="+batchRange)
 	}
 	if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
 		parts = append(parts, "assigned_agent_id="+task.AssignedAgentID.String())
@@ -27953,6 +28028,20 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 			return false, ""
 		}
 		return true, buildProjectContinuationSnapshotArtifactBrowseGuardError(path)
+	case "file.read":
+		path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+		if path == "" {
+			return false, ""
+		}
+		completedBatchRange := projectContinuationCompletedBatchRangeFromPrompt(initialMessage)
+		if completedBatchRange == "" {
+			return false, ""
+		}
+		dependencyPaths := projectContinuationDependencyPathsFromPrompt(initialMessage)
+		if _, ok := dependencyPaths[path]; ok {
+			return true, buildProjectContinuationCompletedBatchDependencyReadGuardError(path, completedBatchRange)
+		}
+		return false, ""
 	case "task.get":
 		taskIDText := strings.TrimSpace(stringValue(arguments["task_id"]))
 		if taskIDText == "" {
@@ -27961,6 +28050,12 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 		taskID, err := uuid.Parse(taskIDText)
 		if err != nil || taskID == uuid.Nil {
 			return false, ""
+		}
+		if rt != nil && rt.session != nil &&
+			strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") &&
+			rt.session.ScopeID != uuid.Nil &&
+			taskID == rt.session.ScopeID {
+			return true, buildProjectContinuationProjectIDTaskGetGuardError(taskID)
 		}
 		namedTaskIDs := projectContinuationPromptNamedTaskIDs(initialMessage)
 		if _, ok := namedTaskIDs[taskID]; !ok {
@@ -28030,6 +28125,10 @@ func buildProjectContinuationSnapshotLeafTaskRediscoveryGuardError(taskID uuid.U
 	return fmt.Sprintf("project continuation already named task id=%s as a leaf task with no child tasks to inspect. Do not call task.list(parent_task_id=...) for that task; act on its exact deliverable or blocker instead.", taskID.String())
 }
 
+func buildProjectContinuationProjectIDTaskGetGuardError(projectID uuid.UUID) string {
+	return fmt.Sprintf("project continuation already named active project id=%s, but that id is not a task record. Do not call task.get with the project id; act on one of the named task ids already present in the continuation prompt instead.", projectID.String())
+}
+
 func buildProjectContinuationSnapshotSessionRediscoveryGuardError(toolName string) string {
 	return fmt.Sprintf("project continuation already has the active project session context plus named active tasks in the continuation prompt. Do not reread broader session or inbox state with %s; act on the named tasks directly or report the concrete blocker.", toolName)
 }
@@ -28064,6 +28163,14 @@ func buildProjectContinuationSnapshotArtifactBrowseGuardError(path string) strin
 		return "project continuation already has named active or draft tasks in the continuation prompt. Do not browse broad workspace artifact roots first; act on one of the named tasks directly or inspect only the exact deliverable path required for that task."
 	}
 	return fmt.Sprintf("project continuation already has named active or draft tasks in the continuation prompt. Do not browse broad workspace artifact root `%s` first; act on one of the named tasks directly or inspect only the exact deliverable path required for that task.", normalized)
+}
+
+func buildProjectContinuationCompletedBatchDependencyReadGuardError(path, batchRange string) string {
+	normalized := normalizeWorkspaceRelativePath(path)
+	if normalized == "" {
+		normalized = strings.TrimSpace(path)
+	}
+	return fmt.Sprintf("project continuation already established that the latest completed task covers batch_range=%s. Do not reread prerequisite artifact `%s` just to verify that completed batch; act on the next unresolved batch or named blocker instead.", strings.TrimSpace(batchRange), normalized)
 }
 
 func buildProjectContinuationSnapshotFlowExecutionGuardError() string {

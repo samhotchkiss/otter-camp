@@ -1410,3 +1410,82 @@
   - expected result after deploy:
     - batch review prompts for content-migration tasks can recover the authoritative `content/posts/...` output set from the task worktree even when the checkpoint row is empty
     - once a review assistant says the preferred-target miss is already sufficient evidence to reject, the runtime synthesizes `flow.review_decision reject` instead of paying another retry
+- 2026-03-28 16:03:47 MDT - `Add PM batch-range supersession guidance`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `projectContinuationBatchRangePattern`, `projectContinuationTaskBatchRange(...)`, and `projectContinuationBatchRangeFromText(...)`
+    - project continuation task refs now include `batch_range=...` when the task title/description names a concrete post batch like `posts 25-35`
+    - project continuation prompts now add `That completed task covers batch_range=...` and, when the snapshot still names older same-batch lanes, explicitly tell the PM lane to treat those older lanes as superseded instead of creating another replacement task for that batch
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - mirrored the same `batch_range=...` hint extraction and completed-batch supersession guidance in worker-authored project continuation prompts
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - `TestProjectExecutionContinuationSnapshotKeepsReviewDecisionBlockedChildrenAsExistingChildWork` now asserts `batch_range=1-12` and `batch_range=13-24` on the surfaced child task refs
+    - added `TestBuildProjectExecutionContinuationPromptIncludesCompletedBatchSupersessionGuidance`
+  - changed [`internal/jobqueue/worker_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_test.go):
+    - added `TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompletedBatchSupersessionGuidance`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3442` so fresh PM continuation prompts can supersede older same-source prompts/fingerprints after deploy
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/jobqueue/worker.go internal/turn/engine_test.go internal/jobqueue/worker_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshotKeepsReviewDecisionBlockedChildrenAsExistingChildWork|BuildProjectExecutionContinuationPrompt|BuildProjectExecutionContinuationPromptIncludesCompletedBatchSupersessionGuidance)$' -count=1`
+    - `GOFLAGS='' go test ./internal/jobqueue -run 'TestBuildProjectExecutionContinuationPromptForWorker(IncludesBlockerReuseGuidance|IncludesLeafTaskGuidance|IncludesCompletedBatchSupersessionGuidance)$' -count=1`
+  - deploy status:
+    - pending rebuild/restart on `repo_version=3442`
+  - expected result after deploy:
+    - PM continuations can distinguish `posts 1-12`, `13-24`, and `25-35` as separate bounded batches instead of treating every `content/posts` lane as one interchangeable root
+    - once a batch like `25-35` completes, older blocked or replacement-eligible `25-35` lanes should be treated as superseded rather than reopened through fresh replacement-task planning
+- 2026-03-28 16:05:46 MDT - `Block project-id task.get confusion in PM continuations`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - project continuation prompts now add `The active project id above is not a task_id...` immediately after the `Active project id: ...` line
+    - `shouldBlockProjectContinuationSnapshotRediscoveryTool(...)` now blocks `task.get` when the requested `task_id` equals the current project session scope id, with a dedicated guard error explaining that the UUID is a project id, not a task record
+    - added `buildProjectContinuationProjectIDTaskGetGuardError(...)`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - `TestBuildProjectExecutionContinuationPrompt` now asserts the project-id-is-not-task guidance
+    - added `TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksProjectIDTaskGet`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3443` so the next PM continuation can supersede the just-deployed `3442` prompt family
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksProjectIDTaskGet|ProjectExecutionContinuationSnapshotKeepsReviewDecisionBlockedChildrenAsExistingChildWork|BuildProjectExecutionContinuationPrompt|BuildProjectExecutionContinuationPromptIncludesCompletedBatchSupersessionGuidance)$' -count=1`
+  - deploy status:
+    - pending rebuild/restart on `repo_version=3443`
+  - expected result after deploy:
+    - PM continuations stop spending one real tool hop on `task.get(project_id)`
+    - if the model still confuses the project UUID with a task UUID, the runtime blocks it before dispatch and points the lane back at the named task ids already present in the prompt
+- 2026-03-28 16:08:18 MDT - `Align worker PM prompt with project-id task guidance`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `appendProjectExecutionSnapshotGuidanceForWorker(...)` now adds the same `The active project id above is not a task_id...` sentence as the engine prompt builder
+  - changed [`internal/jobqueue/worker_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_test.go):
+    - `TestBuildProjectExecutionContinuationPromptForWorkerIncludesBlockerReuseGuidance` now asserts the project-id-is-not-task guidance is present
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3444` so fresh worker-authored PM continuations replace the just-created `3443` prompt family
+  - verified with:
+    - `gofmt -w internal/jobqueue/worker.go internal/jobqueue/worker_test.go`
+    - `GOFLAGS='' go test ./internal/jobqueue -run 'TestBuildProjectExecutionContinuationPromptForWorker(IncludesBlockerReuseGuidance|IncludesLeafTaskGuidance|IncludesCompletedBatchSupersessionGuidance)$' -count=1`
+  - deploy status:
+    - pending rebuild/restart on `repo_version=3444`
+  - expected result after deploy:
+    - worker-authored PM continuations carry the same project-id warning as engine-authored continuations, reducing the chance of another `task.get(project_id)` mistake before the runtime guard ever needs to fire
+- 2026-03-28 16:09:58 MDT - `Block completed-batch dependency rereads in PM continuations`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `projectContinuationCompletedBatchRangePattern` plus `projectContinuationCompletedBatchRangeFromPrompt(...)`
+    - completed-batch project continuation prompts now explicitly say not to reread shared prerequisite artifacts just to verify that completed batch
+    - `shouldBlockProjectContinuationSnapshotRediscoveryTool(...)` now blocks `file.read` when the prompt already says the latest completed task covers `batch_range=...` and the requested path is one of the named shared dependency artifacts
+    - added `buildProjectContinuationCompletedBatchDependencyReadGuardError(...)`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - worker-authored project continuation prompts now carry the same “do not reread that prerequisite just to verify batch_range=...” guidance
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - `TestBuildProjectExecutionContinuationPromptIncludesCompletedBatchSupersessionGuidance` now asserts the no-dependency-reread guidance
+    - added `TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksCompletedBatchDependencyRead`
+  - changed [`internal/jobqueue/worker_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_test.go):
+    - `TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompletedBatchSupersessionGuidance` now asserts the same no-dependency-reread guidance
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3445` so the next PM continuation can replace the `3444` prompt family
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go internal/jobqueue/worker.go internal/jobqueue/worker_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksProjectIDTaskGet|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksCompletedBatchDependencyRead|ProjectExecutionContinuationSnapshotKeepsReviewDecisionBlockedChildrenAsExistingChildWork|BuildProjectExecutionContinuationPrompt|BuildProjectExecutionContinuationPromptIncludesCompletedBatchSupersessionGuidance)$' -count=1`
+    - `GOFLAGS='' go test ./internal/jobqueue -run 'TestBuildProjectExecutionContinuationPromptForWorker(IncludesBlockerReuseGuidance|IncludesLeafTaskGuidance|IncludesCompletedBatchSupersessionGuidance)$' -count=1`
+  - deploy status:
+    - rebuilt/restarted tmux `codex-e2e-20260324`; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+    - direct partial live proof landed on Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`: after `3445`, continuation prompt `4595` no longer led into `file.read content/technonymous-index.json`; assistant `4596` only emitted the still-blocked `file.list content/posts` plus `task.list(status=done, project_id=...)` pair
+  - expected result after deploy:
+    - once a PM continuation already knows `batch_range=13-24` just completed, it stops rereading `content/technonymous-index.json` to verify that fact and moves directly to the next unresolved batch/blocker

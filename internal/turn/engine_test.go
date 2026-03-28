@@ -19464,6 +19464,9 @@ func TestProjectExecutionContinuationSnapshotKeepsReviewDecisionBlockedChildrenA
 	if !strings.Contains(snapshot.ActiveTaskLine, "task 61 (Fetch posts 1-12)") || !strings.Contains(snapshot.ActiveTaskLine, "resume_policy=resume_review_decision") {
 		t.Fatalf("ActiveTaskLine = %q, want blocked review child lanes surfaced as resumable review work", snapshot.ActiveTaskLine)
 	}
+	if !strings.Contains(snapshot.ActiveTaskLine, "batch_range=1-12") || !strings.Contains(snapshot.ActiveTaskLine, "batch_range=13-24") {
+		t.Fatalf("ActiveTaskLine = %q, want batch range hints for blocked child lanes", snapshot.ActiveTaskLine)
+	}
 	if !strings.Contains(snapshot.FocusTaskLine, "task 19 (Ship docs)") {
 		t.Fatalf("FocusTaskLine = %q, want standalone actionable draft to remain focus", snapshot.FocusTaskLine)
 	}
@@ -19879,6 +19882,9 @@ func TestBuildProjectExecutionContinuationPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "Active project id: 123") {
 		t.Fatalf("prompt = %q, want project id guidance", prompt)
 	}
+	if !strings.Contains(prompt, "The active project id above is not a task_id.") {
+		t.Fatalf("prompt = %q, want project-id-is-not-task guidance", prompt)
+	}
 	if !strings.Contains(prompt, "Do not begin with session.list, task.list, task.get, file.list on the workspace root, git.log, or git.status") {
 		t.Fatalf("prompt = %q, want active-task anti-rediscovery guidance", prompt)
 	}
@@ -19905,6 +19911,90 @@ func TestBuildProjectExecutionContinuationPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Start from this existing actionable draft before broad rediscovery") {
 		t.Fatalf("prompt = %q, want focus-task guidance", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationPromptIncludesCompletedBatchSupersessionGuidance(t *testing.T) {
+	task := repo.ProjectTask{
+		TaskNumber: 67,
+		Title:      "Fetch posts 25-35 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+	}
+
+	prompt := buildProjectExecutionContinuationPrompt(task, 2, projectExecutionContinuationSnapshot{
+		ProjectLine:          "Active project id: 123",
+		ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 44 (Replacement scrape batch) id=aaa title=\"Replacement scrape batch\" work_status=draft deliverable_root=content/posts batch_range=25-35 replaceable_blocked_child_tasks=1",
+	})
+
+	if !strings.Contains(prompt, "That completed task covers batch_range=25-35.") {
+		t.Fatalf("prompt = %q, want completed batch range context", prompt)
+	}
+	if !strings.Contains(prompt, "superseded by the latest completed batch") {
+		t.Fatalf("prompt = %q, want batch supersession guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not create another replacement task for batch_range=25-35") {
+		t.Fatalf("prompt = %q, want duplicate replacement guard for completed batch", prompt)
+	}
+	if !strings.Contains(prompt, "do not reread that prerequisite just to verify batch_range=25-35") {
+		t.Fatalf("prompt = %q, want no dependency reread guidance for completed batch", prompt)
+	}
+}
+
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksProjectIDTaskGet(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	activeTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:    "Active project id: " + projectID.String(),
+			ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 22 (Ship docs) id=" + activeTaskID.String() + " title=\"Ship docs\" work_status=in_progress assigned_agent_id=worker-1",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "task.get", map[string]any{
+		"task_id": projectID.String(),
+	})
+	if !blocked {
+		t.Fatal("expected project-lane task.get on the project id to be blocked")
+	}
+	if !strings.Contains(reason, "not a task record") || !strings.Contains(reason, projectID.String()) {
+		t.Fatalf("reason = %q, want project-id task.get guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksCompletedBatchDependencyRead(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTask := repo.ProjectTask{
+		TaskNumber: 66,
+		Title:      "Fetch posts 13-24 from content/technonymous-index.json via web_fetch and save as markdown under content/posts/",
+	}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectExecutionContinuationPrompt(completedTask, 2, projectExecutionContinuationSnapshot{
+			ProjectLine:    "Active project id: " + projectID.String(),
+			ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 62 (Fetch posts 13-24 from technonymous-index.json via web_fetch and save as markdown under content/posts/) id=" + uuid.NewString() + " title=\"Fetch posts 13-24 from technonymous-index.json via web_fetch and save as markdown under content/posts/\" work_status=blocked deliverable_root=content/posts depends_on_path=content/technonymous-index.json batch_range=13-24 resume_policy=manual_recovery_repair",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "file.read", map[string]any{
+		"path": "content/technonymous-index.json",
+	})
+	if !blocked {
+		t.Fatal("expected project-lane file.read on the shared dependency artifact to be blocked once the completed batch is already named")
+	}
+	if !strings.Contains(reason, "batch_range=13-24") || !strings.Contains(reason, "content/technonymous-index.json") {
+		t.Fatalf("reason = %q, want completed-batch dependency read guidance", reason)
 	}
 }
 

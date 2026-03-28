@@ -52,6 +52,9 @@ func TestBuildProjectExecutionContinuationPromptForWorkerIncludesBlockerReuseGui
 		ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 38 (Import batch review) id=aaa title=\"Import batch review\" work_status=blocked deliverable_root=content/posts depends_on_path=content/technonymous-index.json resume_policy=needs_replacement_work blocker=\"review turn repeatedly hit file.read not_found across 3 consecutive turns\"",
 	})
 
+	if !strings.Contains(prompt, "The active project id above is not a task_id.") {
+		t.Fatalf("prompt = %q, want project-id-is-not-task guidance", prompt)
+	}
 	if !strings.Contains(prompt, "act directly on that blocker summary") {
 		t.Fatalf("prompt = %q, want blocker reuse guidance", prompt)
 	}
@@ -131,5 +134,30 @@ func TestBuildProjectContinuationTaskHintsForWorkerIncludesDeliverableAndDepende
 	}
 	if got := hints[childID].DeliverablePath; got != "results/review-path-validation-summary.md" {
 		t.Fatalf("child deliverable path = %q, want inherited parent deliverable path", got)
+	}
+}
+
+func TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompletedBatchSupersessionGuidance(t *testing.T) {
+	prompt := buildProjectExecutionContinuationPromptForWorker(
+		67,
+		"Fetch posts 25-35 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+		2,
+		projectExecutionContinuationSnapshotForWorker{
+			ProjectLine:          "Active project id: 123",
+			ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 44 (Replacement scrape batch) id=aaa title=\"Replacement scrape batch\" work_status=draft deliverable_root=content/posts batch_range=25-35 replaceable_blocked_child_tasks=1",
+		},
+	)
+
+	if !strings.Contains(prompt, "That completed task covers batch_range=25-35.") {
+		t.Fatalf("prompt = %q, want completed batch range context", prompt)
+	}
+	if !strings.Contains(prompt, "superseded by the latest completed batch") {
+		t.Fatalf("prompt = %q, want batch supersession guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not create another replacement task for batch_range=25-35") {
+		t.Fatalf("prompt = %q, want duplicate replacement guard for completed batch", prompt)
+	}
+	if !strings.Contains(prompt, "do not reread that prerequisite just to verify batch_range=25-35") {
+		t.Fatalf("prompt = %q, want no dependency reread guidance for completed batch", prompt)
 	}
 }
