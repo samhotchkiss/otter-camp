@@ -10905,6 +10905,54 @@ func TestProjectExecutionBlockedMutationStopMessageOnTaskExecutionRequired(t *te
 	}
 }
 
+func TestMissingProjectContinuationDependencyArtifactPath(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageText: "Already-active non-terminal tasks in the tree: task 35 work_status=blocked deliverable_root=content/posts depends_on_path=content/technonymous-index.json",
+	}
+
+	path, ok := missingProjectContinuationDependencyArtifactPath(rt, []ToolCall{{
+		Name:      "file.read",
+		Arguments: map[string]any{"path": "content/technonymous-index.json"},
+	}}, []ToolResult{{
+		Name:   "file.read",
+		Output: map[string]any{"error": "not_found"},
+	}})
+	if !ok {
+		t.Fatal("expected dependency read miss to be detected")
+	}
+	if path != "content/technonymous-index.json" {
+		t.Fatalf("path = %q, want content/technonymous-index.json", path)
+	}
+}
+
+func TestMissingProjectContinuationDependencyArtifactPathIgnoresNonDependencyReadMiss(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageText: "Already-active non-terminal tasks in the tree: task 35 work_status=blocked deliverable_root=content/posts depends_on_path=content/technonymous-index.json",
+	}
+
+	if path, ok := missingProjectContinuationDependencyArtifactPath(rt, []ToolCall{{
+		Name:      "file.read",
+		Arguments: map[string]any{"path": "planning/url-index-plan.md"},
+	}}, []ToolResult{{
+		Name:   "file.read",
+		Output: map[string]any{"error": "not_found"},
+	}}); ok {
+		t.Fatalf("unexpected dependency miss %q for non-dependency read", path)
+	}
+}
+
 func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnSubtaskCreateBoundaryError(t *testing.T) {
 	t.Parallel()
 

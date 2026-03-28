@@ -165,6 +165,7 @@ const (
 )
 
 var projectContinuationPromptTaskIDPattern = regexp.MustCompile(`id=([0-9a-fA-F-]{36})`)
+var projectContinuationPromptDependencyPathPattern = regexp.MustCompile(`depends_on_path=([^\s]+)`)
 var explicitDeliverablePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
@@ -12697,6 +12698,11 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			}
 			return true, nil
 		}
+		if missingPath, ok := missingProjectContinuationDependencyArtifactPath(rt, runCalls, results); ok {
+			rt.stopReason = stopReasonValidationBlocked
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, projectContinuationMissingDependencyStopMessage(missingPath))
+			return true, nil
+		}
 		failedBootstrap, err := e.handleProjectBootstrapChildTaskFailure(ctx, rt, results)
 		if err != nil {
 			return false, err
@@ -12864,6 +12870,11 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			if message := projectExecutionBlockedMutationStopMessage([]ToolResult{result}); message != "" {
 				_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, message)
 			}
+			return true, nil
+		}
+		if missingPath, ok := missingProjectContinuationDependencyArtifactPath(rt, []ToolCall{call}, []ToolResult{result}); ok {
+			rt.stopReason = stopReasonValidationBlocked
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, projectContinuationMissingDependencyStopMessage(missingPath))
 			return true, nil
 		}
 		if rt.recoveryTurn && rt.recoveryWriteDone {
@@ -23649,6 +23660,65 @@ func projectExecutionBlockedMutationStopMessage(results []ToolResult) string {
 		}
 	}
 	return ""
+}
+
+func projectContinuationDependencyPathsFromPrompt(content string) map[string]struct{} {
+	matches := projectContinuationPromptDependencyPathPattern.FindAllStringSubmatch(content, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	paths := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		path := normalizeWorkspaceRelativePath(match[1])
+		if path == "" {
+			continue
+		}
+		paths[path] = struct{}{}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	return paths
+}
+
+func missingProjectContinuationDependencyArtifactPath(rt *turnRuntime, calls []ToolCall, results []ToolResult) (string, bool) {
+	if rt == nil || rt.session == nil {
+		return "", false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return "", false
+	}
+	dependencyPaths := projectContinuationDependencyPathsFromPrompt(rt.initialMessageText)
+	if len(dependencyPaths) == 0 {
+		return "", false
+	}
+	for idx, call := range calls {
+		if idx >= len(results) {
+			break
+		}
+		if !strings.EqualFold(strings.TrimSpace(call.Name), "file.read") {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(strings.TrimSpace(toolResultErrorCode(results[idx]))), "not_found") {
+			continue
+		}
+		callPath := normalizeWorkspaceRelativePath(stringValue(call.Arguments["path"]))
+		if _, ok := dependencyPaths[callPath]; ok {
+			return callPath, true
+		}
+	}
+	return "", false
+}
+
+func projectContinuationMissingDependencyStopMessage(path string) string {
+	path = normalizeWorkspaceRelativePath(path)
+	if path == "" {
+		return "[Project continuation found that a named prerequisite artifact is still missing. Queue or advance the smallest replacement task that produces it instead of browsing external sources or writing the file from the project session.]"
+	}
+	return fmt.Sprintf("[Project continuation found that prerequisite artifact `%s` is still missing. Queue or advance the smallest replacement task that produces it instead of browsing external sources or writing the file from the project session.]", path)
 }
 
 func shouldStopAfterBlockedTaskExecutionBoundaryMutation(rt *turnRuntime, results []ToolResult) bool {
