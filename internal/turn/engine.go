@@ -8095,6 +8095,11 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	} else if handled {
 		return nil
 	}
+	if handled, handleErr := e.handleMalformedNoDecomposeChildTaskPreflight(ctx, runtime); handleErr != nil {
+		return handleErr
+	} else if handled {
+		return nil
+	}
 	cancelCtx, stopCancelWatch := e.watchTurnCancellation(ctx, runtime)
 	defer stopCancelWatch()
 
@@ -8851,6 +8856,99 @@ func (e *TurnEngine) handleProjectBootstrapPreflight(ctx context.Context, rt *tu
 		return true, err
 	}
 	return true, nil
+}
+
+func (e *TurnEngine) handleMalformedNoDecomposeChildTaskPreflight(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if e == nil || e.tasks == nil || rt == nil || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
+
+	taskRecord, err := e.tasks.GetByID(ctx, rt.session.ScopeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return true, err
+	}
+	parentTask, malformed, err := e.malformedNoDecomposeParentTaskForChild(ctx, taskRecord)
+	if err != nil || !malformed {
+		return malformed, err
+	}
+
+	reason := buildMalformedNoDecomposeChildTaskBlockedReason(taskRecord, parentTask)
+	systemMessage := buildMalformedNoDecomposeChildTaskSystemMessage(taskRecord, parentTask)
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, systemMessage); err != nil {
+		return true, err
+	}
+	if e.taskTransitions == nil {
+		return true, fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
+		if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
+			var transitionErr tasksvc.ErrInvalidStatusTransition
+			if errors.As(err, &transitionErr) {
+				refreshed, refreshErr := e.tasks.GetByID(ctx, taskRecord.ID)
+				if refreshErr == nil {
+					nextStatus := strings.ToLower(strings.TrimSpace(refreshed.WorkStatus))
+					if nextStatus != "blocked" && nextStatus != "done" && nextStatus != "cancelled" {
+						return true, err
+					}
+				} else {
+					return true, err
+				}
+			} else {
+				return true, err
+			}
+		}
+	}
+	rt.stopReason = stopReasonValidationBlocked
+	if err := e.completeTurn(ctx, rt); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) malformedNoDecomposeParentTaskForChild(ctx context.Context, taskRecord repo.ProjectTask) (repo.ProjectTask, bool, error) {
+	metadata := messageMetadataMap(taskRecord.Metadata)
+	parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+	if !ok || parentID == uuid.Nil {
+		return repo.ProjectTask{}, false, nil
+	}
+	parentTask, err := e.tasks.GetByID(ctx, parentID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return repo.ProjectTask{}, false, nil
+		}
+		return repo.ProjectTask{}, false, err
+	}
+	if parentTask.ProjectID != taskRecord.ProjectID || !projectContinuationParentForbidsDecomposition(parentTask) {
+		return repo.ProjectTask{}, false, nil
+	}
+	return parentTask, true, nil
+}
+
+func buildMalformedNoDecomposeChildTaskBlockedReason(taskRecord, parentTask repo.ProjectTask) string {
+	reason := fmt.Sprintf("%s was created as a child of %s even though the parent explicitly forbids decomposition; resume the bounded work from the parent task instead of this malformed child lane", buildTaskLabel(taskRecord), buildTaskLabel(parentTask))
+	if targetPath := strings.TrimSpace(preferredTaskDeliverablePath(parentTask)); targetPath != "" {
+		reason += fmt.Sprintf(" (parent deliverable: %s)", targetPath)
+	}
+	return reason
+}
+
+func buildMalformedNoDecomposeChildTaskSystemMessage(taskRecord, parentTask repo.ProjectTask) string {
+	lines := []string{
+		fmt.Sprintf("[Task lane halted: %s is a malformed child of %s.", buildTaskLabel(taskRecord), buildTaskLabel(parentTask)),
+		"The parent task explicitly says not to decompose this work, so this child session should not continue.",
+	}
+	if targetPath := strings.TrimSpace(preferredTaskDeliverablePath(parentTask)); targetPath != "" {
+		lines = append(lines, fmt.Sprintf("Resume the real bounded work from the parent task and target `%s` there instead of reopening this child lane.]", targetPath))
+	} else {
+		lines = append(lines, "Resume the real bounded work from the parent task instead of reopening this child lane.]")
+	}
+	return strings.Join(lines, " ")
 }
 
 func (e *TurnEngine) projectBootstrapAutoContinueMessage(ctx context.Context, messageID uuid.UUID) bool {
