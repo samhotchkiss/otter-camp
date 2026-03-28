@@ -11808,6 +11808,62 @@ func TestShouldBlockTaskReviewPreferredDeliverableSiblingReadTool(t *testing.T) 
 	}
 }
 
+func TestShouldBlockTaskReviewPreferredDeliverableFirstTool(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `templates/layout-10-conversational.html`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `templates/layout-10-conversational.html` is missing.\n" +
+			"If reading `templates/layout-10-conversational.html` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.",
+	}
+
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableFirstTool(rt, "file.read", map[string]any{"path": "templates/layout-10-conversational.html"}); blocked {
+		t.Fatalf("preferred target read should remain allowed, reason = %q", reason)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		toolName  string
+		arguments map[string]any
+	}{
+		{name: "git diff", toolName: "git.diff", arguments: map[string]any{}},
+		{name: "root file list", toolName: "file.list", arguments: map[string]any{"path": "."}},
+		{name: "sibling file read", toolName: "file.read", arguments: map[string]any{"path": "planning/discovery-plan/oc-24-validation-plan.md"}},
+		{name: "task get", toolName: "task.get", arguments: map[string]any{"task_id": uuid.NewString()}},
+	} {
+		blocked, reason := shouldBlockTaskReviewPreferredDeliverableFirstTool(rt, tc.toolName, tc.arguments)
+		if !blocked {
+			t.Fatalf("expected %s to be blocked before preferred deliverable read", tc.name)
+		}
+		if !strings.Contains(reason, "templates/layout-10-conversational.html") {
+			t.Fatalf("%s guard reason = %q, want preferred deliverable target", tc.name, reason)
+		}
+		if !strings.Contains(reason, "flow.review_decision reject") {
+			t.Fatalf("%s guard reason = %q, want reject guidance", tc.name, reason)
+		}
+	}
+}
+
+func TestShouldNotBlockTaskReviewPreferredDeliverableFirstToolForOrchestrationParent(t *testing.T) {
+	parentTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `results/review-path-validation-summary.md`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `results/review-path-validation-summary.md` is missing.\n" +
+			"This task is an orchestration-only parent. Review the parent orchestration summary and the direct child-task outcomes, not missing companion planning artifacts.\n" +
+			"Do not call `task.get` on this parent task again during review. If you need task evidence, call `task.list` with `parent_task_id=" + parentTaskID.String() + "`.",
+	}
+
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableFirstTool(rt, "task.list", map[string]any{"parent_task_id": parentTaskID.String()}); blocked {
+		t.Fatalf("expected orchestration-parent child task.list to remain allowed, reason = %q", reason)
+	}
+}
+
 func TestShouldNotStopAfterBlockedProjectBootstrapRecoveryRereadScaffoldOnlyRecovery(t *testing.T) {
 	now := time.Now().UTC()
 	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
@@ -32423,6 +32479,39 @@ func TestBuildTaskReviewActionPromptIncludesPreferredDeliverableTarget(t *testin
 	}
 	if !strings.Contains(prompt, "Do not inspect planning artifacts or list the full repository tree") {
 		t.Fatalf("prompt = %q, want bounded review guidance", prompt)
+	}
+}
+
+func TestBuildTaskReviewActionPromptIncludesPreferredDeliverableTargetFromSaveAsDescription(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Build HTML layout template 10 for Sam.blog: Conversational/chat-inspired. Self-contained HTML file with embedded CSS. Save as templates/layout-10-conversational.html."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  24,
+				Title:       "Build HTML template 10: conversational chat-inspired",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"bootstrap_first_wave_selected": true,
+				}),
+			},
+		},
+	}
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "templates/layout-10-conversational.html") {
+		t.Fatalf("prompt = %q, want Save as deliverable path", prompt)
+	}
+	if strings.Contains(prompt, "templates/layout-10-conversational.html.`") {
+		t.Fatalf("prompt = %q, did not want trailing punctuation in deliverable path", prompt)
 	}
 }
 

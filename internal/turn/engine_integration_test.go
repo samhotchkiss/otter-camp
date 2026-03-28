@@ -21555,6 +21555,59 @@ func newIntegrationFixture(t *testing.T) *integrationFixture {
 	}
 }
 
+func TestBuildTaskReviewActionPromptFallsBackToHistoricalTaskSessionDeliverableTargetIntegration(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	description := "Using the index from the indexing task, scrape the first 10 technonymous.org posts via browser tools. Extract full content (title, body text, date, categories/tags, images). Save each post as a markdown file with YAML frontmatter under content/technonymous/. Commit to the repo."
+	taskRecord.Title = "Scrape technonymous.org posts batch 1 (first 10 posts)"
+	taskRecord.Description = &description
+	taskRecord.WorkStatus = "review"
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update task: %v", err)
+	}
+
+	priorSession, _ := mustCreateTaskSession(t, ctx, fixture, taskRecord, "review the existing deliverables")
+	toolResult, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: priorSession.ID,
+		Role:      "tool_result",
+		Content: string(mustJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":      "content/technonymous/stop-preparing-your-kids-for-jobs.md",
+				"byte_size": 583,
+				"content":   "placeholder deliverable",
+			},
+		})),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage prior tool_result: %v", err)
+	}
+	if err := fixture.chatService.UpdateMessageStatus(ctx, toolResult.ID, "final", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus prior tool_result: %v", err)
+	}
+
+	currentSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession current task scope: %v", err)
+	}
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(ctx, currentSession)
+	if !strings.Contains(prompt, "content/technonymous/stop-preparing-your-kids-for-jobs.md") {
+		t.Fatalf("prompt = %q, want historical deliverable target", prompt)
+	}
+	if !strings.Contains(prompt, "do not begin by listing the repository root") {
+		t.Fatalf("prompt = %q, want bounded direct-inspection guidance", prompt)
+	}
+}
+
 type persistedRecoveryResumeFixture struct {
 	workspaceRoot string
 	targetPath    string
