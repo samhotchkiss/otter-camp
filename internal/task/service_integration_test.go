@@ -2694,6 +2694,45 @@ func TestTaskServiceIntegrationQueueRejectsOversizedUnsplittableWork(t *testing.
 	}
 }
 
+func TestTaskServiceIntegrationQueueAllowsSingleConcreteTemplateWithRequirements(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	description := strings.Join([]string{
+		"Create a single self-contained HTML file at `templates/template-08-replace.html` for Sam.blog.",
+		"",
+		"Requirements:",
+		"- Single HTML file, no JavaScript interactivity or build tooling required",
+		"- Designed as a professional personal hub for Sam Hotchkiss",
+		"- Unique visual identity distinct from templates 1-7 and 9-10",
+		"- Sections: hero/intro, about, blog listing, photography, speaking/consulting CTA, SamBot chat placeholder, contact",
+		"- Mobile responsive via CSS media queries",
+		"- Deliverable: templates/template-08-replace.html",
+	}, "\n")
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Build a single HTML layout template (template 8 of 10) for Sam.blog",
+		Description:    &description,
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	queued, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus queued err = %v, want nil", err)
+	}
+	if got := strings.TrimSpace(queued.WorkStatus); !strings.EqualFold(got, "queued") {
+		t.Fatalf("queued.WorkStatus = %q, want queued", got)
+	}
+}
+
 func newTaskIntegrationService(t *testing.T, pool *pgxpool.Pool) TaskService {
 	t.Helper()
 	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})

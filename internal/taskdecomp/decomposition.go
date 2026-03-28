@@ -29,6 +29,7 @@ var (
 	labelledTaskPattern          = regexp.MustCompile(`(?i)^(?:ws\d+(?:\.\d+[a-z]?)?|template\s+\d+|option\s+\d+|phase\s+\d+|wave\s+\d+|task\s+\d+)[:\-]`)
 	timingOnlyPattern            = regexp.MustCompile(`(?i)^~?\s*\d+\s*(?:-|to\s+)?\d*\s*(?:min|mins|minute|minutes|hr|hrs|hour|hours)\b(?:[[:punct:]\s].*)?$`)
 	enumMarkerPattern            = regexp.MustCompile(`\(\d+\)`)
+	workspaceFilePathPattern     = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\.[A-Za-z0-9]+\b`)
 	toolHeavySignals             = []string{
 		"api",
 		"cli",
@@ -974,14 +975,18 @@ func estimateTaskMinutes(title string, description *string, parentScoped bool) (
 	text := strings.ToLower(strings.TrimSpace(strings.Join([]string{title, rawDescription}, " ")))
 	isBoundedSectionDraft := strings.HasPrefix(strings.ToLower(strings.TrimSpace(title)), "draft ") &&
 		strings.Contains(strings.ToLower(strings.TrimSpace(title)), " section for the brief")
+	deliverables := extractDeliverables(rawDescription)
+	singleConcreteFileDeliverable := looksLikeSingleConcreteFileDeliverable(title, rawDescription, deliverables)
 
 	maxMinutes := defaultMaxTaskMinutes
 	if containsAny(text, toolHeavySignals) || containsAny(text, externalBoundSignals) {
 		maxMinutes = extendedMaxTaskMinutes
 	}
+	if singleConcreteFileDeliverable && maxMinutes < extendedMaxTaskMinutes {
+		maxMinutes = extendedMaxTaskMinutes
+	}
 
 	estimatedMinutes := 20
-	deliverables := extractDeliverables(rawDescription)
 	if extraDeliverables := len(deliverables) - 1; extraDeliverables > 0 {
 		estimatedMinutes += extraDeliverables * 15
 	}
@@ -1011,6 +1016,45 @@ func estimateTaskMinutes(title string, description *string, parentScoped bool) (
 	}
 
 	return estimatedMinutes, maxMinutes
+}
+
+func looksLikeSingleConcreteFileDeliverable(title, rawDescription string, deliverables []string) bool {
+	if titleSuggestsCompoundBoundedWork(title) {
+		return false
+	}
+	if len(deliverables) > 1 {
+		return false
+	}
+	normalizedText := strings.ToLower(strings.TrimSpace(strings.Join([]string{title, rawDescription}, " ")))
+	if normalizedText == "" {
+		return false
+	}
+	if containsAny(normalizedText, broadScopeSignals) {
+		return false
+	}
+	paths := extractWorkspaceFilePaths(title + "\n" + rawDescription)
+	return len(paths) == 1
+}
+
+func extractWorkspaceFilePaths(text string) []string {
+	matches := workspaceFilePathPattern.FindAllString(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(matches))
+	out := make([]string, 0, len(matches))
+	for _, match := range matches {
+		normalized := strings.ToLower(strings.TrimSpace(match))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out
 }
 
 func shouldBypassBroadScopePenaltyForParentScopedChild(title, rawDescription string, deliverables []string, parentScoped bool) bool {

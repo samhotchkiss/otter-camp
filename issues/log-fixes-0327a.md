@@ -566,3 +566,16 @@
     - `TestRewriteTaskReviewPreferredDeliverableReadDispatchCallUsesCurrentTurnTailOffset`
   - verified with `gofmt -w internal/turn/engine.go internal/turn/engine_test.go` and `GOFLAGS='' go test ./internal/turn -run 'Test(MaybeRewriteTaskReviewPreferredDeliverableReadToolCalls(AddsMaxBytes|PreservesSmallerExplicitLimit|UsesTailOffsetAfterTruncatedHeadRead|UsesTailOffsetAfterCurrentTurnHeadRead|DoesNotReuseTailAfterCurrentTurnTailRead)|RewriteTaskReviewPreferredDeliverableReadDispatchCallUsesCurrentTurnTailOffset)$' -count=1`
   - fresh live proof: after the final runtime respawn at `03:56:43 MDT`, task `48` session `1bb99d1b-d24c-4716-b9d4-3fd3197144ac` produced a byte-0 head read at `03:58:02 MDT`, then the next same-target reread in turn `6e173a5a-bc64-4fca-bfbc-73f1120560f4` was executed as `offset_bytes=14818`, `bytes_read=8192`, `truncated=false` at `03:58:06 MDT`
+- 2026-03-28 04:28:22 MDT - allow narrow single-file deliverables to queue despite long companion requirements
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go) so bounded-size estimation now detects narrow single-file workspace deliverables and grants them the extended queue budget even when the surrounding brief has a long `Requirements:` block
+  - kept the earlier procedural-section protection intact: concrete single-file tasks still do not decompose into child tasks just because they mention steps, sections, or constraints
+  - added focused coverage in:
+    - [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go)
+    - [`internal/task/service_integration_test.go`](/Users/sam/dev/otter-camp/internal/task/service_integration_test.go)
+  - verified with:
+    - `gofmt -w internal/taskdecomp/decomposition.go internal/taskdecomp/decomposition_test.go internal/task/service_integration_test.go`
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(ValidateBoundedTaskSizeAllowsSingleConcreteTemplateWithRequirements|PrepareQueueDecompositionSkipsSingleConcreteTemplateWithRequirements|PrepareQueueDecompositionSkipsConcreteDeliverableWithProceduralSections|ValidateBoundedTaskSizeRejectsBrandNarrativeStrategyTask)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/task -run 'TestTaskServiceIntegration(QueueAllowsSingleConcreteTemplateWithRequirements|QueueRejectsOversizedUnsplittableWork)$' -count=1`
+  - deployed by rebuilding `./bin/ottercamp`, restarting tmux `codex-e2e-20260324`, and confirming `./bin/ottercamp health --output json` returned `status=ok`
+  - live diagnosis behind the fix: Sam.blog PM turn `984d9f13-c56d-4a9f-ad71-581dfa0b0c95` kept halting on task `43` with `estimated 65 minutes > 60 minute limit` even though the brief names one concrete output file, `templates/template-08-replace.html`
+  - fresh post-deploy production proof is still pending the next natural PM continuation for session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`

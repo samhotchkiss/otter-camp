@@ -598,6 +598,25 @@ func TestValidateBoundedTaskSizeAllowsParentScopedSinglePillarSlice(t *testing.T
 	}
 }
 
+func TestValidateBoundedTaskSizeAllowsSingleConcreteTemplateWithRequirements(t *testing.T) {
+	title := "Build a single HTML layout template (template 8 of 10) for Sam.blog"
+	description := strings.Join([]string{
+		"Create a single self-contained HTML file at `templates/template-08-replace.html` for Sam.blog.",
+		"",
+		"Requirements:",
+		"- Single HTML file, no JavaScript interactivity or build tooling required",
+		"- Designed as a professional personal hub for Sam Hotchkiss",
+		"- Unique visual identity distinct from templates 1-7 and 9-10",
+		"- Sections: hero/intro, about, blog listing, photography, speaking/consulting CTA, SamBot chat placeholder, contact",
+		"- Mobile responsive via CSS media queries",
+		"- Deliverable: templates/template-08-replace.html",
+	}, "\n")
+
+	if err := validateBoundedTaskSize(title, &description, false); err != nil {
+		t.Fatalf("validateBoundedTaskSize err = %v, want nil for bounded single-file template task", err)
+	}
+}
+
 func TestPrepareQueueDecompositionAutoAppliesForPhotographyArchiveWorkstream(t *testing.T) {
 	description := strings.Join([]string{
 		"ORCHESTRATION PARENT - do not execute directly.",
@@ -677,6 +696,36 @@ func TestPrepareQueueDecompositionSkipsConcreteDeliverableWithProceduralSections
 	}
 	if result.Applied {
 		t.Fatalf("Applied = true, want false for single concrete deliverable with procedural sections: %+v", result)
+	}
+	if len(result.ChildDrafts) != 0 {
+		t.Fatalf("ChildDrafts len = %d, want 0", len(result.ChildDrafts))
+	}
+}
+
+func TestPrepareQueueDecompositionSkipsSingleConcreteTemplateWithRequirements(t *testing.T) {
+	description := strings.Join([]string{
+		"Create a single self-contained HTML file at `templates/template-08-replace.html` for Sam.blog.",
+		"",
+		"Requirements:",
+		"- Single HTML file, no JavaScript interactivity or build tooling required",
+		"- Designed as a professional personal hub for Sam Hotchkiss",
+		"- Unique visual identity distinct from templates 1-7 and 9-10",
+		"- Sections: hero/intro, about, blog listing, photography, speaking/consulting CTA, SamBot chat placeholder, contact",
+		"- Mobile responsive via CSS media queries",
+		"- Deliverable: templates/template-08-replace.html",
+	}, "\n")
+
+	result, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        "Build a single HTML layout template (template 8 of 10) for Sam.blog",
+		Description:  &description,
+		Metadata:     json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("PrepareQueueDecomposition: %v", err)
+	}
+	if result.Applied {
+		t.Fatalf("Applied = true, want false for single concrete template deliverable: %+v", result)
 	}
 	if len(result.ChildDrafts) != 0 {
 		t.Fatalf("ChildDrafts len = %d, want 0", len(result.ChildDrafts))
