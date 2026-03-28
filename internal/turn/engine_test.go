@@ -18017,11 +18017,23 @@ func TestBuildProjectContinuationActionPromptAddsReplacementChildGuidanceForBloc
 	if !strings.Contains(prompt, "Draft parent tasks need fresh replacement child work:") {
 		t.Fatalf("prompt = %q, want replacement-parent snapshot guidance", prompt)
 	}
-	if !strings.Contains(prompt, "Their existing child lanes are terminally blocked, so create or queue the smallest replacement child task under the correct parent now instead of broad rediscovery.") {
+	if !strings.Contains(prompt, "Their existing child lanes are terminally blocked or malformed, so create or queue the smallest replacement child task under the correct parent now instead of broad rediscovery.") {
 		t.Fatalf("prompt = %q, want replacement-child guidance", prompt)
 	}
 	if !strings.Contains(prompt, "Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now") {
 		t.Fatalf("prompt = %q, want focus replacement-child guidance", prompt)
+	}
+}
+
+func TestBuildProjectContinuationActionPromptAddsReplacementChildGuidanceForMalformedChildren(t *testing.T) {
+	prompt := buildProjectContinuationActionPrompt("Active project request: recover malformed scrape batch children", projectExecutionContinuationSnapshot{
+		ProjectLine:          "Active project id: 123",
+		ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/) id=bbb title=\"Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/\" work_status=draft depends_on_path=content/technonymous-index.json assigned_agent_id=worker-1 flow_template_id=ft-1 malformed_child_tasks=2",
+		FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/) id=bbb title=\"Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/\" work_status=draft depends_on_path=content/technonymous-index.json assigned_agent_id=worker-1 flow_template_id=ft-1 malformed_child_tasks=2",
+	})
+
+	if !strings.Contains(prompt, "malformed or stale child artifact lanes") {
+		t.Fatalf("prompt = %q, want malformed-child focus guidance", prompt)
 	}
 }
 
@@ -18359,8 +18371,14 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedProceduralChildren(
 	if err != nil {
 		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
 	}
-	if !strings.Contains(snapshot.DraftTaskLine, "task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/)") {
-		t.Fatalf("DraftTaskLine = %q, want actionable parent task", snapshot.DraftTaskLine)
+	if strings.Contains(snapshot.DraftTaskLine, "task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/)") {
+		t.Fatalf("DraftTaskLine = %q, should not treat malformed procedural-child parent as a plain runnable draft", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/)") {
+		t.Fatalf("ReplacementDraftLine = %q, want actionable parent task moved to replacement-child guidance", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=1") {
+		t.Fatalf("ReplacementDraftLine = %q, want malformed child count", snapshot.ReplacementDraftLine)
 	}
 	if strings.Contains(snapshot.ActiveTaskLine, "Use cli_execute with shell scripting") {
 		t.Fatalf("ActiveTaskLine = %q, should omit malformed procedural child artifact", snapshot.ActiveTaskLine)
@@ -18371,6 +18389,9 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedProceduralChildren(
 	if !strings.Contains(snapshot.FocusTaskLine, "task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/)") {
 		t.Fatalf("FocusTaskLine = %q, want parent task restored as focus", snapshot.FocusTaskLine)
 	}
+	if !strings.Contains(snapshot.FocusTaskLine, "malformed_child_tasks=1") {
+		t.Fatalf("FocusTaskLine = %q, want malformed child count", snapshot.FocusTaskLine)
+	}
 
 	count, err := fixture.engine.countProjectDraftTasks(context.Background(), projectID)
 	if err != nil {
@@ -18378,6 +18399,110 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedProceduralChildren(
 	}
 	if count != 1 {
 		t.Fatalf("countProjectDraftTasks = %d, want 1 actionable parent after ignoring malformed procedural child artifact", count)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftMutationForMalformedChildParent(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentTaskID := uuid.New()
+	childTaskID := uuid.New()
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	parentDescription := "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/."
+	childDescription := "Use cli_execute with shell scripting or iterate in the agent loop. Process all 35 posts."
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentTaskID: {
+				ID:          parentTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  58,
+				Title:       "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+			},
+			childTaskID: {
+				ID:          childTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  60,
+				Title:       "Use cli_execute with shell scripting or iterate in the agent loop. Process all 35 posts.",
+				Description: &childDescription,
+				WorkStatus:  "blocked",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTaskID.String())),
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: recover malformed scrape batch children", projectExecutionContinuationSnapshot{
+			ProjectLine:          "Active project id: " + projectID.String(),
+			ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/) id=" + parentTaskID.String() + " title=\"Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/\" work_status=draft malformed_child_tasks=1",
+			FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/) id=" + parentTaskID.String() + " title=\"Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/\" work_status=draft malformed_child_tasks=1",
+		}),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftMutationTool(context.Background(), rt, "task.update", map[string]any{
+		"task_id":     parentTaskID.String(),
+		"work_status": "queued",
+	})
+	if !blocked {
+		t.Fatal("expected project continuation to block re-queueing focused malformed-child parent")
+	}
+	if !strings.Contains(reason, "focused draft task task 58") || !strings.Contains(reason, "malformed child artifact lane") {
+		t.Fatalf("reason = %q, want focused malformed-child guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftMutationForAncestorPromotion(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	ancestorTaskID := uuid.New()
+	focusTaskID := uuid.New()
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			ancestorTaskID: {
+				ID:         ancestorTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 55,
+				Title:      "Scrape all 35 technonymous.org posts to markdown using web_fetch",
+				WorkStatus: "draft",
+			},
+			focusTaskID: {
+				ID:         focusTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 58,
+				Title:      "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/",
+				WorkStatus: "draft",
+				Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, ancestorTaskID.String())),
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: recover malformed scrape batch children", projectExecutionContinuationSnapshot{
+			ProjectLine:          "Active project id: " + projectID.String(),
+			ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/) id=" + focusTaskID.String() + " title=\"Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/\" work_status=draft malformed_child_tasks=2",
+			FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/) id=" + focusTaskID.String() + " title=\"Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/\" work_status=draft malformed_child_tasks=2",
+		}),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftMutationTool(context.Background(), rt, "task.update", map[string]any{
+		"task_id":     ancestorTaskID.String(),
+		"work_status": "queued",
+	})
+	if !blocked {
+		t.Fatal("expected project continuation to block ancestor promotion when focused child draft is already named")
+	}
+	if !strings.Contains(reason, "focused draft task task 58") || !strings.Contains(reason, "ancestor draft task 55") {
+		t.Fatalf("reason = %q, want focused-child ancestor-promotion guidance", reason)
 	}
 }
 

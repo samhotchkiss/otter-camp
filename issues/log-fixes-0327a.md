@@ -791,3 +791,25 @@
     - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegration(MalformedNoDecomposeChildKickoffPreflightBlocksBeforeModelCall|MalformedProceduralChildKickoffPreflightBlocksBeforeModelCall)$' -count=1`
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(ProjectExecutionContinuationSnapshot(IgnoresMalformedNoDecomposeChildren|IgnoresMalformedProceduralChildren|PromotesBlockedChildParentsToReplacementWork)|EnsureProjectContinuationMessageSuppressesRepeatedConsumedActiveReplacementContinuation)$' -count=1`
   - live diagnosis behind the fix: after the first decomposition repair was written, Sam.blog still had active malformed child tasks `59` and `60` under replacement task `58`, so future PM turns would remain distracted until those existing procedural lanes were explicitly hidden and blocked
+- 2026-03-28 08:47:10 MDT - promote malformed-child parents to replacement guidance and block PM ancestor promotion
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - project-continuation child activity now records `malformed_child_tasks=N` for parents whose only remaining child lanes are stale malformed artifacts
+    - those parents now move from ordinary `DraftTaskLine` into `ReplacementDraftLine` / `FocusTaskLine`, with prompt guidance telling the PM lane to create the smallest fresh replacement child instead of re-queueing the parent
+    - added `shouldBlockProjectContinuationFocusedDraftMutationTool(...)`, which blocks:
+      - `task.update` attempts that re-queue a focused malformed-child parent
+      - `task.update` promotion of named ancestor drafts when the prompt already names the focused bounded child beneath them
+    - the same file now treats those blocked mutations as immediate PM-stop conditions so the turn ends with the narrower replacement-child instruction
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) so worker-authored PM continuation snapshots carry the same `malformed_child_tasks=N` replacement guidance and focus-task wording
+  - added focused coverage in:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectContinuationActionPrompt(AddsReplacementChildGuidanceForBlockedParent|AddsReplacementChildGuidanceForMalformedChildren)|ProjectExecutionContinuationSnapshot(IgnoresMalformedProceduralChildren|SkipsDraftParentWithBlockedChildren|ForSummaryNarrowsToPriorityArtifactPath)|ShouldBlockProjectContinuation(FocusedDraftMutationForMalformedChildParent|FocusedDraftMutationForAncestorPromotion|SnapshotRediscoveryToolBlocksBroadResultsList|DependencyFocusedTaskCreateBlocksUnrelatedTopLevelTask|DependencyFocusedExternalTool)|ShouldNotBlockProjectContinuation(SnapshotRediscoveryToolForParentScopedTaskList|DependencyFocusedTaskCreateForNamedParentTask|DependencyFocusedExternalToolWithoutChildWork))$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(ProjectExecutionContinuationSnapshot(IgnoresMalformedProceduralChildren|PromotesBlockedChildParentsToReplacementWork)|EnsureProjectContinuationMessageSuppressesRepeatedConsumedActiveReplacementContinuation)$' -count=1`
+  - fresh live proof after restart:
+    - Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` no longer replayed the old `task.update(58) -> task.get(55) -> task.update(55)` chain
+    - the first new PM turn recognized that `task 58` had malformed child lanes and created bounded replacement children `61`, `62`, and `63` beneath `58`
+    - resulting state immediately after the turn:
+      - task `58` remained the draft orchestration parent
+      - stale malformed children `59` / `60` remained blocked
+      - fresh child `61` moved to `in_progress`

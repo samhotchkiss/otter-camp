@@ -2628,11 +2628,24 @@ const projectContinuationBlockerExcerptLimitForWorker = 120
 type projectContinuationChildActivityForWorker struct {
 	childTaskCount                   int
 	activeChildTaskCount             int
+	malformedChildTaskCount          int
 	replaceableBlockedChildTaskCount int
 }
 
 func isProjectContinuationActionableDraftTaskForWorker(task repo.ProjectTask, activity projectContinuationChildActivityForWorker) bool {
 	return isActionableProjectDraftTaskForWorker(task) && activity.childTaskCount == 0
+}
+
+func projectContinuationDraftTaskNeedsFreshReplacementChildWorkForWorker(activity projectContinuationChildActivityForWorker) bool {
+	if activity.activeChildTaskCount != 0 {
+		return false
+	}
+	if activity.malformedChildTaskCount > 0 && activity.childTaskCount == 0 {
+		return true
+	}
+	return activity.childTaskCount > 0 &&
+		activity.replaceableBlockedChildTaskCount > 0 &&
+		activity.replaceableBlockedChildTaskCount == activity.childTaskCount
 }
 
 func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, projectID uuid.UUID) (projectExecutionContinuationSnapshotForWorker, error) {
@@ -2668,10 +2681,8 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 		activity := childActivity[task.ID]
 		taskRef := projectExecutionContinuationTaskRefForWorker(task, activity, taskHintsByTask[task.ID])
 		if isActionableProjectDraftTaskForWorker(task) {
-			if activity.childTaskCount > 0 {
-				if activity.activeChildTaskCount == 0 &&
-					activity.replaceableBlockedChildTaskCount > 0 &&
-					activity.replaceableBlockedChildTaskCount == activity.childTaskCount {
+			if activity.childTaskCount > 0 || activity.malformedChildTaskCount > 0 {
+				if projectContinuationDraftTaskNeedsFreshReplacementChildWorkForWorker(activity) {
 					if len(replacementDraftTasks) < 4 {
 						replacementDraftTasks = append(replacementDraftTasks, taskRef)
 					}
@@ -2680,7 +2691,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 					}
 					continue
 				}
-				if len(childActiveDraftTasks) < 4 {
+				if activity.childTaskCount > 0 && len(childActiveDraftTasks) < 4 {
 					childActiveDraftTasks = append(childActiveDraftTasks, taskRef)
 				}
 				continue
@@ -2828,9 +2839,6 @@ func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask, hin
 	activityByParentID := make(map[uuid.UUID]projectContinuationChildActivityForWorker)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDsForWorker(tasks)
 	for _, task := range tasks {
-		if _, skip := malformedChildTaskIDs[task.ID]; skip {
-			continue
-		}
 		var metadata map[string]any
 		if err := json.Unmarshal(task.Metadata, &metadata); err != nil {
 			continue
@@ -2842,6 +2850,12 @@ func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask, hin
 		parentIDText := strings.TrimSpace(fmt.Sprint(rawParentID))
 		parentID, err := uuid.Parse(parentIDText)
 		if err != nil || parentID == uuid.Nil {
+			continue
+		}
+		if _, skip := malformedChildTaskIDs[task.ID]; skip {
+			activity := activityByParentID[parentID]
+			activity.malformedChildTaskCount++
+			activityByParentID[parentID] = activity
 			continue
 		}
 		activity := activityByParentID[parentID]
@@ -2959,6 +2973,9 @@ func projectExecutionContinuationTaskRefForWorker(task repo.ProjectTask, activit
 		if activity.replaceableBlockedChildTaskCount > 0 {
 			parts = append(parts, "replaceable_blocked_child_tasks="+strconv.Itoa(activity.replaceableBlockedChildTaskCount))
 		}
+	}
+	if activity.malformedChildTaskCount > 0 {
+		parts = append(parts, "malformed_child_tasks="+strconv.Itoa(activity.malformedChildTaskCount))
 	}
 	return strings.Join(parts, " ")
 }
@@ -3171,7 +3188,7 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 	}
 	if replacementLine := strings.TrimSpace(snapshot.ReplacementDraftLine); replacementLine != "" {
 		lines = append(lines, replacementLine)
-		lines = append(lines, "Those draft parents no longer have active child execution. Their existing child lanes are terminally blocked, so create or queue the smallest replacement child task under the correct parent now instead of broad rediscovery.")
+		lines = append(lines, "Those draft parents no longer have active child execution. Their existing child lanes are terminally blocked or malformed, so create or queue the smallest replacement child task under the correct parent now instead of broad rediscovery.")
 		lines = append(lines, "Do not browse broad workspace roots, task trees, or flow templates first when the replacement parent already names the dependency or deliverable path.")
 	}
 	if parentLine := strings.TrimSpace(snapshot.ChildActiveDraftLine); parentLine != "" {
@@ -3188,6 +3205,9 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 		}
 		if strings.Contains(focusLine, "replaceable_blocked_child_tasks=") {
 			lines = append(lines, "Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.")
+		}
+		if strings.Contains(focusLine, "malformed_child_tasks=") {
+			lines = append(lines, "Because that focus parent only has malformed or stale child artifact lanes, do not queue the parent again from the project lane. Create the smallest fresh replacement child task under it now instead.")
 		}
 	}
 	return lines

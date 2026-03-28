@@ -7279,7 +7279,7 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 	}
 	if replacementLine := strings.TrimSpace(snapshot.ReplacementDraftLine); replacementLine != "" {
 		lines = append(lines, replacementLine)
-		lines = append(lines, "Those draft parents no longer have active child execution. Their existing child lanes are terminally blocked, so create or queue the smallest replacement child task under the correct parent now instead of broad rediscovery.")
+		lines = append(lines, "Those draft parents no longer have active child execution. Their existing child lanes are terminally blocked or malformed, so create or queue the smallest replacement child task under the correct parent now instead of broad rediscovery.")
 		lines = append(lines, "Do not browse broad workspace roots, task trees, or flow templates first when the replacement parent already names the dependency or deliverable path.")
 	}
 	if parentLine := strings.TrimSpace(snapshot.ChildActiveDraftLine); parentLine != "" {
@@ -7296,6 +7296,9 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		}
 		if strings.Contains(focusLine, "replaceable_blocked_child_tasks=") {
 			lines = append(lines, "Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.")
+		}
+		if strings.Contains(focusLine, "malformed_child_tasks=") {
+			lines = append(lines, "Because that focus parent only has malformed or stale child artifact lanes, do not queue the parent again from the project lane. Create the smallest fresh replacement child task under it now instead.")
 		}
 	}
 	return lines
@@ -13083,6 +13086,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := e.shouldBlockProjectContinuationFocusedDraftMutationTool(ctx, rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if blocked, reason := e.shouldBlockProjectContinuationFlowExecutionLookupTool(ctx, rt, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -17424,10 +17435,8 @@ func buildProjectExecutionContinuationSnapshot(
 		}
 		taskRef := projectExecutionContinuationTaskRef(task, activity, hints)
 		if isActionableProjectDraftTask(task) {
-			if activity.childTaskCount > 0 {
-				if activity.activeChildTaskCount == 0 &&
-					activity.replaceableBlockedChildTaskCount > 0 &&
-					activity.replaceableBlockedChildTaskCount == activity.childTaskCount {
+			if activity.childTaskCount > 0 || activity.malformedChildTaskCount > 0 {
+				if projectContinuationDraftTaskNeedsFreshReplacementChildWork(activity) {
 					if len(replacementDraftTasks) < 4 {
 						replacementDraftTasks = append(replacementDraftTasks, taskRef)
 					}
@@ -17436,7 +17445,7 @@ func buildProjectExecutionContinuationSnapshot(
 					}
 					continue
 				}
-				if len(childActiveDraftTasks) < 4 {
+				if activity.childTaskCount > 0 && len(childActiveDraftTasks) < 4 {
 					childActiveDraftTasks = append(childActiveDraftTasks, taskRef)
 				}
 				continue
@@ -17614,6 +17623,7 @@ func projectContinuationTaskReferencesURLIndex(task repo.ProjectTask) bool {
 type projectContinuationChildActivity struct {
 	childTaskCount                   int
 	activeChildTaskCount             int
+	malformedChildTaskCount          int
 	replaceableBlockedChildTaskCount int
 }
 
@@ -17621,12 +17631,15 @@ func projectContinuationChildTaskActivity(tasks []repo.ProjectTask, hintsByTask 
 	activityByParentID := make(map[uuid.UUID]projectContinuationChildActivity)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(tasks)
 	for _, task := range tasks {
-		if _, skip := malformedChildTaskIDs[task.ID]; skip {
-			continue
-		}
 		metadata := messageMetadataMap(task.Metadata)
 		parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
 		if !ok || parentID == uuid.Nil {
+			continue
+		}
+		if _, skip := malformedChildTaskIDs[task.ID]; skip {
+			activity := activityByParentID[parentID]
+			activity.malformedChildTaskCount++
+			activityByParentID[parentID] = activity
 			continue
 		}
 		activity := activityByParentID[parentID]
@@ -17643,6 +17656,18 @@ func projectContinuationChildTaskActivity(tasks []repo.ProjectTask, hintsByTask 
 		activityByParentID[parentID] = activity
 	}
 	return activityByParentID
+}
+
+func projectContinuationDraftTaskNeedsFreshReplacementChildWork(activity projectContinuationChildActivity) bool {
+	if activity.activeChildTaskCount != 0 {
+		return false
+	}
+	if activity.malformedChildTaskCount > 0 && activity.childTaskCount == 0 {
+		return true
+	}
+	return activity.childTaskCount > 0 &&
+		activity.replaceableBlockedChildTaskCount > 0 &&
+		activity.replaceableBlockedChildTaskCount == activity.childTaskCount
 }
 
 func projectContinuationMalformedChildTaskIDs(tasks []repo.ProjectTask) map[uuid.UUID]struct{} {
@@ -17741,6 +17766,9 @@ func projectExecutionContinuationTaskRef(task repo.ProjectTask, activity project
 		if activity.replaceableBlockedChildTaskCount > 0 {
 			parts = append(parts, "replaceable_blocked_child_tasks="+strconv.Itoa(activity.replaceableBlockedChildTaskCount))
 		}
+	}
+	if activity.malformedChildTaskCount > 0 {
+		parts = append(parts, "malformed_child_tasks="+strconv.Itoa(activity.malformedChildTaskCount))
 	}
 	return strings.Join(parts, " ")
 }
@@ -24523,6 +24551,7 @@ func shouldStopAfterBlockedProjectExecutionBlockedMutation(rt *turnRuntime, resu
 			"flow_owned_review_status_blocked",
 			"review_action_required",
 			"deliverable_path_required",
+			"project continuation already has focused draft task",
 			"task must remain orchestration-only while executable child tasks exist",
 		) {
 			return true
@@ -24564,6 +24593,9 @@ func projectExecutionBlockedMutationStopMessage(results []ToolResult) string {
 		errText := strings.ToLower(strings.TrimSpace(toolResultErrorCode(result)))
 		if strings.Contains(errText, "bounded size policy") || strings.Contains(errText, "bounded task-size policy") {
 			return "[Project continuation found that the remaining draft work still violates the bounded size policy. Split it into smaller reviewable child tasks instead of trying to queue the broad parent again.]"
+		}
+		if strings.Contains(errText, "project continuation already has focused draft task") {
+			return "[Project continuation already has a narrower focused draft task. Create or advance the smallest fresh child work beneath that focus task instead of re-queueing it or promoting its ancestors from the project lane.]"
 		}
 		if strings.Contains(errText, "task_execution_required") {
 			detail := strings.TrimSpace(anyString(result.Output["message"]))
@@ -26897,6 +26929,128 @@ func buildProjectExecutionPrematureDoneToolGuardError(taskRecord repo.ProjectTas
 		return fmt.Sprintf("project continuation should not force %s directly to done from the project lane. Advance the task through its flow or queue the next runnable task instead.", label)
 	}
 	return fmt.Sprintf("project continuation still has %d draft tasks remaining. Do not force %s directly to done from the project lane before it has entered and completed its flow; queue or otherwise advance the next runnable task instead.", remainingDraftTasks, label)
+}
+
+func buildProjectContinuationFocusedDraftReplacementGuardError(focusTask repo.ProjectTask, activity projectContinuationChildActivity) string {
+	label := projectBootstrapTaskLabel(focusTask)
+	switch {
+	case activity.malformedChildTaskCount > 0:
+		return fmt.Sprintf("project continuation already has focused draft task %s with %d malformed child artifact lane(s) from stale decomposition. Do not queue that parent again from the project lane; create the smallest fresh replacement child task beneath %s instead.", label, activity.malformedChildTaskCount, label)
+	case activity.replaceableBlockedChildTaskCount > 0:
+		return fmt.Sprintf("project continuation already has focused draft task %s with %d terminally blocked child lane(s). Do not queue that parent again from the project lane; create the smallest fresh replacement child task beneath %s instead.", label, activity.replaceableBlockedChildTaskCount, label)
+	default:
+		return fmt.Sprintf("project continuation already has focused draft task %s with stale child lanes. Do not queue that parent again from the project lane; create the smallest fresh replacement child task beneath %s instead.", label, label)
+	}
+}
+
+func buildProjectContinuationFocusedDraftAncestorPromotionGuardError(targetTask, focusTask repo.ProjectTask) string {
+	targetLabel := projectBootstrapTaskLabel(targetTask)
+	focusLabel := projectBootstrapTaskLabel(focusTask)
+	return fmt.Sprintf("project continuation already has focused draft task %s as the next bounded step. Do not promote named ancestor draft %s from the project lane just to unblock it; create or advance the smallest bounded child work beneath %s instead.", focusLabel, targetLabel, focusLabel)
+}
+
+func projectContinuationPromptFocusTaskID(initialMessage string) uuid.UUID {
+	const marker = "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step:"
+	idx := strings.Index(initialMessage, marker)
+	if idx < 0 {
+		return uuid.Nil
+	}
+	match := projectContinuationPromptTaskIDPattern.FindStringSubmatch(initialMessage[idx:])
+	if len(match) != 2 {
+		return uuid.Nil
+	}
+	focusTaskID, err := uuid.Parse(strings.TrimSpace(match[1]))
+	if err != nil {
+		return uuid.Nil
+	}
+	return focusTaskID
+}
+
+func projectContinuationTaskIsAncestor(tasksByID map[uuid.UUID]repo.ProjectTask, ancestorID, descendantID uuid.UUID) bool {
+	if ancestorID == uuid.Nil || descendantID == uuid.Nil || ancestorID == descendantID {
+		return false
+	}
+	currentID := descendantID
+	seen := make(map[uuid.UUID]struct{})
+	for currentID != uuid.Nil {
+		taskRecord, ok := tasksByID[currentID]
+		if !ok {
+			return false
+		}
+		metadata := messageMetadataMap(taskRecord.Metadata)
+		parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+		if !ok || parentID == uuid.Nil {
+			return false
+		}
+		if parentID == ancestorID {
+			return true
+		}
+		if _, exists := seen[parentID]; exists {
+			return false
+		}
+		seen[parentID] = struct{}{}
+		currentID = parentID
+	}
+	return false
+}
+
+func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") ||
+		!strings.EqualFold(strings.TrimSpace(toolName), "task.update") {
+		return false, ""
+	}
+	nextStatus := strings.ToLower(strings.TrimSpace(stringValue(arguments["work_status"])))
+	switch nextStatus {
+	case "queued", "in_progress", "review", "done":
+	default:
+		return false, ""
+	}
+	targetTaskID, ok := parseUUIDAny(arguments["task_id"])
+	if !ok || targetTaskID == uuid.Nil {
+		return false, ""
+	}
+	focusTaskID := projectContinuationPromptFocusTaskID(strings.TrimSpace(rt.initialMessageText))
+	if focusTaskID == uuid.Nil {
+		return false, ""
+	}
+	projectID := resolveProjectID(ctx, rt.session, e.tasks)
+	if projectID == nil || *projectID == uuid.Nil {
+		return false, ""
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, *projectID)
+	if err != nil {
+		return false, ""
+	}
+	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(projectTasks))
+	for _, task := range projectTasks {
+		tasksByID[task.ID] = task
+	}
+	focusTask, ok := tasksByID[focusTaskID]
+	if !ok {
+		return false, ""
+	}
+	taskHintsByTask, err := e.projectContinuationTaskHintsByTask(ctx, projectTasks)
+	if err != nil {
+		return false, ""
+	}
+	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
+	focusActivity := childActivity[focusTaskID]
+	if targetTaskID == focusTaskID && projectContinuationDraftTaskNeedsFreshReplacementChildWork(focusActivity) {
+		return true, buildProjectContinuationFocusedDraftReplacementGuardError(focusTask, focusActivity)
+	}
+	targetTask, ok := tasksByID[targetTaskID]
+	if !ok {
+		return false, ""
+	}
+	if strings.EqualFold(strings.TrimSpace(targetTask.WorkStatus), "draft") &&
+		projectContinuationTaskIsAncestor(tasksByID, targetTaskID, focusTaskID) {
+		return true, buildProjectContinuationFocusedDraftAncestorPromotionGuardError(targetTask, focusTask)
+	}
+	return false, ""
 }
 
 func buildTaskExecutionOffTargetEvidenceToolGuardError(targetPath, path, toolName string) string {

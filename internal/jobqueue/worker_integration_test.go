@@ -17954,8 +17954,14 @@ func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedProcedural
 	if err != nil {
 		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
 	}
-	if !strings.Contains(snapshot.DraftTaskLine, "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/") {
-		t.Fatalf("DraftTaskLine = %q, want actionable parent task", snapshot.DraftTaskLine)
+	if strings.Contains(snapshot.DraftTaskLine, "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/") {
+		t.Fatalf("DraftTaskLine = %q, should not treat malformed procedural-child parent as a plain runnable draft", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/") {
+		t.Fatalf("ReplacementDraftLine = %q, want actionable parent task moved to replacement-child guidance", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=1") {
+		t.Fatalf("ReplacementDraftLine = %q, want malformed child count", snapshot.ReplacementDraftLine)
 	}
 	if strings.Contains(snapshot.ActiveTaskLine, "Use cli_execute with shell scripting") {
 		t.Fatalf("ActiveTaskLine = %q, should omit malformed procedural child artifact", snapshot.ActiveTaskLine)
@@ -17965,6 +17971,9 @@ func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedProcedural
 	}
 	if !strings.Contains(snapshot.FocusTaskLine, "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/") {
 		t.Fatalf("FocusTaskLine = %q, want parent task restored as focus", snapshot.FocusTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "malformed_child_tasks=1") {
+		t.Fatalf("FocusTaskLine = %q, want malformed child count", snapshot.FocusTaskLine)
 	}
 
 	remainingDrafts, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
