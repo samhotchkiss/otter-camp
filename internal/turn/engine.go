@@ -108,6 +108,7 @@ const (
 	asyncProjectTaskWorkPromptGuardrail        = 35000
 	asyncProjectTaskReviewPromptGuardrail      = 20000
 	taskReviewPreferredDeliverableReadMaxBytes = 8192
+	taskReviewCheckpointOutputReadMaxBytes     = 4096
 	validationLoopBlockThreshold               = 3
 	validationLoopTurnStopThreshold            = 2
 	duplicateSuccessfulFileWriteChurnCode      = "duplicate_successful_write_churn"
@@ -24413,6 +24414,7 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 			lines = append(lines, fmt.Sprintf("If reading `%s` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.", targetPath))
 			if rootPath != "" && len(checkpointOutputs) > 1 {
 				lines = append(lines, fmt.Sprintf("The checkpoint already identifies the task-owned outputs under `%s`: %s. Treat that output set as authoritative for this batch; after inspecting `%s`, read any additional evidence directly from those named outputs and do not call `file.list` on `%s` or reread dependency artifacts outside `%s` just to rediscover which files belong to the batch.", rootPath, summarizeReviewPromptOutputPaths(checkpointOutputs, reviewPromptCheckpointOutputSummaryLimit(checkpointOutputs)), targetPath, rootPath, rootPath))
+				lines = append(lines, fmt.Sprintf("For additional checkpoint outputs under `%s`, prefer bounded `file.read` calls with `max_bytes=%d` unless you already know you need a smaller slice.", rootPath, taskReviewCheckpointOutputReadMaxBytes))
 			}
 		} else if rootPath != "" {
 			lines = append(lines, fmt.Sprintf("Start with the preferred deliverable root `%s`. Inspect that output root directly before broad workspace discovery, and do not begin with task.get, git.log, or dependency-file reads outside `%s` unless `%s` itself is missing.", rootPath, rootPath, rootPath))
@@ -26825,7 +26827,33 @@ func (e *TurnEngine) maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(ctx
 		}
 
 		path := normalizeWorkspaceRelativePath(stringValue(call.Arguments["path"]))
-		if path == "" || !sameWorkspaceRelativePath(path, targetPath) {
+		if path == "" {
+			out = append(out, call)
+			continue
+		}
+		if siblingMaxBytes, ok := taskReviewCheckpointOutputSiblingReadMaxBytesForBatch(rt, toolCalls, path, targetPath); ok {
+			callCopy := call
+			changedCall := false
+			explicitMaxBytes := intValue(call.Arguments["max_bytes"])
+			if explicitMaxBytes <= 0 || explicitMaxBytes > siblingMaxBytes {
+				if callCopy.Arguments == nil {
+					callCopy.Arguments = map[string]any{}
+				} else {
+					callCopy.Arguments = cloneMap(call.Arguments)
+				}
+				callCopy.Arguments["max_bytes"] = siblingMaxBytes
+				changedCall = true
+			}
+			if changedCall {
+				callCopy.Name = "file.read"
+				out = append(out, callCopy)
+				rewritten = true
+				continue
+			}
+			out = append(out, call)
+			continue
+		}
+		if !sameWorkspaceRelativePath(path, targetPath) {
 			out = append(out, call)
 			continue
 		}
@@ -26986,7 +27014,20 @@ func rewriteTaskReviewPreferredDeliverableReadDispatchCall(rt *turnRuntime, tool
 		return toolName, arguments
 	}
 	targetPath := taskReviewPreferredDeliverableTarget(rt)
-	if targetPath == "" || !sameWorkspaceRelativePath(normalizeWorkspaceRelativePath(stringValue(arguments["path"])), targetPath) {
+	path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+	if targetPath == "" || path == "" {
+		return toolName, arguments
+	}
+	if siblingMaxBytes, ok := taskReviewCheckpointOutputSiblingReadMaxBytesAfterTargetRead(rt, path, targetPath); ok {
+		explicitMaxBytes := intValue(arguments["max_bytes"])
+		if explicitMaxBytes > 0 && explicitMaxBytes <= siblingMaxBytes {
+			return toolName, arguments
+		}
+		rewritten := cloneMap(arguments)
+		rewritten["max_bytes"] = siblingMaxBytes
+		return "file.read", rewritten
+	}
+	if !sameWorkspaceRelativePath(path, targetPath) {
 		return toolName, arguments
 	}
 	if !rt.reviewPreferredDeliverableHeadTruncated || rt.reviewPreferredDeliverableTailReadSeen || rt.reviewPreferredDeliverableByteSize <= taskReviewPreferredDeliverableReadMaxBytes {
@@ -27009,6 +27050,37 @@ func rewriteTaskReviewPreferredDeliverableReadDispatchCall(rt *turnRuntime, tool
 		rewritten["max_bytes"] = taskReviewPreferredDeliverableReadMaxBytes
 	}
 	return "file.read", rewritten
+}
+
+func taskReviewCheckpointOutputSiblingReadMaxBytesForBatch(rt *turnRuntime, calls []ModelToolCall, path, targetPath string) (int, bool) {
+	if !taskReviewBatchIncludesPreferredDeliverableRead(calls, targetPath) {
+		return 0, false
+	}
+	return taskReviewCheckpointOutputSiblingReadMaxBytes(rt, path, targetPath)
+}
+
+func taskReviewCheckpointOutputSiblingReadMaxBytesAfterTargetRead(rt *turnRuntime, path, targetPath string) (int, bool) {
+	if !sameWorkspaceRelativePath(strings.TrimSpace(rt.reviewPreferredDeliverablePath), targetPath) {
+		return 0, false
+	}
+	return taskReviewCheckpointOutputSiblingReadMaxBytes(rt, path, targetPath)
+}
+
+func taskReviewCheckpointOutputSiblingReadMaxBytes(rt *turnRuntime, path, targetPath string) (int, bool) {
+	if rt == nil || path == "" || targetPath == "" || sameWorkspaceRelativePath(path, targetPath) {
+		return 0, false
+	}
+	rootPath := taskReviewPreferredDeliverableRoot(rt)
+	if rootPath == "" {
+		rootPath = normalizeWorkspaceRelativePath(filepath.ToSlash(filepath.Dir(targetPath)))
+	}
+	if rootPath == "" || !taskReviewPromptTreatsCheckpointOutputSetAsAuthoritative(rt, rootPath) {
+		return 0, false
+	}
+	if !workspacePathWithinRoot(path, rootPath) {
+		return 0, false
+	}
+	return taskReviewCheckpointOutputReadMaxBytes, true
 }
 
 func shouldBlockTaskReviewPreferredDeliverableFirstTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {

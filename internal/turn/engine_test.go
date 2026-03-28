@@ -4559,6 +4559,55 @@ func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsPreservesSmaller
 	}
 }
 
+func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsBoundsAuthoritativeCheckpointSiblingRead(t *testing.T) {
+	engine := &TurnEngine{}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `content/posts/practice-one-screen-at-a-time.md`.\n" +
+			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/practice-one-screen-at-a-time.md`, `content/posts/discomfort-is-growth.md`.\n" +
+			"Treat that output set as authoritative for this batch; after inspecting `content/posts/practice-one-screen-at-a-time.md`, read any additional evidence directly from those named outputs and do not call `file.list` on `content/posts` or reread dependency artifacts outside `content/posts` just to rediscover which files belong to the batch.\n" +
+			"For additional checkpoint outputs under `content/posts`, prefer bounded `file.read` calls with `max_bytes=4096` unless you already know you need a smaller slice.\n" +
+			"Use flow.review_decision with the active flow_node_execution_id to approve or reject this review step.",
+	}
+	toolCalls := []ModelToolCall{
+		{
+			ID:   "read-target",
+			Name: "file.read",
+			Arguments: map[string]any{
+				"path": "content/posts/practice-one-screen-at-a-time.md",
+			},
+		},
+		{
+			ID:   "read-sibling",
+			Name: "file_read",
+			Arguments: map[string]any{
+				"path": "content/posts/discomfort-is-growth.md",
+			},
+		},
+	}
+
+	rewritten, changed, err := engine.maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(context.Background(), rt, toolCalls)
+	if err != nil {
+		t.Fatalf("maybeRewriteTaskReviewPreferredDeliverableReadToolCalls: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	if got := intValue(rewritten[0].Arguments["max_bytes"]); got != taskReviewPreferredDeliverableReadMaxBytes {
+		t.Fatalf("target max_bytes = %d, want %d", got, taskReviewPreferredDeliverableReadMaxBytes)
+	}
+	if rewritten[1].Name != "file.read" {
+		t.Fatalf("sibling tool name = %q, want normalized file.read", rewritten[1].Name)
+	}
+	if got := intValue(rewritten[1].Arguments["max_bytes"]); got != taskReviewCheckpointOutputReadMaxBytes {
+		t.Fatalf("sibling max_bytes = %d, want %d", got, taskReviewCheckpointOutputReadMaxBytes)
+	}
+}
+
 func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsUsesTailOffsetAfterTruncatedHeadRead(t *testing.T) {
 	messages := newFakeMessageRepo()
 	sessionID := uuid.New()
@@ -4728,6 +4777,36 @@ func TestRewriteTaskReviewPreferredDeliverableReadDispatchCallUsesCurrentTurnTai
 	}
 	if got := intValue(arguments["max_bytes"]); got != taskReviewPreferredDeliverableReadMaxBytes {
 		t.Fatalf("max_bytes = %d, want %d", got, taskReviewPreferredDeliverableReadMaxBytes)
+	}
+}
+
+func TestRewriteTaskReviewPreferredDeliverableReadDispatchCallBoundsAuthoritativeCheckpointSiblingRead(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        uuid.New(),
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `content/posts/practice-one-screen-at-a-time.md`.\n" +
+			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/practice-one-screen-at-a-time.md`, `content/posts/discomfort-is-growth.md`.\n" +
+			"Treat that output set as authoritative for this batch; after inspecting `content/posts/practice-one-screen-at-a-time.md`, read any additional evidence directly from those named outputs and do not call `file.list` on `content/posts` or reread dependency artifacts outside `content/posts` just to rediscover which files belong to the batch.\n" +
+			"For additional checkpoint outputs under `content/posts`, prefer bounded `file.read` calls with `max_bytes=4096` unless you already know you need a smaller slice.\n" +
+			"Use flow.review_decision with the active flow_node_execution_id to approve or reject this review step.",
+		reviewPreferredDeliverablePath: "content/posts/practice-one-screen-at-a-time.md",
+	}
+
+	name, arguments := rewriteTaskReviewPreferredDeliverableReadDispatchCall(rt, "file_read", map[string]any{
+		"path": "content/posts/discomfort-is-growth.md",
+	})
+	if name != "file.read" {
+		t.Fatalf("name = %q, want file.read", name)
+	}
+	if got := intValue(arguments["max_bytes"]); got != taskReviewCheckpointOutputReadMaxBytes {
+		t.Fatalf("max_bytes = %d, want %d", got, taskReviewCheckpointOutputReadMaxBytes)
+	}
+	if got := intValue(arguments["offset_bytes"]); got != 0 {
+		t.Fatalf("offset_bytes = %d, want 0 for sibling checkpoint output read", got)
 	}
 }
 

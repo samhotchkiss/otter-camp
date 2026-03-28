@@ -1312,3 +1312,23 @@
   - expected result after deploy:
     - once a batch review has successfully read the preferred target, the same turn can move into named same-root outputs from the authoritative batch set
     - the lane stops reopening the old sibling-read guard wall after already satisfying the “read the preferred target first” requirement
+- 2026-03-28 14:27:36 MDT - `Bound authoritative batch review sibling reads`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `taskReviewCheckpointOutputReadMaxBytes = 4096`
+    - authoritative batch-review prompts now tell the model to use bounded reads for additional checkpoint outputs under the shared deliverable root
+    - `maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(...)` now rewrites same-root non-target checkpoint-output reads in a batch that already includes the preferred target read to `max_bytes=4096` unless the model already asked for a smaller slice
+    - `rewriteTaskReviewPreferredDeliverableReadDispatchCall(...)` now does the same for follow-on same-turn sibling reads after a successful preferred-target read
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsBoundsAuthoritativeCheckpointSiblingRead`
+    - added `TestRewriteTaskReviewPreferredDeliverableReadDispatchCallBoundsAuthoritativeCheckpointSiblingRead`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3429` so fresh synthetic review prompts on hot sessions are not suppressed by same-version pending rows from the prior binary
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(MaybeRewriteTaskReviewPreferredDeliverableReadToolCalls(AddsMaxBytes|PreservesSmallerExplicitLimit|BoundsAuthoritativeCheckpointSiblingRead|UsesTailOffsetAfterTruncatedHeadRead|UsesTailOffsetAfterCurrentTurnHeadRead|DoesNotReuseTailAfterCurrentTurnTailRead)|RewriteTaskReviewPreferredDeliverableReadDispatchCall(UsesCurrentTurnTailOffset|BoundsAuthoritativeCheckpointSiblingRead)|ShouldNotBlockTaskReviewSiblingReadWithinAuthoritativeCheckpointOutputSet|ShouldNotBlockTaskReviewPreferredDeliverableFirstToolAfterSuccessfulTargetReadWithinAuthoritativeOutputSet)$' -count=1`
+  - deploy status:
+    - rebuilt and restarted tmux `codex-e2e-20260324`; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+    - direct post-deploy proof is still pending because task-64 session `5a0c5569-b5f0-4ac9-ac55-c73eea9aea73` closed before the new binary came up
+  - expected result after deploy:
+    - authoritative batch review keeps the primary preferred-target read/tail behavior intact
+    - same-root sibling spot-checks stay allowed, but no longer default toward oversized reads that blow up prompt growth
