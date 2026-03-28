@@ -6894,6 +6894,9 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 	}
 	if focusLine := strings.TrimSpace(snapshot.FocusTaskLine); focusLine != "" {
 		lines = append(lines, focusLine)
+		if strings.Contains(focusLine, "child_tasks=") && strings.TrimSpace(snapshot.ActiveTaskLine) != "" {
+			lines = append(lines, "If that focus draft already has child tasks and the active-task snapshot above already names those child lanes, do not reread the parent or child task records first. Queue the draft only if it is still runnable as-is, split it directly into smaller reviewable work if bounded-size policy still blocks it, or report one concrete blocker sentence.")
+		}
 	}
 	return lines
 }

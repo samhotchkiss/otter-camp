@@ -15509,6 +15509,22 @@ func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	}
 }
 
+func TestBuildProjectContinuationActionPromptAddsChildTaskAntiRereadGuidanceForFocusDraft(t *testing.T) {
+	prompt := buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+		ProjectLine:    "Active project id: 123",
+		ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 35 (Scrape batch 1) id=aaa title=\"Scrape batch 1\" work_status=blocked assigned_agent_id=worker-1",
+		DraftTaskLine:  "Actionable draft tasks already in the tree: task 34 (Scrape and import technonymous.org posts from URL index) id=bbb title=\"Scrape and import technonymous.org posts from URL index\" work_status=draft assigned_agent_id=worker-1 flow_template_id=ft-1 child_tasks=2",
+		FocusTaskLine:  "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 34 (Scrape and import technonymous.org posts from URL index) id=bbb title=\"Scrape and import technonymous.org posts from URL index\" work_status=draft assigned_agent_id=worker-1 flow_template_id=ft-1 child_tasks=2",
+	})
+
+	if !strings.Contains(prompt, "do not reread the parent or child task records first") {
+		t.Fatalf("prompt = %q, want child-task anti-reread guidance for focus draft", prompt)
+	}
+	if !strings.Contains(prompt, "split it directly into smaller reviewable work if bounded-size policy still blocks it") {
+		t.Fatalf("prompt = %q, want bounded-size split guidance for focus draft", prompt)
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotSummarizesProjectState(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

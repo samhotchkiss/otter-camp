@@ -12073,7 +12073,7 @@ func TestJobWorkerEnsureProjectContinuationMessageIncludesSnapshotGuidance(t *te
 	}); err != nil {
 		t.Fatalf("create active task: %v", err)
 	}
-	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+	draftTask, err := taskRepo.Create(ctx, repo.ProjectTask{
 		OrganizationID: org.ID,
 		ProjectID:      project.ID,
 		TaskNumber:     34,
@@ -12083,8 +12083,40 @@ func TestJobWorkerEnsureProjectContinuationMessageIncludesSnapshotGuidance(t *te
 		FlowTemplateID: &template.ID,
 		CreatedByType:  "system",
 		CreatedByID:    &agent.ID,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create draft task: %v", err)
+	}
+	childMetadata := json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, draftTask.ID.String()))
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      35,
+		Title:           "Scrape batch 1",
+		WorkStatus:      "blocked",
+		BlocksScope:     "task",
+		AssignedAgentID: &agent.ID,
+		FlowTemplateID:  &template.ID,
+		Metadata:        childMetadata,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	}); err != nil {
+		t.Fatalf("create first blocked child task: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      36,
+		Title:           "Scrape batch 2",
+		WorkStatus:      "blocked",
+		BlocksScope:     "task",
+		AssignedAgentID: &agent.ID,
+		FlowTemplateID:  &template.ID,
+		Metadata:        childMetadata,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	}); err != nil {
+		t.Fatalf("create second blocked child task: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
 		UPDATE project_task
@@ -12130,6 +12162,9 @@ func TestJobWorkerEnsureProjectContinuationMessageIncludesSnapshotGuidance(t *te
 	}
 	if !strings.Contains(content, "Start from this existing actionable draft before broad rediscovery") {
 		t.Fatalf("continuation content missing focus-task guidance: %q", content)
+	}
+	if !strings.Contains(content, "do not reread the parent or child task records first") {
+		t.Fatalf("continuation content missing child-task anti-reread guidance: %q", content)
 	}
 }
 
