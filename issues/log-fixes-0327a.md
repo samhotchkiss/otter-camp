@@ -1,5 +1,12 @@
 # 0327a Fix Log
 
+- 2026-03-28 01:23:16 MDT - `pending` `Stop recovery retries after identical successful file rewrites`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so recovery-mode empty `cli.execute` now checks the current recovery checkpoint before attempting the usual rewrite-to-`file.write` fallback
+  - when the checkpoint already records repeated successful identical `file.write` churn for the same target path, the recovery lane now halts immediately instead of rewriting one more empty-command retry back into the same file output
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) for the new repeated-successful-write checkpoint case, alongside the existing repeated missing-command and first-correction cases
+  - verified with `gofmt -w internal/turn/engine.go internal/turn/engine_test.go` and `go test ./internal/turn -run 'Test(HandleRecoveryCLIExecuteWithoutCommand(StopsAfterRepeatedResumeFailure|StopsAfterRepeatedSuccessfulFileWriteChurn|PersistsCheckpointOnFirstCorrection)|ShouldBlockTaskExecutionSiblingResponsibilityToolForWriteFocusedChildLane|ShouldBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChildDetailFetch|ShouldNotBlockTaskExecutionSiblingResponsibilityToolForDiscoveryChildListingFetch)$' -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `data.status=ok`
+  - live status: deployed on the new runtime, but direct production proof is still pending because the hot Sam.blog template recovery session `cc3576a4-ec4a-4975-b823-23a5c6597946` had already completed before the deploy
 - 2026-03-28 01:16:56 MDT - `pending` `Block discovery child lanes from fetching full article bodies`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so the existing sibling-responsibility guard now covers both child-lane directions:
     - write-focused child lanes still cannot browse external sources when a sibling already owns discovery/navigation work
