@@ -586,6 +586,7 @@ type turnRuntime struct {
 	recoveryTargetPath                      string
 	placeholderTargetSeen                   bool
 	reviewPreferredDeliverablePath          string
+	reviewPreferredDeliverableRootListed    bool
 	reviewPreferredDeliverableByteSize      int
 	reviewPreferredDeliverableHeadTruncated bool
 	reviewPreferredDeliverableTailReadSeen  bool
@@ -22271,6 +22272,7 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 	for _, failure := range failures {
 		previous := next
 		candidate, candidateBlocked := nextTaskValidationGuardState(next, rt.initialMessageID, rt.turn.ID, failure, e.now())
+		candidate = normalizeImmediateTaskValidationTurnStopState(previous, candidate, failure)
 		next = candidate
 		if candidateBlocked {
 			blockedNow = true
@@ -22638,13 +22640,15 @@ func classifyRepeatedSuccessfulFileWriteChurn(turnMessages []repo.ChatMessage, r
 	}
 
 	reason := fmt.Sprintf("repeated successful file.write rewrote `%s` with identical byte_size=%d in the same turn", path, byteSize)
-	return buildToolValidationFailure(
+	failure := buildToolValidationFailure(
 		"file.write",
 		duplicateSuccessfulFileWriteChurnCode,
 		reason,
 		successfulFileWriteChurnAttemptFingerprint(path, byteSize, created),
 		path,
-	), true
+	)
+	failure.ObservedCount = matchCount
+	return failure, true
 }
 
 func successfulFileWriteChurnAttemptFingerprint(path string, byteSize int, created bool) string {
@@ -23821,6 +23825,27 @@ func nextTaskValidationGuardState(current taskValidationGuardState, initialMessa
 	return next, next.Blocked && !current.Blocked
 }
 
+func shouldPromoteImmediateTaskValidationTurnStop(current taskValidationGuardState, failure toolValidationFailure) bool {
+	if current.Count != 0 {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(failure.FailureCode), duplicateSuccessfulFileWriteChurnCode) {
+		return false
+	}
+	return failure.ObservedCount >= validationLoopTurnStopThreshold
+}
+
+func normalizeImmediateTaskValidationTurnStopState(current, next taskValidationGuardState, failure toolValidationFailure) taskValidationGuardState {
+	if !shouldPromoteImmediateTaskValidationTurnStop(current, failure) {
+		return next
+	}
+	if next.Count < validationLoopTurnStopThreshold {
+		next.Count = validationLoopTurnStopThreshold
+	}
+	next.Blocked = next.Count >= validationLoopBlockThreshold
+	return next
+}
+
 func shouldStopTurnAfterRepeatedTaskValidationFailure(rt *turnRuntime, current, next taskValidationGuardState, failure toolValidationFailure) bool {
 	if rt == nil || rt.session == nil || rt.turn == nil {
 		return false
@@ -23840,6 +23865,9 @@ func shouldStopTurnAfterRepeatedTaskValidationFailure(rt *turnRuntime, current, 
 	if current.Count == 0 &&
 		strings.EqualFold(strings.TrimSpace(failure.FailureCode), duplicateRedirectedFileWriteChurnCode) &&
 		failure.ObservedCount >= validationLoopBlockThreshold {
+		return true
+	}
+	if shouldPromoteImmediateTaskValidationTurnStop(current, failure) {
 		return true
 	}
 	if next.Count < validationLoopTurnStopThreshold {
@@ -24462,6 +24490,7 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 			if len(checkpointOutputs) > 1 {
 				lines = append(lines, fmt.Sprintf("The checkpoint already identifies the task-owned outputs under `%s`: %s. Treat that output set as authoritative for this batch; read the named outputs directly and do not call `file.list` on `%s` or reread dependency artifacts outside `%s` just to rediscover which files belong to the batch.", rootPath, summarizeReviewPromptOutputPaths(checkpointOutputs, reviewPromptCheckpointOutputSummaryLimit(checkpointOutputs)), rootPath, rootPath))
 			}
+			lines = append(lines, fmt.Sprintf("After listing `%s`, sample at most %d files under `%s` in this turn. Use the listing to verify presence/count first; do not try to read every file in the batch before calling `flow.review_decision`.", rootPath, taskReviewCheckpointOutputSampleCap, rootPath))
 			lines = append(lines, fmt.Sprintf("If listing or reading under `%s` returns `not_found`, stop broad inspection and call flow.review_decision reject using that missing deliverable-root evidence.", rootPath))
 		}
 		if taskLooksLikeOrchestrationOnlyParent(taskRecord) {
@@ -27083,19 +27112,37 @@ func recordTaskReviewPreferredDeliverableReadResult(rt *turnRuntime, result Tool
 	if rt == nil || !taskReviewPreferredDeliverableFirstApplies(rt) {
 		return
 	}
-	if !strings.EqualFold(strings.TrimSpace(result.Name), "file.read") || len(result.Output) == 0 {
+	rootPath := taskReviewPreferredDeliverableRoot(rt)
+	targetPath := taskReviewPreferredDeliverableTarget(rt)
+	switch strings.ToLower(strings.TrimSpace(result.Name)) {
+	case "file.list":
+		if targetPath == "" && rootPath != "" && len(result.Output) != 0 {
+			if _, ok := result.Output["entries"]; ok {
+				rt.reviewPreferredDeliverableRootListed = true
+			}
+		}
+		return
+	case "file.read":
+	default:
 		return
 	}
-	targetPath := taskReviewPreferredDeliverableTarget(rt)
-	if targetPath == "" {
+	if len(result.Output) == 0 {
 		return
 	}
 	path := normalizeWorkspaceRelativePath(anyString(result.Output["path"]))
 	if path == "" {
 		return
 	}
+	if targetPath == "" {
+		if rootPath != "" &&
+			rt.reviewPreferredDeliverableRootListed &&
+			workspacePathWithinRoot(path, rootPath) &&
+			intValue(result.Output["byte_size"]) > 0 {
+			rt.reviewCheckpointOutputSiblingReads++
+		}
+		return
+	}
 	if !sameWorkspaceRelativePath(path, targetPath) {
-		rootPath := taskReviewPreferredDeliverableRoot(rt)
 		if rootPath == "" {
 			rootPath = normalizeWorkspaceRelativePath(filepath.ToSlash(filepath.Dir(targetPath)))
 		}
@@ -27220,7 +27267,16 @@ func shouldBlockTaskReviewPreferredDeliverableFirstTool(rt *turnRuntime, toolNam
 	switch normalizedToolName {
 	case "file.read", "file_read":
 		path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
-		if path == "" || sameWorkspaceRelativePath(path, targetPath) {
+		if path == "" {
+			return false, ""
+		}
+		if sameWorkspaceRelativePath(path, targetPath) {
+			offsetBytes := intValue(arguments["offset_bytes"])
+			if sameWorkspaceRelativePath(strings.TrimSpace(rt.reviewPreferredDeliverablePath), targetPath) &&
+				!rt.reviewPreferredDeliverableHeadTruncated &&
+				offsetBytes <= 0 {
+				return true, buildTaskReviewRepeatedPreferredDeliverableReadGuardError(targetPath)
+			}
 			return false, ""
 		}
 		rootPath := taskReviewPreferredDeliverableRoot(rt)
@@ -27266,6 +27322,11 @@ func shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt *turnRuntime, too
 			return true, buildTaskReviewCheckpointOutputSetAuthoritativeGuardError(rootPath, normalizedToolName)
 		}
 		if path != "" && workspacePathWithinRoot(path, rootPath) {
+			if (normalizedToolName == "file.read" || normalizedToolName == "file_read") &&
+				rt.reviewPreferredDeliverableRootListed &&
+				rt.reviewCheckpointOutputSiblingReads >= taskReviewCheckpointOutputSampleCap {
+				return true, buildTaskReviewCheckpointOutputSampleCapGuardError(rootPath, taskReviewCheckpointOutputSampleCap)
+			}
 			return false, ""
 		}
 		if taskReviewPromptNamesCheckpointOutputSet(rt, rootPath) {
@@ -28410,6 +28471,14 @@ func buildTaskReviewPreferredDeliverableFirstGuardError(targetPath, toolName str
 	default:
 		return fmt.Sprintf("this review prompt already names preferred deliverable target `%s`. Do not inspect sibling files before reading `%s` directly. Read `%s` first, then call flow.review_decision reject immediately if it is missing or a placeholder.", targetPath, targetPath, targetPath)
 	}
+}
+
+func buildTaskReviewRepeatedPreferredDeliverableReadGuardError(targetPath string) string {
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	if targetPath == "" {
+		return "the preferred deliverable target was already fully inspected in this turn. Do not reread it from byte 0 again; use that evidence or call flow.review_decision now."
+	}
+	return fmt.Sprintf("preferred deliverable target `%s` was already fully inspected in this turn. Do not reread `%s` from byte 0 again; use that existing read as evidence, inspect one bounded adjacent output if needed, or call flow.review_decision now.", targetPath, targetPath)
 }
 
 func buildTaskReviewPreferredDeliverableRootFirstGuardError(rootPath, toolName string) string {

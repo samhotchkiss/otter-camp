@@ -14638,6 +14638,48 @@ func TestShouldNotBlockTaskReviewPreferredDeliverableFirstToolAfterSuccessfulTar
 	}
 }
 
+func TestShouldBlockTaskReviewRepeatedPreferredDeliverableReadAfterFullRead(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `content/posts/yonderosa-and-the-art-of-having-less.md`.\n" +
+			"Use flow.review_decision with the active flow_node_execution_id to approve or reject this review step.",
+		reviewPreferredDeliverablePath:     "content/posts/yonderosa-and-the-art-of-having-less.md",
+		reviewPreferredDeliverableByteSize: 630,
+	}
+
+	blocked, reason := shouldBlockTaskReviewPreferredDeliverableFirstTool(rt, "file.read", map[string]any{"path": "content/posts/yonderosa-and-the-art-of-having-less.md"})
+	if !blocked {
+		t.Fatal("expected repeated preferred-target reread to be blocked after a full read in the same turn")
+	}
+	if !strings.Contains(reason, "already fully inspected in this turn") {
+		t.Fatalf("reason = %q, want repeated preferred-target guidance", reason)
+	}
+}
+
+func TestShouldNotBlockTaskReviewPreferredDeliverableTailReadAfterTruncatedHeadRead(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `content/posts/yonderosa-and-the-art-of-having-less.md`.\n" +
+			"If that first bounded read is truncated and you need the tail, use a follow-up `file.read` on `content/posts/yonderosa-and-the-art-of-having-less.md` with `offset_bytes` near `byte_size-8192` instead of rereading from byte 0.\n" +
+			"Use flow.review_decision with the active flow_node_execution_id to approve or reject this review step.",
+		reviewPreferredDeliverablePath:          "content/posts/yonderosa-and-the-art-of-having-less.md",
+		reviewPreferredDeliverableHeadTruncated: true,
+		reviewPreferredDeliverableByteSize:      16384,
+	}
+
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableFirstTool(rt, "file.read", map[string]any{"path": "content/posts/yonderosa-and-the-art-of-having-less.md", "offset_bytes": 8192}); blocked {
+		t.Fatalf("expected explicit tail read to remain allowed after a truncated head read, reason = %q", reason)
+	}
+}
+
 func TestShouldBlockTaskReviewPreferredDeliverableFirstToolAfterAuthoritativeSampleCap(t *testing.T) {
 	rt := &turnRuntime{
 		session: &chat.ChatSession{
@@ -14788,6 +14830,41 @@ func TestShouldNotBlockTaskReviewCompanionPlanningArtifactToolForPlanningDeliver
 	}
 }
 
+func TestRecordTaskReviewPreferredDeliverableReadResultTracksRootOnlyReviewSampling(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable root `content/posts`. Inspect that output root directly before broad workspace discovery.\n" +
+			"After listing `content/posts`, sample at most 4 files under `content/posts` in this turn.\n" +
+			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.\n",
+	}
+
+	recordTaskReviewPreferredDeliverableReadResult(rt, ToolResult{
+		Name: "file.list",
+		Output: map[string]any{
+			"entries": []any{map[string]any{"path": "content/posts/post-1.md"}},
+		},
+	})
+	if !rt.reviewPreferredDeliverableRootListed {
+		t.Fatal("expected successful root file.list to mark the preferred deliverable root as listed")
+	}
+
+	recordTaskReviewPreferredDeliverableReadResult(rt, ToolResult{
+		Name: "file.read",
+		Output: map[string]any{
+			"path":       "content/posts/post-1.md",
+			"byte_size":  512,
+			"bytes_read": 512,
+		},
+	})
+	if rt.reviewCheckpointOutputSiblingReads != 1 {
+		t.Fatalf("reviewCheckpointOutputSiblingReads = %d, want 1", rt.reviewCheckpointOutputSiblingReads)
+	}
+}
+
 func TestShouldBlockTaskReviewPreferredDeliverableRootFirstTool(t *testing.T) {
 	rt := &turnRuntime{
 		session: &chat.ChatSession{
@@ -14824,6 +14901,30 @@ func TestShouldBlockTaskReviewPreferredDeliverableRootFirstTool(t *testing.T) {
 		if !strings.Contains(reason, "content/posts") {
 			t.Fatalf("%s guard reason = %q, want deliverable root guidance", tc.name, reason)
 		}
+	}
+}
+
+func TestShouldBlockTaskReviewPreferredDeliverableRootReadPastSampleCapAfterRootList(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable root `content/posts`. Inspect that output root directly before broad workspace discovery, and do not begin with task.get, git.log, or dependency-file reads outside `content/posts` unless `content/posts` itself is missing.\n" +
+			"After listing `content/posts`, sample at most 4 files under `content/posts` in this turn. Use the listing to verify presence/count first; do not try to read every file in the batch before calling `flow.review_decision`.\n" +
+			"If listing or reading under `content/posts` returns `not_found`, stop broad inspection and call flow.review_decision reject using that missing deliverable-root evidence.\n" +
+			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
+		reviewPreferredDeliverableRootListed: true,
+		reviewCheckpointOutputSiblingReads:   taskReviewCheckpointOutputSampleCap,
+	}
+
+	blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, "file.read", map[string]any{"path": "content/posts/post-5.md"})
+	if !blocked {
+		t.Fatal("expected root-only batch review to block file reads past the sample cap after the root has already been listed")
+	}
+	if !strings.Contains(reason, "sample at most") {
+		t.Fatalf("guard reason = %q, want root sample-cap guidance", reason)
 	}
 }
 
@@ -26547,6 +26648,124 @@ func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdIdenticalSuccess
 	}
 }
 
+func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalSuccessfulFileWriteInSameTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	path := "templates/template-07-dark-mode-developer.html"
+	byteSize := 476
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Keep scope to the single HTML file",
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	payload := mustRawJSON(t, map[string]any{
+		"tool_name": "file.write",
+		"output": map[string]any{
+			"path":      path,
+			"byte_size": byteSize,
+			"created":   false,
+		},
+	})
+	priorCallID := "write-prev-1"
+	currentCallID := "write-1"
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "Let me write the HTML template directly.",
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID:  fixture.session.ID,
+		TurnID:     &turnID,
+		Role:       "tool_result",
+		Status:     "final",
+		ToolCallID: &priorCallID,
+		Content:    string(payload),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID:  fixture.session.ID,
+		TurnID:     &turnID,
+		Role:       "tool_result",
+		Status:     "final",
+		ToolCallID: &currentCallID,
+		Content:    string(payload),
+	})
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{
+		ID:        currentCallID,
+		Name:      "file.write",
+		Arguments: map[string]any{"path": path, "content": "<!doctype html>"},
+	}}
+	results := []ToolResult{{
+		ToolCallID: currentCallID,
+		Name:       "file.write",
+		Output: map[string]any{
+			"path":      path,
+			"byte_size": byteSize,
+			"created":   false,
+		},
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	guard, ok := parseTaskValidationGuard(updated.Metadata)
+	if !ok {
+		t.Fatal("expected validation guard metadata")
+	}
+	if guard.Count != validationLoopTurnStopThreshold {
+		t.Fatalf("guard.Count = %d, want %d", guard.Count, validationLoopTurnStopThreshold)
+	}
+	if !fixture.messages.containsContentSubstring("Repeated identical successful file.write churn in this turn") {
+		t.Fatal("expected repeated successful file.write churn early-stop validation message")
+	}
+	if !fixture.messages.containsContentSubstring("immediately rewrite `templates/template-07-dark-mode-developer.html` again as the first step") {
+		t.Fatal("expected path-specific retry guidance for duplicate successful file.write churn")
+	}
+}
+
 func TestHandleToolValidationResultsIgnoresSuccessfulFileWriteChurnWhenByteSizeChanges(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -37338,6 +37557,9 @@ func TestBuildTaskReviewActionPromptIncludesPreferredDeliverableRoot(t *testing.
 	}
 	if !strings.Contains(prompt, "dependency-file reads outside `content/posts`") {
 		t.Fatalf("prompt = %q, want bounded root-first guidance", prompt)
+	}
+	if !strings.Contains(prompt, "sample at most 4 files under `content/posts`") {
+		t.Fatalf("prompt = %q, want bounded root sampling guidance", prompt)
 	}
 }
 
