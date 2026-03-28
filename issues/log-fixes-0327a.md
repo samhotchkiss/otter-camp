@@ -435,3 +435,28 @@
   - verified with `gofmt -w internal/jobqueue/worker.go internal/jobqueue/worker_integration_test.go` and `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ClosesRejectedExecution|SkipsPendingAgentTurn)?|RequeueActiveExecutionSessionsWithoutTurns(ForTaskQueueKickoff|CreatesMissingTaskQueueKickoff)|RetireClosedAsyncSessionRuns(FailsNonTerminalTaskRuns|CompletesDoneTaskRuns))$' -count=1`
   - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
   - live proof: on the new runtime, the remaining `11` blocked/rejected Sam.blog task sessions (`11`, `16`, `17`, `18`, `19`, `20`, `22`, `23`, `24`, `30`, `37`) all closed at `2026-03-28 01:41:43 MDT`, removing the rest of the dead blocked-task session noise from the active async pool
+- 2026-03-28 02:04:12 MDT - `pending` `Unstick compressed PM continuation prompts`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `shouldAppendSyntheticUserPrompt(...)` ignores orphan pending synthetic prompts that have no `turn_id`
+  - kept the existing protections intact:
+    - a duplicate pending synthetic prompt on a live non-terminal turn still suppresses a second copy
+    - a duplicate synthetic prompt on a completed/terminal turn no longer suppresses a fresh copy
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - `TestShouldAppendSyntheticUserPromptSkipsDuplicatePendingSource`
+    - `TestShouldAppendSyntheticUserPromptIgnoresDuplicateOnCompletedTurn`
+    - `TestShouldAppendSyntheticUserPromptIgnoresOrphanPendingSyntheticPrompt`
+  - verified with `gofmt -w internal/turn/engine.go internal/turn/engine_test.go` and `go test ./internal/turn -run 'TestShouldAppendSyntheticUserPrompt(SkipsDuplicatePendingSource|IgnoresDuplicateOnCompletedTurn|IgnoresOrphanPendingSyntheticPrompt)$' -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
+  - live proof: after restart, Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` appended fresh synthetic `project_continuation_resume` prompts at sequences `3481` and `3497` instead of repeating the old generic `I'm ready to help` fallback
+- 2026-03-28 02:04:12 MDT - `pending` `Keep PM continuation focus on the named dependency artifact`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so async project continuations now:
+    - block unrelated top-level `task.create` work when the active continuation prompt is already focused on a named dependency artifact path
+    - extract explicit workspace-relative artifact paths from the active project request / continuation summary
+    - narrow continuation snapshots to tasks that match that active artifact path before selecting draft focus
+  - this means unrelated actionable drafts such as Sam.blog task `43` stop being surfaced as the project-lane focus when the active request is explicitly about `content/technonymous-index.json`
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - `TestShouldBlockProjectContinuationDependencyFocusedTaskCreateBlocksUnrelatedTopLevelTask`
+    - `TestShouldNotBlockProjectContinuationDependencyFocusedTaskCreateForNamedParentTask`
+    - `TestProjectExecutionContinuationSnapshotForSummaryNarrowsToPriorityArtifactPath`
+  - verified with `gofmt -w internal/turn/engine.go internal/turn/engine_test.go` and `go test ./internal/turn -run 'Test(ShouldAppendSyntheticUserPrompt(SkipsDuplicatePendingSource|IgnoresDuplicateOnCompletedTurn|IgnoresOrphanPendingSyntheticPrompt)|ShouldBlockProjectContinuationDependencyFocusedTaskCreateBlocksUnrelatedTopLevelTask|ShouldNotBlockProjectContinuationDependencyFocusedTaskCreateForNamedParentTask|ProjectExecutionContinuationSnapshot(ForSummaryNarrowsToPriorityArtifactPath|SummarizesProjectState)|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocks(BroadTaskList|NamedTaskGet))$' -count=1`
+  - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and confirmed `./bin/ottercamp health --output json` returned `status=ok`
+  - live proof: post-restart continuation prompt `3526` on Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` no longer surfaced unrelated task `43`; it stayed focused on the technonymous index path and matching tasks (`41`, `35`, `36`, `39`, `34`)

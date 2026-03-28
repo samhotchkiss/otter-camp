@@ -6836,8 +6836,18 @@ func TestPersistBootstrapFirstWaveSelectionUsesMetadataUpdatesOnly(t *testing.T)
 
 func TestShouldAppendSyntheticUserPromptSkipsDuplicatePendingSource(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
+
+	pendingTurn, err := fixture.chat.CreateTurn(context.Background(), fixture.session.ID, fixture.chat.participants[0].ParticipantID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := fixture.chat.StartTurn(context.Background(), pendingTurn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+	turnID := pendingTurn.ID
 	fixture.messages.create(repo.ChatMessage{
 		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
 		Role:      "user",
 		Status:    "pending",
 		Content:   "Continue the active task now from the continuation summary above.",
@@ -6882,6 +6892,25 @@ func TestShouldAppendSyntheticUserPromptIgnoresDuplicateOnCompletedTurn(t *testi
 	}
 	if !shouldAppend {
 		t.Fatal("shouldAppendSyntheticUserPrompt = false, want true when duplicate synthetic prompt belongs to completed turn")
+	}
+}
+
+func TestShouldAppendSyntheticUserPromptIgnoresOrphanPendingSyntheticPrompt(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Continue the active project execution now from the continuation summary above.",
+		Metadata:  syntheticContinuationActionMessageMetadata(nil, "project_continuation_resume"),
+	})
+
+	shouldAppend, err := fixture.engine.shouldAppendSyntheticUserPrompt(context.Background(), fixture.session.ID, "project_continuation_resume")
+	if err != nil {
+		t.Fatalf("shouldAppendSyntheticUserPrompt: %v", err)
+	}
+	if !shouldAppend {
+		t.Fatal("shouldAppendSyntheticUserPrompt = false, want true when duplicate synthetic prompt is orphaned without a turn")
 	}
 }
 
@@ -9981,6 +10010,62 @@ func TestShouldNotBlockProjectContinuationSnapshotRediscoveryToolForParentScoped
 	})
 	if blocked {
 		t.Fatalf("expected parent-scoped task.list to remain available, got %q", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationDependencyFocusedTaskCreateBlocksUnrelatedTopLevelTask(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	indexTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: restore content/technonymous-index.json", projectExecutionContinuationSnapshot{
+			ProjectLine:    "Active project id: " + projectID.String(),
+			ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 41 (Write the results to content/technonymous-index.json) id=" + indexTaskID.String() + " title=\"Write the results to content/technonymous-index.json\" work_status=blocked deliverable_path=content/technonymous-index.json assigned_agent_id=worker-1 flow_template_id=flow-1",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationDependencyFocusedTaskCreate(rt, "task.create", map[string]any{
+		"title":       "Build template 8 replacement",
+		"description": "Create a replacement HTML template for the blocked OC-38 deliverable.",
+	})
+	if !blocked {
+		t.Fatal("expected unrelated top-level task.create to be blocked when continuation prompt is focused on a named dependency artifact")
+	}
+	if !strings.Contains(reason, "content/technonymous-index.json") {
+		t.Fatalf("reason = %q, want named dependency path", reason)
+	}
+}
+
+func TestShouldNotBlockProjectContinuationDependencyFocusedTaskCreateForNamedParentTask(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: restore content/technonymous-index.json", projectExecutionContinuationSnapshot{
+			ProjectLine:          "Active project id: " + projectID.String(),
+			ChildActiveDraftLine: "Draft parent tasks already have child work: task 39 (Replacement: Crawl technonymous.org and produce content/technonymous-index.json) id=" + parentTaskID.String() + " title=\"Replacement: Crawl technonymous.org and produce content/technonymous-index.json\" work_status=draft depends_on_path=content/technonymous-index.json assigned_agent_id=worker-1 flow_template_id=flow-1 child_tasks=2",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationDependencyFocusedTaskCreate(rt, "task.create", map[string]any{
+		"title":          "Fetch archive listing pages for index rebuild",
+		"description":    "Create a bounded child task for the existing technonymous index replacement work.",
+		"parent_task_id": parentTaskID.String(),
+	})
+	if blocked {
+		t.Fatalf("expected dependency-focused child task.create to remain available, got %q", reason)
 	}
 }
 
@@ -17012,6 +17097,84 @@ func TestProjectExecutionContinuationSnapshotSummarizesProjectState(t *testing.T
 	}
 	if !strings.Contains(snapshot.FocusTaskLine, "task 19 (Ship docs)") {
 		t.Fatalf("FocusTaskLine = %q, want first actionable draft", snapshot.FocusTaskLine)
+	}
+}
+
+func TestProjectExecutionContinuationSnapshotForSummaryNarrowsToPriorityArtifactPath(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	assignedID := uuid.New()
+	indexParentID := uuid.New()
+	indexDescription := "Crawl technonymous.org archive pages and build post URL index. Output a JSON index at content/technonymous-index.json with title, URL, and date for each post."
+	indexWriteDescription := "Write the crawl results to content/technonymous-index.json."
+	templateDescription := "Create a single self-contained HTML file at templates/template-08-replace.html for Sam.blog."
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			uuid.New(): {
+				ID:              uuid.New(),
+				ProjectID:       projectID,
+				TaskNumber:      41,
+				Title:           "Write the results to content/technonymous-index.json",
+				WorkStatus:      "blocked",
+				AssignedAgentID: &assignedID,
+				Description:     stringPtr(indexWriteDescription),
+			},
+			uuid.New(): {
+				ID:              uuid.New(),
+				ProjectID:       projectID,
+				TaskNumber:      37,
+				Title:           "Build a single HTML layout template (template 7 of 10) for Sam.blog",
+				WorkStatus:      "blocked",
+				AssignedAgentID: &assignedID,
+				Description:     stringPtr("Create a single self-contained HTML file at templates/template-07-dark-mode-developer.html for Sam.blog."),
+			},
+			uuid.New(): {
+				ID:              uuid.New(),
+				ProjectID:       projectID,
+				TaskNumber:      43,
+				Title:           "Build a single HTML layout template (template 8 of 10) for Sam.blog — replacement for blocked OC-38",
+				WorkStatus:      "draft",
+				AssignedAgentID: &assignedID,
+				Description:     stringPtr(templateDescription),
+			},
+			indexParentID: {
+				ID:              indexParentID,
+				ProjectID:       projectID,
+				TaskNumber:      39,
+				Title:           "Replacement: Crawl technonymous.org and produce content/technonymous-index.json",
+				WorkStatus:      "draft",
+				AssignedAgentID: &assignedID,
+				Description:     stringPtr(indexDescription),
+			},
+			uuid.New(): {
+				ID:         uuid.New(),
+				ProjectID:  projectID,
+				TaskNumber: 40,
+				Title:      "Navigate to technonymous.org using browser tools",
+				WorkStatus: "blocked",
+				Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, indexParentID.String())),
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshotForSummary(context.Background(), projectID, "Active project request: restore content/technonymous-index.json")
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshotForSummary: %v", err)
+	}
+	if !strings.Contains(snapshot.ActiveTaskLine, "task 41 (Write the results to content/technonymous-index.json)") {
+		t.Fatalf("ActiveTaskLine = %q, want dependency-focused active task", snapshot.ActiveTaskLine)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "task 37") {
+		t.Fatalf("ActiveTaskLine = %q, should omit unrelated active task when summary names a concrete artifact path", snapshot.ActiveTaskLine)
+	}
+	if strings.Contains(snapshot.DraftTaskLine, "task 43") {
+		t.Fatalf("DraftTaskLine = %q, should omit unrelated actionable draft when summary names a concrete artifact path", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.ChildActiveDraftLine, "task 39 (Replacement: Crawl technonymous.org and produce content/technonymous-index.json)") {
+		t.Fatalf("ChildActiveDraftLine = %q, want dependency-focused draft parent", snapshot.ChildActiveDraftLine)
+	}
+	if strings.TrimSpace(snapshot.FocusTaskLine) != "" {
+		t.Fatalf("FocusTaskLine = %q, want no unrelated focus task when only off-target actionable drafts remain", snapshot.FocusTaskLine)
 	}
 }
 

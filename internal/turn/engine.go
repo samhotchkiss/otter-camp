@@ -166,7 +166,8 @@ const (
 )
 
 var projectContinuationPromptTaskIDPattern = regexp.MustCompile(`id=([0-9a-fA-F-]{36})`)
-var projectContinuationPromptDependencyPathPattern = regexp.MustCompile(`depends_on_path=([^\s]+)`)
+var projectContinuationPromptDependencyPathPattern = regexp.MustCompile(`(?:depends_on_path|deliverable_path)=([^\s]+)`)
+var projectContinuationWorkspacePathPattern = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\b`)
 var explicitDeliverablePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
@@ -4779,7 +4780,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForMissingDependency(
 	if err != nil {
 		return false, err
 	}
-	snapshot, err := e.projectExecutionContinuationSnapshot(ctx, session.ScopeID)
+	snapshot, err := e.projectExecutionContinuationSnapshotForSummary(ctx, session.ScopeID, missingPath)
 	if err != nil {
 		return false, err
 	}
@@ -10216,7 +10217,7 @@ func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt 
 			return appendErr
 		}
 		if shouldAppend {
-			snapshot, snapshotErr := e.projectExecutionContinuationSnapshot(ctx, rt.session.ScopeID)
+			snapshot, snapshotErr := e.projectExecutionContinuationSnapshotForSummary(ctx, rt.session.ScopeID, summary)
 			if snapshotErr != nil {
 				return snapshotErr
 			}
@@ -12773,6 +12774,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			continue
 		}
 		if blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
+		if blocked, reason := shouldBlockProjectContinuationDependencyFocusedTaskCreate(rt, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
 				Name:       name,
@@ -17036,6 +17045,10 @@ type projectContinuationTaskHints struct {
 const projectContinuationBlockerExcerptLimit = 120
 
 func (e *TurnEngine) projectExecutionContinuationSnapshot(ctx context.Context, projectID uuid.UUID) (projectExecutionContinuationSnapshot, error) {
+	return e.projectExecutionContinuationSnapshotForSummary(ctx, projectID, "")
+}
+
+func (e *TurnEngine) projectExecutionContinuationSnapshotForSummary(ctx context.Context, projectID uuid.UUID, summary string) (projectExecutionContinuationSnapshot, error) {
 	snapshot := projectExecutionContinuationSnapshot{}
 	if projectID == uuid.Nil {
 		return snapshot, nil
@@ -17052,18 +17065,43 @@ func (e *TurnEngine) projectExecutionContinuationSnapshot(ctx context.Context, p
 	if err != nil {
 		return snapshot, err
 	}
+	priorityPaths := projectContinuationPriorityPathsFromText(summary)
+	if filtered, matched := buildProjectExecutionContinuationSnapshot(projectTasks, taskHintsByTask, priorityPaths); matched {
+		filtered.ProjectLine = snapshot.ProjectLine
+		return filtered, nil
+	}
+	filtered, _ := buildProjectExecutionContinuationSnapshot(projectTasks, taskHintsByTask, nil)
+	filtered.ProjectLine = snapshot.ProjectLine
+	return filtered, nil
+}
+
+func buildProjectExecutionContinuationSnapshot(
+	projectTasks []repo.ProjectTask,
+	taskHintsByTask map[uuid.UUID]projectContinuationTaskHints,
+	priorityPaths map[string]struct{},
+) (projectExecutionContinuationSnapshot, bool) {
+	snapshot := projectExecutionContinuationSnapshot{}
 	activeTasks := make([]string, 0, 4)
 	draftTasks := make([]string, 0, 4)
 	childActiveDraftTasks := make([]string, 0, 4)
 	childActivity := projectContinuationChildTaskActivity(projectTasks)
 	focusTask := ""
+	filterByPriority := len(priorityPaths) > 0
+	matchedPriority := false
 	for _, task := range projectTasks {
 		status := strings.ToLower(strings.TrimSpace(task.WorkStatus))
 		if status == "" || status == "done" || status == "cancelled" {
 			continue
 		}
 		activity := childActivity[task.ID]
-		taskRef := projectExecutionContinuationTaskRef(task, activity, taskHintsByTask[task.ID])
+		hints := taskHintsByTask[task.ID]
+		if filterByPriority && !projectContinuationTaskMatchesPriorityPaths(task, hints, priorityPaths) {
+			continue
+		}
+		if filterByPriority {
+			matchedPriority = true
+		}
+		taskRef := projectExecutionContinuationTaskRef(task, activity, hints)
 		if isActionableProjectDraftTask(task) {
 			if activity.childTaskCount > 0 {
 				if len(childActiveDraftTasks) < 4 {
@@ -17095,7 +17133,7 @@ func (e *TurnEngine) projectExecutionContinuationSnapshot(ctx context.Context, p
 	if focusTask != "" {
 		snapshot.FocusTaskLine = "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: " + focusTask
 	}
-	return snapshot, nil
+	return snapshot, matchedPriority
 }
 
 func (e *TurnEngine) projectContinuationTaskHintsByTask(ctx context.Context, tasks []repo.ProjectTask) (map[uuid.UUID]projectContinuationTaskHints, error) {
@@ -17187,6 +17225,41 @@ func projectContinuationTaskDependencyHintPath(task repo.ProjectTask, tasks []re
 		return explicit
 	}
 	return ""
+}
+
+func projectContinuationPriorityPathsFromText(text string) map[string]struct{} {
+	paths := projectContinuationDependencyPathsFromPrompt(text)
+	for _, match := range projectContinuationWorkspacePathPattern.FindAllString(text, -1) {
+		if normalized := normalizeWorkspaceRelativePath(match); normalized != "" {
+			if paths == nil {
+				paths = make(map[string]struct{})
+			}
+			paths[normalized] = struct{}{}
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	return paths
+}
+
+func projectContinuationTaskMatchesPriorityPaths(task repo.ProjectTask, hints projectContinuationTaskHints, priorityPaths map[string]struct{}) bool {
+	if len(priorityPaths) == 0 {
+		return true
+	}
+	for path := range priorityPaths {
+		normalized := normalizeWorkspaceRelativePath(path)
+		if normalized == "" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(hints.DeliverablePath), normalized) || strings.EqualFold(strings.TrimSpace(hints.DependsOnPath), normalized) {
+			return true
+		}
+		if projectContinuationTaskLikelyProducesPath(task, hints, normalized) {
+			return true
+		}
+	}
+	return false
 }
 
 func projectContinuationTaskReferencesURLIndex(task repo.ProjectTask) bool {
@@ -23204,6 +23277,9 @@ func (e *TurnEngine) shouldAppendSyntheticUserPrompt(ctx context.Context, sessio
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), source) {
+			if message.TurnID == nil || *message.TurnID == uuid.Nil {
+				continue
+			}
 			if message.TurnID != nil && *message.TurnID != uuid.Nil && e.chat != nil {
 				if turn, getErr := e.chat.GetTurn(ctx, *message.TurnID); getErr == nil && isTerminalTurnStatus(turn.Status) {
 					continue
@@ -25919,6 +25995,88 @@ func buildProjectContinuationSnapshotArtifactBrowseGuardError(path string) strin
 
 func buildProjectContinuationSnapshotFlowExecutionGuardError() string {
 	return "project continuation already has named active or draft tasks in the continuation prompt and no concrete flow_node_execution_id was named as the blocker. Do not probe flow.get_execution from the project lane first; act on the named task directly or advance the correct task execution lane."
+}
+
+func shouldBlockProjectContinuationDependencyFocusedTaskCreate(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if rt == nil || rt.session == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") ||
+		!strings.EqualFold(strings.TrimSpace(toolName), "task.create") {
+		return false, ""
+	}
+	dependencyPaths := projectContinuationDependencyPathsFromPrompt(rt.initialMessageText)
+	if len(dependencyPaths) == 0 {
+		return false, ""
+	}
+	if projectContinuationTaskCreateMatchesDependencyFocus(arguments, dependencyPaths, projectContinuationPromptNamedTaskIDs(rt.initialMessageText)) {
+		return false, ""
+	}
+	return true, buildProjectContinuationDependencyFocusedTaskCreateGuardError(dependencyPaths)
+}
+
+func projectContinuationTaskCreateMatchesDependencyFocus(arguments map[string]any, dependencyPaths map[string]struct{}, namedTaskIDs map[uuid.UUID]struct{}) bool {
+	if len(dependencyPaths) == 0 {
+		return true
+	}
+	if parentID, ok := parseUUIDAny(arguments["parent_task_id"]); ok && parentID != uuid.Nil {
+		if _, named := namedTaskIDs[parentID]; named {
+			return true
+		}
+	}
+	textParts := []string{
+		stringValue(arguments["title"]),
+		stringValue(arguments["description"]),
+		stringValue(arguments["deliverable_path"]),
+		stringValue(arguments["path"]),
+	}
+	normalizedText := strings.ToLower(strings.Join(strings.Fields(strings.Join(textParts, " ")), " "))
+	if normalizedText == "" {
+		return false
+	}
+	for path := range dependencyPaths {
+		for _, signal := range projectContinuationDependencyPathSignals(path) {
+			if signal == "" {
+				continue
+			}
+			if strings.Contains(normalizedText, signal) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func projectContinuationDependencyPathSignals(path string) []string {
+	normalized := strings.ToLower(strings.TrimSpace(normalizeWorkspaceRelativePath(path)))
+	if normalized == "" {
+		return nil
+	}
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(normalized)))
+	stem := strings.ToLower(strings.TrimSpace(strings.TrimSuffix(base, filepath.Ext(base))))
+	signals := []string{normalized}
+	if base != "" && base != normalized {
+		signals = append(signals, base)
+	}
+	if stem != "" && stem != base {
+		signals = append(signals, stem)
+	}
+	return signals
+}
+
+func buildProjectContinuationDependencyFocusedTaskCreateGuardError(dependencyPaths map[string]struct{}) string {
+	if len(dependencyPaths) == 0 {
+		return "project continuation is already focused on a specific prerequisite artifact in the continuation prompt. Do not create unrelated top-level tasks from the project lane; create or advance only the smallest task that restores that artifact."
+	}
+	paths := make([]string, 0, len(dependencyPaths))
+	for path := range dependencyPaths {
+		if normalized := normalizeWorkspaceRelativePath(path); normalized != "" {
+			paths = append(paths, normalized)
+		}
+	}
+	sort.Strings(paths)
+	return fmt.Sprintf("project continuation is already focused on prerequisite artifact path(s) %s in the continuation prompt. Do not create unrelated top-level tasks from the project lane; create or advance only the smallest task that restores one of those named artifacts.", strings.Join(paths, ", "))
 }
 
 func buildProjectContinuationFlowExecutionLookupGuardError(taskRecord repo.ProjectTask, flowNodeExecutionID uuid.UUID) string {
