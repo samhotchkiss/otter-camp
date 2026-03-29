@@ -2625,6 +2625,17 @@ type dbTokenUsageValidationLoopBlockRow struct {
 	CompletedAt  time.Time `json:"completed_at"`
 }
 
+type dbTokenUsageSyntheticPromptRow struct {
+	SessionID              uuid.UUID `json:"session_id"`
+	ScopeType              string    `json:"scope_type"`
+	Mode                   string    `json:"mode"`
+	Source                 string    `json:"source"`
+	SyntheticPrompts       int64     `json:"synthetic_prompts"`
+	ConsumedPrompts        int64     `json:"consumed_prompts"`
+	ValidationBlockedTurns int64     `json:"validation_blocked_turns"`
+	LastSeen               time.Time `json:"last_seen"`
+}
+
 type dbTokenUsageStopReasonRow struct {
 	ScopeType            string    `json:"scope_type"`
 	Mode                 string    `json:"mode"`
@@ -2691,6 +2702,7 @@ type dbTokenUsageReport struct {
 	ShellFileBuildReadbackChurn []dbTokenUsageShellChurnRow          `json:"shell_file_build_readback_churn"`
 	CLIWorkingDirectoryRoots    []dbTokenUsageCLIRootRow             `json:"task_cli_working_directory_roots"`
 	RecentValidationLoopBlocks  []dbTokenUsageValidationLoopBlockRow `json:"recent_validation_loop_blocks"`
+	RepeatedSyntheticPrompts    []dbTokenUsageSyntheticPromptRow     `json:"repeated_synthetic_prompts"`
 	CompletedByStopReason       []dbTokenUsageStopReasonRow          `json:"completed_by_stop_reason"`
 	Failures                    []dbTokenUsageFailureRow             `json:"failures"`
 	ProviderHealth              []dbTokenUsageProviderHealthRow      `json:"provider_health"`
@@ -3610,6 +3622,69 @@ func loadDBTokenUsageReport(ctx context.Context, pool *pgxpool.Pool, windowHours
 		return nil, err
 	}
 
+	syntheticPromptRows, err := pool.Query(ctx, `
+		SELECT
+			cm.session_id,
+			cs.scope_type,
+			cs.mode,
+			COALESCE(cm.metadata->>'source', '') AS source,
+			COUNT(*) AS synthetic_prompts,
+			COUNT(*) FILTER (
+				WHERE EXISTS (
+					SELECT 1
+					FROM chat_turn ct
+					WHERE ct.session_id = cm.session_id
+					  AND ct.trigger_message_id = cm.id
+					  AND ct.status IN ('completed', 'failed', 'cancelled')
+				)
+			) AS consumed_prompts,
+			COUNT(*) FILTER (
+				WHERE EXISTS (
+					SELECT 1
+					FROM chat_turn ct
+					WHERE ct.session_id = cm.session_id
+					  AND ct.trigger_message_id = cm.id
+					  AND ct.status = 'completed'
+					  AND ct.stop_reason = 'validation_loop_blocked'
+				)
+			) AS validation_blocked_turns,
+			MAX(cm.created_at) AS last_seen
+		FROM chat_message cm
+		JOIN chat_session cs ON cs.id = cm.session_id
+		WHERE cm.created_at >= $1
+		  AND cm.role = 'user'
+		  AND COALESCE(cm.metadata->>'synthetic_user_message', 'false') = 'true'
+		  AND COALESCE(cm.metadata->>'source', '') <> ''
+		  AND ($2::uuid IS NULL OR cs.organization_id = $2)
+		GROUP BY cm.session_id, cs.scope_type, cs.mode, COALESCE(cm.metadata->>'source', '')
+		HAVING COUNT(*) > 1
+		ORDER BY synthetic_prompts DESC, validation_blocked_turns DESC, last_seen DESC, cm.session_id
+		LIMIT $3
+	`, sinceAt, orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer syntheticPromptRows.Close()
+	for syntheticPromptRows.Next() {
+		var row dbTokenUsageSyntheticPromptRow
+		if scanErr := syntheticPromptRows.Scan(
+			&row.SessionID,
+			&row.ScopeType,
+			&row.Mode,
+			&row.Source,
+			&row.SyntheticPrompts,
+			&row.ConsumedPrompts,
+			&row.ValidationBlockedTurns,
+			&row.LastSeen,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		report.RepeatedSyntheticPrompts = append(report.RepeatedSyntheticPrompts, row)
+	}
+	if err := syntheticPromptRows.Err(); err != nil {
+		return nil, err
+	}
+
 	return report, nil
 }
 
@@ -3766,6 +3841,23 @@ func printDBTokenUsageReportTable(w io.Writer, formatter clitools.OutputFormatte
 		})
 	}
 	_ = formatter.WriteTable([]string{"Turn", "Session", "Scope", "Mode", "Block Excerpt", "Completed At"}, validationLoopRows)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "== Repeated Synthetic Prompts By Lane ==")
+	syntheticPromptRows := make([][]string, 0, len(report.RepeatedSyntheticPrompts))
+	for _, row := range report.RepeatedSyntheticPrompts {
+		syntheticPromptRows = append(syntheticPromptRows, []string{
+			row.SessionID.String(),
+			row.ScopeType,
+			row.Mode,
+			row.Source,
+			strconv.FormatInt(row.SyntheticPrompts, 10),
+			strconv.FormatInt(row.ConsumedPrompts, 10),
+			strconv.FormatInt(row.ValidationBlockedTurns, 10),
+			row.LastSeen.UTC().Format(time.RFC3339),
+		})
+	}
+	_ = formatter.WriteTable([]string{"Session", "Scope", "Mode", "Source", "Synthetic Prompts", "Consumed", "Validation-Blocked", "Last Seen"}, syntheticPromptRows)
 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "== Completed Turns By Stop Reason ==")

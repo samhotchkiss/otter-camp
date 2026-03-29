@@ -191,6 +191,43 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create chat turn: %v", err)
 	}
+	synthMessage1, err := messageRepo.Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "pending",
+		CreatedAt: createdAt.Add(90 * time.Second),
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","synthetic_user_message":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create first synthetic message: %v", err)
+	}
+	synthStopReason := "validation_loop_blocked"
+	synthStartedAt := createdAt.Add(95 * time.Second)
+	synthCompletedAt := createdAt.Add(100 * time.Second)
+	if _, err := turnRepo.Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       2,
+		TriggerMessageID: &synthMessage1.ID,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StartedAt:        &synthStartedAt,
+		CompletedAt:      &synthCompletedAt,
+		StopReason:       &synthStopReason,
+	}); err != nil {
+		t.Fatalf("create synthetic continuation turn: %v", err)
+	}
+	if _, err := messageRepo.Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "pending",
+		CreatedAt: createdAt.Add(110 * time.Second),
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","synthetic_user_message":true}`),
+	}); err != nil {
+		t.Fatalf("create second synthetic message: %v", err)
+	}
 
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO model_invocation (
@@ -346,6 +383,9 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	if !strings.Contains(stdout, `"recent_validation_loop_blocks"`) || !strings.Contains(stdout, `recovery_target_focus_required`) {
 		t.Fatalf("db token-usage output missing recent validation-loop blocks section: %q", stdout)
 	}
+	if !strings.Contains(stdout, `"repeated_synthetic_prompts"`) || !strings.Contains(stdout, `"synthetic_prompts": 2`) {
+		t.Fatalf("db token-usage output missing repeated synthetic prompt section: %q", stdout)
+	}
 
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
@@ -358,6 +398,20 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	row, ok := repeatedPackageInstalls[0].(map[string]any)
 	if !ok {
 		t.Fatalf("unexpected repeated_package_installs row: %#v", repeatedPackageInstalls[0])
+	}
+	repeatedSyntheticPrompts, ok := payload["repeated_synthetic_prompts"].([]any)
+	if !ok || len(repeatedSyntheticPrompts) != 1 {
+		t.Fatalf("unexpected repeated_synthetic_prompts payload: %#v", payload["repeated_synthetic_prompts"])
+	}
+	synthRow, ok := repeatedSyntheticPrompts[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected repeated_synthetic_prompts row: %#v", repeatedSyntheticPrompts[0])
+	}
+	if synthRow["source"] != "project_execution_continuation" {
+		t.Fatalf("unexpected repeated_synthetic_prompts source: %#v", synthRow["source"])
+	}
+	if synthRow["validation_blocked_turns"] != float64(1) {
+		t.Fatalf("unexpected repeated_synthetic_prompts validation_blocked_turns: %#v", synthRow["validation_blocked_turns"])
 	}
 	if got, _ := row["attempted_specs"].(string); got != "pyyaml" {
 		t.Fatalf("attempted_specs = %q, want %q", got, "pyyaml")
@@ -394,12 +448,19 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	if !ok || len(validationLoopBlocks) == 0 {
 		t.Fatalf("unexpected recent_validation_loop_blocks payload: %#v", payload["recent_validation_loop_blocks"])
 	}
-	blockRow, ok := validationLoopBlocks[0].(map[string]any)
-	if !ok {
-		t.Fatalf("unexpected validation-loop block row: %#v", validationLoopBlocks[0])
+	foundRecoveryFocus := false
+	for _, raw := range validationLoopBlocks {
+		blockRow, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected validation-loop block row: %#v", raw)
+		}
+		if got, _ := blockRow["block_excerpt"].(string); strings.Contains(got, "recovery_target_focus_required") {
+			foundRecoveryFocus = true
+			break
+		}
 	}
-	if got, _ := blockRow["block_excerpt"].(string); !strings.Contains(got, "recovery_target_focus_required") {
-		t.Fatalf("block_excerpt = %q, want recovery_target_focus_required", got)
+	if !foundRecoveryFocus {
+		t.Fatalf("recent_validation_loop_blocks missing recovery_target_focus_required row: %#v", validationLoopBlocks)
 	}
 	inFlightAgentTurns, ok := payload["in_flight_agent_turns"].([]any)
 	if !ok || len(inFlightAgentTurns) != 1 {
