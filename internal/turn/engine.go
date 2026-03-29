@@ -15301,6 +15301,9 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 						}
 					}
 				}
+				if err := e.persistBlockedRecoveryInheritedSharedWriteTaskState(ctx, rt, targetPath); err != nil {
+					return false, err
+				}
 				rt.recoveryBlockReason = buildRecoveryInheritedSharedDeliverableBlockedTaskReason(targetPath)
 				_ = e.cancelRecoveryResumeDispatch(ctx, rt, rt.recoveryBlockReason)
 			}
@@ -17526,6 +17529,76 @@ func buildRecoveryInheritedSharedDeliverableBlockedTaskReason(targetPath string)
 		path = "the shared parent deliverable"
 	}
 	return fmt.Sprintf("recovery halted because the decomposed child lane inherits shared parent deliverable %s; resume only with bounded file.edit updates on the current shared file or by moving integration back to the parent task", path)
+}
+
+func (e *TurnEngine) persistBlockedRecoveryInheritedSharedWriteTaskState(ctx context.Context, rt *turnRuntime, targetPath string) error {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil || rt.turn == nil || !rt.recoveryTurn {
+		return nil
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	reason := buildRecoveryInheritedSharedDeliverableBlockedTaskReason(targetPath)
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
+		if e.taskTransitions == nil {
+			return fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+		}
+		if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
+			var transitionErr tasksvc.ErrInvalidStatusTransition
+			if errors.As(err, &transitionErr) {
+				refreshed, refreshErr := e.tasks.GetByID(ctx, taskRecord.ID)
+				if refreshErr == nil {
+					nextStatus := strings.ToLower(strings.TrimSpace(refreshed.WorkStatus))
+					if nextStatus != "blocked" && nextStatus != "done" && nextStatus != "cancelled" {
+						return err
+					}
+					taskRecord = refreshed
+				} else {
+					return err
+				}
+			} else {
+				return err
+			}
+		} else {
+			refreshed, refreshErr := e.tasks.GetByID(ctx, taskRecord.ID)
+			if refreshErr == nil {
+				taskRecord = refreshed
+			}
+		}
+	}
+	nowValue := e.now().UTC().Format(time.RFC3339Nano)
+	guardState := taskValidationGuardState{
+		InitialMessageID:   rt.initialMessageID.String(),
+		Fingerprint:        "file.write:inherited_shared_deliverable_write_blocked",
+		AttemptFingerprint: "file.write:inherited_shared_deliverable_write_blocked",
+		ToolName:           "file.write",
+		FailureClass:       "tool_validation",
+		FailureCode:        "inherited_shared_deliverable_write_blocked",
+		FailureReason:      reason,
+		Count:              validationLoopBlockThreshold,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            true,
+		FirstSeenAt:        nowValue,
+		LastSeenAt:         nowValue,
+		LastTurnID:         rt.turn.ID.String(),
+	}
+	merged, mergeErr := mergeTaskValidationGuardMetadata(taskRecord.Metadata, guardState)
+	if mergeErr != nil {
+		return mergeErr
+	}
+	taskRecord.Metadata = merged
+	if _, err := updateTurnTaskMetadata(ctx, e.tasks, taskRecord); err != nil {
+		return err
+	}
+	return nil
 }
 
 func buildRecoveryMissingInheritedSharedDeliverableBlockedTaskReason(targetPath string) string {

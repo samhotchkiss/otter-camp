@@ -34730,6 +34730,8 @@ func TestHandleRecoveryCLIExecuteWithoutCommandStopsAfterRepeatedResumeFailure(t
 		},
 	}
 	fixture.engine.tasks = taskRepo
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.taskTransitions = blocker
 
 	rt := &turnRuntime{
 		session:          fixture.session,
@@ -37366,6 +37368,8 @@ func TestDispatchToolsStopsAfterBlockedInheritedSharedWriteBatchAndBlocksRecover
 			}),
 		},
 	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.taskTransitions = blocker
 
 	rt := &turnRuntime{
 		session:          fixture.session,
@@ -37414,6 +37418,29 @@ func TestDispatchToolsStopsAfterBlockedInheritedSharedWriteBatchAndBlocksRecover
 	}
 	if !fixture.messages.containsContentSubstring("Task shared-deliverable guard blocked a decomposed child lane") {
 		t.Fatal("expected shared-deliverable stop message")
+	}
+	updatedTask, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID child task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("updatedTask.WorkStatus = %q, want blocked", updatedTask.WorkStatus)
+	}
+	guard, ok := tasksvc.ParseValidationGuard(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected validation guard metadata on blocked shared-deliverable recovery task")
+	}
+	if !guard.Blocked {
+		t.Fatalf("guard.Blocked = %v, want true", guard.Blocked)
+	}
+	if guard.Count < validationLoopBlockThreshold {
+		t.Fatalf("guard.Count = %d, want >= %d", guard.Count, validationLoopBlockThreshold)
+	}
+	if len(blocker.calls) != 1 {
+		t.Fatalf("MarkBlocked calls = %d, want 1", len(blocker.calls))
+	}
+	if !strings.Contains(blocker.calls[0].reason, "inherits shared parent deliverable") {
+		t.Fatalf("block reason = %q, want shared parent deliverable reason", blocker.calls[0].reason)
 	}
 }
 

@@ -18,6 +18,18 @@
   - latest `task_recovery_resume` message `f329165e-a31f-4019-a571-ae0ab5df5fbc` settled `failed`
   - newest session `a7ca3361-c853-4fe4-adc1-c42c0b708898` is `closed`
   - `agent_turn` jobs for that session are only `dead_letter` / `done`, with no pending replay behind the terminal guard
+- Follow-on fix:
+  - `internal/turn/engine.go` now persists a terminal validation-guard state when the recovery-only inherited shared-deliverable `file.write` guard fires
+  - this writes `failure_code=inherited_shared_deliverable_write_blocked`, `blocked=true`, and threshold count into task metadata before returning, then marks the task blocked if needed
+  - `internal/turn/engine_test.go` now asserts the blocked task transition and blocked validation-guard metadata in `TestDispatchToolsStopsAfterBlockedInheritedSharedWriteBatchAndBlocksRecovery`
+- Focused verification:
+  - `GOFLAGS='' go test ./internal/turn -run 'Test(DispatchToolsStopsAfterBlockedInheritedSharedWriteBatchAndBlocksRecovery|HandleToolValidationResultsBlocksRecoveryMissingInheritedSharedDeliverable|ShouldStopAfterExecutionDeliverableWriteStopsForInheritedSharedSingleFileEdit)$' -count=1`
+- Live proof:
+  - SamBot task `180`
+  - latest turn `527e2c5c-1da8-4680-a098-4e267365bd47`
+  - task metadata now shows `agent_turn_validation_guard.blocked=true`, `count=3`, and `failure_code=inherited_shared_deliverable_write_blocked`
+  - newest session `cff5e1f7-8e59-4802-8a0f-112d7fdcf512` is drained with no pending `agent_turn` jobs
+  - remaining seam is only session closeout if that drained blocked session stays `active` longer than expected
 
 ## 2026-03-29 15:09 MDT
 
