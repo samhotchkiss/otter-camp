@@ -113,6 +113,14 @@ func TestTaskLooksProceduralInstructionArtifact(t *testing.T) {
 	if !TaskLooksProceduralInstructionArtifact("Reference planning/sambot-feature-spec.md for feature requirements. Be specific and opinionated — recommend concrete tools/services, not just categories.", &referenceDescription) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for reference-only instruction child task")
 	}
+	supportDescription := "Use Sam's voice and opinions as established in the SamBot feature spec at planning/sambot-feature-spec.md and the scraped blog content in content/posts/."
+	if !TaskLooksProceduralInstructionArtifact("Use Sam's voice and opinions as established in the SamBot feature spec at planning/sambot-feature-spec.md and the scraped blog content in content/posts/", &supportDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for context-only support child task")
+	}
+	boundedSupportDescription := "Use content/technonymous-index.json and write the first 12 posts as markdown files under content/posts/."
+	if TaskLooksProceduralInstructionArtifact("Use content/technonymous-index.json and write the first 12 posts as markdown files under content/posts/", &boundedSupportDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = true, want false for bounded deliverable task that names source artifacts")
+	}
 }
 
 func TestExtractDeliverablesIgnoresReferenceOnlyInstructionLines(t *testing.T) {

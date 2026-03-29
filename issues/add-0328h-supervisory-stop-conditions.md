@@ -34,6 +34,18 @@ They need sharper stopping rules than ordinary execution lanes.
 
 ### Working Notes
 
+- 2026-03-29 13:24 MDT - Picked up the next supervisory/task-lane stop seam after the bounded-size PM split created SamBot child tasks `155` / `156` for shared deliverable `planning/sambot-example-conversations.md`.
+- 2026-03-29 13:24 MDT - Fresh live proof on child session `2c91777a-0ee4-44fd-b90c-70703796b95e` (task `156`) showed a narrower malformed-child family than the older `Reference planning/...` junk:
+  - the child task title/description was `Use Sam's voice and opinions as established in the SamBot feature spec at planning/sambot-feature-spec.md and the scraped blog content in content/posts/`
+  - the lane immediately tried to reread the shared parent sources, then switched into whole-file ownership of `planning/sambot-example-conversations.md`
+  - the existing shared-deliverable guard blocked the unsafe `file.write`, but only after the child had already spent a full turn proving it was support-only instruction text rather than bounded execution work
+- 2026-03-29 13:24 MDT - Local hardening is in [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+  - `TaskLooksProceduralInstructionArtifact(...)` now treats `Use ... as established in planning/... and content/...` style support-only children as malformed procedural artifacts when they cite source artifacts but still name no concrete output action
+  - this feeds the existing malformed-child snapshot filters and kickoff preflight, so these support-only children should now block before model call instead of reaching the shared-deliverable guard later
+- 2026-03-29 13:24 MDT - Focused verification is green:
+  - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(TaskLooksProceduralInstructionArtifact|ExtractDeliverablesIgnoresReferenceOnlyInstructionLines)$' -count=1`
+  - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationMalformed(Procedural|Support)ChildKickoffPreflightBlocksBeforeModelCall$' -count=1`
+
 - 2026-03-29 11:20 MDT - Fresh live PM proof on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`: continuation prompt `8369` already named only terminally blocked leaf tasks owning `planning/sambot-feature-spec.md` and explicitly said to leave `resume_policy=terminal_keep_blocked` lanes blocked, but the same PM turn still issued `file.read planning/sambot-feature-spec.md` (`8372`) after the broader `task.list` rediscovery guard had already fired at `8371`.
 - 2026-03-29 11:20 MDT - Picked up the next stop-condition slice in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go): project continuations should treat deliverable reads for terminally blocked leaf-task paths as supervisory stop candidates, not as legitimate PM inspection.
 - 2026-03-29 11:20 MDT - Initial implementation plan:

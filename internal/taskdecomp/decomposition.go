@@ -917,6 +917,9 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 			return true
 		}
 	}
+	if looksLikeContextOnlySupportInstruction(normalized) {
+		return true
+	}
 	if strings.HasPrefix(normalized, "use ") {
 		for _, marker := range []string{
 			"web_fetch",
@@ -939,6 +942,54 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 		strings.Contains(normalized, " must ") ||
 		strings.Contains(normalized, " needs to ") ||
 		strings.Contains(normalized, " need to ")
+}
+
+func looksLikeContextOnlySupportInstruction(normalized string) bool {
+	if !strings.HasPrefix(normalized, "use ") {
+		return false
+	}
+	if !containsWorkspaceArtifactReference(normalized) {
+		return false
+	}
+	if strings.Contains(normalized, " write ") ||
+		strings.Contains(normalized, " produce ") ||
+		strings.Contains(normalized, " create ") ||
+		strings.Contains(normalized, " draft ") ||
+		strings.Contains(normalized, " save ") ||
+		strings.Contains(normalized, " output ") ||
+		strings.Contains(normalized, " edit ") ||
+		strings.Contains(normalized, " update ") ||
+		strings.Contains(normalized, " revise ") {
+		return false
+	}
+	return strings.Contains(normalized, " as established in ") ||
+		strings.Contains(normalized, " for feature requirements") ||
+		strings.Contains(normalized, " for requirements context") ||
+		strings.Contains(normalized, " voice and opinions") ||
+		strings.Contains(normalized, " voice and style") ||
+		strings.Contains(normalized, " tone and opinions") ||
+		strings.Contains(normalized, " style and opinions")
+}
+
+func containsWorkspaceArtifactReference(normalized string) bool {
+	if workspaceFilePathPattern.MatchString(normalized) {
+		return true
+	}
+	for _, root := range []string{
+		"planning/",
+		"content/",
+		"templates/",
+		"docs/",
+		"scripts/",
+		"results/",
+		"data/",
+		"deliverables/",
+	} {
+		if strings.Contains(normalized, root) {
+			return true
+		}
+	}
+	return false
 }
 
 func isExecutableDeliverable(item, normalized string) bool {

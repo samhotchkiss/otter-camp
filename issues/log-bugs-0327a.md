@@ -455,3 +455,15 @@
     - decomposition then produced task `147` (`Overview — One-paragraph summary ...`) and task `148` (`Reference planning/sambot-feature-spec.md for feature requirements ...`)
     - task `148` entered an execution lane and then had to be narrowed by downstream task-lane guards onto `planning/sambot-architecture.md`
   Root cause: [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go) already rejected explicit procedural junk like `Use cli_execute ...`, but it still treated `Reference planning/...` instruction lines as executable deliverables during decomposition. Impact: PM decomposition can create malformed child tasks that pollute continuation focus, reopen task-lane churn, and hide the real parent work unit that should remain actionable.
+- 2026-03-29 13:24 MDT - SamBot replacement task `154` exposed one more malformed decomposition family after the explicit-deliverable-path fix.
+  - fresh live evidence:
+    - task `156` / session `2c91777a-0ee4-44fd-b90c-70703796b95e`
+    - task text: `Use Sam's voice and opinions as established in the SamBot feature spec at planning/sambot-feature-spec.md and the scraped blog content in content/posts/`
+    - the lane immediately reread source artifacts, then attempted whole-file ownership of inherited shared deliverable `planning/sambot-example-conversations.md` until the later shared-deliverable guard stopped it
+  - bug:
+    - [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go) did not classify support-only `Use ... as established in planning/... and content/...` child tasks as malformed procedural artifacts
+  - impact:
+    - PM continuations can still create executable child lanes with no concrete deliverable of their own
+    - those lanes burn a full task turn before the downstream shared-file safety guards intervene
+  - target fix:
+    - treat those source-artifact support tasks as malformed procedural children up front so kickoff preflight blocks them before model call

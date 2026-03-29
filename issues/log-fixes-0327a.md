@@ -3361,3 +3361,18 @@
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformed(Procedural|ReferenceOnly)Children$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live effect is that malformed reference-only children like Sam.blog task `148` are ignored as malformed child artifacts, leaving parent task `146` as the actionable PM-visible architecture unit
+- 2026-03-29 13:24 MDT - Hardened decomposition against support-only “use the source artifacts” child tasks after the SamBot conversations split exposed task `156`.
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+    - `isInstructionOnlyDeliverable(...)` now also treats `Use ... as established in planning/... and content/...` style support-only children as malformed procedural artifacts when they cite source artifacts but still lack a concrete output action
+    - added `looksLikeContextOnlySupportInstruction(...)` / `containsWorkspaceArtifactReference(...)` to distinguish those malformed support tasks from legitimate bounded tasks that also mention source files
+  - changed tests:
+    - [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go)
+      - added the live SamBot support-child case
+      - added a non-regression case for `Use content/... and write ...`
+    - [`internal/turn/engine_integration_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_integration_test.go)
+      - added `TestTurnEngineIntegrationMalformedSupportChildKickoffPreflightBlocksBeforeModelCall`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(TaskLooksProceduralInstructionArtifact|ExtractDeliverablesIgnoresReferenceOnlyInstructionLines)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationMalformed(Procedural|Support)ChildKickoffPreflightBlocksBeforeModelCall$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live effect is that support-only children like Sam.blog task `156` halt in kickoff preflight before any model/tool work, instead of surviving until the later shared-deliverable write guard
