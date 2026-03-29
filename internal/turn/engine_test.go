@@ -32325,6 +32325,75 @@ func TestHandleRecoveryFileWriteWithoutContentStopsAfterRepeatedResumeFailure(t 
 	}
 }
 
+func TestHandleRecoveryFileWriteWithoutContentEnablesDirectWriteOnlyState(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	targetPath := "templates/template-08-replace.html"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Write templates/template-08-replace.html",
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+
+	rt := &turnRuntime{
+		session:                 fixture.session,
+		initialMessageID:        fixture.userMessageID,
+		initialMessageText:      buildRecoveryResumeActionPrompt(recoveryResumeState{targetPath: targetPath}),
+		recoveryTurn:            true,
+		recoveryTargetPath:      targetPath,
+		recoveryDirectWriteOnly: false,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{ID: "write-1", Name: "file.write", Arguments: map[string]any{"path": targetPath}}
+
+	handled, abort, err := fixture.engine.handleRecoveryFileWriteWithoutContent(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleRecoveryFileWriteWithoutContent: %v", err)
+	}
+	if !handled || abort {
+		t.Fatalf("handled=%v abort=%v, want true/false", handled, abort)
+	}
+	if !rt.recoveryDirectWriteOnly {
+		t.Fatal("expected direct-write-only state after recovery file.write missing-content correction")
+	}
+	if !fixture.messages.containsContentSubstring("[Recovery correction: file.write for `templates/template-08-replace.html` was emitted without `content`.") {
+		t.Fatal("expected recovery correction system message")
+	}
+
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint.TargetPath = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "without `content`") {
+		t.Fatalf("checkpoint.FailureReason = %q, want missing-content reason", checkpoint.FailureReason)
+	}
+}
+
 func TestHandleRecoveryCLIExecuteWithoutCommandStopsAfterRepeatedResumeFailure(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -33502,6 +33571,7 @@ func TestShouldBlockTaskRecoveryReadScopeTool(t *testing.T) {
 		arguments          map[string]any
 		initialMessageText string
 		recoveryTargetPath string
+		recoveryDirectOnly bool
 		wantBlock          bool
 	}{
 		{
@@ -33521,6 +33591,48 @@ func TestShouldBlockTaskRecoveryReadScopeTool(t *testing.T) {
 			toolName:           "file.read",
 			path:               "planning/discovery-plan/oc-13-validation-plan.md",
 			initialMessageText: "Continue the active task recovery now.\nA substantive durable draft is already available above. Reuse that draft body directly instead of introducing yourself, summarizing the task, or describing what you are about to do.\nDo not reread strategy artifacts, planning files, or workspace listings before writing when the substantive draft is already present above.",
+			wantBlock:          true,
+		},
+		{
+			name:               "blocks target file once direct write only recovery is active",
+			toolName:           "file.read",
+			path:               "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md",
+			initialMessageText: "Continue the active task recovery now.\nYour entire next assistant message must be either the concrete file body for the target deliverable or one concrete blocker sentence.\nNo recovered draft body is available above.",
+			recoveryDirectOnly: true,
+			wantBlock:          true,
+		},
+		{
+			name:               "blocks same task planning artifact once direct write only recovery is active",
+			toolName:           "file.read",
+			path:               "planning/discovery-plan/oc-13-validation-plan.md",
+			initialMessageText: "Continue the active task recovery now.\nYour entire next assistant message must be either the concrete file body for the target deliverable or one concrete blocker sentence.\nNo recovered draft body is available above.",
+			recoveryDirectOnly: true,
+			wantBlock:          true,
+		},
+		{
+			name:               "blocks read only cli execute once direct write only recovery is active",
+			toolName:           "cli.execute",
+			arguments:          map[string]any{"command": "ls planning/"},
+			initialMessageText: "Continue the active task recovery now.\nYour entire next assistant message must be either the concrete file body for the target deliverable or one concrete blocker sentence.\nNo recovered draft body is available above.",
+			recoveryDirectOnly: true,
+			wantBlock:          true,
+		},
+		{
+			name:               "blocks file list once direct write only recovery is active",
+			toolName:           "file.list",
+			path:               "templates",
+			initialMessageText: "Continue the active task recovery now.\nYour entire next assistant message must be either the concrete file body for the target deliverable or one concrete blocker sentence.\nNo recovered draft body is available above.",
+			recoveryDirectOnly: true,
+			recoveryTargetPath: "templates/template-08-replace.html",
+			wantBlock:          true,
+		},
+		{
+			name:               "blocks file search once direct write only recovery is active",
+			toolName:           "file.search",
+			arguments:          map[string]any{"pattern": "template", "path": "templates"},
+			initialMessageText: "Continue the active task recovery now.\nYour entire next assistant message must be either the concrete file body for the target deliverable or one concrete blocker sentence.\nNo recovered draft body is available above.",
+			recoveryDirectOnly: true,
+			recoveryTargetPath: "templates/template-08-replace.html",
 			wantBlock:          true,
 		},
 		{
@@ -33569,6 +33681,7 @@ func TestShouldBlockTaskRecoveryReadScopeTool(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rt.initialMessageText = tc.initialMessageText
 			rt.recoveryTargetPath = "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md"
+			rt.recoveryDirectWriteOnly = tc.recoveryDirectOnly
 			if strings.TrimSpace(tc.recoveryTargetPath) != "" {
 				rt.recoveryTargetPath = tc.recoveryTargetPath
 			}
@@ -33581,6 +33694,99 @@ func TestShouldBlockTaskRecoveryReadScopeTool(t *testing.T) {
 				t.Fatalf("shouldBlockTaskRecoveryReadScopeTool(%q, %#v) = %v, want %v", tc.toolName, arguments, got, tc.wantBlock)
 			}
 		})
+	}
+}
+
+func TestRecoveryDirectWriteOnlyState(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    "templates/template-08-replace.html",
+		FailureReason: "recovery_target_focus_required",
+		PriorFailureReasons: []string{
+			"file.write for `templates/template-08-replace.html` retried without `content` instead of the file body",
+		},
+	}
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(nil, checkpoint)
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:             taskID,
+			OrganizationID: fixture.session.OrganizationID,
+			ProjectID:      projectID,
+			TaskNumber:     85,
+			WorkStatus:     "in_progress",
+			Metadata:       metadata,
+		},
+	}
+
+	directWritePrompt := buildRecoveryResumeActionPrompt(recoveryResumeState{
+		targetPath:    "templates/template-08-replace.html",
+		failureReason: "recovery_target_focus_required",
+		blockerClass:  taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint,
+	})
+	if !fixture.engine.recoveryDirectWriteOnlyState(context.Background(), fixture.session, "templates/template-08-replace.html", directWritePrompt) {
+		t.Fatal("expected direct-write-only recovery state to activate for template task with prior empty-content history")
+	}
+
+	contentPostsPrompt := buildRecoveryResumeActionPrompt(recoveryResumeState{
+		targetPath:    "content/posts/stop-preparing-your-kids-for-jobs.md",
+		failureReason: "recovery_target_focus_required",
+		blockerClass:  taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint,
+	})
+	if fixture.engine.recoveryDirectWriteOnlyState(context.Background(), fixture.session, "content/posts/stop-preparing-your-kids-for-jobs.md", contentPostsPrompt) {
+		t.Fatal("did not expect direct-write-only recovery state for content/posts source-fetch recovery")
+	}
+}
+
+func TestShouldStopAfterBlockedTaskRecoveryDirectWriteOnly(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		recoveryTurn:            true,
+		recoveryDirectWriteOnly: true,
+		recoveryTargetPath:      "templates/template-08-replace.html",
+	}
+
+	results := []ToolResult{
+		{
+			ToolCallID: "call-1",
+			Name:       "file.read",
+			Error:      "task recovery for `templates/template-08-replace.html` is already in direct-write mode after empty or non-substantive file-body retries. Do not inspect `templates/template-08-replace.html` now; your next assistant message must be the concrete file body for `templates/template-08-replace.html` itself or one concrete blocker sentence.",
+		},
+		{
+			ToolCallID: "call-2",
+			Name:       "file.list",
+			Error:      "task recovery for `templates/template-08-replace.html` is already in direct-write mode after empty or non-substantive file-body retries. Do not inspect `templates` now; your next assistant message must be the concrete file body for `templates/template-08-replace.html` itself or one concrete blocker sentence.",
+		},
+	}
+
+	if !shouldStopAfterBlockedTaskRecoveryDirectWriteOnly(rt, results) {
+		t.Fatal("expected pure blocked direct-write-only recovery batch to stop")
+	}
+
+	mixed := append([]ToolResult{}, results...)
+	mixed = append(mixed, ToolResult{
+		ToolCallID: "call-3",
+		Name:       "message.send",
+		Error:      "session_id_required",
+	})
+	if shouldStopAfterBlockedTaskRecoveryDirectWriteOnly(rt, mixed) {
+		t.Fatal("did not expect mixed blocked batch to trigger direct-write-only stop")
 	}
 }
 
@@ -33670,6 +33876,34 @@ func TestClassifyToolValidationFailureRecognizesRecoverySourceFetchWriteRequired
 	}
 	if failure.DeliverablePath != "content/technonymous-index.json" {
 		t.Fatalf("deliverable path = %q, want content/technonymous-index.json", failure.DeliverablePath)
+	}
+}
+
+func TestClassifyToolValidationFailureRecognizesRecoveryDirectWriteRequired(t *testing.T) {
+	t.Parallel()
+
+	call := ToolCall{
+		ID:   "call-1",
+		Name: "file.read",
+		Arguments: map[string]any{
+			"path": "templates/template-08-replace.html",
+		},
+	}
+	result := ToolResult{
+		ToolCallID: "call-1",
+		Name:       "file.read",
+		Error:      "task recovery for `templates/template-08-replace.html` is already in direct-write mode after empty or non-substantive file-body retries. Do not inspect `templates/template-08-replace.html` now; your next assistant message must be the concrete file body for `templates/template-08-replace.html` itself or one concrete blocker sentence.",
+	}
+
+	failure, ok := classifyToolValidationFailure(call, result)
+	if !ok {
+		t.Fatal("classifyToolValidationFailure returned ok=false")
+	}
+	if failure.FailureCode != "recovery_direct_write_required" {
+		t.Fatalf("failure code = %q, want recovery_direct_write_required", failure.FailureCode)
+	}
+	if failure.DeliverablePath != "templates/template-08-replace.html" {
+		t.Fatalf("deliverable path = %q, want templates/template-08-replace.html", failure.DeliverablePath)
 	}
 }
 
@@ -34443,6 +34677,83 @@ func TestDispatchToolsStopsAfterPureBlockedProjectContinuationRediscoveryBatch(t
 	}
 	if !fixture.messages.containsContentSubstring("Project continuation rediscovery guard blocked only broad rereads") {
 		t.Fatal("expected project continuation rediscovery early-stop message")
+	}
+}
+
+func TestDispatchToolsStopsAfterPureBlockedTaskRecoveryDirectWriteBatch(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.chat.session.Mode = fixture.session.Mode
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		ProjectID:      projectID,
+		TaskNumber:     85,
+		WorkStatus:     "in_progress",
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:         turnID,
+			SessionID:  fixture.session.ID,
+			TurnNumber: 1,
+			Status:     "in_progress",
+		},
+		startedAt:               time.Now(),
+		recoveryTurn:            true,
+		recoveryDirectWriteOnly: true,
+		recoveryTargetPath:      "templates/template-08-replace.html",
+		initialMessageText:      "Continue the active task recovery now.\nYour entire next assistant message must be either the concrete file body for the target deliverable or one concrete blocker sentence.\nNo recovered draft body is available above.",
+	}
+	fixture.chat.turns[turnID] = rt.turn
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turnID)
+
+	stop, err := fixture.engine.dispatchTools(context.Background(), rt, []ModelToolCall{
+		{
+			ID:   "blocked-target-read",
+			Name: "file.read",
+			Arguments: map[string]any{
+				"path": "templates/template-08-replace.html",
+			},
+		},
+		{
+			ID:   "blocked-templates-list",
+			Name: "file.list",
+			Arguments: map[string]any{
+				"path": "templates",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dispatchTools: %v", err)
+	}
+	if !stop {
+		t.Fatal("expected dispatchTools to stop after pure blocked direct-write-only recovery batch")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if !fixture.messages.containsContentSubstring("Recovery direct-write-only mode blocked read-only discovery for `templates/template-08-replace.html`") {
+		t.Fatal("expected direct-write-only recovery stop message")
 	}
 }
 

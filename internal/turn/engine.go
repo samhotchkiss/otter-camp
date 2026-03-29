@@ -593,6 +593,7 @@ type turnRuntime struct {
 	recoveryBlockReason                     string
 	recoveryQueuedTurn                      bool
 	recoveryTargetPath                      string
+	recoveryDirectWriteOnly                 bool
 	recoverySourceFetchReady                bool
 	placeholderTargetSeen                   bool
 	reviewPreferredDeliverablePath          string
@@ -9119,6 +9120,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	}
 	if runtime.recoveryTurn {
 		runtime.recoveryTargetPath = e.recoveryTargetPathForSession(ctx, session)
+		runtime.recoveryDirectWriteOnly = e.recoveryDirectWriteOnlyState(ctx, session, runtime.recoveryTargetPath, runtime.initialMessageText)
 	}
 	runtime.projectIdentity = e.loadProjectIdentityForMessage(ctx, sessionID, messageID)
 	if runtime.projectIdentity == nil {
@@ -14654,6 +14656,11 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if shouldStopAfterBlockedProjectKickoffSessionCreate(rt, blockedCalls) {
 			return true, nil
 		}
+		if len(toolCalls) == 0 && shouldStopAfterBlockedTaskRecoveryDirectWriteOnly(rt, blockedCalls) {
+			rt.stopReason = stopReasonValidationBlocked
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskRecoveryDirectWriteOnlyTurnStopMessage(rt))
+			return true, nil
+		}
 		if len(toolCalls) == 0 && shouldStopAfterBlockedProjectContinuationRediscovery(rt, blockedCalls) {
 			rt.stopReason = stopReasonValidationBlocked
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Project continuation rediscovery guard blocked only broad rereads. Ending this turn early so the next continuation can act directly on the named tasks instead of repeating blocked PM discovery.]")
@@ -16107,6 +16114,7 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 	if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, "", buildRecoveryFileWriteCorrectionFailureReason(targetPath), message.ID); checkpointErr != nil {
 		return true, false, checkpointErr
 	}
+	rt.recoveryDirectWriteOnly = true
 	return true, false, nil
 }
 
@@ -25698,15 +25706,15 @@ func classifyToolValidationFailure(call ToolCall, result ToolResult) (toolValida
 		return buildToolValidationFailure(toolName, "malformed_arguments_raw", reason, attemptFingerprint, ""), true
 	}
 
+	if code, reason, ok := classifyDeterministicToolResultFailure(toolName, normalizedErrorCode, rawErrorCode, rawErrorCode); ok {
+		return buildToolValidationFailure(toolName, code, reason, attemptFingerprint, deliverablePath), true
+	}
 	if isToolValidationCode(normalizedErrorCode) {
 		reason := rawErrorCode
 		if strings.EqualFold(normalizedErrorCode, "non_substantive_content") {
 			reason = nonSubstantiveContentValidationFailureReason(toolName, result, deliverablePath)
 		}
 		return buildToolValidationFailure(toolName, normalizedErrorCode, reason, attemptFingerprint, deliverablePath), true
-	}
-	if code, reason, ok := classifyDeterministicToolResultFailure(toolName, normalizedErrorCode, rawErrorCode, strings.TrimSpace(result.Error)); ok {
-		return buildToolValidationFailure(toolName, code, reason, attemptFingerprint, deliverablePath), true
 	}
 
 	if reason := strings.TrimSpace(stripToolFailurePrefix(result.Error, toolName)); reason != "" {
@@ -25872,6 +25880,20 @@ func classifyDeterministicToolResultFailure(toolName, normalizedErrorCode, rawEr
 			reason = "recovery_source_fetch_write_required"
 		}
 		return "recovery_source_fetch_write_required", reason, true
+	}
+	if containsAny(normalizedReason,
+		"already in direct-write mode after empty or non-substantive file-body retries",
+		"your next assistant message must be the concrete file body for",
+		"your next assistant message must be the concrete file body itself or one concrete blocker sentence",
+	) {
+		reason := strings.TrimSpace(rawReason)
+		if reason == "" {
+			reason = strings.TrimSpace(rawErrorCode)
+		}
+		if reason == "" {
+			reason = "recovery_direct_write_required"
+		}
+		return "recovery_direct_write_required", reason, true
 	}
 	return "", "", false
 }
@@ -29129,7 +29151,13 @@ func shouldBlockTaskRecoveryReadScopeTool(rt *turnRuntime, toolName string, argu
 		return false
 	}
 	normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
-	if normalizedToolName != "file.read" && normalizedToolName != "cli.execute" {
+	if normalizedToolName != "file.read" &&
+		normalizedToolName != "file.list" &&
+		normalizedToolName != "file.search" &&
+		normalizedToolName != "cli.execute" {
+		return false
+	}
+	if normalizedToolName == "cli.execute" && !isReadOnlyDiscoveryCLIExecuteCall(arguments) {
 		return false
 	}
 	targetPath := strings.TrimSpace(rt.recoveryTargetPath)
@@ -29137,6 +29165,9 @@ func shouldBlockTaskRecoveryReadScopeTool(rt *turnRuntime, toolName string, argu
 		return false
 	}
 	path := recoveryReadScopePathFromToolArguments(normalizedToolName, arguments)
+	if rt.recoveryDirectWriteOnly {
+		return true
+	}
 	if path == "" {
 		if normalizedToolName == "cli.execute" && recoveryTargetPrefersCheckpointOwnedRootContext(rt, targetPath) {
 			return true
@@ -30002,6 +30033,26 @@ func recoveryPromptHasDurableDraftInstruction(rt *turnRuntime) bool {
 		strings.Contains(initialMessage, "the substantive draft is already present above")
 }
 
+func recoveryPromptRequiresDirectWriteOnly(initialMessage string) bool {
+	lower := strings.ToLower(strings.TrimSpace(initialMessage))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "your entire next assistant message must be either the concrete file body for the target deliverable or one concrete blocker sentence") &&
+		strings.Contains(lower, "no recovered draft body is available above")
+}
+
+func recoveryCheckpointHistoryRequiresDirectWriteOnly(checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) bool {
+	for _, reason := range taskcheckpoint.RecoveryFileWriteFailureHistory(&checkpoint) {
+		if taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(reason) ||
+			taskcheckpoint.RecoveryFileWriteFailureIsMissingContent(reason) ||
+			taskcheckpoint.RecoveryFileWriteFailureIsIntentOnly(reason) {
+			return true
+		}
+	}
+	return false
+}
+
 func taskReviewBatchIncludesPreferredDeliverableRead(calls []ModelToolCall, targetPath string) bool {
 	targetPath = normalizeWorkspaceRelativePath(targetPath)
 	if targetPath == "" {
@@ -30039,6 +30090,52 @@ func taskRecoveryReadPathMatchesTask(path string, taskNumber int) bool {
 		return true
 	}
 	return false
+}
+
+func (e *TurnEngine) recoveryDirectWriteOnlyState(ctx context.Context, session *chat.ChatSession, targetPath, initialMessageText string) bool {
+	if e == nil || e.tasks == nil || session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(session.Mode), "async") {
+		return false
+	}
+	targetPath = normalizeWorkspaceRelativePath(strings.TrimSpace(targetPath))
+	if targetPath == "" {
+		return false
+	}
+	if !recoveryPromptRequiresDirectWriteOnly(initialMessageText) {
+		return false
+	}
+	lowerInitial := strings.ToLower(strings.TrimSpace(initialMessageText))
+	if strings.HasPrefix(strings.ToLower(targetPath), "content/posts/") &&
+		containsAny(lowerInitial,
+			"fetch or source the real post body",
+			"multi-output content/posts batch",
+			"checkpoint-owned output root/artifact context",
+			"technonymous-index.json",
+			"use web_fetch",
+			"via web_fetch",
+		) {
+		return false
+	}
+	taskID := resolveTaskID(session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return false
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return false
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if !ok {
+		return false
+	}
+	checkpointTarget := normalizeWorkspaceRelativePath(strings.TrimSpace(checkpoint.TargetPath))
+	if checkpointTarget != "" && !sameWorkspaceRelativePath(checkpointTarget, targetPath) {
+		return false
+	}
+	return recoveryCheckpointHistoryRequiresDirectWriteOnly(checkpoint)
 }
 
 func taskToolTouchesRecoveryStatusPath(arguments map[string]any) bool {
@@ -31011,6 +31108,18 @@ func buildTaskRecoveryReadScopeToolGuardError(rt *turnRuntime, toolName string, 
 		target = strings.TrimSpace(rt.recoveryTargetPath)
 	}
 	path := recoveryReadScopePathFromToolArguments(toolName, arguments)
+	if rt != nil && rt.recoveryDirectWriteOnly {
+		if target == "" {
+			if path == "" {
+				return "task recovery is already in direct-write mode after empty or non-substantive file-body retries. Do not reopen read-only discovery now; your next assistant message must be the concrete file body itself or one concrete blocker sentence."
+			}
+			return fmt.Sprintf("task recovery is already in direct-write mode after empty or non-substantive file-body retries. Do not inspect `%s` now; your next assistant message must be the concrete file body itself or one concrete blocker sentence.", path)
+		}
+		if path == "" {
+			return fmt.Sprintf("task recovery for `%s` is already in direct-write mode after empty or non-substantive file-body retries. Do not reopen read-only discovery now; your next assistant message must be the concrete file body for `%s` itself or one concrete blocker sentence.", target, target)
+		}
+		return fmt.Sprintf("task recovery for `%s` is already in direct-write mode after empty or non-substantive file-body retries. Do not inspect `%s` now; your next assistant message must be the concrete file body for `%s` itself or one concrete blocker sentence.", target, path, target)
+	}
 	if recoveryPromptHasDurableDraftInstruction(rt) && projectBootstrapRecoveryReadsPlanningPath(map[string]any{"path": path}) {
 		if target == "" {
 			return "task recovery already includes a substantive durable draft in the prompt. Do not reread planning artifacts now; write the target deliverable directly, or use only the matching recovery artifact if the target still needs repair."
@@ -31200,6 +31309,45 @@ func buildTaskReviewCompanionPlanningArtifactGuardError(targetPath, toolName, pa
 		return fmt.Sprintf("this review prompt already says the task has no explicit companion planning-artifact contract. Do not inspect planning/ files with %s now. Review the actual deliverable files instead, then call flow.review_decision.", toolName)
 	}
 	return fmt.Sprintf("this review prompt already says the task has no explicit companion planning-artifact contract. Do not inspect planning artifact `%s` with %s now. Review the actual deliverable files instead, then call flow.review_decision.", path, toolName)
+}
+
+func shouldStopAfterBlockedTaskRecoveryDirectWriteOnly(rt *turnRuntime, results []ToolResult) bool {
+	if rt == nil || rt.session == nil || !rt.recoveryTurn || !rt.recoveryDirectWriteOnly {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") ||
+		len(results) == 0 {
+		return false
+	}
+
+	sawDirectWriteStop := false
+	for _, result := range results {
+		failure, ok := classifyToolValidationFailure(ToolCall{Name: result.Name}, result)
+		if !ok {
+			return false
+		}
+		switch strings.TrimSpace(failure.FailureCode) {
+		case "recovery_direct_write_required":
+			sawDirectWriteStop = true
+		case "recovery_target_focus_required":
+			continue
+		default:
+			return false
+		}
+	}
+	return sawDirectWriteStop
+}
+
+func buildTaskRecoveryDirectWriteOnlyTurnStopMessage(rt *turnRuntime) string {
+	target := ""
+	if rt != nil {
+		target = normalizeWorkspaceRelativePath(strings.TrimSpace(rt.recoveryTargetPath))
+	}
+	if target == "" {
+		return "[Recovery direct-write-only mode blocked a read-only discovery batch. Ending this turn now so the next continuation writes the concrete file body directly or reports one concrete blocker sentence.]"
+	}
+	return fmt.Sprintf("[Recovery direct-write-only mode blocked read-only discovery for `%s`. Ending this turn now so the next continuation writes `%s` directly or reports one concrete blocker sentence instead of reopening discovery.]", target, target)
 }
 
 func shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt *turnRuntime, blocked bool) bool {

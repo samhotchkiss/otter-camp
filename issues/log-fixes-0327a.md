@@ -2647,3 +2647,22 @@
   - that turn created replacement task `82` and then hit the bounded-size guard at tool result `6480` instead of bouncing on stale task-lane ownership or PM-side `flow_owned_status_blocked`
   - remaining live-proof gap:
     - the exact max-tool-calls continuation-summary branch did not re-fire on the first `3543` PM turn, so the stale-summary-anchor fix is deployed and test-green but still waiting on the next natural long PM continuation for direct production confirmation
+- 2026-03-29 05:46:48 MDT - Finished locally and queued for deploy: stop pure direct-write-only recovery batches immediately instead of letting them burn a second blocked rediscovery tool.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `shouldBlockTaskRecoveryReadScopeTool(...)` now covers `file.list` and `file.search` when `recoveryDirectWriteOnly` is active
+    - added `shouldStopAfterBlockedTaskRecoveryDirectWriteOnly(...)`
+    - added `buildTaskRecoveryDirectWriteOnlyTurnStopMessage(...)`
+    - [`dispatchTools(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now ends the turn immediately when a blocked-only recovery batch is entirely `recovery_direct_write_required`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - widened `TestShouldBlockTaskRecoveryReadScopeTool` for direct-write-only `file.list` / `file.search`
+    - added `TestShouldStopAfterBlockedTaskRecoveryDirectWriteOnly`
+    - added `TestDispatchToolsStopsAfterPureBlockedTaskRecoveryDirectWriteBatch`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockTaskRecoveryReadScopeTool|RecoveryDirectWriteOnlyState|ShouldStopAfterBlockedTaskRecoveryDirectWriteOnly|DispatchToolsStopsAfterPureBlockedTaskRecoveryDirectWriteBatch|ClassifyToolValidationFailureRecognizesRecovery(DirectWriteRequired|SourceFetchWriteRequired)|HandleRecoveryFileWriteWithoutContent(EnablesDirectWriteOnlyState|StopsAfterRepeatedResumeFailure))$' -count=1`
+  - pre-deploy live proof:
+    - task `85` session `324f566b-751b-4d09-915f-f821abbfd37a`
+    - turns `43-44` already hit `recovery_direct_write_required` at `336` / `296`
+    - the same assistant batch still also emitted blocked `file.list templates` results `337` / `297`
+    - the turn then ended on the older repeated-focus stop `338` / `298`
+  - remaining live-proof gap:
+    - the direct post-deploy target is that the next natural retry on task `85` should stop immediately after the blocked direct-write-only batch without the extra `file.list templates` result
