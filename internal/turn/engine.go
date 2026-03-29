@@ -18841,7 +18841,11 @@ func (e *TurnEngine) taskExplicitDeliverablePath(ctx context.Context, taskRecord
 	if !ok {
 		return ""
 	}
-	return strings.TrimSpace(explicitDeliverablePath(parentTask))
+	inherited := strings.TrimSpace(explicitDeliverablePath(parentTask))
+	if inherited == "" || !deliverableTargetMatchesTaskContract(taskRecord, inherited) {
+		return ""
+	}
+	return inherited
 }
 
 func (e *TurnEngine) taskPreferredDeliverableRoot(ctx context.Context, taskRecord repo.ProjectTask) string {

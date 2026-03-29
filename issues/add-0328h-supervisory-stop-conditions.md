@@ -275,3 +275,19 @@ They need sharper stopping rules than ordinary execution lanes.
     - `GOFLAGS='' go test ./internal/tools/native -run 'TestFileRead(TreatsNotDirectoryPreferredTargetAsNotFound|RejectsMarkdownReviewAssessmentPlaceholderAtPreferredTarget)$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is rebuild/restart and confirm the next task-179 review retry turns that same filesystem miss into the normal `not_found` rejection path instead of broad reread attempts
+- 2026-03-29 16:24 MDT - The next live supervisory seam moved to blocked review lane task `174` (backend API wiring). Its recovery lane kept inheriting the sibling frontend deliverable `sambot/widget.html` from parent task `172`, so the review continuation kept getting redirected away from the API artifact and into repeated read-only churn.
+  - fresh live evidence:
+    - session `15811b29-6845-4217-a925-9b596064f6c5`
+    - task `174` is a backend/API task, but messages `55-60` kept returning `deliverable_path\":\"sambot/widget.html\"` and `recovery_target_focus_required`
+    - assistant message `59` explicitly called out the contradiction: the task is about backend API wiring while recovery keeps steering it to the widget deliverable
+  - local fix:
+    - [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go) now only inherits a parent task’s explicit deliverable path when that inherited path still matches the child task’s contract
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now applies the same contract check before surfacing inherited explicit deliverable paths into prompts and task-session targeting
+    - added focused coverage in:
+      - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go) with `TestLatestRecoveryTargetPathForSessionIgnoresConflictingParentFrontendDeliverableForBackendChild`
+      - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) with `TestSessionTaskDeliverablePathIgnoresConflictingParentFrontendDeliverableForBackendChild`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(LatestRecoveryTargetPathForSessionIgnoresConflictingParentFrontendDeliverableForBackendChild|FileReadTreatsNotDirectoryPreferredTargetAsNotFound|DeliverableTargetMatchesTaskContractRejectsFrontendArtifactForBackendTask)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(SessionTaskDeliverablePathIgnoresConflictingParentFrontendDeliverableForBackendChild|SessionTaskDeliverablePathPrefersChildLeadingPathTitleOverParentDeliverable|DeliverableTargetMatchesTaskContractRejectsFrontendArtifactForBackendTask)$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is rebuild/restart and confirm the next task-174 review retry targets the API deliverable instead of the widget sibling

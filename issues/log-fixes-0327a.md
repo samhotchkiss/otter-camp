@@ -3675,3 +3675,16 @@
     - `GOFLAGS='' go test ./internal/tools/native -run 'TestFileRead(TreatsNotDirectoryPreferredTargetAsNotFound|RejectsMarkdownReviewAssessmentPlaceholderAtPreferredTarget)$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is rebuild/restart and confirm the next task-179 review retry rejects immediately on the normalized `not_found` evidence
+- 2026-03-29 16:24 MDT - Fixed explicit-deliverable inheritance so decomposed child tasks no longer inherit a parent’s sibling artifact when it conflicts with the child’s own contract.
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `taskExplicitDeliverablePath(...)` now inherits a parent explicit deliverable only when `deliverableTargetMatchesTaskContract(...)` still accepts that path for the child task
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - the turn-engine mirror of `taskExplicitDeliverablePath(...)` now applies the same contract check, so prompts and recovery targeting stay aligned with the child lane
+  - changed tests:
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go) adds `TestLatestRecoveryTargetPathForSessionIgnoresConflictingParentFrontendDeliverableForBackendChild`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) adds `TestSessionTaskDeliverablePathIgnoresConflictingParentFrontendDeliverableForBackendChild`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(LatestRecoveryTargetPathForSessionIgnoresConflictingParentFrontendDeliverableForBackendChild|FileReadTreatsNotDirectoryPreferredTargetAsNotFound|DeliverableTargetMatchesTaskContractRejectsFrontendArtifactForBackendTask)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(SessionTaskDeliverablePathIgnoresConflictingParentFrontendDeliverableForBackendChild|SessionTaskDeliverablePathPrefersChildLeadingPathTitleOverParentDeliverable|DeliverableTargetMatchesTaskContractRejectsFrontendArtifactForBackendTask)$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is rebuild/restart and confirm the next task-174 review retry stays on the API deliverable instead of `sambot/widget.html`

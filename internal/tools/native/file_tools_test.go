@@ -231,6 +231,61 @@ func TestDeliverableTargetMatchesTaskContractRejectsFrontendArtifactForBackendTa
 	}
 }
 
+func TestLatestRecoveryTargetPathForSessionIgnoresConflictingParentFrontendDeliverableForBackendChild(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	parentID := uuid.New()
+	childID := uuid.New()
+	sessionID := uuid.New()
+
+	parentDescription := "Frontend chat widget — a self-contained HTML/CSS/JS component (sambot/widget.html or similar) that renders a floating chat bubble."
+	childDescription := "Backend API wiring — implement POST /api/sambot/chat that accepts { message, session_id } and returns { response, session_id }."
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentID.String()})
+	if err != nil {
+		t.Fatalf("json.Marshal(childMetadata): %v", err)
+	}
+	childTask := repo.ProjectTask{
+		ID:             childID,
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		TaskNumber:     174,
+		Title:          "Backend API wiring",
+		Description:    &childDescription,
+		Metadata:       childMetadata,
+	}
+	executor.tasks = &mockTaskRepo{
+		task: childTask,
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:             parentID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				TaskNumber:     172,
+				Title:          "Build SamBot Chat MVP: frontend widget + backend API wiring",
+				Description:    &parentDescription,
+			},
+			childTask,
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "user",
+				Content:   "Review only.\nStart with the preferred deliverable target `sambot/api.js`.\nUse flow.review_decision.",
+			},
+		},
+	}
+
+	got := executor.latestRecoveryTargetPathForSession(context.Background(), workspaceScope{sessionID: &sessionID, taskID: &childID})
+	if got != "sambot/api.js" {
+		t.Fatalf("latestRecoveryTargetPathForSession(...) = %q, want %q", got, "sambot/api.js")
+	}
+}
+
 func TestContentMigrationCheckpointPreferredOutputPathSkipsExplicitSingleFileDeliverable(t *testing.T) {
 	description := "Deliverable: Append these sections to the existing planning/sambot-feature-spec.md file. Do not overwrite existing content."
 	taskRecord := repo.ProjectTask{

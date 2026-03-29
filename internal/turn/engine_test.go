@@ -40219,6 +40219,50 @@ func TestSessionTaskDeliverablePathPrefersChildLeadingPathTitleOverParentDeliver
 	}
 }
 
+func TestSessionTaskDeliverablePathIgnoresConflictingParentFrontendDeliverableForBackendChild(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	parentID := uuid.New()
+	childID := uuid.New()
+	parentDescription := "Frontend chat widget — a self-contained HTML/CSS/JS component (sambot/widget.html or similar) that renders a floating chat bubble."
+	childDescription := "Backend API wiring — implement POST /api/sambot/chat that accepts { message, session_id } and returns { response, session_id }."
+	childTask := repo.ProjectTask{
+		ID:          childID,
+		TaskNumber:  174,
+		Title:       "Backend API wiring",
+		Description: &childDescription,
+		Metadata: mustRawJSON(t, map[string]any{
+			"decomposition_parent_task_id": parentID.String(),
+		}),
+	}
+
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:          parentID,
+				TaskNumber:  172,
+				Title:       "Build SamBot Chat MVP: frontend widget + backend API wiring",
+				Description: &parentDescription,
+			},
+			childID: childTask,
+		},
+	}
+	messageRepo := newFakeMessageRepo()
+	messageRepo.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Content:   "Review only.\nStart with the preferred deliverable target `sambot/api.js`.\nUse flow.review_decision.",
+		Status:    "final",
+	})
+	fixture.messages = messageRepo
+	fixture.engine.messages = messageRepo
+
+	if got := fixture.engine.sessionTaskDeliverablePath(context.Background(), fixture.session.ID, childTask); got != "sambot/api.js" {
+		t.Fatalf("sessionTaskDeliverablePath(...) = %q, want %q", got, "sambot/api.js")
+	}
+}
+
 func TestDeliverableTargetMatchesTaskContractRejectsDependencyArtifactForBackendTask(t *testing.T) {
 	t.Parallel()
 

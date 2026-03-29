@@ -497,7 +497,11 @@ func (e *NativeToolExecutor) taskExplicitDeliverablePath(ctx context.Context, ta
 	if !ok {
 		return ""
 	}
-	return strings.TrimSpace(parseExplicitDeliverablePath(parentTask))
+	inherited := strings.TrimSpace(parseExplicitDeliverablePath(parentTask))
+	if inherited == "" || !deliverableTargetMatchesTaskContract(taskRecord, inherited) {
+		return ""
+	}
+	return inherited
 }
 
 func (e *NativeToolExecutor) taskPreferredDeliverableRoot(ctx context.Context, taskRecord repo.ProjectTask) string {

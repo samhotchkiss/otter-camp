@@ -651,3 +651,14 @@
   - impact:
     - review lanes can burn multiple blocked rediscovery steps after an already-decisive preferred-target miss
     - path-shape workspace errors look more complex than they are and delay the correct rejection path
+- 2026-03-29 16:24 MDT - Decomposed child tasks can inherit the wrong explicit deliverable from a mixed-scope parent, which misdirects recovery and review lanes into sibling artifact churn.
+  - fresh live evidence:
+    - task `174` (backend API wiring) session `15811b29-6845-4217-a925-9b596064f6c5`
+    - messages `55-60` kept steering recovery to `deliverable_path=sambot/widget.html`
+    - the task’s own scope is backend/API work, so message `59` explicitly called out that contradiction before the turn hit repeated read-only churn
+  - bug:
+    - [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go) and [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) inherited parent explicit deliverable paths without rechecking whether that parent path still matched the child task’s contract
+    - for mixed frontend/backend parents, a backend child could inherit the widget path and keep getting redirected away from its actual API deliverable
+  - impact:
+    - blocked review continuations can churn on sibling deliverables instead of the child’s own artifact
+    - read-only validation guards fire repeatedly, but against the wrong target, so the lane settles slowly instead of making a clean review decision
