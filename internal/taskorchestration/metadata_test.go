@@ -148,3 +148,127 @@ func TestValidateCompletionAllowsBlockedProceduralChildrenWithSatisfiedParent(t 
 		t.Fatalf("ValidateCompletion: %v", err)
 	}
 }
+
+func TestValidateCompletionAllowsBlockedChildrenAfterCompletedCloseoutProof(t *testing.T) {
+	parentID := uuid.New()
+	blockedChildID := uuid.New()
+	doneAID := uuid.New()
+	doneBID := uuid.New()
+	closeoutChildID := uuid.New()
+	now := time.Date(2026, 3, 29, 8, 45, 0, 0, time.UTC)
+	description := "Scrape and import technonymous.org posts from URL index."
+	parent := repo.ProjectTask{
+		ID:         parentID,
+		TaskNumber: 34,
+		Title:      "Scrape and import technonymous.org posts from URL index",
+		Metadata: taskdecomp.ApplyMetadata(json.RawMessage(`{}`), taskdecomp.Plan{
+			RequiresDecomposition: true,
+			PrimaryDeliverable:    "content/posts/{slug}.md",
+			Deliverables: []string{
+				"content/posts/{slug}.md",
+				"Fetch posts 13-24 from content/technonymous-index.json and save as markdown in content/posts/",
+				"Fetch posts 25-35 from content/technonymous-index.json and save as markdown in content/posts/",
+				"Close out OC-34: verify content/posts/ contains all scraped posts and mark parent complete",
+			},
+		}, description, []uuid.UUID{blockedChildID, doneAID, doneBID, closeoutChildID}),
+	}
+	metadata, err := Apply(parent.Metadata, Update{
+		ChildVerifications: []ChildVerification{
+			NewChildVerification(doneAID, "Verified posts 13-24 landed in content/posts/.", now),
+			NewChildVerification(doneBID, "Verified posts 25-35 landed in content/posts/.", now),
+			NewChildVerification(closeoutChildID, "Verified the closeout child confirmed all 35 posts exist and the parent can close.", now),
+		},
+		IntegrationCheck:  NewIntegrationCheck("passed", "Confirmed the full scrape-import workstream is complete end to end.", now),
+		OutcomeAssessment: NewOutcomeAssessment(true, "The scrape-import parent outcome is satisfied.", now),
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	parent.Metadata = metadata
+
+	blockedChild := repo.ProjectTask{
+		ID:         blockedChildID,
+		TaskNumber: 81,
+		Title:      "Scrape all technonymous.org posts from content/technonymous-index.json and save as markdown files in content/posts/",
+		WorkStatus: "blocked",
+	}
+	doneChildA := repo.ProjectTask{
+		ID:         doneAID,
+		TaskNumber: 66,
+		Title:      "Fetch posts 13–24 from content/technonymous-index.json and save as markdown in content/posts/",
+		WorkStatus: "done",
+	}
+	doneChildB := repo.ProjectTask{
+		ID:         doneBID,
+		TaskNumber: 67,
+		Title:      "Fetch posts 25–35 from content/technonymous-index.json and save as markdown in content/posts/",
+		WorkStatus: "done",
+	}
+	closeoutDescription := "All 35 posts exist in content/posts/ and the parent can close."
+	closeoutChild := repo.ProjectTask{
+		ID:          closeoutChildID,
+		TaskNumber:  80,
+		Title:       "Close out OC-34: verify content/posts/ contains all scraped posts and mark parent complete",
+		Description: &closeoutDescription,
+		WorkStatus:  "done",
+	}
+
+	if err := ValidateCompletion(parent, []repo.ProjectTask{blockedChild, doneChildA, doneChildB, closeoutChild}); err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+}
+
+func TestValidateCompletionStillRejectsActiveChildAfterCompletedCloseoutProof(t *testing.T) {
+	parentID := uuid.New()
+	activeChildID := uuid.New()
+	closeoutChildID := uuid.New()
+	now := time.Date(2026, 3, 29, 8, 50, 0, 0, time.UTC)
+	description := "Scrape and import technonymous.org posts from URL index."
+	parent := repo.ProjectTask{
+		ID:         parentID,
+		TaskNumber: 34,
+		Title:      "Scrape and import technonymous.org posts from URL index",
+		Metadata: taskdecomp.ApplyMetadata(json.RawMessage(`{}`), taskdecomp.Plan{
+			RequiresDecomposition: true,
+			PrimaryDeliverable:    "content/posts/{slug}.md",
+			Deliverables: []string{
+				"content/posts/{slug}.md",
+				"Close out OC-34: verify content/posts/ contains all scraped posts and mark parent complete",
+			},
+		}, description, []uuid.UUID{activeChildID, closeoutChildID}),
+	}
+	metadata, err := Apply(parent.Metadata, Update{
+		ChildVerifications: []ChildVerification{
+			NewChildVerification(closeoutChildID, "Verified the closeout child confirmed the parent can close.", now),
+		},
+		IntegrationCheck:  NewIntegrationCheck("passed", "Confirmed the current completed work is coherent.", now),
+		OutcomeAssessment: NewOutcomeAssessment(true, "The parent outcome looks satisfied pending the live active child lane.", now),
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	parent.Metadata = metadata
+
+	activeChild := repo.ProjectTask{
+		ID:         activeChildID,
+		TaskNumber: 81,
+		Title:      "Scrape all technonymous.org posts from content/technonymous-index.json and save as markdown files in content/posts/",
+		WorkStatus: "in_progress",
+	}
+	closeoutDescription := "All 35 posts exist in content/posts/ and the parent can close."
+	closeoutChild := repo.ProjectTask{
+		ID:          closeoutChildID,
+		TaskNumber:  80,
+		Title:       "Close out OC-34: verify content/posts/ contains all scraped posts and mark parent complete",
+		Description: &closeoutDescription,
+		WorkStatus:  "done",
+	}
+
+	err = ValidateCompletion(parent, []repo.ProjectTask{activeChild, closeoutChild})
+	if !errors.Is(err, ErrParentCompletionRequirements) {
+		t.Fatalf("ValidateCompletion err = %v, want ErrParentCompletionRequirements", err)
+	}
+	if !strings.Contains(err.Error(), "all child tasks must complete before the parent can finish integration") {
+		t.Fatalf("error = %v, want active-child completion detail", err)
+	}
+}

@@ -185,14 +185,24 @@ func Evaluate(parentTask repo.ProjectTask, childTasks []repo.ProjectTask) Comple
 	}
 
 	var (
-		hasExecutableChild bool
-		hasCompletedChild  bool
-		missingLabels      []string
+		hasExecutableChild        bool
+		hasCompletedChild         bool
+		hasCompletedCloseoutChild bool
+		missingLabels             []string
 	)
+	for _, child := range childTasks {
+		if childTaskClosesParent(parentTask, child) {
+			hasCompletedCloseoutChild = true
+			break
+		}
+	}
 	for _, child := range childTasks {
 		status := normalizeStatus(child.WorkStatus)
 		terminal := status == "done" || status == "cancelled"
 		if !terminal && blockedMalformedChildDoesNotBlockParentCompletion(parentTask, child) {
+			terminal = true
+		}
+		if !terminal && hasCompletedCloseoutChild && status == "blocked" {
 			terminal = true
 		}
 		completed := status == "done"
@@ -360,6 +370,49 @@ func blockedMalformedChildDoesNotBlockParentCompletion(parentTask, childTask rep
 		return true
 	}
 	return parentSourceDescriptionForbidsDecomposition(parentTask.Metadata)
+}
+
+func childTaskClosesParent(parentTask, childTask repo.ProjectTask) bool {
+	if normalizeStatus(childTask.WorkStatus) != "done" {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(childTask.Title))
+	if childTask.Description != nil {
+		if description := strings.ToLower(strings.TrimSpace(*childTask.Description)); description != "" {
+			text += "\n" + description
+		}
+	}
+	if !containsAnyCloseoutSignal(text) {
+		return false
+	}
+	return strings.Contains(text, fmt.Sprintf("oc-%d", parentTask.TaskNumber)) ||
+		strings.Contains(text, fmt.Sprintf("parent %d", parentTask.TaskNumber)) ||
+		strings.Contains(text, "confirms the parent") ||
+		strings.Contains(text, "parent can close") ||
+		strings.Contains(text, "parent can be closed") ||
+		strings.Contains(text, "parent can be closed out")
+}
+
+func containsAnyCloseoutSignal(text string) bool {
+	for _, needle := range []string{
+		"close parent",
+		"close out parent",
+		"close out oc-",
+		"parent can close",
+		"parent can be closed",
+		"parent can be closed out",
+		"mark parent",
+		"parent complete",
+		"complete the parent",
+		"confirms the parent",
+		"mark done immediately",
+		"delivered",
+	} {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func parentSourceDescriptionForbidsDecomposition(metadata json.RawMessage) bool {
