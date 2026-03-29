@@ -7576,6 +7576,7 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		lines = append(lines, "If a named draft task above shows assigned_agent_id=missing, flow_template_id=missing, or requires_human_review=true, repair that exact prerequisite before trying to queue it.")
 		if strings.Contains(draftLine, "completed_closeout_child_tasks=") {
 			lines = append(lines, "If a named draft task above already shows completed_closeout_child_tasks=..., use that completed child proof to advance or close the parent instead of creating another replacement child.")
+			lines = append(lines, "When completed child proof and completed-task batch evidence are already present, do not re-verify broad artifact roots on disk before advancing the parent unless a concrete tool error says the artifact is missing.")
 		}
 		if strings.Contains(draftLine, "deliverable_path=") {
 			lines = append(lines, "If a named draft task above already shows deliverable_path=..., inspect or write that exact path instead of reopening broad workspace context.")
@@ -7598,19 +7599,21 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 	}
 	if focusLine := strings.TrimSpace(snapshot.FocusTaskLine); focusLine != "" {
 		lines = append(lines, focusLine)
+		focusHasCompletedCloseout := strings.Contains(focusLine, "completed_closeout_child_tasks=")
 		if strings.Contains(focusLine, "child_tasks=") && strings.TrimSpace(snapshot.ActiveTaskLine) != "" {
 			lines = append(lines, "If that focus draft already has child tasks and the active-task snapshot above already names those child lanes, do not reread the parent or child task records first. Queue the draft only if it is still runnable as-is, split it directly into smaller reviewable work if bounded-size policy still blocks it, or report one concrete blocker sentence.")
 		}
 		if strings.Contains(focusLine, "deliverable_path=") || strings.Contains(focusLine, "deliverable_root=") || strings.Contains(focusLine, "depends_on_path=") {
 			lines = append(lines, "When the focus task already includes exact deliverable or dependency hints, use those paths directly before any broader workspace search.")
 		}
-		if strings.Contains(focusLine, "completed_closeout_child_tasks=") {
+		if focusHasCompletedCloseout {
 			lines = append(lines, "Because that focus parent already has completed closeout child proof, advance or close the parent directly instead of creating another replacement child.")
+			lines = append(lines, "Do not relist `content/posts`, reread sibling batch outputs, or re-verify the same deliverable on disk unless a concrete tool error says the completed artifact is missing.")
 		}
-		if strings.Contains(focusLine, "replaceable_blocked_child_tasks=") {
+		if strings.Contains(focusLine, "replaceable_blocked_child_tasks=") && !focusHasCompletedCloseout {
 			lines = append(lines, "Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.")
 		}
-		if strings.Contains(focusLine, "malformed_child_tasks=") {
+		if strings.Contains(focusLine, "malformed_child_tasks=") && !focusHasCompletedCloseout {
 			lines = append(lines, "Because that focus parent only has malformed or stale child artifact lanes, do not queue the parent again from the project lane. Create the smallest fresh replacement child task under it now instead.")
 		}
 	}

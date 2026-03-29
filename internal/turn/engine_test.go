@@ -19829,6 +19829,12 @@ func TestBuildProjectContinuationActionPromptAddsCompletedCloseoutGuidance(t *te
 	if !strings.Contains(prompt, "already has completed closeout child proof, advance or close the parent directly instead of creating another replacement child") {
 		t.Fatalf("prompt = %q, want completed-closeout focus guidance", prompt)
 	}
+	if !strings.Contains(prompt, "do not re-verify broad artifact roots on disk before advancing the parent") {
+		t.Fatalf("prompt = %q, want completed-closeout anti-reread guidance", prompt)
+	}
+	if strings.Contains(prompt, "Because that focus parent only has malformed or stale child artifact lanes") {
+		t.Fatalf("prompt = %q, should not append malformed-child replacement guidance once completed closeout proof exists", prompt)
+	}
 }
 
 func TestProjectExecutionContinuationSnapshotSummarizesProjectState(t *testing.T) {

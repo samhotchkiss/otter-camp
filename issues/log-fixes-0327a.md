@@ -1949,3 +1949,24 @@
     - `go test ./internal/turn -run 'Test(BuildProjectContinuationActionPrompt(AddsCompletedCloseoutGuidance|AddsReplacementChildGuidanceForMalformedChildren|AddsReplacementChildGuidanceForBlockedParent|AddsChildWorkGuidanceForDecomposedParent)|ProjectExecutionContinuationSnapshot(LiveTask44CompletedCloseoutBeatsReplacementBucket|PrefersDraftChildOverFreshReplacementParent|IgnoresMalformedProceduralChildren|IgnoresMalformedNoDecomposeChildren)|ExplicitDeliverablePathFallsBackToDecompositionSourceDescription|PreferredTaskDeliverableRoot(FallsBackToDecompositionSourceDescription|SkipsDependencyArtifactAndUsesOutputRoot)|ShouldStopAfterSuccessfulProjectExecutionHandoffMutation(RequiresReplacementChildPrompt|IgnoresAssignmentOnlyUpdate)?)$' -count=1`
   - deploy / proof status:
     - direct production proof is still pending the next natural PM continuation because the currently active prompt/messages were created before the `3490` rebuild
+- 2026-03-28 21:21:00 MDT - Live proof:
+  - the next PM continuation on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` produced prompt `5334`, which now shows task `44` in `Actionable draft tasks already in the tree` with `deliverable_path=content/technonymous-index.json` and `completed_closeout_child_tasks=1`
+  - that confirms the closeout-ready parent snapshot is live; task `44` is no longer in the replacement-child bucket
+- 2026-03-28 21:21:00 MDT - Finished: suppress replacement-child guidance once a PM focus parent is already closeout-ready.
+  - live diagnosis:
+    - prompt `5334` correctly surfaced the new closeout-ready marker for task `44`, but it still appended the older malformed-child focus instruction that said to create a fresh replacement child
+    - assistant/tool sequence `5335-5349` then showed the PM lane drifting into broad artifact verification instead of acting directly on the proven parent closeout
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `appendProjectExecutionSnapshotGuidance(...)` now treats `completed_closeout_child_tasks=...` as the dominant focus signal
+    - closeout-ready draft/focus guidance now says not to re-verify broad artifact roots or the same completed deliverables on disk unless a concrete tool error says they are missing
+    - malformed-child and replaceable-blocked-child replacement guidance is now suppressed when the same focus line already has completed closeout proof
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - widened `TestBuildProjectContinuationActionPromptAddsCompletedCloseoutGuidance`
+    - kept the closeout snapshot and deliverable-hint regression coverage green
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3491`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `go test ./internal/turn -run 'Test(BuildProjectContinuationActionPrompt(AddsCompletedCloseoutGuidance|AddsReplacementChildGuidanceForMalformedChildren|AddsReplacementChildGuidanceForBlockedParent|AddsChildWorkGuidanceForDecomposedParent)|ProjectExecutionContinuationSnapshot(LiveTask44CompletedCloseoutBeatsReplacementBucket|PrefersDraftChildOverFreshReplacementParent)|ExplicitDeliverablePathFallsBackToDecompositionSourceDescription|PreferredTaskDeliverableRoot(FallsBackToDecompositionSourceDescription|SkipsDependencyArtifactAndUsesOutputRoot))$' -count=1`
+  - deploy / proof status:
+    - prompt-only slice is ready to deploy; fresh direct production proof will be the next PM continuation after the `3491` rebuild
