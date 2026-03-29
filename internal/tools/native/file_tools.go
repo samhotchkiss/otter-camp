@@ -167,13 +167,14 @@ func (e *NativeToolExecutor) rejectPlaceholderDeliverableRead(ctx context.Contex
 		return nil, false, err
 	}
 	plan, ok := taskplan.Parse(taskRecord.Metadata)
-	if (!ok || !strings.EqualFold(strings.TrimSpace(plan.Mode), taskplan.ModeExecutionFirst)) &&
-		!strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
-		return nil, false, nil
-	}
 	deliverablePath := parseExplicitDeliverablePath(taskRecord)
 	if deliverablePath == "" {
 		deliverablePath = e.latestRecoveryTargetPathForSession(ctx, scope)
+	}
+	if deliverablePath == "" &&
+		(!ok || !strings.EqualFold(strings.TrimSpace(plan.Mode), taskplan.ModeExecutionFirst)) &&
+		!strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		return nil, false, nil
 	}
 	normalizedPath := normalizeWorkspacePath(relativePath)
 	if normalizedPath == "" {
