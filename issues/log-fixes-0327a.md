@@ -3482,3 +3482,15 @@
     - deployed on `repo_version=3569`
     - fresh same-version live proof for the new suppression branch is still pending because the restart's stale-`repo_version` purge retired the task-170 canary prompt first
     - adjacent live state is good: there are now `0` active pending `task_recovery_resume` prompts on blocked async task sessions after the restart
+- 2026-03-29 14:47 MDT - Blocked project continuations from trying task-owned recovery decisions.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - async project continuations now block `flow.recovery_decision` when the continuation prompt already names the active/draft task set and does not name a concrete `flow_node_execution_id` blocker
+    - this keeps PM turns inside project-layer actions (`task.create` / `task.update` / bounded replacements) instead of paying for task-owned flow recovery from the project session
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksFlowRecoveryDecision`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocks(FlowGetExecution|FlowRecoveryDecision|NamedTaskGet|NamedActiveTaskGet|BroadTaskList|BroadResultsList|PlanningRootBrowseWhenPlanningTargetsNamed)|DispatchTools(StopsAfterPureBlockedProjectContinuationRediscoveryBatch|TrimsPureBlockedProjectContinuationRediscoveryBatch|StopsAfterSecondSingleBlockedProjectContinuationRediscoveryInSameTurn))$' -count=1`
+  - deploy / proof status:
+    - deployed on the current local runtime after rebuild/restart
+    - fresh adjacent live proof landed immediately: PM turn `942` cancelled stale blocked child `OC-159` and then hit the existing task-lane ownership guard on `OC-171`, without repeating the older flow-recovery detour from turn `941`

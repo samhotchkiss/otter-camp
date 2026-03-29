@@ -11488,6 +11488,35 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksFlowGetExecu
 	}
 }
 
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksFlowRecoveryDecision(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	draftTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:   "Active project id: " + projectID.String(),
+			DraftTaskLine: "Actionable draft tasks already in the tree: task 22 (Produce final project close-out report) id=" + draftTaskID.String() + " title=\"Produce final project close-out report\" work_status=draft",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "flow.recovery_decision", map[string]any{
+		"flow_node_execution_id": uuid.New().String(),
+		"decision":               "retry",
+	})
+	if !blocked {
+		t.Fatal("expected project-lane flow.recovery_decision to be blocked once the continuation prompt already names actionable draft tasks")
+	}
+	if !strings.Contains(reason, "Do not call flow.recovery_decision") {
+		t.Fatalf("reason = %q, want flow.recovery_decision guidance", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadResultsList(t *testing.T) {
 	t.Parallel()
 

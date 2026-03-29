@@ -209,3 +209,16 @@ They need sharper stopping rules than ordinary execution lanes.
     - its dead invocation `045e89f7-3ce4-43d8-a2e7-c7964f4e7d4e` was marked `failed/stale_model_invocation`
     - the queue then advanced the PM session into fresh retry turn `266abfb0-cc4f-48da-8403-695bba1c2908` at `14:30:09 MDT`
     - that confirms the full-capacity queue path now releases dead PM slots immediately instead of waiting on the separate stale-maintenance ticker
+- 2026-03-29 14:47 MDT - Picked up the next PM supervisory seam from the fresh post-restart canary. The project lane was already blocking `task.get`, blocked deliverable rereads, and `planning/` root browse, but it still spent a tool on `flow.recovery_decision` / `flow.get_execution` style task-owned flow control instead of staying inside task.create/task.update decisions at the project layer.
+  - fresh live evidence:
+    - pre-fix PM turn `941` on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` explicitly said `Let me check the flow execution to understand the blocker`
+    - that turn then paid for `flow.get_execution` from the project lane even though the continuation prompt already named the blocked task family and the active replacement lanes
+  - local fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now blocks `flow.recovery_decision` from async project continuations the same way it already blocked `flow.get_execution` when no concrete `flow_node_execution_id` was named as the blocker in the prompt
+    - widened [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) with `TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksFlowRecoveryDecision`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocks(FlowGetExecution|FlowRecoveryDecision|NamedTaskGet|NamedActiveTaskGet|BroadTaskList|BroadResultsList|PlanningRootBrowseWhenPlanningTargetsNamed)|DispatchTools(StopsAfterPureBlockedProjectContinuationRediscoveryBatch|TrimsPureBlockedProjectContinuationRediscoveryBatch|StopsAfterSecondSingleBlockedProjectContinuationRediscoveryInSameTurn))$' -count=1`
+  - post-deploy live state:
+    - first fresh PM turn `942` on the new binary cancelled stale blocked child `OC-159`
+    - the same turn hit the existing task-lane-ownership guard on `OC-171` from the project session
+    - the old `flow.recovery_decision` attempt did not recur in that fresh post-deploy turn family

@@ -31988,6 +31988,8 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 		return true, buildProjectContinuationSnapshotRediscoveryGuardError(toolName, uuid.Nil)
 	case "flow.get_execution", "flow_get_execution":
 		return true, buildProjectContinuationSnapshotFlowExecutionGuardError()
+	case "flow.recovery_decision":
+		return true, buildProjectContinuationSnapshotFlowRecoveryDecisionGuardError()
 	case "file.list", "file_list":
 		path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
 		if path == "" || path == "." {
@@ -32261,6 +32263,10 @@ func buildProjectContinuationPlanningRootBrowseGuardError(targetPaths []string) 
 
 func buildProjectContinuationSnapshotFlowExecutionGuardError() string {
 	return "project continuation already has named active or draft tasks in the continuation prompt and no concrete flow_node_execution_id was named as the blocker. Do not probe flow.get_execution from the project lane first; act on the named task directly or advance the correct task execution lane."
+}
+
+func buildProjectContinuationSnapshotFlowRecoveryDecisionGuardError() string {
+	return "project continuation already has named active or draft tasks in the continuation prompt and no concrete flow_node_execution_id was named as the blocker. Do not call flow.recovery_decision from the project lane; act on the named task directly, create the smallest bounded replacement task, or advance the correct task execution lane instead."
 }
 
 func buildProjectContinuationTerminalBlockedDeliverableReadGuardError(path string) string {
