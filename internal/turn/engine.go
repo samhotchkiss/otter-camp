@@ -20501,6 +20501,9 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	if looksLikeContentMigrationCheckpointSummaryWithoutBody(path, trimmed) {
 		return fmt.Sprintf("assistant draft for %s repeated a content-migration checkpoint summary instead of the file body", path)
 	}
+	if looksLikeContentMigrationTaskScaffoldWithoutBody(path, trimmed) {
+		return fmt.Sprintf("assistant draft for %s repeated a source-backed content-migration task scaffold instead of the file body", path)
+	}
 	if looksLikeDeliverableCompletionSummaryWithoutBody(path, trimmed) {
 		return fmt.Sprintf("assistant draft for %s wrote a completion summary about deliverables/review readiness instead of the actual file body", path)
 	}
@@ -21141,6 +21144,38 @@ func looksLikeContentMigrationRecoveryNoteWithoutBody(targetPath, content string
 		"read the index",
 		"fetch each url",
 		"write the actual article markdown",
+	) {
+		return false
+	}
+	return true
+}
+
+func looksLikeContentMigrationTaskScaffoldWithoutBody(targetPath, content string) bool {
+	path := strings.ToLower(strings.TrimSpace(targetPath))
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || !strings.HasPrefix(path, "content/posts/") {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if !containsAny(lower,
+		"## objective",
+		"## validation criteria",
+		"## evidence expectations",
+	) {
+		return false
+	}
+	if !containsAny(lower,
+		"content/technonymous-index.json",
+		"technonymous-index.json",
+		"post_urls array",
+		"use web_fetch",
+		"via web_fetch",
+		"retrieve the full post html",
+		"retrieve the page content",
+		"write each post as a separate .md file under content/posts/",
+		"save the article text as clean markdown files under content/posts/",
+		"use the url slug as the filename",
+		"include yaml front-matter",
 	) {
 		return false
 	}

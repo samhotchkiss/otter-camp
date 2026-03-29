@@ -1704,3 +1704,21 @@
     - `TestMaybeSynthesizeTaskExecutionFileWriteToolCallsUsesExplicitMarkdownDeliverableDraft` is currently red in the live tree even outside this patch path, so I kept that separate as existing test debt instead of widening this fix
   - proof target after deploy:
     - the next task-70 recovery-resume message should omit the fake scaffold draft entirely, and the next retry should stop starting from markdown-body text that was never fetched from the source posts
+- 2026-03-28 18:20:00 MDT - Finished: reject source-backed content-migration scaffolds even when they arrive through continuation-summary history.
+  - live diagnosis:
+    - post-`3463` recovery-resume message `285` on task `70` session `30a79813-2880-4ae1-be7f-2dd76623f193` still carried the same scaffold under `Continuation summary draft:`
+    - that proved the first fix removed the fallback helper but did not yet reject the identical scaffold when it arrived through historical/system continuation summary content
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `looksLikeContentMigrationTaskScaffoldWithoutBody(...)`
+    - `recoveryFileWriteDraftRejectReason(...)` now rejects source-backed `content/posts/...` task scaffolds containing sections like `## Objective`, `## Validation Criteria`, `## Evidence Expectations` together with `technonymous-index.json`, `post_urls array`, `web_fetch`, `content/posts`, `url slug`, or `YAML front-matter`
+    - this closes both remaining entry points: inferred fallback and historical/system continuation-summary reuse
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestRecoveryFileWriteDraftRejectReasonRejectsContentMigrationTaskScaffoldWithoutBody`
+    - added `TestLoadRecoveryResumeStateRejectsContentMigrationTaskScaffoldSummaryDraft`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3464`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(RecoveryFileWriteDraftRejectReasonRejectsContentMigration(TaskScaffoldWithoutBody|CheckpointSummaryWithoutBody|RecoveryNoteWithoutBody)|LoadRecoveryResumeStateRejectsContentMigration(CheckpointSummaryDraft|RecoveryNoteDraft|TaskScaffoldSummaryDraft)|InferredTaskDeliverableDraftSkipsSourceBackedContentPostsTask|MaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsSourceBackedContentPostsTask)$' -count=1`
+  - proof target after deploy:
+    - the next task-70 recovery-resume state should have no `Continuation summary draft` block containing the source-backed scaffold, and the following retry should stop writing fake article-body markdown into `content/posts/...`

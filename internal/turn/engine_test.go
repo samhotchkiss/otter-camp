@@ -35216,6 +35216,30 @@ Let me start fresh with the correct approach:
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReasonRejectsContentMigrationTaskScaffoldWithoutBody(t *testing.T) {
+	t.Parallel()
+
+	content := strings.TrimSpace(`
+# Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/
+
+## Objective
+Read the first 12 entries (indices 0-11) from content/technonymous-index.json. For each entry, use web_fetch to retrieve the full post HTML from its URL, convert the post body to clean markdown, and write each post as a separate .md file under content/posts/. Use the URL slug as the filename. Include YAML front-matter with title, date, url, and any tags/categories from the index.
+
+## Validation Criteria
+- Define explicit pass/fail checks for each relevant stage.
+- Note the required evidence or observable outputs for each check.
+- Call out key failure conditions or edge cases reviewers should expect to verify.
+
+## Evidence Expectations
+- Reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.
+`)
+
+	reason := recoveryFileWriteDraftRejectReason(content, "content/posts/i-cant-picture-my-kids.md")
+	if !strings.Contains(reason, "source-backed content-migration task scaffold") {
+		t.Fatalf("reason = %q, want source-backed scaffold rejection", reason)
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReasonRejectsRecoveryGuidanceSummaryPlaceholder(t *testing.T) {
 	t.Parallel()
 
@@ -36180,6 +36204,86 @@ Let me start fresh with the correct approach:
 	}
 	if state.summaryDraft != "" {
 		t.Fatalf("summaryDraft = %q, want no inferred fallback for source-backed content migration task", state.summaryDraft)
+	}
+}
+
+func TestLoadRecoveryResumeStateRejectsContentMigrationTaskScaffoldSummaryDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	projectSlug := "content-migration-task-scaffold"
+	orgSlug := "acme"
+	description := "Read the first 12 entries (indices 0-11) from content/technonymous-index.json. For each entry, use web_fetch to retrieve the full post HTML from its URL, convert the post body to clean markdown, and write each post as a separate .md file under content/posts/. Use the URL slug as the filename. Include YAML front-matter with title, date, url, and any tags/categories from the index."
+
+	fixture.engine.dataDir = t.TempDir()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			TaskNumber:     70,
+			Title:          "Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/",
+			Description:    &description,
+			WorkStatus:     "blocked",
+			Metadata: mustRawJSON(t, map[string]any{
+				"recovery_file_write_checkpoint": map[string]any{
+					"version":        1,
+					"target_path":    "content/posts/i-cant-picture-my-kids.md",
+					"failure_reason": "repeated read-only recovery discovery for content/technonymous-index.json within the same recovery turn; write the deliverable or resume from the durable artifact instead of rereading context again",
+				},
+			}),
+		},
+	}}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: orgID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		orgID: {ID: orgID, Slug: orgSlug},
+	}}
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "system",
+		Status:    "final",
+		Content: strings.TrimSpace(`[Continuation summary]
+# Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/
+
+## Objective
+Read the first 12 entries (indices 0-11) from content/technonymous-index.json. For each entry, use web_fetch to retrieve the full post HTML from its URL, convert the post body to clean markdown, and write each post as a separate .md file under content/posts/. Use the URL slug as the filename. Include YAML front-matter with title, date, url, and any tags/categories from the index.
+
+## Validation Criteria
+- Define explicit pass/fail checks for each relevant stage.
+- Note the required evidence or observable outputs for each check.
+- Call out key failure conditions or edge cases reviewers should expect to verify.
+
+## Evidence Expectations
+- Reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.`),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	state, ok := fixture.engine.loadRecoveryResumeState(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery resume state")
+	}
+	if state.summaryDraft != "" {
+		t.Fatalf("summaryDraft = %q, want source-backed scaffold summary to be rejected", state.summaryDraft)
+	}
+	if !strings.Contains(state.summaryDraftRejectedReason, "source-backed content-migration task scaffold") {
+		t.Fatalf("summaryDraftRejectedReason = %q, want source-backed scaffold rejection", state.summaryDraftRejectedReason)
 	}
 }
 
