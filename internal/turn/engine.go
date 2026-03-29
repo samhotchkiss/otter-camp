@@ -558,6 +558,7 @@ type turnRuntime struct {
 	agent                                   repo.Agent
 	turn                                    *chat.ChatTurn
 	initialMessageID                        uuid.UUID
+	initialMessageSource                    string
 	initialMessageText                      string
 	currentJobID                            *uuid.UUID
 	runID                                   *uuid.UUID
@@ -8430,6 +8431,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		agent:                   agent,
 		turn:                    turn,
 		initialMessageID:        messageID,
+		initialMessageSource:    strings.TrimSpace(stringValue(messageMetadataMap(message.Metadata)["source"])),
 		initialMessageText:      strings.TrimSpace(message.Content),
 		currentJobID:            cloneUUIDPointer(currentJobID),
 		runID:                   runID,
@@ -13964,6 +13966,10 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if stopAfterBootstrapPersist {
 			return true, nil
 		}
+		if shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, runCalls, results) {
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Project continuation successfully handed off the focused replacement child work. Ending this turn now so the new task lane can run instead of spending more PM tools re-checking the same handoff.]")
+			return true, nil
+		}
 		if rt.toolCallsUsed >= toolBudget {
 			return e.stopForMaxToolCalls(ctx, rt)
 		}
@@ -14171,6 +14177,10 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return false, err
 		}
 		if stopAfterBootstrapPersist {
+			return true, nil
+		}
+		if shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, []ToolCall{call}, []ToolResult{result}) {
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Project continuation successfully handed off the focused replacement child work. Ending this turn now so the new task lane can run instead of spending more PM tools re-checking the same handoff.]")
 			return true, nil
 		}
 		if rt.toolCallsUsed >= toolBudget {
@@ -26300,6 +26310,72 @@ func shouldStopAfterBlockedProjectExecutionBlockedMutation(rt *turnRuntime, resu
 		}
 	}
 	return false
+}
+
+func shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt *turnRuntime, calls []ToolCall, results []ToolResult) bool {
+	if !projectContinuationReplacementChildHandoffActive(rt) {
+		return false
+	}
+	for idx, call := range calls {
+		if idx >= len(results) {
+			break
+		}
+		if projectExecutionHandoffMutationSucceeded(call, results[idx]) {
+			return true
+		}
+	}
+	return false
+}
+
+func projectContinuationReplacementChildHandoffActive(rt *turnRuntime) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	switch strings.TrimSpace(rt.initialMessageSource) {
+	case projectExecutionContinuationSource, "project_continuation_resume":
+	default:
+		return false
+	}
+	initial := strings.TrimSpace(rt.initialMessageText)
+	return strings.Contains(initial, "Current focus parent:") &&
+		strings.Contains(initial, "fresh replacement child task beneath")
+}
+
+func projectExecutionHandoffMutationSucceeded(call ToolCall, result ToolResult) bool {
+	if strings.TrimSpace(toolResultErrorCode(result)) != "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(call.Name)) {
+	case "task.update":
+		switch projectExecutionResultWorkStatus(call.Arguments, result) {
+		case "queued", "in_progress", "review":
+			return true
+		}
+	case "task.create":
+		switch projectExecutionResultWorkStatus(call.Arguments, result) {
+		case "queued", "in_progress", "review":
+			return true
+		}
+	}
+	return false
+}
+
+func projectExecutionResultWorkStatus(arguments map[string]any, result ToolResult) string {
+	if status := strings.ToLower(strings.TrimSpace(stringValue(arguments["work_status"]))); status != "" {
+		return status
+	}
+	if status := strings.ToLower(strings.TrimSpace(stringValue(result.Output["work_status"]))); status != "" {
+		return status
+	}
+	taskOutput, ok := result.Output["task"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(stringValue(taskOutput["work_status"])))
 }
 
 func projectExecutionBlockedMutationStopMessage(results []ToolResult) string {

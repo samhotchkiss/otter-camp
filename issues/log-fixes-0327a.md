@@ -1906,3 +1906,25 @@
   - after deploy on `repo_version=3486`, Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` picked up continuation `4885` with the new replacement-child retry wording
   - the lane first hit the existing top-level-task guard at `4887`, then immediately corrected and created fresh child task `72` under parent `44` at `4889`
   - the same turn queued task `72` at `4891`, proving the sharper retry converted the old rediscovery-only idle stop into the intended bounded PM action
+- 2026-03-28 20:41:05 MDT - Finished: stop PM replacement-child turns after a successful child handoff.
+  - live diagnosis:
+    - Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` correctly created child task `72` and queued it, but the same continuation turn kept running verification work after that handoff and later hit `max_tool_calls`
+    - the gap was in the turn engine itself: blocked PM mutations already ended the turn, but successful replacement-child handoffs did not
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `initialMessageSource` tracking to `turnRuntime`
+    - added `shouldStopAfterSuccessfulProjectExecutionHandoffMutation(...)`
+    - added replacement-child prompt gating plus successful handoff detection for `task.update` / `task.create` moves into `queued`, `in_progress`, or `review`
+    - async project-continuation turns now append a system message and end immediately after that focused handoff succeeds
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation`
+    - added `TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationIgnoresAssignmentOnlyUpdate`
+    - added `TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationRequiresReplacementChildPrompt`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3488`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `go test ./internal/turn -run 'Test(ShouldStopAfterSuccessfulProjectExecutionHandoffMutation|ShouldStopAfterSuccessfulProjectExecutionHandoffMutationIgnoresAssignmentOnlyUpdate|ShouldStopAfterSuccessfulProjectExecutionHandoffMutationRequiresReplacementChildPrompt|HandleCompletedProjectExecutionContinuationTurnRetriesReplacementChildWorkWithFreshMessage|HandleCompletedProjectExecutionContinuationTurnSuppressesRepeatedRediscoveryBlockedRetry)$' -count=1`
+  - deploy / proof status:
+    - rebuilt and restarted the runtime on `repo_version=3488`
+    - health is `ok`
+    - fresh direct production proof is still pending because the first post-deploy PM continuation surfaced a newer task-44 focus bug and never reached the successful handoff branch again

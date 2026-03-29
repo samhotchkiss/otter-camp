@@ -13617,6 +13617,84 @@ func TestProjectExecutionBlockedMutationStopMessageOnTaskExecutionRequired(t *te
 	}
 }
 
+func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText:   "Current focus parent: task 44 (Replacement scrape batch) id=abc. Your next assistant action must create the smallest fresh replacement child task beneath task 44 (Replacement scrape batch).",
+	}
+
+	calls := []ToolCall{{
+		Name:      "task.update",
+		Arguments: map[string]any{"task_id": uuid.NewString(), "work_status": "queued"},
+	}}
+	results := []ToolResult{{
+		Name:   "task.update",
+		Output: map[string]any{"task_id": uuid.NewString(), "work_status": "queued"},
+	}}
+
+	if !shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
+		t.Fatal("expected successful queued replacement-child handoff to stop the PM turn")
+	}
+}
+
+func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationIgnoresAssignmentOnlyUpdate(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText:   "Current focus parent: task 44 (Replacement scrape batch) id=abc. Your next assistant action must create the smallest fresh replacement child task beneath task 44 (Replacement scrape batch).",
+	}
+
+	calls := []ToolCall{{
+		Name:      "task.update",
+		Arguments: map[string]any{"task_id": uuid.NewString(), "assigned_agent_id": uuid.NewString()},
+	}}
+	results := []ToolResult{{
+		Name:   "task.update",
+		Output: map[string]any{"task_id": uuid.NewString(), "assigned_agent_id": uuid.NewString()},
+	}}
+
+	if shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
+		t.Fatal("assignment-only update should not stop the PM turn as a successful handoff")
+	}
+}
+
+func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationRequiresReplacementChildPrompt(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText:   "Continue the active project execution now.",
+	}
+
+	calls := []ToolCall{{
+		Name:      "task.update",
+		Arguments: map[string]any{"task_id": uuid.NewString(), "work_status": "queued"},
+	}}
+	results := []ToolResult{{
+		Name:   "task.update",
+		Output: map[string]any{"task_id": uuid.NewString(), "work_status": "queued"},
+	}}
+
+	if shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
+		t.Fatal("plain project continuation should not use the replacement-child handoff stop")
+	}
+}
+
 func TestMissingProjectContinuationDependencyArtifactPath(t *testing.T) {
 	t.Parallel()
 
