@@ -2481,3 +2481,23 @@
   - deploy / proof status:
     - fresh live proof is Sam.blog PM continuation message `52fd2a72-1c20-4779-bdb1-3c4ea9b44c92`, which now includes `Actionable draft tasks already in the tree: task 34 ... completed_closeout_child_tasks=2` plus the direct-close guidance
     - the next PM turn `30f9cb11-7827-4f61-b943-1157cbf0fd84` then acted on parent `34` itself, reading and rewriting the [`planning/prd-spec`](/Users/sam/otter-data/workspaces/sam-blog-rebuild-restart-12/planning/prd-spec) artifacts instead of reopening blocked child rediscovery
+- 2026-03-29 02:45:25 MDT - Finished and live-proven: stop PM closeout turns on the exact parent-orchestration completion contract.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - completed-closeout PM prompt guidance now explicitly tells the lane to record `parent_orchestration.child_verifications`, `parent_orchestration.integration_check.status=passed`, and `parent_orchestration.outcome_assessment.satisfied=true` on the parent task before setting it `done`
+    - focus guidance now tells the PM lane not to cancel blocked stale child lanes first from the project session
+    - `shouldStopAfterBlockedProjectExecutionBlockedMutation(...)` now treats `parent task requires child verification and passed integration before completion` as an immediate-stop PM mutation error
+    - `projectExecutionBlockedMutationStopMessage(...)` now emits the exact parent-orchestration correction instead of generic mutation-block text
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - worker-authored PM continuation prompts now include the same explicit parent-orchestration closeout guidance
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): widened `TestBuildProjectContinuationActionPromptAddsCompletedCloseoutGuidance`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): widened `TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnTaskLaneBoundaryErrors`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): added `TestProjectExecutionBlockedMutationStopMessageOnParentCompletionRequirements`
+  - verified with:
+    - `go test ./internal/turn -run 'Test(BuildProjectContinuationActionPromptAddsCompletedCloseoutGuidance|ShouldStopAfterBlockedProjectExecutionBlockedMutationOnTaskLaneBoundaryErrors|ProjectExecutionBlockedMutationStopMessageOn(TaskLaneBoundary|ParentCompletionRequirements)|ProjectExecutionBlockedMutationStopMessageOnTaskExecutionRequired)$' -count=1`
+    - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(TreatsCloseoutReadyParentAsActionableDraft|TreatsMarkParentCompleteTitleAsCloseoutProof)$' -count=1`
+  - deploy / proof status:
+    - fresh live proof is PM continuation turn `251f751c-c0c7-4292-bed0-a37e418cc861` on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`
+    - assistant `5d29d858-ee03-454d-a188-7348daebbff7` tried the correct bounded `task.update` on parent `34`
+    - tool result `e6845dbc-e879-4e84-ab1f-52cbbbe5d565` returned `parent task requires child verification and passed integration before completion`
+    - the turn then ended immediately with system correction `bc55fde8-d3e1-4f5e-9f5b-0a2d7fa2a15d` instructing the lane to record `parent_orchestration` evidence instead of cancelling blocked stale child lanes
