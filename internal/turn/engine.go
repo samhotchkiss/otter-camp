@@ -13748,6 +13748,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := e.shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ctx, rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if blocked, reason := e.shouldBlockProjectContinuationFocusedDraftMutationTool(ctx, rt, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -19059,6 +19067,7 @@ func projectContinuationTaskReferencesURLIndex(task repo.ProjectTask) bool {
 type projectContinuationChildActivity struct {
 	childTaskCount                   int
 	activeChildTaskCount             int
+	blockedChildTaskCount            int
 	malformedChildTaskCount          int
 	replaceableBlockedChildTaskCount int
 	completedCloseoutChildTaskCount  int
@@ -19112,6 +19121,7 @@ func projectContinuationChildTaskActivity(tasks []repo.ProjectTask, hintsByTask 
 			activity.activeChildTaskCount++
 		}
 		if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
+			activity.blockedChildTaskCount++
 			switch strings.TrimSpace(hintsByTask[task.ID].ResumePolicy) {
 			case "terminal_keep_blocked", "needs_replacement_work":
 				activity.replaceableBlockedChildTaskCount++
@@ -19138,9 +19148,10 @@ func projectContinuationDraftTaskNeedsFreshReplacementChildWork(activity project
 }
 
 func projectContinuationDraftTaskReadyForParentClosure(activity projectContinuationChildActivity) bool {
-	return activity.completedCloseoutChildTaskCount > 0 &&
-		activity.activeChildTaskCount == 0 &&
-		activity.childTaskCount == 0
+	if activity.completedCloseoutChildTaskCount == 0 || activity.activeChildTaskCount != 0 {
+		return false
+	}
+	return activity.childTaskCount == 0 || activity.childTaskCount == activity.blockedChildTaskCount
 }
 
 func projectContinuationChildTaskClosesParent(
@@ -26816,6 +26827,9 @@ func projectExecutionResultWorkStatus(arguments map[string]any, result ToolResul
 func projectExecutionBlockedMutationStopMessage(results []ToolResult) string {
 	for _, result := range results {
 		errText := strings.ToLower(strings.TrimSpace(toolResultErrorCode(result)))
+		if strings.Contains(errText, "completed closeout child proof") {
+			return "[Project continuation focus parent already has completed closeout child proof. Advance or close the parent directly instead of creating another replacement child for the same batch.]"
+		}
 		if strings.Contains(errText, "bounded size policy") || strings.Contains(errText, "bounded task-size policy") {
 			return "[Project continuation found that the remaining draft work still violates the bounded size policy. Split it into smaller reviewable child tasks instead of trying to queue the broad parent again.]"
 		}
@@ -29616,6 +29630,11 @@ func buildProjectContinuationFocusedDraftReplacementGuardError(focusTask repo.Pr
 	}
 }
 
+func buildProjectContinuationFocusedDraftCloseoutTaskCreateGuardError(focusTask repo.ProjectTask) string {
+	label := projectBootstrapTaskLabel(focusTask)
+	return fmt.Sprintf("project continuation already has focused draft task %s with completed closeout child proof for the same deliverable. Do not create another replacement child beneath %s from the project lane; advance or close %s directly instead.", label, label, label)
+}
+
 func buildProjectContinuationFocusedDraftAncestorPromotionGuardError(targetTask, focusTask repo.ProjectTask) string {
 	targetLabel := projectBootstrapTaskLabel(targetTask)
 	focusLabel := projectBootstrapTaskLabel(focusTask)
@@ -29726,6 +29745,44 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 		return true, buildProjectContinuationFocusedDraftAncestorPromotionGuardError(targetTask, focusTask)
 	}
 	return false, ""
+}
+
+func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") ||
+		!strings.EqualFold(strings.TrimSpace(toolName), "task.create") {
+		return false, ""
+	}
+	parentTaskID, ok := parseUUIDAny(arguments["parent_task_id"])
+	if !ok || parentTaskID == uuid.Nil {
+		return false, ""
+	}
+	projectID := resolveProjectID(ctx, rt.session, e.tasks)
+	if projectID == nil || *projectID == uuid.Nil {
+		return false, ""
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, *projectID)
+	if err != nil {
+		return false, ""
+	}
+	priorityPaths := projectContinuationPriorityPathsFromText(strings.TrimSpace(rt.initialMessageText))
+	taskHintsByTask, err := e.projectContinuationTaskHintsByTask(ctx, projectTasks)
+	if err != nil {
+		return false, ""
+	}
+	focusTask, ok := projectContinuationCurrentFocusTask(projectTasks, taskHintsByTask, priorityPaths)
+	if !ok || focusTask.ID == uuid.Nil || focusTask.ID != parentTaskID {
+		return false, ""
+	}
+	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
+	focusActivity := childActivity[focusTask.ID]
+	if !projectContinuationDraftTaskReadyForParentClosure(focusActivity) {
+		return false, ""
+	}
+	return true, buildProjectContinuationFocusedDraftCloseoutTaskCreateGuardError(focusTask)
 }
 
 func buildTaskExecutionOffTargetEvidenceToolGuardError(targetPath, path, toolName string) string {

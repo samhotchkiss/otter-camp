@@ -2952,6 +2952,7 @@ const projectContinuationBlockerExcerptLimitForWorker = 120
 type projectContinuationChildActivityForWorker struct {
 	childTaskCount                   int
 	activeChildTaskCount             int
+	blockedChildTaskCount            int
 	malformedChildTaskCount          int
 	replaceableBlockedChildTaskCount int
 	completedCloseoutChildTaskCount  int
@@ -2986,9 +2987,10 @@ func projectContinuationDraftTaskNeedsFreshReplacementChildWorkForWorker(activit
 }
 
 func projectContinuationDraftTaskReadyForParentClosureForWorker(activity projectContinuationChildActivityForWorker) bool {
-	return activity.completedCloseoutChildTaskCount > 0 &&
-		activity.activeChildTaskCount == 0 &&
-		activity.childTaskCount == 0
+	if activity.completedCloseoutChildTaskCount == 0 || activity.activeChildTaskCount != 0 {
+		return false
+	}
+	return activity.childTaskCount == 0 || activity.childTaskCount == activity.blockedChildTaskCount
 }
 
 func projectContinuationSnapshotWaitsOnActiveChildWorkForWorker(remainingDraftTasks int, snapshot projectExecutionContinuationSnapshotForWorker) bool {
@@ -3344,6 +3346,7 @@ func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask, hin
 			activity.activeChildTaskCount++
 		}
 		if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
+			activity.blockedChildTaskCount++
 			switch strings.TrimSpace(hintsByTask[task.ID].ResumePolicy) {
 			case "terminal_keep_blocked", "needs_replacement_work":
 				activity.replaceableBlockedChildTaskCount++

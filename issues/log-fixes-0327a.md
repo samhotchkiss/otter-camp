@@ -2274,3 +2274,53 @@
   - deploy / proof status:
     - pre-fix live evidence is task `78` review session `337fe47d-a163-4b9f-97dd-4089fbbaed47`, where `file.read(content/posts/README.md)` returned the combined placeholder blob instead of an invalid-deliverable error
     - fresh direct live proof will be the next task-78 review reread of `content/posts/README.md` after the `3516` restart
+- 2026-03-29 00:46:40 MDT - Finished locally: treat closeout-ready PM parents with only terminally blocked stale children as actionable closure work, not replacement-child work.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `projectContinuationDraftTaskReadyForParentClosure(...)` now treats `completed_closeout_child_tasks>0` plus “all remaining open children are replaceable blocked” as closeout-ready, so the PM lane can advance or close the parent directly instead of demanding another replacement child
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - mirrored the same closeout-ready rule in `projectContinuationDraftTaskReadyForParentClosureForWorker(...)`, keeping worker-generated PM snapshots aligned with the turn engine
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestProjectContinuationDraftTaskReadyForParentClosureAllowsOnlyReplaceableBlockedChildren`
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerProjectExecutionContinuationSnapshotPrefersParentCloseoutOverReplaceableBlockedChildren`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped runtime version to `3517`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectContinuationDraftTaskReadyForParentClosureAllowsOnlyReplaceableBlockedChildren|BuildProjectContinuationActionPromptAddsCompletedCloseoutGuidance|ProjectExecutionContinuationSnapshotForSummaryTreatsCloseoutChildAsActionableDraft)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(PromotesBlockedChildParentsToReplacementWork|PrefersParentCloseoutOverReplaceableBlockedChildren)$' -count=1`
+  - deploy / proof status:
+    - pre-fix live evidence is the task-34/task-79 PM loop on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where completed closeout proof still left task `34` in replacement-child guidance
+    - fresh direct live proof target is the next post-`3517` PM continuation or startup recovery snapshot for that same session; task `34` should move into `DraftTaskLine`/focus closeout guidance instead of `ReplacementDraftLine`
+- 2026-03-29 00:51:53 MDT - Finished locally: block duplicate PM replacement-child creation once the focus parent is already closeout-ready.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `shouldBlockProjectContinuationFocusedDraftTaskCreateTool(...)`, which recomputes current project focus state before `task.create` and blocks new child creation beneath a focus parent that already has completed closeout child proof
+    - updated `projectExecutionBlockedMutationStopMessage(...)` so this guard stops the PM turn with direct “advance or close the parent” guidance instead of the generic replacement-child message
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldBlockProjectContinuationFocusedDraftTaskCreateForCloseoutReadyParent`, which uses real task/event rows to prove the guard still fires even when the continuation prompt itself is stale replacement-child guidance
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped runtime version to `3518`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationFocusedDraftTaskCreateForCloseoutReadyParent|ProjectContinuationDraftTaskReadyForParentClosureAllowsOnlyReplaceableBlockedChildren|BuildProjectContinuationActionPromptAddsCompletedCloseoutGuidance|ProjectExecutionContinuationSnapshotForSummaryTreatsCloseoutChildAsActionableDraft)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(PromotesBlockedChildParentsToReplacementWork|PrefersParentCloseoutOverReplaceableBlockedChildren)$' -count=1`
+  - deploy / proof status:
+    - pre-fix live evidence is session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` creating duplicate closeout task `80` from stale prompt `5935` right after the `3517` restart
+    - the direct post-`3518` proof target is the next PM attempt to create another child beneath task `34`; it should now stop with closeout guidance instead of admitting another duplicate replacement task
+- 2026-03-29 00:57:21 MDT - Finished locally: broaden closeout-ready PM parent detection from “all remaining children are replaceable blocked” to “all remaining children are blocked.”
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `projectContinuationChildActivity` now tracks `blockedChildTaskCount`
+    - `projectContinuationDraftTaskReadyForParentClosure(...)` now treats completed closeout child proof plus any remaining blocked-only child lanes as closeout-ready, which matches the live `manual_recovery_repair` child under task `34`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - mirrored the same broader blocked-child closeout rule in the worker snapshot path so PM prompts and worker recovery stay aligned
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - renamed/expanded the helper regression to `TestProjectContinuationDraftTaskReadyForParentClosureAllowsOnlyBlockedChildren`
+    - updated `TestShouldBlockProjectContinuationFocusedDraftTaskCreateForCloseoutReadyParent` so one child uses `resume_policy=manual_recovery_repair`, matching the live Sam.blog shape
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - updated `TestJobWorkerProjectExecutionContinuationSnapshotPrefersParentCloseoutOverReplaceableBlockedChildren` to cover the mixed blocked-child case
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped runtime version to `3519`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationFocusedDraftTaskCreateForCloseoutReadyParent|ProjectContinuationDraftTaskReadyForParentClosureAllowsOnlyBlockedChildren|BuildProjectContinuationActionPromptAddsCompletedCloseoutGuidance|ProjectExecutionContinuationSnapshotForSummaryTreatsCloseoutChildAsActionableDraft)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(PromotesBlockedChildParentsToReplacementWork|PrefersParentCloseoutOverReplaceableBlockedChildren)$' -count=1`
+  - deploy / proof status:
+    - pre-fix live evidence is the `task 80 -> task 81` duplicate closeout chain on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where one remaining `manual_recovery_repair` child kept task `34` out of closeout-ready state
+    - the direct post-`3519` proof target is the next PM attempt to create another child beneath task `34`; it should now stop or close the parent instead of spawning task `82`

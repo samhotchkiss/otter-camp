@@ -19111,6 +19111,169 @@ func TestJobWorkerProjectExecutionContinuationSnapshotPromotesBlockedChildParent
 	}
 }
 
+func TestJobWorkerProjectExecutionContinuationSnapshotPrefersParentCloseoutOverReplaceableBlockedChildren(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "project-continuation-snapshot-closeout-over-blocked-children",
+		DisplayName: "Project Continuation Snapshot Closeout Over Blocked Children",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "closeout-over-blocked-children-project",
+		DisplayName:    "Closeout Over Blocked Children Project",
+		Description:    "Project for closeout-over-blocked-child PM snapshot coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "closeout-over-blocked-children-template",
+		DisplayName:    "Closeout Over Blocked Children Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	eventRepo := repo.NewProjectTaskEventRepo(pool)
+
+	parentDescription := "Scrape and import technonymous.org posts from URL index."
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     34,
+		Title:          "Scrape and import technonymous.org posts from URL index",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	for idx, taskNumber := range []int{73, 77, 78} {
+		childTitle := fmt.Sprintf("Blocked child %d", taskNumber)
+		childTask, createErr := taskRepo.Create(ctx, repo.ProjectTask{
+			OrganizationID: org.ID,
+			ProjectID:      project.ID,
+			TaskNumber:     taskNumber,
+			Title:          childTitle,
+			WorkStatus:     "blocked",
+			BlocksScope:    "task",
+			FlowTemplateID: &template.ID,
+			AssignedAgentID: func() *uuid.UUID {
+				id := agent.ID
+				return &id
+			}(),
+			CreatedByType: "system",
+			CreatedByID:   &agent.ID,
+			Metadata:      childMetadata,
+		})
+		if createErr != nil {
+			t.Fatalf("create child task %d: %v", taskNumber, createErr)
+		}
+		blockedReason := `{"blocked_reason":"flow rejection max visits exceeded"}`
+		if idx == 0 {
+			blockedReason = `{"blocked_reason":"recovery halted after recovered file.write for content/posts/stop-preparing-your-kids-for-jobs.md failed: file.write"}`
+		}
+		if _, recordErr := eventRepo.Record(ctx, repo.ProjectTaskEvent{
+			TaskID:    childTask.ID,
+			ProjectID: project.ID,
+			EventType: "flow.rejected",
+			ActorType: "system",
+			Payload:   json.RawMessage(blockedReason),
+		}); recordErr != nil {
+			t.Fatalf("record blocked reason for child task %d: %v", taskNumber, recordErr)
+		}
+	}
+	closeoutTitle := fmt.Sprintf("Close out scrape-import workstream and mark parent OC-%d complete", parentTask.TaskNumber)
+	closeoutDescription := fmt.Sprintf("All 35 posts are already present in content/posts/. This child confirms the parent OC-%d deliverable is complete so the parent can close. Mark done immediately.", parentTask.TaskNumber)
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     79,
+		Title:          closeoutTitle,
+		Description:    &closeoutDescription,
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata:      childMetadata,
+	}); err != nil {
+		t.Fatalf("create closeout child: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	parentLabel := fmt.Sprintf("task %d (Scrape and import technonymous.org posts from URL index)", parentTask.TaskNumber)
+	if strings.Contains(snapshot.ReplacementDraftLine, parentLabel) {
+		t.Fatalf("snapshot = %+v, should not keep parent 34 in replacement bucket once closeout child proof exists", snapshot)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, parentLabel) {
+		t.Fatalf("snapshot = %+v, want parent 34 visible as actionable closeout draft", snapshot)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "replaceable_blocked_child_tasks=2") {
+		t.Fatalf("snapshot = %+v, want replaceable blocked child count preserved on actionable closeout draft", snapshot)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "completed_closeout_child_tasks=1") {
+		t.Fatalf("snapshot = %+v, want completed closeout child marker", snapshot)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, parentLabel) {
+		t.Fatalf("snapshot = %+v, want focus to stay on parent 34 closeout", snapshot)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "completed_closeout_child_tasks=1") {
+		t.Fatalf("snapshot = %+v, want focus closeout marker", snapshot)
+	}
+}
+
 func TestJobWorkerProjectExecutionContinuationSnapshotKeepsReviewDecisionBlockedChildrenAsExistingChildWork(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

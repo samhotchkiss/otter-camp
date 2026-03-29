@@ -20438,6 +20438,28 @@ func TestBuildProjectContinuationActionPromptAddsCompletedCloseoutGuidance(t *te
 	}
 }
 
+func TestProjectContinuationDraftTaskReadyForParentClosureAllowsOnlyBlockedChildren(t *testing.T) {
+	t.Parallel()
+
+	if !projectContinuationDraftTaskReadyForParentClosure(projectContinuationChildActivity{
+		childTaskCount:                   5,
+		blockedChildTaskCount:            5,
+		replaceableBlockedChildTaskCount: 4,
+		completedCloseoutChildTaskCount:  1,
+	}) {
+		t.Fatal("expected completed closeout child proof to override stale blocked child lanes")
+	}
+
+	if projectContinuationDraftTaskReadyForParentClosure(projectContinuationChildActivity{
+		childTaskCount:                   2,
+		blockedChildTaskCount:            1,
+		replaceableBlockedChildTaskCount: 1,
+		completedCloseoutChildTaskCount:  1,
+	}) {
+		t.Fatal("did not expect closeout readiness when a non-blocked open child lane still remains")
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotSummarizesProjectState(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()
@@ -21274,6 +21296,163 @@ func TestShouldBlockProjectContinuationFocusedDraftMutationForMalformedChildPare
 	}
 	if !strings.Contains(reason, "focused draft task task 58") || !strings.Contains(reason, "malformed child artifact lane") {
 		t.Fatalf("reason = %q, want focused malformed-child guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftTaskCreateForCloseoutReadyParent(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "pm-closeout-ready-parent-task-create",
+		DisplayName: "PM Closeout Ready Parent Task Create",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "pm-closeout-ready-parent-task-create-project",
+		DisplayName:    "PM closeout-ready parent task.create guard",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "PM Closeout Guard Worker",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "pm-closeout-ready-parent-task-create",
+		DisplayName:    "PM Closeout Ready Parent Task Create",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	eventRepo := repo.NewProjectTaskEventRepo(pool)
+	parentDescription := "Scrape and import technonymous.org posts from URL index."
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     34,
+		Title:          "Scrape and import technonymous.org posts from URL index",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childMetadata := json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTask.ID.String()))
+	for idx, taskNumber := range []int{73, 77, 78} {
+		childTask, createErr := taskRepo.Create(ctx, repo.ProjectTask{
+			OrganizationID: org.ID,
+			ProjectID:      project.ID,
+			TaskNumber:     taskNumber,
+			Title:          fmt.Sprintf("Blocked child %d", taskNumber),
+			WorkStatus:     "blocked",
+			BlocksScope:    "task",
+			FlowTemplateID: &template.ID,
+			AssignedAgentID: func() *uuid.UUID {
+				id := agent.ID
+				return &id
+			}(),
+			CreatedByType: "system",
+			CreatedByID:   &agent.ID,
+			Metadata:      childMetadata,
+		})
+		if createErr != nil {
+			t.Fatalf("create child task %d: %v", taskNumber, createErr)
+		}
+		blockedReason := `{"blocked_reason":"flow rejection max visits exceeded"}`
+		if idx == 0 {
+			blockedReason = `{"blocked_reason":"recovery halted after recovered file.write for content/posts/stop-preparing-your-kids-for-jobs.md failed: file.write"}`
+		}
+		if _, recordErr := eventRepo.Record(ctx, repo.ProjectTaskEvent{
+			TaskID:    childTask.ID,
+			ProjectID: project.ID,
+			EventType: "flow.rejected",
+			ActorType: "system",
+			Payload:   json.RawMessage(blockedReason),
+		}); recordErr != nil {
+			t.Fatalf("record blocked reason for child task %d: %v", taskNumber, recordErr)
+		}
+	}
+	closeoutTitle := fmt.Sprintf("Close out scrape-import workstream and mark parent OC-%d complete", parentTask.TaskNumber)
+	closeoutDescription := fmt.Sprintf("All 35 posts are already present in content/posts/. This child confirms the parent OC-%d deliverable is complete so the parent can close. Mark done immediately.", parentTask.TaskNumber)
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     79,
+		Title:          closeoutTitle,
+		Description:    &closeoutDescription,
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata:      childMetadata,
+	}); err != nil {
+		t.Fatalf("create closeout child: %v", err)
+	}
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = pool
+	fixture.engine.tasks = taskRepo
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = project.ID
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: close out the scrape-import parent", projectExecutionContinuationSnapshot{
+			ProjectLine:          "Active project id: " + project.ID.String(),
+			ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 34 (Scrape and import technonymous.org posts from URL index) id=" + parentTask.ID.String() + " work_status=draft child_tasks=3 replaceable_blocked_child_tasks=3",
+			FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 34 (Scrape and import technonymous.org posts from URL index) id=" + parentTask.ID.String() + " work_status=draft child_tasks=3 replaceable_blocked_child_tasks=3",
+		}),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ctx, rt, "task.create", map[string]any{
+		"parent_task_id": parentTask.ID.String(),
+		"title":          "Close out OC-34 again",
+		"description":    "Duplicate close-out replacement task for batch 1-12.",
+	})
+	if !blocked {
+		snapshot, snapshotErr := fixture.engine.projectExecutionContinuationSnapshotForSummary(ctx, project.ID, rt.initialMessageText)
+		if snapshotErr != nil {
+			t.Fatalf("expected project continuation to block duplicate replacement child creation beneath a closeout-ready parent (snapshot error: %v)", snapshotErr)
+		}
+		t.Fatalf("expected project continuation to block duplicate replacement child creation beneath a closeout-ready parent; snapshot=%+v", snapshot)
+	}
+	if !strings.Contains(reason, "completed closeout child proof") || !strings.Contains(reason, "advance or close") {
+		t.Fatalf("reason = %q, want closeout-ready guidance", reason)
 	}
 }
 
