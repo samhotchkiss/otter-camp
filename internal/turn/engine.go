@@ -5210,6 +5210,21 @@ func (e *TurnEngine) retryProjectExecutionContinuationForRediscoveryStop(
 	priorityPaths := projectContinuationPriorityPathsFromText(strings.TrimSpace(latestUser.Content))
 	focusTask, focusOK := projectContinuationCurrentFocusTask(projectTasks, taskHintsByTask, priorityPaths)
 	blockedTask, blockedOK := projectContinuationCurrentActionableBlockedTask(projectTasks, taskHintsByTask, priorityPaths)
+	if blockedOK {
+		activeTaskLane, activeErr := e.projectTaskAlreadyOwnsExecutionLane(ctx, blockedTask)
+		if activeErr != nil {
+			return false, activeErr
+		}
+		if activeTaskLane {
+			_, _ = e.appendSystemMessage(
+				ctx,
+				latestCompleted.ID,
+				session.ID,
+				buildProjectExecutionContinuationActiveTaskLaneStopMessage(blockedTask),
+			)
+			return true, nil
+		}
+	}
 	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
 	if err != nil {
 		return false, err
@@ -5253,6 +5268,20 @@ func (e *TurnEngine) retryProjectExecutionContinuationForRediscoveryStop(
 		return false, err
 	}
 	return enqueued, nil
+}
+
+func (e *TurnEngine) projectTaskAlreadyOwnsExecutionLane(ctx context.Context, task repo.ProjectTask) (bool, error) {
+	if task.CurrentFlowNodeID != nil && *task.CurrentFlowNodeID != uuid.Nil {
+		return true, nil
+	}
+	if e == nil || e.pool == nil || task.ID == uuid.Nil {
+		return false, nil
+	}
+	session, err := repo.NewChatSessionRepo(e.pool).GetByScopeAndMode(ctx, "project_task", task.ID, "async")
+	if err != nil {
+		return false, err
+	}
+	return session != nil, nil
 }
 
 func buildProjectExecutionContinuationMissingDependencyRetryPrompt(
@@ -5300,6 +5329,11 @@ func buildProjectExecutionContinuationRediscoveryRetryPrompt(
 	)
 	retryPrompt += " If no named task can be advanced without more context, reply with one concrete blocker sentence instead of another discovery plan."
 	return retryPrompt
+}
+
+func buildProjectExecutionContinuationActiveTaskLaneStopMessage(task repo.ProjectTask) string {
+	label := projectBootstrapTaskLabel(task)
+	return fmt.Sprintf("%s %s already has an active project_task session. Leave that task lane alone from the project session. Do not create, queue, update, or inspect deliverables for %s from the PM lane; let the bound task lane continue or let its own review lane issue flow.review_decision if that review lane becomes active.]", projectContinuationTaskLaneBoundaryGuardPrefix, label, label)
 }
 
 func buildProjectExecutionContinuationRediscoveryActionInstruction(

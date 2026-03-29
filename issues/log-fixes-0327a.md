@@ -2576,3 +2576,20 @@
     - on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, the first post-restart PM continuation message `ecc1beb5-611a-4b1b-8115-b0ce755c0ef6` still ended on the old rediscovery-only stop in turn `73f6578c-f412-41f0-b4e0-e2c73d8262e0`
     - the new runtime immediately appended focused retry message `e61befed-bd69-4dd8-a2e5-c74ef5a8f7b1`, which explicitly named blocked task `71` and told the PM lane to `create, queue, or update the smallest bounded recovery step`
     - that follow-on turn `3877ecfa-9b43-44c7-866a-5eb50fd80895` no longer drained the session idle; it progressed to the narrower `task_lane_owned_by_project_task_session` stop after one blocked root probe and one exact deliverable read
+- 2026-03-29 04:25:47 MDT - Finished and live-proven: short-circuit focused PM retries when the blocked task already owns execution.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - [`retryProjectExecutionContinuationForRediscoveryStop(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now calls `projectTaskAlreadyOwnsExecutionLane(...)` before enqueuing the focused supervisory retry
+    - new helper `projectTaskAlreadyOwnsExecutionLane(...)` treats non-nil `current_flow_node_id` as the primary ownership signal and falls back to an active async `project_task` session lookup
+    - when ownership is already present, the turn appends `buildProjectExecutionContinuationActiveTaskLaneStopMessage(...)` and exits without creating another PM continuation message
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleCompletedProjectExecutionContinuationTurnSkipsRediscoveryRetryWhenBlockedTaskAlreadyOwnsExecutionLane`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - runtime version is now `3540`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurn(RetriesRediscoveryStopWithFocusedMessage|SkipsRediscoveryRetryWhenBlockedTaskAlreadyOwnsExecutionLane|SuppressesRepeatedRediscoveryBlockedRetry|RetriesReplacementChildWorkWithFreshMessage)|ShouldStopAfterBlockedProjectContinuationRediscovery)$' -count=1`
+    - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, `./bin/ottercamp version` returned `repo_version=3540`, and `./bin/ottercamp health --output json` returned `status=ok`
+  - deploy / proof status:
+    - fresh live proof is Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`
+    - worker startup launched exactly one PM continuation message `9534756d-2367-48b6-9dbf-10347e32976f` and turn `17e32c32-4665-4dcc-badf-293848a3eaa3`
+    - that turn appended a `projectContinuationTaskLaneBoundaryGuardPrefix` system message stating task `71` already has an active `project_task` session and no second focused PM retry message was created
+    - post-turn SQL and worker logs both stayed quiet, which proves the extra supervisory retry was eliminated
