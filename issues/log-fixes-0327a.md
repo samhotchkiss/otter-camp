@@ -3664,3 +3664,14 @@
     - `GOFLAGS='' go test -tags=integration ./internal/tools/native -run 'TestIntegrationFlowReviewDecision(ApproveWithEmptyReviewCommit|RejectCreatesCanonicalRejectionCommit)$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is commit/push, rebuild/restart, then let the next real review decision write this richer metadata live
+- 2026-03-29 16:18 MDT - Fixed the preferred-target review miss where `file.read` returned raw `not a directory` instead of normalized missing-target evidence.
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - added `isNotFoundLikePathError(...)` so `ENOTDIR` joins `fs.ErrNotExist` as a `not_found`-equivalent miss
+    - `file.read` now returns `path` and `deliverable_path` on that missing-target path family, allowing the existing review reject synthesizer to treat it as preferred-target reject evidence
+    - reused the same helper for `file.list` / `file.search`
+  - changed [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go):
+    - added `TestFileReadTreatsNotDirectoryPreferredTargetAsNotFound`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'TestFileRead(TreatsNotDirectoryPreferredTargetAsNotFound|RejectsMarkdownReviewAssessmentPlaceholderAtPreferredTarget)$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is rebuild/restart and confirm the next task-179 review retry rejects immediately on the normalized `not_found` evidence

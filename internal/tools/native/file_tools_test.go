@@ -1215,6 +1215,62 @@ func TestFileReadRejectsMarkdownReviewAssessmentPlaceholderAtPreferredTarget(t *
 	}
 }
 
+func TestFileReadTreatsNotDirectoryPreferredTargetAsNotFound(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "sambot/api.js"
+
+	if err := os.WriteFile(filepath.Join(root, "sambot"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(sambot): %v", err)
+	}
+
+	description := "Write a Node.js/Express backend API file at sambot/api.js."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Write sambot/api.js — Express.js backend API endpoint for SamBot chat",
+			Description:    &description,
+			WorkStatus:     "review",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "user",
+				Content: "Review only.\n" +
+					"Start with the preferred deliverable target `sambot/api.js`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `sambot/api.js` is missing.\n" +
+					"If reading `sambot/api.js` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := fmt.Sprintf("%v", out["error"]); got != "not_found" {
+		t.Fatalf("error = %v, want not_found", got)
+	}
+	if got := out["path"]; got != targetPath {
+		t.Fatalf("path = %v, want %s", got, targetPath)
+	}
+	if got := out["deliverable_path"]; got != targetPath {
+		t.Fatalf("deliverable_path = %v, want %s", got, targetPath)
+	}
+}
+
 func TestFileReadRejectsReviewSummaryPlaceholderAtCheckpointOwnedReviewOutput(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

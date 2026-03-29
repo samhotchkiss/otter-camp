@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/google/uuid"
 
@@ -42,6 +43,23 @@ type sessionRecoveryState struct {
 	reviewLane bool
 }
 
+func isNotFoundLikePathError(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+}
+
+func (e *NativeToolExecutor) buildNotFoundReadResponse(ctx context.Context, scope workspaceScope, requestedPath string) map[string]any {
+	out := map[string]any{"error": "not_found"}
+	normalizedPath := normalizeWorkspacePath(requestedPath)
+	if normalizedPath == "" {
+		return out
+	}
+	out["path"] = normalizedPath
+	if targetPath := normalizeWorkspacePath(e.latestRecoveryTargetPathForSession(ctx, scope)); targetPath != "" && sameOrNestedWorkspacePath(normalizedPath, targetPath) {
+		out["deliverable_path"] = targetPath
+	}
+	return out
+}
+
 func (e *NativeToolExecutor) handleFileRead(ctx context.Context, input map[string]any) (map[string]any, error) {
 	wd, scope, resolved, err := e.resolveInputPath(ctx, input, "path")
 	if err != nil {
@@ -61,8 +79,8 @@ func (e *NativeToolExecutor) handleFileRead(ctx context.Context, input map[strin
 		switch {
 		case errors.Is(err, ErrPathTraversal):
 			return map[string]any{"error": "path_traversal"}, nil
-		case errors.Is(err, fs.ErrNotExist):
-			return map[string]any{"error": "not_found"}, nil
+		case isNotFoundLikePathError(err):
+			return e.buildNotFoundReadResponse(ctx, scope, pathInput), nil
 		default:
 			return nil, err
 		}
@@ -83,8 +101,8 @@ func (e *NativeToolExecutor) handleFileRead(ctx context.Context, input map[strin
 
 	file, err := os.Open(realPath)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return map[string]any{"error": "not_found"}, nil
+		if isNotFoundLikePathError(err) {
+			return e.buildNotFoundReadResponse(ctx, scope, pathInput), nil
 		}
 		return nil, err
 	}
@@ -1189,7 +1207,7 @@ func (e *NativeToolExecutor) handleFileList(ctx context.Context, input map[strin
 
 	info, err := os.Stat(resolved)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
+		if isNotFoundLikePathError(err) {
 			return map[string]any{"error": "not_found"}, nil
 		}
 		return nil, err
@@ -1343,7 +1361,7 @@ func (e *NativeToolExecutor) handleFileSearch(ctx context.Context, input map[str
 
 	info, err := os.Stat(resolved)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
+		if isNotFoundLikePathError(err) {
 			return map[string]any{"error": "not_found"}, nil
 		}
 		return nil, err

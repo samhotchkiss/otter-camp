@@ -262,3 +262,16 @@ They need sharper stopping rules than ordinary execution lanes.
     - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurnRetries(GenericReplyWithFreshMessage|JordanGenericReplyWithFreshMessage)$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is rebuild/restart and confirm the next PM continuation treats the Jordan-style reply as generic and requeues bounded continuation work
+- 2026-03-29 16:18 MDT - The next live supervisory seam showed up in the fresh review replacement lane for task `179` (`sambot/api.js`). The review prompt correctly started with the preferred deliverable target, and the first `file.read sambot/api.js` failed immediately with a filesystem `not a directory` error because the path shape under the task worktree was invalid.
+  - fresh live evidence:
+    - session `4fa74e79-af56-459e-9f8e-830d9522c6c8`
+    - message `5` returned `lstat .../task-179/sambot/api.js: not a directory`
+    - instead of treating that as reject-worthy missing-target evidence, the review lane kept trying `git.status`, `file.list`, and `git.diff`, all of which the preferred-target guards blocked one by one
+  - local fix:
+    - [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go) now treats `ENOTDIR` / `not a directory` as a `not_found`-equivalent path miss for `file.read` (and the same helper is reused by `file.list` / `file.search`)
+    - the `file.read` not-found response now carries `path` and `deliverable_path` for the active preferred target, so the existing review reject synthesizer can recognize the missing target directly
+    - added focused coverage in [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go) with `TestFileReadTreatsNotDirectoryPreferredTargetAsNotFound`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'TestFileRead(TreatsNotDirectoryPreferredTargetAsNotFound|RejectsMarkdownReviewAssessmentPlaceholderAtPreferredTarget)$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is rebuild/restart and confirm the next task-179 review retry turns that same filesystem miss into the normal `not_found` rejection path instead of broad reread attempts

@@ -640,3 +640,14 @@
   - impact:
     - project continuation turns can be marked complete on generic PM chatter
     - the PM lane can park instead of issuing the next bounded continuation retry
+- 2026-03-29 16:18 MDT - Review lanes can still miss the preferred-deliverable fast-reject path when the first `file.read` fails with a path-shape filesystem error instead of literal `not_found`.
+  - fresh live evidence:
+    - task `179` review session `4fa74e79-af56-459e-9f8e-830d9522c6c8`
+    - message `5` returned `lstat .../task-179/sambot/api.js: not a directory`
+    - the same review lane then spent `git.status`, `file.list`, and `git.diff` attempts that the preferred-target guards blocked individually, instead of rejecting immediately from the first read
+  - bug:
+    - [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go) normalized `fs.ErrNotExist` to `not_found` but leaked `ENOTDIR` / `not a directory` as a raw error
+    - without normalized `not_found` plus the preferred target path, the review reject synthesizer could not treat that first read as reject-worthy evidence
+  - impact:
+    - review lanes can burn multiple blocked rediscovery steps after an already-decisive preferred-target miss
+    - path-shape workspace errors look more complex than they are and delay the correct rejection path
