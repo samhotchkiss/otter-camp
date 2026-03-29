@@ -1331,6 +1331,51 @@ func TestIntegrationFileReadRejectsMarkdownReviewAssessmentPlaceholderAtInProgre
 	}
 }
 
+func TestIntegrationFileReadRejectsBatchInventoryPlaceholderAtInProgressDeliverablePath(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	description := "Final replacement for batch 1-12. Previous attempts all terminally blocked. Read content/technonymous-index.json and save each post as markdown under content/posts/. Deliverable: content/posts/"
+	flowTemplate := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Title:           "Final replacement: scrape technonymous posts 1-12 to markdown in content/posts/",
+		Description:     &description,
+		WorkStatus:      "in_progress",
+		FlowTemplateID:  &flowTemplate.ID,
+		AssignedAgentID: &agent.ID,
+	})
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	workspaceRoot := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:          pool,
+		WorkspaceRoot: workspaceRoot,
+	})
+	ctx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	targetPath := "content/posts/stop-preparing-your-kids-for-jobs.md"
+	targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	placeholder := "All 35 files exist. Posts 1-12 (0-indexed entries 0-11) are:\n1. stop-preparing-your-kids-for-jobs\n2. the-end-of-commercial-software\n3. he-has-risen-the-return-of-piracy\n4. happy-new-yeartechnonymous-isnt-dead\n"
+	if err := os.WriteFile(targetAbs, []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("write placeholder target: %v", err)
+	}
+
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("file.read: %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+	if got := out["deliverable_path"]; got != "content/posts" {
+		t.Fatalf("deliverable_path = %v, want content/posts", got)
+	}
+}
+
 func TestIntegrationFileWriteSamBlogAlternatingRawPayloadsReturnContentRequired(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)

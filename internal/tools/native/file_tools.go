@@ -867,6 +867,9 @@ func looksLikeRejectedDeliverablePlaceholder(content string) bool {
 	if looksLikeDeliverableReviewAssessmentPlaceholder(lower) {
 		return true
 	}
+	if looksLikeDeliverableBatchInventoryPlaceholder(trimmed, lower) {
+		return true
+	}
 	if strings.Contains(lower, "# ready to continue oc-") &&
 		(strings.Contains(lower, "deliverable target:") || strings.Contains(lower, "**deliverable target**:")) &&
 		(strings.Contains(lower, "what i need from you:") || strings.Contains(lower, "**what i need from you**:")) {
@@ -920,6 +923,40 @@ func looksLikeDeliverableReviewAssessmentPlaceholder(lower string) bool {
 		return false
 	}
 	return strings.Contains(lower, ".md") || strings.Contains(lower, "content/posts/")
+}
+
+func looksLikeDeliverableBatchInventoryPlaceholder(trimmed, lower string) bool {
+	if trimmed == "" || lower == "" {
+		return false
+	}
+	if !strings.HasPrefix(lower, "all ") || !strings.Contains(lower, " files exist") {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"posts 1-12",
+		"posts 13-24",
+		"posts 25-35",
+		"0-indexed entries",
+		"entries[0]",
+		"entries[12]",
+		"entries 0-11",
+		"entries 12-23",
+		"entries 24-34",
+	) {
+		return false
+	}
+	if !strings.Contains(lower, "are:") {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"\n1. ",
+		"\r\n1. ",
+		"\n2. ",
+		"\r\n2. ",
+	) {
+		return false
+	}
+	return true
 }
 
 func (e *NativeToolExecutor) handleFileList(ctx context.Context, input map[string]any) (map[string]any, error) {
