@@ -3020,3 +3020,17 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleTurnCompletedEventAdvancesFlowFromPriorDurableWriteWhenRetryTurnReturnsRuntimeSummaryPlaceholder|HandleTurnCompletedEventAdvancesFlowFromDurableRecoveryWrite|HandleTurnCompletedEventCreatesCanonicalCommitFromDeliverableWrite|HandleTurnCompletedEventAdvancesFlowFromBlockedRecoveryWrite|HandleTurnCompletedEventRetriesGenericTaskContinuationReply|HandleTurnCompletedEventBlocksRepeatedGenericTaskContinuationReply)$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live canary is task `133`, where the current assistant-only `runtime will advance the flow` retry family should settle into canonical commit + flow advance instead of reopening more summary-only retries
+- 2026-03-29 09:25 MDT - Repointed stale project-task execution live-turn metadata to the newer leaked current turn before worker stale-turn recovery runs.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - added [`RepointProjectTaskExecutionLiveTurnsToCurrentSessionTurns(...)`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) to repair active `flow_node_execution.metadata.live_turn_id` when it lags behind an active session’s newer in-progress `current_turn_id`
+    - [`RecoverStaleInProgressContinuationTurns(...)`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) and [`RecoverStaleInProgressTriggeredTurns(...)`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now call that repair step first
+  - changed tests:
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+      - added `TestJobWorkerRecoverStaleInProgressContinuationTurnsPrefersCurrentTurnOverCompletedExecutionMetadataLiveTurn`
+      - added `TestJobWorkerRecoverStaleInProgressTriggeredTurnsPrefersCurrentTurnOverCompletedExecutionMetadataLiveTurn`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRecoverStaleInProgress(ContinuationTurnsPrefersCurrentTurnOverCompletedExecutionMetadataLiveTurn|TriggeredTurnsPrefersCurrentTurnOverCompletedExecutionMetadataLiveTurn)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary is task `127`, where the worker should stop trusting stale `live_turn_id=f60d...`, fail leaked current turn `1d08f...`, clear `current_turn_id`, and enqueue/allow the next bounded review retry
+  - caveat:
+    - one older adjacent integration fixture, `TestJobWorkerRecoverStaleInProgressTriggeredTurnsUsesExecutionMetadataLiveTurn`, is still red on its historic expectation and I kept that separate from this narrow drift-repair slice

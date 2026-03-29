@@ -4508,6 +4508,9 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 }
 
 func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (int64, error) {
+	if _, err := w.RepointProjectTaskExecutionLiveTurnsToCurrentSessionTurns(ctx); err != nil {
+		return 0, fmt.Errorf("repoint project_task execution live turns for continuation recovery: %w", err)
+	}
 	rows, err := w.pool.Query(ctx, `
 		SELECT cs.id,
 		       COALESCE(live_turn.id, ct.id) AS turn_id,
@@ -4695,6 +4698,9 @@ func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (i
 }
 
 func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int64, error) {
+	if _, err := w.RepointProjectTaskExecutionLiveTurnsToCurrentSessionTurns(ctx); err != nil {
+		return 0, fmt.Errorf("repoint project_task execution live turns for triggered recovery: %w", err)
+	}
 	rows, err := w.pool.Query(ctx, `
 		SELECT cs.id,
 		       COALESCE(live_turn.id, ct.id) AS turn_id,
@@ -5063,6 +5069,49 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		repaired++
 	}
 	return repaired, nil
+}
+
+func (w *Worker) RepointProjectTaskExecutionLiveTurnsToCurrentSessionTurns(ctx context.Context) (int64, error) {
+	ct, err := w.pool.Exec(ctx, `
+		WITH candidates AS (
+			SELECT e.id AS execution_id,
+			       cs.current_turn_id AS current_turn_id
+			FROM flow_node_execution e
+			JOIN chat_session cs
+			  ON cs.id = e.session_id
+			JOIN chat_turn current_turn
+			  ON current_turn.id = cs.current_turn_id
+			LEFT JOIN chat_turn live_turn
+			  ON COALESCE(e.metadata->>'live_turn_id', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+			 AND live_turn.id = (e.metadata->>'live_turn_id')::uuid
+			WHERE e.status = 'active'
+			  AND cs.scope_type = 'project_task'
+			  AND cs.status = 'active'
+			  AND cs.mode = 'async'
+			  AND cs.current_turn_id IS NOT NULL
+			  AND current_turn.status = 'in_progress'
+			  AND COALESCE(e.metadata->>'live_turn_id', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+			  AND (e.metadata->>'live_turn_id')::uuid <> cs.current_turn_id
+			  AND (
+			        live_turn.id IS NULL
+			     OR live_turn.status <> 'in_progress'
+			     OR live_turn.turn_number < current_turn.turn_number
+			  )
+		)
+		UPDATE flow_node_execution e
+		SET metadata = jsonb_set(
+		        COALESCE(e.metadata, '{}'::jsonb),
+		        '{live_turn_id}',
+		        to_jsonb(candidates.current_turn_id::text),
+		        true
+		    )
+		FROM candidates
+		WHERE e.id = candidates.execution_id
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("repoint project_task execution live turns to current session turns: %w", err)
+	}
+	return ct.RowsAffected(), nil
 }
 
 func (w *Worker) loadLatestTurnRateLimitRetryAfter(ctx context.Context, turnID uuid.UUID) (time.Duration, bool, error) {
