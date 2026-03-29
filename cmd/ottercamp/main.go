@@ -2636,6 +2636,17 @@ type dbTokenUsageSyntheticPromptRow struct {
 	LastSeen               time.Time `json:"last_seen"`
 }
 
+type dbTokenUsageReviewOutcomeRow struct {
+	SessionID                    uuid.UUID `json:"session_id"`
+	ScopeType                    string    `json:"scope_type"`
+	Mode                         string    `json:"mode"`
+	EventualDecision             string    `json:"eventual_decision"`
+	SyntheticReviewPrompts       int64     `json:"synthetic_review_prompts"`
+	ConsumedReviewPrompts        int64     `json:"consumed_review_prompts"`
+	ValidationBlockedReviewTurns int64     `json:"validation_blocked_review_turns"`
+	DecisionAt                   time.Time `json:"decision_at"`
+}
+
 type dbTokenUsageStopReasonRow struct {
 	ScopeType            string    `json:"scope_type"`
 	Mode                 string    `json:"mode"`
@@ -2703,6 +2714,7 @@ type dbTokenUsageReport struct {
 	CLIWorkingDirectoryRoots    []dbTokenUsageCLIRootRow             `json:"task_cli_working_directory_roots"`
 	RecentValidationLoopBlocks  []dbTokenUsageValidationLoopBlockRow `json:"recent_validation_loop_blocks"`
 	RepeatedSyntheticPrompts    []dbTokenUsageSyntheticPromptRow     `json:"repeated_synthetic_prompts"`
+	ReviewResumeOutcomes        []dbTokenUsageReviewOutcomeRow       `json:"review_resume_outcomes"`
 	CompletedByStopReason       []dbTokenUsageStopReasonRow          `json:"completed_by_stop_reason"`
 	Failures                    []dbTokenUsageFailureRow             `json:"failures"`
 	ProviderHealth              []dbTokenUsageProviderHealthRow      `json:"provider_health"`
@@ -3685,6 +3697,105 @@ func loadDBTokenUsageReport(ctx context.Context, pool *pgxpool.Pool, windowHours
 		return nil, err
 	}
 
+	reviewOutcomeRows, err := pool.Query(ctx, `
+		WITH review_prompts AS (
+			SELECT
+				cm.session_id,
+				cs.scope_type,
+				cs.mode,
+				COUNT(*) AS synthetic_review_prompts,
+				COUNT(*) FILTER (
+					WHERE EXISTS (
+						SELECT 1
+						FROM chat_turn ct
+						WHERE ct.session_id = cm.session_id
+						  AND ct.trigger_message_id = cm.id
+						  AND ct.status IN ('completed', 'failed', 'cancelled')
+					)
+				) AS consumed_review_prompts,
+				COUNT(*) FILTER (
+					WHERE EXISTS (
+						SELECT 1
+						FROM chat_turn ct
+						WHERE ct.session_id = cm.session_id
+						  AND ct.trigger_message_id = cm.id
+						  AND ct.status = 'completed'
+						  AND ct.stop_reason = 'validation_loop_blocked'
+					)
+				) AS validation_blocked_review_turns
+			FROM chat_message cm
+			JOIN chat_session cs ON cs.id = cm.session_id
+			WHERE cm.created_at >= $1
+			  AND cm.role = 'user'
+			  AND COALESCE(cm.metadata->>'synthetic_user_message', 'false') = 'true'
+			  AND COALESCE(cm.metadata->>'source', '') = 'task_review_action'
+			  AND ($2::uuid IS NULL OR cs.organization_id = $2)
+			GROUP BY cm.session_id, cs.scope_type, cs.mode
+		),
+		latest_decision AS (
+			SELECT
+				session_id,
+				decision,
+				decision_at
+			FROM (
+				SELECT
+					cm.session_id,
+					lower(COALESCE(call->'arguments'->>'decision', '')) AS decision,
+					cm.created_at AS decision_at,
+					ROW_NUMBER() OVER (
+						PARTITION BY cm.session_id
+						ORDER BY cm.created_at DESC, cm.sequence_number DESC NULLS LAST, cm.id DESC
+					) AS rn
+				FROM chat_message cm
+				JOIN chat_session cs ON cs.id = cm.session_id
+				CROSS JOIN LATERAL jsonb_array_elements(COALESCE(cm.metadata::jsonb->'tool_calls', '[]'::jsonb)) AS call
+				WHERE cm.created_at >= $1
+				  AND cm.role = 'assistant'
+				  AND cm.status = 'final'
+				  AND call->>'name' = 'flow.review_decision'
+				  AND lower(COALESCE(call->'arguments'->>'decision', '')) IN ('approve', 'reject')
+				  AND ($2::uuid IS NULL OR cs.organization_id = $2)
+			) ranked
+			WHERE rn = 1
+		)
+		SELECT
+			rp.session_id,
+			rp.scope_type,
+			rp.mode,
+			ld.decision,
+			rp.synthetic_review_prompts,
+			rp.consumed_review_prompts,
+			rp.validation_blocked_review_turns,
+			ld.decision_at
+		FROM review_prompts rp
+		JOIN latest_decision ld ON ld.session_id = rp.session_id
+		ORDER BY rp.validation_blocked_review_turns DESC, rp.synthetic_review_prompts DESC, ld.decision_at DESC, rp.session_id
+		LIMIT $3
+	`, sinceAt, orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer reviewOutcomeRows.Close()
+	for reviewOutcomeRows.Next() {
+		var row dbTokenUsageReviewOutcomeRow
+		if scanErr := reviewOutcomeRows.Scan(
+			&row.SessionID,
+			&row.ScopeType,
+			&row.Mode,
+			&row.EventualDecision,
+			&row.SyntheticReviewPrompts,
+			&row.ConsumedReviewPrompts,
+			&row.ValidationBlockedReviewTurns,
+			&row.DecisionAt,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		report.ReviewResumeOutcomes = append(report.ReviewResumeOutcomes, row)
+	}
+	if err := reviewOutcomeRows.Err(); err != nil {
+		return nil, err
+	}
+
 	return report, nil
 }
 
@@ -3858,6 +3969,23 @@ func printDBTokenUsageReportTable(w io.Writer, formatter clitools.OutputFormatte
 		})
 	}
 	_ = formatter.WriteTable([]string{"Session", "Scope", "Mode", "Source", "Synthetic Prompts", "Consumed", "Validation-Blocked", "Last Seen"}, syntheticPromptRows)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "== Review Resume Outcomes ==")
+	reviewOutcomeTableRows := make([][]string, 0, len(report.ReviewResumeOutcomes))
+	for _, row := range report.ReviewResumeOutcomes {
+		reviewOutcomeTableRows = append(reviewOutcomeTableRows, []string{
+			row.SessionID.String(),
+			row.ScopeType,
+			row.Mode,
+			row.EventualDecision,
+			strconv.FormatInt(row.SyntheticReviewPrompts, 10),
+			strconv.FormatInt(row.ConsumedReviewPrompts, 10),
+			strconv.FormatInt(row.ValidationBlockedReviewTurns, 10),
+			row.DecisionAt.UTC().Format(time.RFC3339),
+		})
+	}
+	_ = formatter.WriteTable([]string{"Session", "Scope", "Mode", "Decision", "Synthetic Review Prompts", "Consumed", "Validation-Blocked", "Decision At"}, reviewOutcomeTableRows)
 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "== Completed Turns By Stop Reason ==")

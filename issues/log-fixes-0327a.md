@@ -3734,3 +3734,16 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(StructuredReviewDecisionPromptContextDedupesAndFallsBack|BuildRecoveryResumeStateMessageIncludesStructuredReviewDecisionContext|DeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask|SessionTaskDeliverablePathIgnoresHistoricalAuxiliaryTestArtifactForBackendTaskReferencingFeatureSpec)$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is to ship it and confirm the next recovery/review retry includes the persisted structured validation context live
+- 2026-03-29 17:00 MDT - Picked up the second `add-0328i` runtime-metrics slice on top of the earlier `repeated_synthetic_prompts` report.
+  - changed [`cmd/ottercamp/main.go`](/Users/sam/dev/otter-camp/cmd/ottercamp/main.go):
+    - added `dbTokenUsageReviewOutcomeRow`
+    - extended `dbTokenUsageReport` with `review_resume_outcomes`
+    - added a derived query that groups synthetic `task_review_action` prompts by session, counts total / consumed / validation-blocked review resumes, and joins them to the latest assistant `flow.review_decision` tool call so the report shows eventual `approve` / `reject` next to retry cost
+    - added a matching table section in `printDBTokenUsageReportTable(...)`
+  - changed [`cmd/ottercamp/main_db_integration_test.go`](/Users/sam/dev/otter-camp/cmd/ottercamp/main_db_integration_test.go):
+    - widened the fixture with a synthetic review lane that spends one blocked review resume before an eventual `flow.review_decision reject`
+    - widened assertions so the JSON report must now expose both `repeated_synthetic_prompts` and `review_resume_outcomes`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./cmd/ottercamp -run '^TestDBTokenUsageJSONIncludesCacheReadsAndAttribution$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is to run the live report after rebuild/restart and use the new section to pick the next hot review hardening seam

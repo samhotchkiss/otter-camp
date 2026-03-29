@@ -175,6 +175,19 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create chat session: %v", err)
 	}
+	reviewSession, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create review chat session: %v", err)
+	}
 	stopReason := "validation_loop_blocked"
 	startedAt := createdAt.Add(-2 * time.Minute)
 	completedAt := createdAt.Add(-1 * time.Minute)
@@ -227,6 +240,58 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","synthetic_user_message":true}`),
 	}); err != nil {
 		t.Fatalf("create second synthetic message: %v", err)
+	}
+	reviewPrompt1, err := messageRepo.Create(ctx, repo.ChatMessage{
+		SessionID: reviewSession.ID,
+		Role:      "user",
+		Content:   "Review the current deliverable.",
+		Status:    "pending",
+		CreatedAt: createdAt.Add(120 * time.Second),
+		Metadata:  json.RawMessage(`{"source":"task_review_action","synthetic_user_message":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create first review prompt: %v", err)
+	}
+	reviewStopReason := "validation_loop_blocked"
+	reviewStartedAt := createdAt.Add(125 * time.Second)
+	reviewCompletedAt := createdAt.Add(130 * time.Second)
+	if _, err := turnRepo.Create(ctx, repo.ChatTurn{
+		SessionID:        reviewSession.ID,
+		TurnNumber:       1,
+		TriggerMessageID: &reviewPrompt1.ID,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StartedAt:        &reviewStartedAt,
+		CompletedAt:      &reviewCompletedAt,
+		StopReason:       &reviewStopReason,
+	}); err != nil {
+		t.Fatalf("create blocked review turn: %v", err)
+	}
+	reviewPrompt2, err := messageRepo.Create(ctx, repo.ChatMessage{
+		SessionID: reviewSession.ID,
+		Role:      "user",
+		Content:   "Review the current deliverable.",
+		Status:    "pending",
+		CreatedAt: createdAt.Add(135 * time.Second),
+		Metadata:  json.RawMessage(`{"source":"task_review_action","synthetic_user_message":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create second review prompt: %v", err)
+	}
+	reviewDecisionCompletedAt := createdAt.Add(145 * time.Second)
+	reviewDecisionTurn, err := turnRepo.Create(ctx, repo.ChatTurn{
+		SessionID:        reviewSession.ID,
+		TurnNumber:       2,
+		TriggerMessageID: &reviewPrompt2.ID,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StartedAt:        &reviewCompletedAt,
+		CompletedAt:      &reviewDecisionCompletedAt,
+	})
+	if err != nil {
+		t.Fatalf("create decision review turn: %v", err)
 	}
 
 	if _, err := pool.Exec(ctx, `
@@ -328,6 +393,20 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 			t.Fatalf("stamp chat message %d: %v", idx, err)
 		}
 	}
+	reviewDecisionMessage, err := messageRepo.Create(ctx, repo.ChatMessage{
+		SessionID: reviewSession.ID,
+		TurnID:    &reviewDecisionTurn.ID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "Rejecting the deliverable.",
+		Metadata:  json.RawMessage(`{"tool_calls":[{"id":"review-1","name":"flow.review_decision","arguments":{"decision":"reject","reason":"Criterion not met"}}]}`),
+	})
+	if err != nil {
+		t.Fatalf("create review decision message: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE chat_message SET created_at = $2, updated_at = $2 WHERE id = $1`, reviewDecisionMessage.ID, createdAt.Add(146*time.Second)); err != nil {
+		t.Fatalf("stamp review decision message: %v", err)
+	}
 
 	code, stdout, stderr := captureCommandOutput(t, func() int {
 		return runDBTokenUsage([]string{"--output", "json", "--hours", "24", "--limit", "5", "--org", org.ID.String()})
@@ -386,6 +465,9 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	if !strings.Contains(stdout, `"repeated_synthetic_prompts"`) || !strings.Contains(stdout, `"synthetic_prompts": 2`) {
 		t.Fatalf("db token-usage output missing repeated synthetic prompt section: %q", stdout)
 	}
+	if !strings.Contains(stdout, `"review_resume_outcomes"`) || !strings.Contains(stdout, `"eventual_decision": "reject"`) {
+		t.Fatalf("db token-usage output missing review resume outcomes section: %q", stdout)
+	}
 
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
@@ -400,18 +482,42 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 		t.Fatalf("unexpected repeated_package_installs row: %#v", repeatedPackageInstalls[0])
 	}
 	repeatedSyntheticPrompts, ok := payload["repeated_synthetic_prompts"].([]any)
-	if !ok || len(repeatedSyntheticPrompts) != 1 {
+	if !ok || len(repeatedSyntheticPrompts) < 2 {
 		t.Fatalf("unexpected repeated_synthetic_prompts payload: %#v", payload["repeated_synthetic_prompts"])
 	}
-	synthRow, ok := repeatedSyntheticPrompts[0].(map[string]any)
+	foundProjectContinuation := false
+	for _, raw := range repeatedSyntheticPrompts {
+		synthRow, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected repeated_synthetic_prompts row: %#v", raw)
+		}
+		if synthRow["source"] != "project_execution_continuation" {
+			continue
+		}
+		foundProjectContinuation = true
+		if synthRow["validation_blocked_turns"] != float64(1) {
+			t.Fatalf("unexpected repeated_synthetic_prompts validation_blocked_turns: %#v", synthRow["validation_blocked_turns"])
+		}
+	}
+	if !foundProjectContinuation {
+		t.Fatalf("repeated_synthetic_prompts missing project_execution_continuation row: %#v", repeatedSyntheticPrompts)
+	}
+	reviewResumeOutcomes, ok := payload["review_resume_outcomes"].([]any)
+	if !ok || len(reviewResumeOutcomes) != 1 {
+		t.Fatalf("unexpected review_resume_outcomes payload: %#v", payload["review_resume_outcomes"])
+	}
+	reviewOutcomeRow, ok := reviewResumeOutcomes[0].(map[string]any)
 	if !ok {
-		t.Fatalf("unexpected repeated_synthetic_prompts row: %#v", repeatedSyntheticPrompts[0])
+		t.Fatalf("unexpected review_resume_outcomes row: %#v", reviewResumeOutcomes[0])
 	}
-	if synthRow["source"] != "project_execution_continuation" {
-		t.Fatalf("unexpected repeated_synthetic_prompts source: %#v", synthRow["source"])
+	if reviewOutcomeRow["eventual_decision"] != "reject" {
+		t.Fatalf("unexpected review_resume_outcomes eventual_decision: %#v", reviewOutcomeRow["eventual_decision"])
 	}
-	if synthRow["validation_blocked_turns"] != float64(1) {
-		t.Fatalf("unexpected repeated_synthetic_prompts validation_blocked_turns: %#v", synthRow["validation_blocked_turns"])
+	if reviewOutcomeRow["synthetic_review_prompts"] != float64(2) {
+		t.Fatalf("unexpected review_resume_outcomes synthetic_review_prompts: %#v", reviewOutcomeRow["synthetic_review_prompts"])
+	}
+	if reviewOutcomeRow["validation_blocked_review_turns"] != float64(1) {
+		t.Fatalf("unexpected review_resume_outcomes validation_blocked_review_turns: %#v", reviewOutcomeRow["validation_blocked_review_turns"])
 	}
 	if got, _ := row["attempted_specs"].(string); got != "pyyaml" {
 		t.Fatalf("attempted_specs = %q, want %q", got, "pyyaml")
