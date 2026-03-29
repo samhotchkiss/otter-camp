@@ -55,6 +55,23 @@ func TestParseRecentDeliverableTargetFromToolResultPrefersDeliverablePath(t *tes
 	}
 }
 
+func TestParseRecentDeliverableTargetFromToolResultStripsWrappedDeliverablePath(t *testing.T) {
+	payload, err := json.Marshal(map[string]any{
+		"tool_name": "file.read",
+		"output": map[string]any{
+			"deliverable_path": "`planning/sambot-feature-spec.md`",
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(payload): %v", err)
+	}
+
+	got := parseRecentDeliverableTargetFromToolResult(string(payload))
+	if got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("parseRecentDeliverableTargetFromToolResult(...) = %q, want %q", got, "planning/sambot-feature-spec.md")
+	}
+}
+
 func TestLatestRecoveryTargetPathForSessionFallsBackToRecentToolResult(t *testing.T) {
 	sessionID := uuid.New()
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
@@ -92,6 +109,25 @@ func TestLatestRecoveryTargetPathForSessionFallsBackToReviewPromptTarget(t *test
 	got := executor.latestRecoveryTargetPathForSession(context.Background(), workspaceScope{sessionID: &sessionID})
 	if got != "src/pipeline_logger.py" {
 		t.Fatalf("latestRecoveryTargetPathForSession(...) = %q, want %q", got, "src/pipeline_logger.py")
+	}
+}
+
+func TestLatestRecoveryTargetPathForSessionStripsBackticksFromReviewPromptTarget(t *testing.T) {
+	sessionID := uuid.New()
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "user",
+				Content:   "Review only.\nStart with the preferred deliverable target `planning/sambot-feature-spec.md`.\nUse flow.review_decision.",
+			},
+		},
+	}
+
+	got := executor.latestRecoveryTargetPathForSession(context.Background(), workspaceScope{sessionID: &sessionID})
+	if got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("latestRecoveryTargetPathForSession(...) = %q, want %q", got, "planning/sambot-feature-spec.md")
 	}
 }
 

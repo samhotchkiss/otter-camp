@@ -2906,3 +2906,20 @@
       - task `111` no longer stayed in the older open-ended recovery churn family; the new review session `c95f1f65-1a31-44e1-b833-124a2c6911af` rejected and blocked the corrupt deliverable immediately after bounded inspection
     - current caveat:
       - the exact `file.read -> placeholder_deliverable` transition for the short `The file content is clearly not a valid deliverable ... self-referential summary ...` body is still not directly live-proven, because that read returned the body content before the review lane rejected it
+- 2026-03-29 08:20 MDT - Fixed wrapped-path normalization for recovery/deliverable target comparisons.
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - [`normalizeWorkspacePath(...)`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go) now strips wrapper backticks/quotes/brackets and trailing punctuation before cleaning the path
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - [`normalizeWorkspaceRelativePath(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now strips the same wrappers/punctuation before cleaning the path
+  - changed tests:
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go)
+      - added `TestParseRecentDeliverableTargetFromToolResultStripsWrappedDeliverablePath`
+      - added `TestLatestRecoveryTargetPathForSessionStripsBackticksFromReviewPromptTarget`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(ParseRecentDeliverableTargetFromToolResult(PrefersDeliverablePath|StripsWrappedDeliverablePath)|LatestRecoveryTargetPathForSession(FallsBackToReviewPromptTarget|StripsBackticksFromReviewPromptTarget))$' -count=1`
+  - deploy / proof status:
+    - runtime version is now `3569`
+    - rebuilt [`./bin/ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp), respawned tmux panes `%847/%848`, and [`./bin/ottercamp health --output json`](/Users/sam/dev/otter-camp/bin/ottercamp) returned `status=ok`
+    - fresh live proof:
+      - old task-129 review session `cb25ec19-d20e-4250-8f47-1e49bd64cd08` had been self-blocking on `recovery_target_focus_required` while carrying backticked `deliverable_path`
+      - successor session `3e72351c-6278-499f-b36c-de2b75646376` no longer returned a raw `recovery_target_focus_required` tool result for its first direct read of `planning/sambot-feature-spec.md`; it read file content instead, which proves the path-token self-block is gone

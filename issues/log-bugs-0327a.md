@@ -310,3 +310,8 @@
   - task `111` execution session `72a06536-9316-4cf2-9b7d-fd412307af85` still read a `493`-byte body beginning `The file content is clearly not a valid deliverable ... self-referential summary ...`
   - the succeeding review session `c95f1f65-1a31-44e1-b833-124a2c6911af` then rejected and blocked correctly, so the family is now bounded
   - but the read itself still returned content instead of `placeholder_deliverable`, so the native deliverable-classifier effect is still only test-proven for this specific paraphrase family
+- 2026-03-29 08:20 MDT - Replacement review task `129` exposed a separate path-token bug in native recovery targeting. Fresh pre-fix evidence on session `cb25ec19-d20e-4250-8f47-1e49bd64cd08`:
+  - the review prompt correctly named preferred target `planning/sambot-feature-spec.md`
+  - direct `file.read` still returned `recovery_target_focus_required`
+  - the tool payload showed `deliverable_path=\"`planning/sambot-feature-spec.md`\"`, with wrapper backticks preserved in the stored target
+  Root cause: shared path normalization preserved markdown/quote wrappers, so runtime comparisons treated `` `planning/sambot-feature-spec.md` `` and `planning/sambot-feature-spec.md` as different paths. Impact: review lanes could self-block on their own preferred deliverable target even when the contract was otherwise correct.

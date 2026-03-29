@@ -33750,6 +33750,12 @@ func normalizeWorkspaceRelativePath(value string) string {
 	if trimmed == "" {
 		return ""
 	}
+	trimmed = strings.Trim(trimmed, "`'\"“”‘’()[]{}")
+	trimmed = strings.TrimRight(trimmed, ".,:;!?")
+	trimmed = strings.Trim(trimmed, "`'\"“”‘’()[]{}")
+	if trimmed == "" {
+		return ""
+	}
 	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(trimmed)))
 }
 
