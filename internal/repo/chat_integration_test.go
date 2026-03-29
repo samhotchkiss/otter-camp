@@ -153,9 +153,9 @@ func TestChatTurnRepoCreateForMessageAttemptRepairsCurrentTurnAndReplacesStalePe
 	pool := testdb.New(t)
 	fixture := seedChatFixture(t, ctx, pool)
 
-	messageRepo := NewChatMessageRepo(pool)
 	sessionRepo := NewChatSessionRepo(pool)
 	turnRepo := NewChatTurnRepo(pool)
+	messageRepo := NewChatMessageRepo(pool)
 
 	firstMessage, err := messageRepo.Create(ctx, ChatMessage{
 		SessionID: fixture.session.ID,
@@ -431,6 +431,7 @@ func TestChatSessionRepoCloseCancelsNonTerminalTurns(t *testing.T) {
 
 	sessionRepo := NewChatSessionRepo(pool)
 	turnRepo := NewChatTurnRepo(pool)
+	messageRepo := NewChatMessageRepo(pool)
 
 	pendingTurn, err := turnRepo.Create(ctx, ChatTurn{
 		SessionID:      fixture.session.ID,
@@ -455,6 +456,16 @@ func TestChatSessionRepoCloseCancelsNonTerminalTurns(t *testing.T) {
 	if _, err := sessionRepo.UpdateCurrentTurn(ctx, fixture.session.ID, &inProgressTurn.ID); err != nil {
 		t.Fatalf("set current turn: %v", err)
 	}
+	pendingMessage, err := messageRepo.Create(ctx, ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Content:   "pending message should fail when session closes",
+		Status:    "pending",
+		Metadata:  jsonRaw(`{"source":"close-session-pending-message"}`),
+	})
+	if err != nil {
+		t.Fatalf("create pending message: %v", err)
+	}
 
 	closed, err := sessionRepo.Close(ctx, fixture.session.ID)
 	if err != nil {
@@ -472,6 +483,7 @@ func TestChatSessionRepoCloseCancelsNonTerminalTurns(t *testing.T) {
 
 	assertChatTurnStatus(t, ctx, pool, pendingTurn.ID, "cancelled", "session_closed")
 	assertChatTurnStatus(t, ctx, pool, inProgressTurn.ID, "cancelled", "session_closed")
+	assertChatMessageStatus(t, ctx, pool, pendingMessage.ID, "failed", "session_closed")
 }
 
 func TestChatSessionRepoCloseProjectScopedCancelsNonTerminalTurns(t *testing.T) {
@@ -482,6 +494,7 @@ func TestChatSessionRepoCloseProjectScopedCancelsNonTerminalTurns(t *testing.T) 
 	sessionRepo := NewChatSessionRepo(pool)
 	turnRepo := NewChatTurnRepo(pool)
 	taskRepo := NewProjectTaskRepo(pool)
+	messageRepo := NewChatMessageRepo(pool)
 
 	projectSession, err := sessionRepo.Create(ctx, ChatSession{
 		OrganizationID: fixture.org.ID,
@@ -508,6 +521,16 @@ func TestChatSessionRepoCloseProjectScopedCancelsNonTerminalTurns(t *testing.T) 
 	}
 	if _, err := sessionRepo.UpdateCurrentTurn(ctx, projectSession.ID, &projectTurn.ID); err != nil {
 		t.Fatalf("set project current turn: %v", err)
+	}
+	projectPendingMessage, err := messageRepo.Create(ctx, ChatMessage{
+		SessionID: projectSession.ID,
+		Role:      "user",
+		Content:   "pending project message should fail when project closes",
+		Status:    "pending",
+		Metadata:  jsonRaw(`{"source":"close-project-scoped-project-message"}`),
+	})
+	if err != nil {
+		t.Fatalf("create pending project message: %v", err)
 	}
 
 	task, err := taskRepo.Create(ctx, ProjectTask{
@@ -546,6 +569,16 @@ func TestChatSessionRepoCloseProjectScopedCancelsNonTerminalTurns(t *testing.T) 
 	}
 	if _, err := sessionRepo.UpdateCurrentTurn(ctx, taskSession.ID, &taskTurn.ID); err != nil {
 		t.Fatalf("set task current turn: %v", err)
+	}
+	taskPendingMessage, err := messageRepo.Create(ctx, ChatMessage{
+		SessionID: taskSession.ID,
+		Role:      "user",
+		Content:   "pending task message should fail when project closes",
+		Status:    "pending",
+		Metadata:  jsonRaw(`{"source":"close-project-scoped-task-message"}`),
+	})
+	if err != nil {
+		t.Fatalf("create pending task message: %v", err)
 	}
 
 	otherOrg, otherProject := seedTaskRepoOrgProject(t, ctx, pool)
@@ -588,6 +621,8 @@ func TestChatSessionRepoCloseProjectScopedCancelsNonTerminalTurns(t *testing.T) 
 	assertChatTurnStatus(t, ctx, pool, projectTurn.ID, "cancelled", "session_closed")
 	assertChatTurnStatus(t, ctx, pool, taskTurn.ID, "cancelled", "session_closed")
 	assertChatTurnStatus(t, ctx, pool, otherTurn.ID, "pending", "")
+	assertChatMessageStatus(t, ctx, pool, projectPendingMessage.ID, "failed", "session_closed")
+	assertChatMessageStatus(t, ctx, pool, taskPendingMessage.ID, "failed", "session_closed")
 }
 
 func TestChatMessageReactionUniqueConstraint(t *testing.T) {
@@ -835,6 +870,34 @@ func assertChatTurnStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	}
 	if stopReason == nil || *stopReason != wantStopReason {
 		t.Fatalf("turn %s stop_reason = %v, want %q", turnID, stopReason, wantStopReason)
+	}
+}
+
+func assertChatMessageStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, messageID uuid.UUID, wantStatus string, wantError string) {
+	t.Helper()
+
+	var (
+		status       string
+		errorMessage *string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, error_message
+		FROM chat_message
+		WHERE id = $1
+	`, messageID).Scan(&status, &errorMessage); err != nil {
+		t.Fatalf("query message %s: %v", messageID, err)
+	}
+	if status != wantStatus {
+		t.Fatalf("message %s status = %q, want %q", messageID, status, wantStatus)
+	}
+	if wantError == "" {
+		if errorMessage != nil {
+			t.Fatalf("message %s error_message = %v, want nil", messageID, errorMessage)
+		}
+		return
+	}
+	if errorMessage == nil || *errorMessage != wantError {
+		t.Fatalf("message %s error_message = %v, want %q", messageID, errorMessage, wantError)
 	}
 }
 

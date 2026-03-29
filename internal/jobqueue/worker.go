@@ -5672,6 +5672,19 @@ func (w *Worker) ClearInactiveSessionCurrentTurns(ctx context.Context) (int64, e
 	`); err != nil {
 		return 0, fmt.Errorf("cancel inactive session turns: %w", err)
 	}
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE chat_message
+		SET status = 'failed',
+		    error_message = 'session_closed'
+		WHERE session_id IN (
+			SELECT id
+			FROM chat_session
+			WHERE status IN ('closed', 'archived')
+		)
+		  AND status IN ('pending', 'streaming')
+	`); err != nil {
+		return 0, fmt.Errorf("fail inactive session pending messages: %w", err)
+	}
 
 	ct, err := w.pool.Exec(ctx, `
 		UPDATE chat_session

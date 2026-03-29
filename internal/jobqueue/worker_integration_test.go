@@ -1134,6 +1134,100 @@ func TestJobWorkerRetireClosedAsyncSessionRunsCompletesDoneTaskRuns(t *testing.T
 	}
 }
 
+func TestJobWorkerClearInactiveSessionCurrentTurnsFailsPendingMessages(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "clear-inactive-session-pending-messages",
+		DisplayName: "Clear Inactive Session Pending Messages",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "clear-inactive-session-pending-messages-project",
+		DisplayName:    "Clear Inactive Session Pending Messages Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Closed session should not keep pending prompts",
+		WorkStatus:     "blocked",
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Review only. Use flow.review_decision.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"task_review_action"}`),
+	})
+	if err != nil {
+		t.Fatalf("create pending message: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE chat_session
+		SET status = 'closed',
+		    closed_at = now(),
+		    current_turn_id = NULL
+		WHERE id = $1
+	`, session.ID); err != nil {
+		t.Fatalf("close session directly: %v", err)
+	}
+
+	if _, err := worker.ClearInactiveSessionCurrentTurns(ctx); err != nil {
+		t.Fatalf("ClearInactiveSessionCurrentTurns: %v", err)
+	}
+
+	var (
+		status       string
+		errorMessage *string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, error_message
+		FROM chat_message
+		WHERE id = $1
+	`, message.ID).Scan(&status, &errorMessage); err != nil {
+		t.Fatalf("query message: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("message status = %q, want failed", status)
+	}
+	if errorMessage == nil || *errorMessage != "session_closed" {
+		t.Fatalf("message error_message = %v, want session_closed", errorMessage)
+	}
+}
+
 func TestJobWorkerReservesSlotsForAgentTurnsOverBackgroundJobs(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

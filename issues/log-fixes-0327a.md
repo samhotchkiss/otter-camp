@@ -2105,3 +2105,28 @@
     - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and health is `ok` on `repo_version=3503` (`request_id=c5929974-a36a-432d-9514-9769f3ab9eca`)
     - the hot PM session is currently drained again (`0` pending `project_execution_continuation`, `0` pending/claimed `agent_turn` jobs), so direct production proof is still pending the next natural PM wakeup
     - the concrete before/after canary is narrow and clear: on the new binary, the old `5842-5847` family should now collapse straight into the review-lane resume system message without recording the blocked rediscovery tool results first
+- 2026-03-28 22:47:12 MDT - Finished: fail orphan pending prompts when sessions close or are later discovered inactive.
+  - live diagnosis:
+    - task `78` (`scope_id=75a5606f-3577-4be8-bbf6-337fe3a68286`) had seven async `project_task` sessions already `status=closed`
+    - there were no pending/claimed `agent_turn` jobs and all related `flow_node_execution` rows were terminal, but the closed sessions still retained pending synthetic user messages from `task_queue_processor` and `task_review_action`
+    - that proved the leftover prompts were orphan backlog, not recoverable work
+  - changed [`internal/repo/chat.go`](/Users/sam/dev/otter-camp/internal/repo/chat.go):
+    - [`ChatSessionRepo.Close(...)`](/Users/sam/dev/otter-camp/internal/repo/chat.go) now fails pending/streaming `chat_message` rows with `error_message='session_closed'` after cancelling non-terminal turns
+    - [`ChatSessionRepo.CloseProjectScoped(...)`](/Users/sam/dev/otter-camp/internal/repo/chat.go) now does the same for both project and project-task sessions under the project being closed
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - [`ClearInactiveSessionCurrentTurns(...)`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now includes a safety-net pass that fails pending/streaming `chat_message` rows for any already `closed` or `archived` session
+  - changed tests:
+    - [`internal/repo/chat_integration_test.go`](/Users/sam/dev/otter-camp/internal/repo/chat_integration_test.go)
+      - widened close and close-project-scoped coverage to assert pending messages become `failed` with `session_closed`
+      - added `assertChatMessageStatus(...)`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+      - added `TestJobWorkerClearInactiveSessionCurrentTurnsFailsPendingMessages`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3505`
+  - verified with:
+    - `go test -tags=integration ./internal/repo -run 'TestChatSessionRepoClose(CancelsNonTerminalTurns|ProjectScopedCancelsNonTerminalTurns)$' -count=1`
+    - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerClearInactiveSessionCurrentTurnsFailsPendingMessages$' -count=1`
+  - deploy / proof status:
+    - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and health is `ok` on `repo_version=3505` (`request_id=5f04c35d-8a43-4eb4-b1f0-a7e4a5315979`)
+    - the targeted live query for the seven closed task-78 sessions now returns zero pending user messages
+    - the broader sanity check `count(*)` over `chat_message` joined to `chat_session` for `session.status in ('closed','archived')` and `message.status in ('pending','streaming')` also returns `0`

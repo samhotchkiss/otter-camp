@@ -223,6 +223,15 @@ func (r *ChatSessionRepo) Close(ctx context.Context, id uuid.UUID) (ChatSession,
 	`, id); err != nil {
 		return ChatSession{}, mapDBError(err)
 	}
+	if _, err := r.db.Exec(ctx, `
+		UPDATE chat_message
+		SET status = 'failed',
+		    error_message = 'session_closed'
+		WHERE session_id = $1
+		  AND status IN ('pending', 'streaming')
+	`, id); err != nil {
+		return ChatSession{}, mapDBError(err)
+	}
 
 	row := r.db.QueryRow(ctx, `
 		UPDATE chat_session
@@ -281,6 +290,27 @@ func (r *ChatSessionRepo) CloseProjectScoped(ctx context.Context, projectID uuid
 			  )
 		)
 		  AND status IN ('pending', 'in_progress')
+	`, projectID); err != nil {
+		return mapDBError(err)
+	}
+	if _, err := r.db.Exec(ctx, `
+		UPDATE chat_message
+		SET status = 'failed',
+		    error_message = 'session_closed'
+		WHERE session_id IN (
+			SELECT id
+			FROM chat_session
+			WHERE status = 'active'
+			  AND (
+				(scope_type = 'project' AND scope_id = $1)
+				OR (scope_type = 'project_task' AND scope_id IN (
+					SELECT id
+					FROM project_task
+					WHERE project_id = $1
+				))
+			  )
+		)
+		  AND status IN ('pending', 'streaming')
 	`, projectID); err != nil {
 		return mapDBError(err)
 	}
