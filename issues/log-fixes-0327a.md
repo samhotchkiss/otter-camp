@@ -1,5 +1,13 @@
 # 0327a Fix Log
 
+- 2026-03-28 20:13:29 MDT - `pending` `Preserve target-aware guidance for non-substantive file writes`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `classifyToolValidationFailure(...)` now carries the concrete target path from native `file.write` / `file.edit` validation failures even when the tool result only exposed `output.path` or the original call arguments
+  - `non_substantive_content` failures now keep the native tool message and strengthen it with `Target deliverable: ...` plus `Do not switch to cli.execute or shell wrappers`, which makes the repeated-turn validation stop much more specific for the next continuation
+  - added focused unit coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) for the enriched `non_substantive_content` classification
+  - verified with `GOFLAGS='' go test ./internal/turn -run 'TestClassifyToolValidationFailureRecognizesNonSubstantiveContent$' -count=1`
+  - note: the nearby integration fixture `TestTurnEngineIntegrationRecoveryResumeBlocksIntentOnlyNarrationBeforeReadOnlyToolDispatch` is currently stale on this tree because `ResumeValidationBlockedTask` now rejects that older blocker shape before the engine path runs; I left that fixture separate from this narrow guidance slice
+  - live status: task `71` remains the canary for whether the next repeated `non_substantive_content` stop now tells the model to keep using direct file writes on the same target instead of pivoting into `cli.execute`
+
 - 2026-03-28 20:08:17 MDT - `pending` `Reject batch inventory stubs as placeholder deliverables`
   - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go) so `looksLikeRejectedDeliverablePlaceholder(...)` now also catches numbered batch-inventory/status stubs like `All 35 files exist. Posts 1-12 ...` that list slugs instead of real markdown body content
   - the new `looksLikeDeliverableBatchInventoryPlaceholder(...)` detector is intentionally narrow: it looks for `All N files exist`, explicit batch/entry references, and numbered line items, which matches the live task-71 corrupted target without broadening into normal prose markdown

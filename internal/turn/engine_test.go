@@ -23534,7 +23534,8 @@ func TestClassifyToolValidationFailureRecognizesNonSubstantiveContent(t *testing
 		ToolCallID: "write-1",
 		Name:       "file.write",
 		Output: map[string]any{
-			"error": "non_substantive_content",
+			"error":   "non_substantive_content",
+			"message": "file.write content appears to be task narration about planning to write the deliverable, not the deliverable body itself. Write the concrete file contents directly.",
 		},
 	})
 	if !ok {
@@ -23545,6 +23546,15 @@ func TestClassifyToolValidationFailureRecognizesNonSubstantiveContent(t *testing
 	}
 	if failure.ToolName != "file.write" {
 		t.Fatalf("tool name = %q, want file.write", failure.ToolName)
+	}
+	if failure.DeliverablePath != "validation_scope.md" {
+		t.Fatalf("deliverable path = %q, want validation_scope.md", failure.DeliverablePath)
+	}
+	if !strings.Contains(failure.FailureReason, "Target deliverable: `validation_scope.md`") {
+		t.Fatalf("failure reason = %q, want target deliverable hint", failure.FailureReason)
+	}
+	if !strings.Contains(failure.FailureReason, "Do not switch to cli.execute or shell wrappers") {
+		t.Fatalf("failure reason = %q, want cli.execute correction", failure.FailureReason)
 	}
 }
 

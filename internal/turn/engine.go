@@ -24110,6 +24110,7 @@ func classifyToolValidationFailure(call ToolCall, result ToolResult) (toolValida
 	attemptFingerprint := toolargs.AttemptFingerprint(toolName, call.Arguments)
 	rawErrorCode := strings.TrimSpace(toolResultErrorCode(result))
 	normalizedErrorCode := normalizeValidationFailureCode(rawErrorCode)
+	deliverablePath := validationFailureDeliverablePath(toolName, call, result)
 
 	if hasRawToolArguments(call) {
 		if rawErrorCode == "" {
@@ -24123,22 +24124,67 @@ func classifyToolValidationFailure(call ToolCall, result ToolResult) (toolValida
 	}
 
 	if isToolValidationCode(normalizedErrorCode) {
-		return buildToolValidationFailure(toolName, normalizedErrorCode, rawErrorCode, attemptFingerprint, toolResultDeliverablePath(result)), true
+		reason := rawErrorCode
+		if strings.EqualFold(normalizedErrorCode, "non_substantive_content") {
+			reason = nonSubstantiveContentValidationFailureReason(toolName, result, deliverablePath)
+		}
+		return buildToolValidationFailure(toolName, normalizedErrorCode, reason, attemptFingerprint, deliverablePath), true
 	}
 	if code, reason, ok := classifyDeterministicToolResultFailure(toolName, normalizedErrorCode, rawErrorCode, strings.TrimSpace(result.Error)); ok {
-		return buildToolValidationFailure(toolName, code, reason, attemptFingerprint, toolResultDeliverablePath(result)), true
+		return buildToolValidationFailure(toolName, code, reason, attemptFingerprint, deliverablePath), true
 	}
 
 	if reason := strings.TrimSpace(stripToolFailurePrefix(result.Error, toolName)); reason != "" {
 		if code := normalizeValidationFailureCode(reason); isToolValidationCode(code) {
-			return buildToolValidationFailure(toolName, code, reason, attemptFingerprint, toolResultDeliverablePath(result)), true
+			if strings.EqualFold(code, "non_substantive_content") {
+				reason = nonSubstantiveContentValidationFailureReason(toolName, result, deliverablePath)
+			}
+			return buildToolValidationFailure(toolName, code, reason, attemptFingerprint, deliverablePath), true
 		}
 		if code, normalizedReason, ok := classifyDeterministicToolResultFailure(toolName, normalizeValidationFailureCode(reason), rawErrorCode, reason); ok {
-			return buildToolValidationFailure(toolName, code, normalizedReason, attemptFingerprint, toolResultDeliverablePath(result)), true
+			return buildToolValidationFailure(toolName, code, normalizedReason, attemptFingerprint, deliverablePath), true
 		}
 	}
 
 	return toolValidationFailure{}, false
+}
+
+func validationFailureDeliverablePath(toolName string, call ToolCall, result ToolResult) string {
+	if deliverablePath := strings.TrimSpace(toolResultDeliverablePath(result)); deliverablePath != "" {
+		return deliverablePath
+	}
+	if len(result.Output) != 0 {
+		if path := normalizeWorkspaceRelativePath(anyString(result.Output["path"])); path != "" {
+			return path
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "file.read", "file.write", "file.edit", "file.list", "file.search":
+		if path := normalizeWorkspaceRelativePath(stringValue(call.Arguments["path"])); path != "" {
+			return path
+		}
+	}
+	return ""
+}
+
+func nonSubstantiveContentValidationFailureReason(toolName string, result ToolResult, deliverablePath string) string {
+	reason := strings.TrimSpace(anyString(result.Output["message"]))
+	if reason == "" {
+		reason = strings.TrimSpace(toolResultErrorCode(result))
+	}
+	if reason == "" {
+		reason = "non_substantive_content"
+	}
+	if deliverablePath == "" {
+		return reason
+	}
+	reason = strings.TrimSpace(strings.TrimRight(reason, "."))
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "file.write", "file.edit":
+		return fmt.Sprintf("%s Target deliverable: `%s`. Do not switch to cli.execute or shell wrappers; write the concrete deliverable body directly to `%s`.", reason, deliverablePath, deliverablePath)
+	default:
+		return fmt.Sprintf("%s Target deliverable: `%s`.", reason, deliverablePath)
+	}
 }
 
 func classifyDeterministicToolResultFailure(toolName, normalizedErrorCode, rawErrorCode, rawReason string) (string, string, bool) {
