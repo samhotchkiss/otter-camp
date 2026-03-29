@@ -2825,3 +2825,18 @@
       - the same review session then self-blocked on `preferred deliverable target ... already fully inspected in this turn` after only that validation-error payload
     - current live caveat after deploy:
       - task `103` is still `blocked` with no new pending `agent_turn` jobs, so fresh production proof for the corrected native/read-accounting path still depends on the next replay rather than the already-closed pre-fix session chain
+- 2026-03-29 07:23 MDT - Fixed the next task-103 review close-out seam in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+  - added turn-runtime fields to carry preferred-target reject evidence (`placeholder_deliverable`, `not_found`, `mismatched_deliverable_context`) with the exact target path
+  - updated [`recordTaskReviewPreferredDeliverableReadResult(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so preferred-target placeholder/missing/mismatched reads record reject evidence instead of only setting broad placeholder follow-on blocking
+  - updated [`maybeSynthesizeTaskReviewDecisionToolCalls(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) to synthesize `flow.review_decision reject` directly from that runtime evidence, even when the assistant responds with narration or follow-on non-decision tools
+  - added focused tests in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - `TestRecordTaskReviewPreferredDeliverableReadResultTracksRejectEvidenceForTargetPlaceholder`
+    - `TestMaybeSynthesizeTaskReviewDecisionToolCallsUsesPreferredDeliverableRejectEvidence`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(MaybeSynthesizeTaskReviewDecisionToolCallsUses(PreferredDeliverableRejectEvidence|ExplicitRejectDecision|DirtyWorkspaceRejectOnlyRetry)|RecordTaskReviewPreferredDeliverableReadResult(TracksRejectEvidenceForTargetPlaceholder|IgnoresValidationError)|ShouldBlockTaskPlaceholderDeliverableFollowOnToolForReview)$' -count=1`
+  - deploy / proof status:
+    - [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt) now carries `3561`
+    - strongest live pre-fix proof:
+      - task `103` review session `ec062d3c-08d5-475d-967b-03726b7a2f65` successfully read `planning/sambot-feature-spec.md`, but still ended blocked without `flow.review_decision reject`
+    - expected live post-fix behavior:
+      - the next preferred-target placeholder review should synthesize `flow.review_decision reject` immediately instead of ending as a prose-only blocked review turn

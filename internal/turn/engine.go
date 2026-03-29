@@ -610,6 +610,8 @@ type turnRuntime struct {
 	recoverySourceFetchReady                bool
 	placeholderTargetSeen                   bool
 	reviewPreferredDeliverablePath          string
+	reviewRejectEvidenceCode                string
+	reviewRejectEvidencePath                string
 	reviewPreferredDeliverableRootListed    bool
 	reviewPreferredDeliverableByteSize      int
 	reviewPreferredDeliverableHeadTruncated bool
@@ -17197,6 +17199,26 @@ func (e *TurnEngine) maybeSynthesizeTaskReviewDecisionToolCalls(ctx context.Cont
 		)
 		return []ModelToolCall{synthesized}, true, nil
 	}
+	if code, path, ok := taskReviewRejectEvidence(rt); ok {
+		synthesized := ModelToolCall{
+			ID:   fmt.Sprintf("task-review-decision-%s", uuid.NewString()),
+			Name: "flow.review_decision",
+			Tier: "tier2",
+			Arguments: map[string]any{
+				"flow_node_execution_id": executionID.String(),
+				"decision":               "reject",
+				"reason":                 buildTaskReviewRejectEvidenceReason(code, path),
+			},
+		}
+		e.logger.Info("task review: synthesized flow.review_decision from preferred deliverable reject evidence",
+			"session_id", rt.session.ID,
+			"turn_id", rt.turn.ID,
+			"evidence_code", code,
+			"evidence_path", path,
+			"flow_node_execution_id", executionID.String(),
+		)
+		return []ModelToolCall{synthesized}, true, nil
+	}
 	decision, ok := explicitReviewDecisionFromText(assistantContent)
 	if !ok {
 		return toolCalls, false, nil
@@ -29781,9 +29803,15 @@ func recordTaskReviewPreferredDeliverableReadResult(rt *turnRuntime, result Tool
 	}
 	rootPath := taskReviewPreferredDeliverableRoot(rt)
 	targetPath := taskReviewPreferredDeliverableTarget(rt)
+	errorCode := normalizeValidationFailureCode(toolResultErrorCode(result))
 	switch strings.ToLower(strings.TrimSpace(result.Name)) {
 	case "file.list":
 		if targetPath == "" && rootPath != "" && len(result.Output) != 0 {
+			path := normalizeWorkspaceRelativePath(anyString(result.Output["path"]))
+			if sameWorkspaceRelativePath(path, rootPath) && errorCode == "not_found" {
+				rt.reviewRejectEvidenceCode = errorCode
+				rt.reviewRejectEvidencePath = rootPath
+			}
 			if _, ok := result.Output["entries"]; ok {
 				rt.reviewPreferredDeliverableRootListed = true
 			}
@@ -29822,6 +29850,14 @@ func recordTaskReviewPreferredDeliverableReadResult(rt *turnRuntime, result Tool
 		}
 		return
 	}
+	if errorCode == "placeholder_deliverable" || errorCode == "not_found" || errorCode == "mismatched_deliverable_context" {
+		rt.reviewRejectEvidenceCode = errorCode
+		rt.reviewRejectEvidencePath = targetPath
+		if errorCode == "placeholder_deliverable" {
+			rt.placeholderTargetSeen = true
+		}
+		return
+	}
 	if strings.TrimSpace(result.Error) != "" || strings.TrimSpace(anyString(result.Output["error"])) != "" {
 		return
 	}
@@ -29846,6 +29882,47 @@ func recordTaskReviewPreferredDeliverableReadResult(rt *turnRuntime, result Tool
 	}
 	if offsetBytes > 0 && readBytes > 0 {
 		rt.reviewPreferredDeliverableTailReadSeen = true
+	}
+}
+
+func taskReviewRejectEvidence(rt *turnRuntime) (string, string, bool) {
+	if !taskReviewPromptActive(rt) {
+		return "", "", false
+	}
+	code := normalizeValidationFailureCode(rt.reviewRejectEvidenceCode)
+	path := normalizeWorkspaceRelativePath(rt.reviewRejectEvidencePath)
+	switch code {
+	case "placeholder_deliverable", "not_found", "mismatched_deliverable_context":
+		if path != "" {
+			return code, path, true
+		}
+	}
+	return "", "", false
+}
+
+func buildTaskReviewRejectEvidenceReason(code, path string) string {
+	path = normalizeWorkspaceRelativePath(path)
+	switch normalizeValidationFailureCode(code) {
+	case "placeholder_deliverable":
+		if path == "" {
+			return "The preferred deliverable target returned placeholder_deliverable; reject immediately using that tool result as evidence."
+		}
+		return fmt.Sprintf("The preferred deliverable target `%s` returned placeholder_deliverable; reject immediately using that tool result as evidence.", path)
+	case "mismatched_deliverable_context":
+		if path == "" {
+			return "The preferred deliverable target returned mismatched_deliverable_context; reject immediately using that tool result as evidence."
+		}
+		return fmt.Sprintf("The preferred deliverable target `%s` returned mismatched_deliverable_context; reject immediately using that tool result as evidence.", path)
+	case "not_found":
+		if path == "" {
+			return "The preferred deliverable target returned not_found; reject immediately using that tool result as evidence."
+		}
+		return fmt.Sprintf("The preferred deliverable target `%s` returned not_found; reject immediately using that tool result as evidence.", path)
+	default:
+		if path == "" {
+			return "The preferred deliverable target returned reject-worthy evidence; reject immediately using that tool result as evidence."
+		}
+		return fmt.Sprintf("The preferred deliverable target `%s` returned reject-worthy evidence; reject immediately using that tool result as evidence.", path)
 	}
 }
 

@@ -16408,6 +16408,39 @@ func TestShouldBlockTaskPlaceholderDeliverableFollowOnToolForReview(t *testing.T
 	}
 }
 
+func TestRecordTaskReviewPreferredDeliverableReadResultTracksRejectEvidenceForTargetPlaceholder(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `planning/sambot-feature-spec.md`. Inspect that target directly before broad workspace discovery.\n" +
+			"If reading `planning/sambot-feature-spec.md` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.",
+	}
+
+	recordTaskReviewPreferredDeliverableReadResult(rt, ToolResult{
+		Name: "file.read",
+		Output: map[string]any{
+			"path":  "planning/sambot-feature-spec.md",
+			"error": "placeholder_deliverable",
+		},
+	})
+
+	if got := rt.reviewRejectEvidenceCode; got != "placeholder_deliverable" {
+		t.Fatalf("reviewRejectEvidenceCode = %q, want placeholder_deliverable", got)
+	}
+	if got := rt.reviewRejectEvidencePath; got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("reviewRejectEvidencePath = %q, want preferred target path", got)
+	}
+	if !rt.placeholderTargetSeen {
+		t.Fatal("placeholderTargetSeen = false, want true")
+	}
+	if got := rt.reviewPreferredDeliverablePath; got != "" {
+		t.Fatalf("reviewPreferredDeliverablePath = %q, want empty for validation-error placeholder read", got)
+	}
+}
+
 func TestShouldBlockTaskReviewPreferredDeliverableSiblingReadTool(t *testing.T) {
 	rt := &turnRuntime{
 		session: &chat.ChatSession{
@@ -28392,6 +28425,75 @@ func TestMaybeSynthesizeTaskReviewDecisionToolCallsUsesDirtyWorkspaceRejectOnlyR
 	}
 	if got := stringValue(toolCalls[0].Arguments["reason"]); !strings.Contains(got, "workspace is still dirty") {
 		t.Fatalf("reason = %q, want dirty-workspace context", got)
+	}
+}
+
+func TestMaybeSynthesizeTaskReviewDecisionToolCallsUsesPreferredDeliverableRejectEvidence(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		TaskNumber: 103,
+		Title:      "Append technical architecture, data sources, and UI/UX sections",
+		WorkStatus: "review",
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		initialMessageText:       "Review only.\nInspect the current deliverables and use flow.review_decision to approve or reject this review step.",
+		reviewRejectEvidenceCode: "placeholder_deliverable",
+		reviewRejectEvidencePath: "planning/sambot-feature-spec.md",
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskReviewDecisionToolCalls(
+		context.Background(),
+		rt,
+		"The file still looks like placeholder scaffolding, so I should reject it.",
+		[]ModelToolCall{{
+			ID:        "task-get-1",
+			Name:      "task.get",
+			Tier:      "tier2",
+			Arguments: map[string]any{"task_id": taskID.String()},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskReviewDecisionToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "flow.review_decision" {
+		t.Fatalf("toolCalls = %+v, want one flow.review_decision", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["decision"]); got != "reject" {
+		t.Fatalf("decision = %q, want reject", got)
+	}
+	if got := stringValue(toolCalls[0].Arguments["flow_node_execution_id"]); got != executionID.String() {
+		t.Fatalf("flow_node_execution_id = %q, want %s", got, executionID)
+	}
+	if got := stringValue(toolCalls[0].Arguments["reason"]); !strings.Contains(got, "placeholder_deliverable") || !strings.Contains(got, "planning/sambot-feature-spec.md") {
+		t.Fatalf("reason = %q, want preferred-target placeholder evidence", got)
 	}
 }
 
