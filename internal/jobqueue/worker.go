@@ -672,6 +672,8 @@ func (w *Worker) CancelGroup(ctx context.Context, tx pgx.Tx, groupKey, reason st
 // a worker restart and immediately clears closed-session claimed jobs left
 // behind by a dead worker.
 func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
+	currentRepoVersion := strings.TrimSpace(versionpkg.RepoVersion)
+
 	// Condition 1: session is closed/archived
 	ct1, err := w.pool.Exec(ctx, `
 		UPDATE job_queue jq
@@ -1020,6 +1022,74 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("purge stale agent_turn jobs (duplicate synthetic dispatches): %w", err)
 	}
 
+	var ct7b pgconn.CommandTag
+	if currentRepoVersion != "" {
+		ct7b, err = w.pool.Exec(ctx, `
+			UPDATE job_queue jq
+			SET status = 'dead_letter',
+			    claimed_by = NULL,
+			    claimed_at = NULL,
+			    last_error = 'purged stale synthetic continuation dispatch from older repo_version',
+			    updated_at = now()
+			WHERE jq.status IN ('pending', 'claimed')
+			  AND jq.job_type = 'agent_turn'
+			  AND EXISTS (
+			    SELECT 1
+			    FROM chat_message cm
+			    WHERE cm.id = (jq.payload->>'message_id')::uuid
+			      AND cm.role = 'user'
+			      AND cm.status = 'pending'
+			      AND COALESCE(cm.metadata->>'synthetic_user_message', 'false') = 'true'
+			      AND COALESCE(cm.metadata->>'source', '') IN (
+			        'task_recovery_action',
+			        'task_recovery_resume',
+			        'task_review_action',
+			        'project_continuation_resume',
+			        'organization_continuation_resume',
+			        'project_execution_continuation'
+			      )
+			      AND COALESCE(cm.metadata->>'repo_version', '') <> ''
+			      AND COALESCE(cm.metadata->>'repo_version', '') <> $1
+			      AND NOT EXISTS (
+			        SELECT 1
+			        FROM chat_turn live
+			        WHERE live.trigger_message_id = cm.id
+			          AND live.status IN ('pending', 'in_progress')
+			      )
+			  )
+		`, currentRepoVersion)
+		if err != nil {
+			return 0, fmt.Errorf("purge stale agent_turn jobs (older synthetic repo_version): %w", err)
+		}
+		if _, err := w.pool.Exec(ctx, `
+			UPDATE chat_message cm
+			SET status = 'failed',
+			    error_message = 'superseded stale synthetic prompt after repo_version change',
+			    updated_at = now()
+			WHERE cm.role = 'user'
+			  AND cm.status = 'pending'
+			  AND COALESCE(cm.metadata->>'synthetic_user_message', 'false') = 'true'
+			  AND COALESCE(cm.metadata->>'source', '') IN (
+			    'task_recovery_action',
+			    'task_recovery_resume',
+			    'task_review_action',
+			    'project_continuation_resume',
+			    'organization_continuation_resume',
+			    'project_execution_continuation'
+			  )
+			  AND COALESCE(cm.metadata->>'repo_version', '') <> ''
+			  AND COALESCE(cm.metadata->>'repo_version', '') <> $1
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM chat_turn live
+			    WHERE live.trigger_message_id = cm.id
+			      AND live.status IN ('pending', 'in_progress')
+			  )
+		`, currentRepoVersion); err != nil {
+			return 0, fmt.Errorf("fail stale synthetic pending messages (older repo_version): %w", err)
+		}
+	}
+
 	// Condition 8: legacy task-lane dispatches with no execution identity are
 	// stale once the bound session already has an active execution with a
 	// newer live turn. Keep execution-owned dispatches; drop only pre-rework
@@ -1056,7 +1126,7 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("purge stale agent_turn jobs (legacy task dispatches): %w", err)
 	}
 
-	total := ct1.RowsAffected() + ct2.RowsAffected() + ct3.RowsAffected() + ct4.RowsAffected() + ct5.RowsAffected() + ct5b.RowsAffected() + ct6.RowsAffected() + ct7.RowsAffected() + ct8.RowsAffected()
+	total := ct1.RowsAffected() + ct2.RowsAffected() + ct3.RowsAffected() + ct4.RowsAffected() + ct5.RowsAffected() + ct5b.RowsAffected() + ct6.RowsAffected() + ct7.RowsAffected() + ct7b.RowsAffected() + ct8.RowsAffected()
 	return total, nil
 }
 

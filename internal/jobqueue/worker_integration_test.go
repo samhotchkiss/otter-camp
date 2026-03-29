@@ -14097,6 +14097,154 @@ func appendLegacyPlaintextToolResultToRecoveryTurn(t *testing.T, pool *pgxpool.P
 	}
 }
 
+func createPendingSyntheticRecoveryResumeDispatchFixture(t *testing.T, pool *pgxpool.Pool, slug, repoVersion string) (context.Context, repo.ChatSession, repo.FlowNodeExecution, repo.ChatMessage, uuid.UUID) {
+	t.Helper()
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        slug + "-" + uuid.NewString()[:8],
+		DisplayName: "Pending Synthetic Recovery Resume Fixture",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Recover the task by writing the deliverable.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           slug + "-project-" + uuid.NewString()[:8],
+		DisplayName:    "Pending Synthetic Recovery Resume Fixture Project",
+		Description:    "Project for stale synthetic recovery resume queue cleanup coverage",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           slug + "-template",
+		DisplayName:    "Pending Synthetic Recovery Resume Fixture Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Execute",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         project.ID,
+		Title:             "Pending synthetic recovery resume should be purged after deploy",
+		WorkStatus:        "in_progress",
+		BlocksScope:       "task",
+		CurrentFlowNodeID: &flowNode.ID,
+		FlowTemplateID:    &template.ID,
+		CreatedByType:     "system",
+		CreatedByID:       &agent.ID,
+		AssignedAgentID:   &agent.ID,
+		Metadata:          json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active flow node execution: %v", err)
+	}
+	metadata, err := json.Marshal(map[string]any{
+		"source":                 "task_recovery_resume",
+		"synthetic_user_message": true,
+		"flow_node_execution_id": execution.ID.String(),
+		"repo_version":           repoVersion,
+	})
+	if err != nil {
+		t.Fatalf("marshal recovery metadata: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active task recovery now.",
+		Status:    "pending",
+		Metadata:  metadata,
+	})
+	if err != nil {
+		t.Fatalf("create recovery resume message: %v", err)
+	}
+
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, $2, 70, $3, $4)
+		RETURNING id
+	`,
+		fmt.Sprintf(`{"session_id":"%s","message_id":"%s","flow_node_execution_id":"%s","retry_count":0}`, session.ID, message.ID, execution.ID),
+		time.Now().UTC(),
+		fmt.Sprintf("agent_turn:%s:%s:0", session.ID, message.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, message.ID, 0),
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert stale synthetic recovery resume job: %v", err)
+	}
+
+	return ctx, session, execution, message, jobID
+}
+
+func lookupSessionAssignedAgentID(t *testing.T, pool *pgxpool.Pool, sessionID uuid.UUID) uuid.UUID {
+	t.Helper()
+
+	var agentID uuid.UUID
+	if err := pool.QueryRow(context.Background(), `
+		SELECT pt.assigned_agent_id
+		FROM chat_session cs
+		JOIN project_task pt ON pt.id = cs.scope_id
+		WHERE cs.id = $1
+	`, sessionID).Scan(&agentID); err != nil {
+		t.Fatalf("lookup session assigned agent id: %v", err)
+	}
+	return agentID
+}
+
 func createTerminalRecoveryResumeExecutionFixture(t *testing.T, pool *pgxpool.Pool, slug string, stopReason *string) (context.Context, repo.ChatSession, repo.FlowNodeExecution, repo.ChatMessage) {
 	t.Helper()
 
@@ -14499,6 +14647,159 @@ func TestJobWorkerPurgeStaleAgentTurnJobsDoesNotPurgeValidationLoopBlockedRecove
 	}
 	if lastError != "" {
 		t.Fatalf("last_error = %q, want empty when validation_loop_blocked recovery write stays eligible", lastError)
+	}
+}
+
+func TestJobWorkerPurgeStaleAgentTurnJobsPurgesOlderRepoVersionSyntheticRecoveryResumePrompt(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	originalVersion := versionpkg.RepoVersion
+	defer func() {
+		versionpkg.RepoVersion = originalVersion
+	}()
+	versionpkg.RepoVersion = "3550"
+
+	ctx, session, execution, message, jobID := createPendingSyntheticRecoveryResumeDispatchFixture(t, pool, "purge-older-repo-version-synthetic-recovery", "3549")
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 1 {
+		t.Fatalf("purged jobs = %d, want 1", purged)
+	}
+
+	var status, lastError string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(last_error, '')
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status, &lastError); err != nil {
+		t.Fatalf("query purged job: %v", err)
+	}
+	if status != "dead_letter" {
+		t.Fatalf("job status = %q, want dead_letter", status)
+	}
+	if lastError != "purged stale synthetic continuation dispatch from older repo_version" {
+		t.Fatalf("last_error = %q, want stale synthetic repo_version purge reason", lastError)
+	}
+
+	var messageStatus, errorMessage string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, message.ID).Scan(&messageStatus, &errorMessage); err != nil {
+		t.Fatalf("query failed message: %v", err)
+	}
+	if messageStatus != "failed" {
+		t.Fatalf("message status = %q, want failed", messageStatus)
+	}
+	if errorMessage != "superseded stale synthetic prompt after repo_version change" {
+		t.Fatalf("message error = %q, want stale synthetic prompt failure", errorMessage)
+	}
+
+	var queuedJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status IN ('pending', 'claimed')
+		  AND (payload->>'session_id')::uuid = $1
+	`, session.ID).Scan(&queuedJobs); err != nil {
+		t.Fatalf("count live queued jobs: %v", err)
+	}
+	if queuedJobs != 0 {
+		t.Fatalf("queued jobs = %d, want 0 after stale synthetic purge", queuedJobs)
+	}
+
+	var executionIDInPayload uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		SELECT (payload->>'flow_node_execution_id')::uuid
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&executionIDInPayload); err != nil {
+		t.Fatalf("query purged job payload execution id: %v", err)
+	}
+	if executionIDInPayload != execution.ID {
+		t.Fatalf("job execution id = %s, want %s", executionIDInPayload, execution.ID)
+	}
+}
+
+func TestJobWorkerPurgeStaleAgentTurnJobsKeepsOlderRepoVersionSyntheticRecoveryResumePromptWithLiveTurn(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	originalVersion := versionpkg.RepoVersion
+	defer func() {
+		versionpkg.RepoVersion = originalVersion
+	}()
+	versionpkg.RepoVersion = "3550"
+
+	ctx, session, _, message, jobID := createPendingSyntheticRecoveryResumeDispatchFixture(t, pool, "keep-live-older-repo-version-synthetic-recovery", "3549")
+
+	agentID := lookupSessionAssignedAgentID(t, pool, session.ID)
+	liveTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agentID,
+		Status:           "in_progress",
+		TriggerMessageID: &message.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create live turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &liveTurn.ID); err != nil {
+		t.Fatalf("update current turn: %v", err)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 0 {
+		t.Fatalf("purged jobs = %d, want 0 while live turn still owns the stale synthetic prompt", purged)
+	}
+
+	var status, lastError string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(last_error, '')
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status, &lastError); err != nil {
+		t.Fatalf("query kept job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("job status = %q, want pending", status)
+	}
+	if lastError != "" {
+		t.Fatalf("last_error = %q, want empty while live turn is present", lastError)
+	}
+
+	var messageStatus, errorMessage string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, message.ID).Scan(&messageStatus, &errorMessage); err != nil {
+		t.Fatalf("query kept message: %v", err)
+	}
+	if messageStatus != "pending" {
+		t.Fatalf("message status = %q, want pending", messageStatus)
+	}
+	if errorMessage != "" {
+		t.Fatalf("message error = %q, want empty while live turn is present", errorMessage)
 	}
 }
 
