@@ -15313,7 +15313,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if shouldStopAfterBlockedProjectKickoffSessionCreate(rt, blockedCalls) {
 			return true, nil
 		}
-		if len(toolCalls) == 0 && shouldStopAfterBlockedTaskRecoveryDirectWriteOnly(rt, blockedCalls) {
+		if shouldStopAfterBlockedTaskRecoveryDirectWriteOnlyBatch(rt, blockedCalls, toolCalls) {
 			rt.stopReason = stopReasonValidationBlocked
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskRecoveryDirectWriteOnlyTurnStopMessage(rt))
 			return true, nil
@@ -33065,6 +33065,22 @@ func shouldStopAfterBlockedTaskRecoveryDirectWriteOnly(rt *turnRuntime, results 
 		}
 	}
 	return sawDirectWriteStop
+}
+
+func shouldStopAfterBlockedTaskRecoveryDirectWriteOnlyBatch(rt *turnRuntime, blockedResults []ToolResult, remainingCalls []ToolCall) bool {
+	if !shouldStopAfterBlockedTaskRecoveryDirectWriteOnly(rt, blockedResults) {
+		return false
+	}
+	if len(remainingCalls) == 0 {
+		return true
+	}
+	for _, call := range remainingCalls {
+		if _, _, ok := normalizeReadOnlyDiscoveryToolCall(call.Name, call.Arguments); ok {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func buildTaskRecoveryDirectWriteOnlyTurnStopMessage(rt *turnRuntime) string {

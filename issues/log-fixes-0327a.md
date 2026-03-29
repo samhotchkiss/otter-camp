@@ -3588,3 +3588,15 @@
   - deploy / proof status:
     - rebuilt/restarted cleanly; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
     - direct post-deploy proof is still pending because the fresh task `175` review session has not emitted its first tool result yet on the new binary
+- 2026-03-29 15:52 MDT - Tightened the direct-write-only recovery stop so mixed read-only tails no longer keep doomed recovery turns alive.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `dispatchTools(...)` now stops direct-write-only recovery when blocked rereads are followed only by additional read-only discovery calls, instead of requiring the blocked batch to have zero remaining tool calls
+    - added `shouldStopAfterBlockedTaskRecoveryDirectWriteOnlyBatch(...)` to distinguish read-only tails from legitimate same-turn mutation attempts
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestShouldStopAfterBlockedTaskRecoveryDirectWriteOnlyBatch`
+      - added `TestDispatchToolsStopsAfterBlockedDirectWriteOnlyRecoveryBatchWithReadOnlyTail`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterBlockedTaskRecoveryDirectWriteOnly(Batch)?|DispatchToolsStopsAfter(PureBlockedDirectWriteOnlyRecoveryBatch|BlockedDirectWriteOnlyRecoveryBatchWithReadOnlyTail))$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is rebuild/restart and verify task `173` no longer drifts from blocked rereads into `flow.get_execution` / `cli.execute`

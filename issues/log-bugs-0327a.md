@@ -590,3 +590,14 @@
   - impact:
     - explicit output-file tasks can still reread review commentary as if it were real artifact content
     - recovery draft reuse can keep amplifying that contamination instead of stopping on placeholder evidence
+- 2026-03-29 15:52 MDT - Direct-write-only recovery can still leak into extra read-only rediscovery if the assistant mixes one blocked target reread with other read-only tools in the same batch.
+  - fresh live evidence:
+    - widget task `173` session `d46bbe6c-34bc-4213-9291-f93f252dfd1a` was already in direct-write-only mode after repeated non-substantive `file.write`
+    - the turn hit blocked rereads on `planning/sambot-feature-spec.md`, `sambot`, and `sambot-system-prompt.md`, but because the batch also included `flow.get_execution`, the direct-write-only stop did not fire yet
+    - the lane then kept going into broader `cli.execute` inspection and more non-substantive `file.write` retries before finally blocking
+  - bug:
+    - the direct-write-only stop only triggered when there were no remaining tool calls after the blocked read-only results
+    - it did not treat a remaining tail of other read-only discovery tools as equally doomed rediscovery
+  - impact:
+    - recovery turns that are already narrowed to “write the file body directly or report one blocker sentence” can still waste more tools before settling
+    - the lane gets another chance to drift into `cli.execute` instead of terminating immediately

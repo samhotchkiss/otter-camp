@@ -35959,6 +35959,55 @@ func TestShouldStopAfterBlockedTaskRecoveryDirectWriteOnly(t *testing.T) {
 	}
 }
 
+func TestShouldStopAfterBlockedTaskRecoveryDirectWriteOnlyBatch(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		recoveryTurn:            true,
+		recoveryDirectWriteOnly: true,
+		recoveryTargetPath:      "sambot/widget.html",
+	}
+
+	blocked := []ToolResult{
+		{
+			ToolCallID: "call-1",
+			Name:       "file.read",
+			Error:      "task recovery for `sambot/widget.html` is already in direct-write mode after empty or non-substantive file-body retries. Do not inspect `sambot/widget.html` now; your next assistant message must be the concrete file body for `sambot/widget.html` itself or one concrete blocker sentence.",
+		},
+	}
+
+	readOnlyTail := []ToolCall{
+		{
+			ID:   "call-2",
+			Name: "flow.get_execution",
+			Arguments: map[string]any{
+				"execution_id": uuid.New().String(),
+			},
+		},
+	}
+	if !shouldStopAfterBlockedTaskRecoveryDirectWriteOnlyBatch(rt, blocked, readOnlyTail) {
+		t.Fatal("expected read-only tail after blocked direct-write-only batch to stop")
+	}
+
+	mutatingTail := []ToolCall{
+		{
+			ID:   "call-3",
+			Name: "file.write",
+			Arguments: map[string]any{
+				"path":    "sambot/widget.html",
+				"content": "<html></html>",
+			},
+		},
+	}
+	if shouldStopAfterBlockedTaskRecoveryDirectWriteOnlyBatch(rt, blocked, mutatingTail) {
+		t.Fatal("did not expect mutating tail after blocked direct-write-only batch to stop")
+	}
+}
+
 func TestShouldBlockTaskRecoveryPostSourceFetchDiscoveryTool(t *testing.T) {
 	t.Parallel()
 
@@ -37056,6 +37105,86 @@ func TestDispatchToolsStopsAfterPureBlockedTaskRecoveryDirectWriteBatch(t *testi
 	}
 }
 
+func TestDispatchToolsStopsAfterBlockedDirectWriteOnlyRecoveryBatchWithReadOnlyTail(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.chat.session.Mode = fixture.session.Mode
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		ProjectID:      projectID,
+		TaskNumber:     173,
+		WorkStatus:     "in_progress",
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:         turnID,
+			SessionID:  fixture.session.ID,
+			TurnNumber: 1,
+			Status:     "in_progress",
+		},
+		startedAt:               time.Now(),
+		recoveryTurn:            true,
+		recoveryDirectWriteOnly: true,
+		recoveryTargetPath:      "sambot/widget.html",
+		initialMessageText:      "Continue the active task recovery now.\nYour entire next assistant message must be either the concrete file body for the target deliverable or one concrete blocker sentence.\nNo recovered draft body is available above.",
+	}
+	fixture.chat.turns[turnID] = rt.turn
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turnID)
+
+	stop, err := fixture.engine.dispatchTools(context.Background(), rt, []ModelToolCall{
+		{
+			ID:   "blocked-target-read",
+			Name: "file.read",
+			Arguments: map[string]any{
+				"path": "sambot/widget.html",
+			},
+		},
+		{
+			ID:   "read-only-tail",
+			Name: "flow.get_execution",
+			Arguments: map[string]any{
+				"execution_id": uuid.New().String(),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dispatchTools: %v", err)
+	}
+	if !stop {
+		t.Fatal("expected dispatchTools to stop after blocked direct-write-only recovery batch with read-only tail")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if !fixture.messages.containsContentSubstring("Recovery direct-write-only mode blocked read-only discovery for `sambot/widget.html`") {
+		t.Fatal("expected direct-write-only recovery stop message")
+	}
+	if fixture.messages.containsToolName("flow.get_execution") {
+		t.Fatal("did not expect flow.get_execution to execute after direct-write-only stop")
+	}
+}
+
 func TestDispatchToolsStopsAfterBlockedInheritedSharedWriteBatchAndBlocksRecovery(t *testing.T) {
 	t.Parallel()
 
@@ -37800,6 +37929,21 @@ func (f *fakeMessageRepo) containsContentSubstring(content string) bool {
 	defer f.mu.Unlock()
 	needle := strings.TrimSpace(content)
 	for _, item := range f.items {
+		if strings.Contains(strings.TrimSpace(item.Content), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *fakeMessageRepo) containsToolName(toolName string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	needle := strings.TrimSpace(toolName)
+	for _, item := range f.items {
+		if !strings.EqualFold(strings.TrimSpace(item.Role), "tool_result") {
+			continue
+		}
 		if strings.Contains(strings.TrimSpace(item.Content), needle) {
 			return true
 		}
