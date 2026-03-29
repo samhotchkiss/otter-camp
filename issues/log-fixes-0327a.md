@@ -3266,4 +3266,20 @@
     - `GOFLAGS='' go test ./internal/tools/native -run 'Test(ParseExplicitDeliverablePath(PrefersLongDescriptionPathOverBareTitleToken|RejectsNonPathOutputAdjective|DetectsAppendTargetPath|UsesTitleWhenDescriptionStartsWithInputRead|PrefersDescriptionAppendTargetOverSlashTitle))$' -count=1`
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ExplicitDeliverablePath(PrefersLongDescriptionPathOverBareTitleToken|FallsBackToDecompositionSourceDescription|DetectsDirectVerbPathWithoutPreposition|DetectsAppendTargetPath|UsesTitleWhenDescriptionStartsWithInputRead)|SessionTaskDeliverablePath(InheritsLongDescriptionParentPathOverBareTitleToken|InheritsParentExplicitDeliverableForDecomposedChild))$' -count=1`
   - deploy / proof status:
-    - ready to deploy next; live canaries are active task sessions `c6bfa4ef-6f7c-4186-8014-3a620f065f96` and `8ca97cf6-f0ef-4ad3-ab53-b6e23f35a20f`, which should stop targeting bare `SamBot` after restart
+    - deployed on `repo_version=3570`
+    - live proof landed immediately on task `145` / session `c6bfa4ef-6f7c-4186-8014-3a620f065f96`: post-restart tool result `89` wrote to `planning/sambot-feature-spec.md` instead of bare `SamBot`
+    - the old stale checkpoint target `SamBot` still exists in task metadata, but the new runtime-selected recovery write path is now the correct inherited parent deliverable
+- 2026-03-29 12:00 MDT - Guarded decomposed child lanes from replacing inherited shared parent files with `file.write`.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added inherited shared single-file deliverable detection for decomposed child tasks
+    - async task execution now blocks `file.write` to that inherited parent file and stops pure blocked batches immediately with edit-oriented guidance
+    - recovery handlers now halt and checkpoint instead of replaying persisted-draft `file.write` mutations into the inherited shared parent file
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestShouldStopAfterBlockedTaskExecutionInheritedSharedWrite`
+      - added `TestShouldBlockTaskExecutionInheritedSharedDeliverableWriteTool`
+      - added `TestHandleRecoveryFileWriteWithoutContentStopsForInheritedSharedParentDeliverable`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterBlockedTaskExecution(InheritedSharedWrite|SiblingMutation)|ShouldBlockTaskExecutionInheritedSharedDeliverableWriteTool|HandleRecoveryFileWriteWithoutContentStopsForInheritedSharedParentDeliverable)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; live canary remains the SamBot child-task recovery family under parent task `139`, where `planning/sambot-feature-spec.md` should now stop with edit-oriented guidance instead of receiving another replayed whole-file write

@@ -10407,6 +10407,77 @@ func TestShouldStopAfterBlockedTaskExecutionSiblingMutation(t *testing.T) {
 	}
 }
 
+func TestShouldStopAfterBlockedTaskExecutionInheritedSharedWrite(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+	}
+	results := []ToolResult{{
+		Name:  "file.write",
+		Error: "task execution should keep task 145 (Context Corpus) inside a bounded edit lane. This decomposed child task inherits the shared parent deliverable path `planning/sambot-feature-spec.md`. Do not use file.write to replace the whole shared file from this child lane; read the current file and use file.edit for the specific section update instead, or resume integration from the parent task.",
+	}}
+
+	if !shouldStopAfterBlockedTaskExecutionInheritedSharedWrite(rt, results) {
+		t.Fatal("expected blocked inherited shared file.write mutation to end the turn early")
+	}
+	if shouldStopAfterBlockedTaskExecutionInheritedSharedWrite(rt, []ToolResult{{Name: "file.edit", Error: results[0].Error}}) {
+		t.Fatal("did not want file.edit results to use the inherited shared file.write stop path")
+	}
+}
+
+func TestShouldBlockTaskExecutionInheritedSharedDeliverableWriteTool(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	parentID := uuid.New()
+	childID := uuid.New()
+	parentDescription := "Write the complete spec to planning/sambot-feature-spec.md."
+	childDescription := "Context Corpus section for the SamBot spec."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = childID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:          parentID,
+				TaskNumber:  139,
+				Title:       "Write SamBot Chat Feature Specification",
+				Description: &parentDescription,
+			},
+			childID: {
+				ID:          childID,
+				TaskNumber:  145,
+				Title:       "Context Corpus",
+				Description: &childDescription,
+				Metadata: mustRawJSON(t, map[string]any{
+					"decomposition_parent_task_id": parentID.String(),
+				}),
+			},
+		},
+	}
+
+	rt := &turnRuntime{session: fixture.session}
+	blocked, reason := fixture.engine.shouldBlockTaskExecutionInheritedSharedDeliverableWriteTool(context.Background(), rt, "file.write", map[string]any{
+		"path": "planning/sambot-feature-spec.md",
+	})
+	if !blocked {
+		t.Fatal("expected inherited shared deliverable file.write to be blocked")
+	}
+	if !strings.Contains(reason, "use file.edit") {
+		t.Fatalf("reason = %q, want file.edit guidance", reason)
+	}
+
+	blocked, _ = fixture.engine.shouldBlockTaskExecutionInheritedSharedDeliverableWriteTool(context.Background(), rt, "file.edit", map[string]any{
+		"path": "planning/sambot-feature-spec.md",
+	})
+	if blocked {
+		t.Fatal("did not want file.edit on inherited shared deliverable to be blocked")
+	}
+}
+
 func TestShouldBlockOrchestrationParentReviewTaskListToolRequiresParentScopedList(t *testing.T) {
 	t.Parallel()
 
@@ -33309,6 +33380,12 @@ func TestHandleRecoveryFileWriteWithoutContentStopsAfterRepeatedResumeFailure(t 
 			Status:    "in_progress",
 		},
 	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "# SamBot Feature Spec\n\n## Context Corpus\n- Use all scraped technonymous.org posts.\n- Include LinkedIn profile data and curated biography facts.\n",
+	})
 	call := &ToolCall{ID: "write-1", Name: "file.write", Arguments: map[string]any{"path": targetPath}}
 
 	handled, abort, err := fixture.engine.handleRecoveryFileWriteWithoutContent(context.Background(), rt, call)
@@ -33547,6 +33624,109 @@ func TestHandleRecoveryFileWriteWithoutContentEnablesDirectWriteOnlyState(t *tes
 	}
 	if !strings.Contains(checkpoint.FailureReason, "without `content`") {
 		t.Fatalf("checkpoint.FailureReason = %q, want missing-content reason", checkpoint.FailureReason)
+	}
+}
+
+func TestHandleRecoveryFileWriteWithoutContentStopsForInheritedSharedParentDeliverable(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	parentID := uuid.New()
+	taskID := uuid.New()
+	projectID := uuid.New()
+	dataDir := t.TempDir()
+	projectSlug := "sambot-project"
+	orgSlug := "default"
+	targetPath := "planning/sambot-feature-spec.md"
+	parentDescription := "Write the complete spec to planning/sambot-feature-spec.md."
+	childDescription := "Context Corpus section for the SamBot spec."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:             parentID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Write SamBot Chat Feature Specification",
+				Description:    &parentDescription,
+			},
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Context Corpus",
+				Description:    &childDescription,
+				WorkStatus:     "in_progress",
+				Metadata: mustRawJSON(t, map[string]any{
+					"decomposition_parent_task_id": parentID.String(),
+					"recovery_file_write_checkpoint": map[string]any{
+						"version":        1,
+						"blocker_class":  "durable_recovery_checkpoint",
+						"target_path":    targetPath,
+						"failure_reason": "file.write content appears to be task narration about planning to write the deliverable, not the deliverable body itself. Write the concrete file contents directly.",
+					},
+				}),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	targetAbs := filepath.Join(dataDir, "workspaces", projectSlug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte("# SamBot Feature Spec\n\n## Existing Context Corpus\n- Existing shared content.\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		recoveryTurn:     true,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{ID: "write-1", Name: "file.write", Arguments: map[string]any{"path": targetPath}}
+
+	handled, abort, err := fixture.engine.handleRecoveryFileWriteWithoutContent(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleRecoveryFileWriteWithoutContent: %v", err)
+	}
+	if !handled || !abort {
+		t.Fatalf("handled=%v abort=%v, want true/true", handled, abort)
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if !fixture.messages.containsContentSubstring("[Recovery shared-deliverable guard: this decomposed child task inherits `planning/sambot-feature-spec.md` from its parent.") {
+		t.Fatal("expected shared-deliverable recovery stop message")
+	}
+
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint.TargetPath = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "cannot replay a whole-file write into inherited shared parent deliverable") {
+		t.Fatalf("checkpoint.FailureReason = %q, want shared-deliverable failure reason", checkpoint.FailureReason)
 	}
 }
 

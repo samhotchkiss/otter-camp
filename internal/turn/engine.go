@@ -14743,6 +14743,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := e.shouldBlockTaskExecutionInheritedSharedDeliverableWriteTool(ctx, rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if e.shouldBlockTaskExecutionBroadContextTool(ctx, rt, name) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -14928,6 +14936,11 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if len(toolCalls) == 0 && shouldStopAfterBlockedTaskExecutionSiblingMutation(rt, blockedCalls) {
 			rt.stopReason = stopReasonValidationBlocked
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Task sibling-responsibility guard blocked a discovery-only child lane from mutating the shared deliverable. Ending the turn early so the write-focused sibling can own the artifact.]")
+			return true, nil
+		}
+		if len(toolCalls) == 0 && shouldStopAfterBlockedTaskExecutionInheritedSharedWrite(rt, blockedCalls) {
+			rt.stopReason = stopReasonValidationBlocked
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Task shared-deliverable guard blocked a decomposed child lane from replacing the inherited parent file with file.write. Ending the turn early so the next continuation uses file.edit on the bounded section instead of overwriting the whole shared document.]")
 			return true, nil
 		}
 		if shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, blockedCalls) {
@@ -16266,6 +16279,9 @@ func (e *TurnEngine) handleRecoveryRejectedFileWriteContent(ctx context.Context,
 		return false, false, nil
 	}
 	if persistedDraft, persistedRejectReason, persistedOK := e.recoveryPersistedDraftContent(ctx, rt, targetPath); persistedOK && strings.TrimSpace(persistedRejectReason) == "" {
+		if e.recoveryShouldBlockInheritedSharedDeliverableWrite(ctx, rt, targetPath) {
+			return e.haltRecoveryInheritedSharedDeliverableWrite(ctx, rt, targetPath)
+		}
 		normalized["content"] = persistedDraft
 		if _, exists := normalized["create_dirs"]; !exists {
 			normalized["create_dirs"] = true
@@ -16328,6 +16344,9 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutPath(ctx context.Context, rt 
 	}
 
 	if draft, rejectReason, ok := e.recoveryFileWriteDraftContent(ctx, rt, targetPath); ok {
+		if e.recoveryShouldBlockInheritedSharedDeliverableWrite(ctx, rt, targetPath) {
+			return e.haltRecoveryInheritedSharedDeliverableWrite(ctx, rt, targetPath)
+		}
 		normalized["content"] = draft
 		call.Arguments = normalized
 		if rt.recoveryFileWrites == nil {
@@ -16366,6 +16385,9 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 	}
 
 	if draft, rejectReason, ok := e.recoveryFileWriteDraftContent(ctx, rt, targetPath); ok {
+		if e.recoveryShouldBlockInheritedSharedDeliverableWrite(ctx, rt, targetPath) {
+			return e.haltRecoveryInheritedSharedDeliverableWrite(ctx, rt, targetPath)
+		}
 		normalized["content"] = draft
 		if _, exists := normalized["create_dirs"]; !exists {
 			normalized["create_dirs"] = true
@@ -16454,6 +16476,9 @@ func (e *TurnEngine) handleRecoveryMalformedFileEditWithoutPath(ctx context.Cont
 	}
 	draft, rejectReason, ok := e.recoveryFileWriteDraftContent(ctx, rt, targetPath)
 	if ok {
+		if e.recoveryShouldBlockInheritedSharedDeliverableWrite(ctx, rt, targetPath) {
+			return e.haltRecoveryInheritedSharedDeliverableWrite(ctx, rt, targetPath)
+		}
 		call.Name = "file.write"
 		call.Arguments = mergeRewrittenFileWriteArguments(call.Arguments, map[string]any{
 			"path":        targetPath,
@@ -17090,6 +17115,22 @@ func buildRepeatedRecoveryReadOnlyDiscoveryTurnStopSystemMessage(targetPath, art
 	return fmt.Sprintf("[Repeated read-only recovery discovery for `%s` in this recovery turn. Ending the turn early so the next continuation writes the deliverable instead of rereading context again.]", path)
 }
 
+func buildRecoveryInheritedSharedDeliverableWriteFailureReason(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the shared parent deliverable"
+	}
+	return fmt.Sprintf("decomposed child recovery cannot replay a whole-file write into inherited shared parent deliverable %s; resume by editing the current shared file in place or by moving the bounded child output to its own artifact", path)
+}
+
+func buildRecoveryInheritedSharedDeliverableWriteStopMessage(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the shared parent deliverable"
+	}
+	return fmt.Sprintf("[Recovery shared-deliverable guard: this decomposed child task inherits `%s` from its parent. Do not replay a whole-file file.write from persisted draft here. Read the current shared file and use file.edit for the bounded section update instead, or resume integration from the parent task. Ending the turn early.]", path)
+}
+
 func buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, failureReason string) string {
 	path := strings.TrimSpace(targetPath)
 	if path == "" {
@@ -17162,6 +17203,46 @@ func buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, failureRe
 		return fmt.Sprintf("recovery halted after file.write for %s was retried without content; resume from %s and re-queue only after the file body exists", path, artifact)
 	}
 	return fmt.Sprintf("recovery halted after file.write for %s was retried without content; re-queue only after producing the full file body", path)
+}
+
+func (e *TurnEngine) recoveryShouldBlockInheritedSharedDeliverableWrite(ctx context.Context, rt *turnRuntime, targetPath string) bool {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil || !rt.recoveryTurn {
+		return false
+	}
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	if targetPath == "" {
+		return false
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return false
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return false
+	}
+	sharedPath := e.inheritedSharedSingleFileDeliverablePath(ctx, taskRecord)
+	return sharedPath != "" && sameWorkspaceRelativePath(targetPath, sharedPath)
+}
+
+func (e *TurnEngine) haltRecoveryInheritedSharedDeliverableWrite(ctx context.Context, rt *turnRuntime, targetPath string) (bool, bool, error) {
+	if e == nil || rt == nil || rt.turn == nil || rt.session == nil {
+		return false, false, nil
+	}
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	if targetPath == "" {
+		return false, false, nil
+	}
+	rt.stopReason = stopReasonValidationBlocked
+	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryInheritedSharedDeliverableWriteStopMessage(targetPath))
+	if err != nil {
+		return true, true, err
+	}
+	failureReason := buildRecoveryInheritedSharedDeliverableWriteFailureReason(targetPath)
+	if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, "", failureReason, message.ID); checkpointErr != nil {
+		return true, true, checkpointErr
+	}
+	return true, true, nil
 }
 
 func recoveryToolCallsContainReviewDecision(toolCalls []ModelToolCall) bool {
@@ -28524,6 +28605,31 @@ func shouldStopAfterBlockedTaskExecutionSiblingMutation(rt *turnRuntime, results
 	return true
 }
 
+func shouldStopAfterBlockedTaskExecutionInheritedSharedWrite(rt *turnRuntime, results []ToolResult) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	if len(results) == 0 {
+		return false
+	}
+	for _, result := range results {
+		errText := strings.ToLower(strings.TrimSpace(result.Error))
+		switch strings.ToLower(strings.TrimSpace(result.Name)) {
+		case "file.write", "file_write":
+			if strings.Contains(errText, "inherits the shared parent deliverable path") &&
+				strings.Contains(errText, "do not use file.write") {
+				continue
+			}
+		}
+		return false
+	}
+	return true
+}
+
 func shouldStopAfterBlockedProjectContinuationRediscovery(rt *turnRuntime, results []ToolResult) bool {
 	if rt == nil || rt.session == nil {
 		return false
@@ -29350,6 +29456,60 @@ func (e *TurnEngine) shouldBlockTaskExecutionSiblingResponsibilityTool(ctx conte
 		return false, ""
 	}
 	return true, buildTaskExecutionDiscoveryDetailFetchGuardError(taskRecord, writeSiblings, rawURL)
+}
+
+func (e *TurnEngine) inheritedSharedSingleFileDeliverablePath(ctx context.Context, taskRecord repo.ProjectTask) string {
+	if e == nil {
+		return ""
+	}
+	if explicit := normalizeWorkspaceRelativePath(explicitDeliverablePath(taskRecord)); explicit != "" {
+		return ""
+	}
+	parentTask, ok := e.decompositionParentTask(ctx, taskRecord)
+	if !ok {
+		return ""
+	}
+	parentExplicit := normalizeWorkspaceRelativePath(explicitDeliverablePath(parentTask))
+	if parentExplicit == "" || !strings.Contains(filepath.Base(parentExplicit), ".") {
+		return ""
+	}
+	inherited := normalizeWorkspaceRelativePath(e.taskExplicitDeliverablePath(ctx, taskRecord))
+	if inherited == "" || !sameWorkspaceRelativePath(inherited, parentExplicit) {
+		return ""
+	}
+	return parentExplicit
+}
+
+func (e *TurnEngine) shouldBlockTaskExecutionInheritedSharedDeliverableWriteTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, ""
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "file.write", "file_write":
+	default:
+		return false, ""
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return false, ""
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return false, ""
+	}
+	sharedPath := e.inheritedSharedSingleFileDeliverablePath(ctx, taskRecord)
+	if sharedPath == "" {
+		return false, ""
+	}
+	targetPath := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+	if targetPath == "" || !sameWorkspaceRelativePath(targetPath, sharedPath) {
+		return false, ""
+	}
+	return true, buildTaskExecutionInheritedSharedDeliverableWriteGuardError(taskRecord, sharedPath)
 }
 
 func (e *TurnEngine) taskExecutionSiblingTasks(ctx context.Context, taskRecord repo.ProjectTask) ([]repo.ProjectTask, error) {
@@ -31067,6 +31227,14 @@ func buildTaskExecutionDiscoveryWriteGuardError(taskRecord repo.ProjectTask, sib
 		return fmt.Sprintf("task execution should keep %s in the discovery/listing lane. Do not write deliverable files from this lane when sibling write work already exists; stop after archive/listing evidence instead.", current)
 	}
 	return fmt.Sprintf("task execution should keep %s in the discovery/listing lane. Sibling write work already exists in %s. Do not write deliverable files from this lane; stop after archive/listing evidence and hand the URLs/titles to the write lane instead.", current, strings.Join(labels, ", "))
+}
+
+func buildTaskExecutionInheritedSharedDeliverableWriteGuardError(taskRecord repo.ProjectTask, sharedPath string) string {
+	current := projectBootstrapTaskLabel(taskRecord)
+	if strings.TrimSpace(current) == "" {
+		current = "the current child task"
+	}
+	return fmt.Sprintf("task execution should keep %s inside a bounded edit lane. This decomposed child task inherits the shared parent deliverable path `%s`. Do not use file.write to replace the whole shared file from this child lane; read the current file and use file.edit for the specific section update instead, or resume integration from the parent task.", current, sharedPath)
 }
 
 func buildOrchestrationParentReviewTaskListGuardError(taskRecord repo.ProjectTask) string {
