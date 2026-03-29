@@ -23234,6 +23234,81 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFile
 	}
 }
 
+func TestEnqueueTaskValidationBlockedContinuationPromptBlocksMalformedDuplicateSharedFileChild(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentID := uuid.New()
+	childID := uuid.New()
+	parentDescription := "Produce the file planning/sambot-example-conversations.md containing 5-8 realistic example conversations between a site visitor and SamBot"
+	childDescription := "Produce the file planning/sambot-example-conversations.md containing 5-8 realistic example conversations between a site visitor and SamBot"
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		parentID: {
+			ID:          parentID,
+			ProjectID:   projectID,
+			TaskNumber:  154,
+			Title:       "Write SamBot Example Conversations (replacement)",
+			Description: &parentDescription,
+			WorkStatus:  "draft",
+		},
+		childID: {
+			ID:          childID,
+			ProjectID:   projectID,
+			TaskNumber:  155,
+			Title:       "Produce the file planning/sambot-example-conversations.md containing 5-8 realistic example conversations between a site visitor and SamBot",
+			Description: &childDescription,
+			WorkStatus:  "in_progress",
+			Metadata:    mustJSONRaw(map[string]any{"decomposition_parent_task_id": parentID.String()}),
+		},
+	}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = childID
+
+	stopReason := stopReasonValidationBlocked
+	latestCompleted := &repo.ChatTurn{
+		ID:         uuid.New(),
+		SessionID:  fixture.session.ID,
+		Status:     "completed",
+		StopReason: &stopReason,
+	}
+	latestUser := &repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "final",
+		Content:   "Continue the active task recovery now.",
+	}
+
+	handled, err := fixture.engine.enqueueTaskValidationBlockedContinuationPrompt(context.Background(), fixture.session, taskRepo.items[childID], latestCompleted, latestUser, nil)
+	if err != nil {
+		t.Fatalf("enqueueTaskValidationBlockedContinuationPrompt: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want malformed duplicate shared-file child continuation to be terminal")
+	}
+	if got := taskRepo.items[childID].WorkStatus; got != "blocked" {
+		t.Fatalf("child task work_status = %q, want blocked", got)
+	}
+	taskTransitions, ok := fixture.engine.taskTransitions.(*fakeTaskTransitionService)
+	if !ok {
+		t.Fatalf("taskTransitions = %T, want *fakeTaskTransitionService", fixture.engine.taskTransitions)
+	}
+	if len(taskTransitions.calls) != 1 || taskTransitions.calls[0].taskID != childID {
+		t.Fatalf("MarkBlocked calls = %+v, want single block for child task", taskTransitions.calls)
+	}
+	if !strings.Contains(taskTransitions.calls[0].reason, "duplicates the parent's shared single-file deliverable") {
+		t.Fatalf("block reason = %q, want malformed duplicate shared-file child reason", taskTransitions.calls[0].reason)
+	}
+	if !fixture.messages.containsContentSubstring("duplicates the parent shared single-file deliverable owned by OC-154") {
+		t.Fatal("expected system message explaining duplicate shared-file child halt")
+	}
+	if fixture.messages.containsContentSubstring("Continue the active task recovery now.") {
+		t.Fatal("unexpected synthetic recovery continuation prompt for malformed duplicate shared-file child")
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotPrefersDraftChildOverFreshReplacementParent(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

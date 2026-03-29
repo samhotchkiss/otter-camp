@@ -1767,6 +1767,11 @@ func (e *TurnEngine) enqueueTaskValidationBlockedContinuationPrompt(
 	if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
 		return false, nil
 	}
+	if handled, err := e.handleMalformedChildValidationBlockedContinuation(ctx, session, taskRecord, latestCompleted); err != nil {
+		return true, err
+	} else if handled {
+		return true, nil
+	}
 	targetPath := strings.TrimSpace(e.sessionTaskDeliverablePath(ctx, session.ID, taskRecord))
 	retryPrompt, ok := taskExecutionRetryPromptForMissingPreferredDeliverable(messages, latestCompleted, latestUser, targetPath)
 	if !ok {
@@ -1800,6 +1805,75 @@ func (e *TurnEngine) enqueueTaskValidationBlockedContinuationPrompt(
 		return true, err
 	}
 	return enqueued, nil
+}
+
+func (e *TurnEngine) handleMalformedChildValidationBlockedContinuation(
+	ctx context.Context,
+	session *chat.ChatSession,
+	taskRecord repo.ProjectTask,
+	latestCompleted *repo.ChatTurn,
+) (bool, error) {
+	if e == nil || session == nil || latestCompleted == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(session.Mode), "async") {
+		return false, nil
+	}
+
+	var (
+		reason        string
+		systemMessage string
+	)
+	if parentTask, malformed, err := e.malformedNoDecomposeParentTaskForChild(ctx, taskRecord); err != nil {
+		return false, err
+	} else if malformed {
+		reason = buildMalformedNoDecomposeChildTaskBlockedReason(taskRecord, parentTask)
+		systemMessage = buildMalformedNoDecomposeChildTaskSystemMessage(taskRecord, parentTask)
+	}
+	if reason == "" {
+		if parentTask, malformed, err := e.malformedProceduralParentTaskForChild(ctx, taskRecord); err != nil {
+			return false, err
+		} else if malformed {
+			reason = buildMalformedProceduralChildTaskBlockedReason(taskRecord, parentTask)
+			systemMessage = buildMalformedProceduralChildTaskSystemMessage(taskRecord, parentTask)
+		}
+	}
+	if reason == "" {
+		if parentTask, sharedPath, malformed, err := e.malformedDuplicateSharedFileParentTaskForChild(ctx, taskRecord); err != nil {
+			return false, err
+		} else if malformed {
+			reason = buildMalformedDuplicateSharedFileChildTaskBlockedReason(taskRecord, parentTask, sharedPath)
+			systemMessage = buildMalformedDuplicateSharedFileChildTaskSystemMessage(taskRecord, parentTask, sharedPath)
+		}
+	}
+	if strings.TrimSpace(reason) == "" || strings.TrimSpace(systemMessage) == "" {
+		return false, nil
+	}
+	if _, err := e.appendSystemMessage(ctx, latestCompleted.ID, session.ID, systemMessage); err != nil {
+		return true, err
+	}
+	if e.taskTransitions == nil {
+		return true, fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
+		if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
+			var transitionErr tasksvc.ErrInvalidStatusTransition
+			if errors.As(err, &transitionErr) {
+				refreshed, refreshErr := e.tasks.GetByID(ctx, taskRecord.ID)
+				if refreshErr == nil {
+					nextStatus := strings.ToLower(strings.TrimSpace(refreshed.WorkStatus))
+					if nextStatus != "blocked" && nextStatus != "done" && nextStatus != "cancelled" {
+						return true, err
+					}
+				} else {
+					return true, err
+				}
+			} else {
+				return true, err
+			}
+		}
+	}
+	return true, nil
 }
 
 func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(

@@ -1,5 +1,17 @@
 # 0327a Fix Log
 
+## 2026-03-29 13:45 MDT
+
+- Fix: validation-blocked continuation creation now reuses malformed-child classifiers before emitting another synthetic recovery prompt.
+- `internal/turn/engine.go` now blocks `no-decompose`, procedural/support-only, and duplicate shared-file child lanes directly from `enqueueTaskValidationBlockedContinuationPrompt(...)`, appends the existing terminal system explanation, and marks the task blocked instead of queuing another continuation.
+- Focused verification:
+  - `GOFLAGS='' go test ./internal/turn -run 'Test(EnqueueTaskValidationBlockedContinuationPromptBlocksMalformedDuplicateSharedFileChild|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren)$' -count=1`
+- Live proof:
+  - SamBot task `155`
+  - turn `61efff0a-b3ab-429e-b09f-90267e1adb90`
+  - task now `blocked`
+  - terminal message says the lane duplicates parent shared single-file deliverable owned by `OC-154`
+  - no new synthetic recovery prompt was created after that turn
 - 2026-03-29 13:11:45 MDT - `pending` `Parse markdown-emphasized deliverable labels for PM task hints`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `explicitDeliverablePathPatterns` now accept markdown-emphasized labels like `**Deliverable:**` and `**Output:**`
   - this prevents `explicitDeliverablePath(...)` from falling back to a leading title token like `SamBot` when the description already includes the real path under an emphasized label

@@ -34,6 +34,10 @@ They need sharper stopping rules than ordinary execution lanes.
 
 ### Working Notes
 
+- 2026-03-29 13:45 MDT - Added a new supervisory stop on the task-side continuation path. A malformed child lane that has already ended `validation_loop_blocked` should not receive another synthetic `task_continuation_resume` / recovery-style prompt just because the latest turn stopped cheaply.
+- 2026-03-29 13:45 MDT - `internal/turn/engine.go:enqueueTaskValidationBlockedContinuationPrompt(...)` now checks the same malformed-child families already enforced at kickoff preflight (`no-decompose`, procedural/support-only, and duplicate shared-file children). When matched, the engine appends the same terminal system explanation, marks the task blocked, and suppresses further continuation prompt creation for that lane. This closes the task-155 duplicate-full-file replay family without relying on a brand-new kickoff turn.
+- 2026-03-29 13:47 MDT - Live proof is in. SamBot task `155` completed fresh turn `61efff0a-b3ab-429e-b09f-90267e1adb90`, appended the duplicate shared-file halt message, and transitioned to `blocked` with no follow-on synthetic recovery prompt. That is the supervisory stop we wanted: the runtime ends the malformed lane instead of supervising one more retry.
+
 - 2026-03-29 13:24 MDT - Picked up the next supervisory/task-lane stop seam after the bounded-size PM split created SamBot child tasks `155` / `156` for shared deliverable `planning/sambot-example-conversations.md`.
 - 2026-03-29 13:24 MDT - Fresh live proof on child session `2c91777a-0ee4-44fd-b90c-70703796b95e` (task `156`) showed a narrower malformed-child family than the older `Reference planning/...` junk:
   - the child task title/description was `Use Sam's voice and opinions as established in the SamBot feature spec at planning/sambot-feature-spec.md and the scraped blog content in content/posts/`
