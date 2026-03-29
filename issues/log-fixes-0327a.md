@@ -2750,3 +2750,24 @@
   - remaining live-proof gap:
     - after deploy, the next recovery resume for task `88` or any similar decomposed child should drop the foreign checkpoint entirely instead of resurfacing it in `[Recovery resume state]`
     - immediate post-deploy check showed the known affected task-88 sessions were already closed, so this slice is currently a deployed forward guard rather than a fresh live repro
+- 2026-03-29 06:39 MDT - Finished and deployed on `repo_version=3557`: prefer explicit single-file deliverables over reference roots for SamBot replacement children.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `explicitDeliverablePath(...)` now detects direct-verb path forms like `Produce planning/sambot-feature-spec.md ...`
+    - `preferredTaskDeliverableRoot(...)` now returns empty when the task already has an explicit deliverable path, so reference material like `content/posts/` does not become the preferred output root for single-file tasks
+    - `deliverableTargetMatchesTaskContract(...)` now requires exact path matching whenever an explicit deliverable exists, which blocks reuse of sibling markdown files like `planning/sambot-conversations.md`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestRecoveryTargetPathForSessionPrefersExplicitDeliverableOverHistoricalReferenceMarkdown`
+    - added `TestExplicitDeliverablePathDetectsDirectVerbPathWithoutPreposition`
+    - added `TestPreferredTaskDeliverableRootIgnoresReferenceRootWhenExplicitDeliverableExists`
+    - added `TestBuildTaskReviewActionPromptPrefersExplicitDeliverableOverReferenceRoot`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(RecoveryTargetPathForSessionPrefersExplicitDeliverableOverHistoricalReferenceMarkdown|ExplicitDeliverablePath(DetectsDirectVerbPathWithoutPreposition|RejectsParameterizedMarkdownOutputPath|FallsBackToDecompositionSourceDescription)|PreferredTaskDeliverableRoot(IgnoresReferenceRootWhenExplicitDeliverableExists|FallsBackToDecompositionSourceDescription|SkipsDependencyArtifactAndUsesOutputRoot)|BuildTaskReviewActionPrompt(PrefersExplicitDeliverableOverReferenceRoot|IncludesPreferredDeliverableTarget|IncludesPreferredDeliverableRoot))$' -count=1`
+  - deploy / proof status:
+    - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+      - runtime version is now `3557`
+    - rebuilt [`./bin/ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp), respawned tmux panes `%847/%848`, and [`./bin/ottercamp health --output json`](/Users/sam/dev/otter-camp/bin/ottercamp) returned `status=ok`
+    - live binary reports `repo_version=3557`
+    - the immediate candidate sessions rolled forward before restart:
+      - task `96` successor session `cc97cbdd-4a4b-490b-9dbb-01b63a5f2c17`
+      - task `99` successor review session `cb850e6f-01b8-45ca-8d3c-5265c1453794`
+    - both were already carrying pre-restart prompt state, so fresh direct proof for the new contract logic still depends on the next newly-created turn/session rather than those persisted prompts

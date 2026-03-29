@@ -185,6 +185,7 @@ var explicitDeliverablePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:write|create|produce)\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\bsave\s+as\s+([^\s,;]+)`),
 }
+var leadingVerbDeliverablePathPattern = regexp.MustCompile(`(?i)^\s*(?:write|create|produce)\s+([^\s,;]+)`)
 var preferredDeliverableRootPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:under|in)\s+/?((?:content(?:/[A-Za-z0-9._-]+)+)/?)`),
 }
@@ -17997,6 +17998,9 @@ func preferredTaskDeliverablePath(taskRecord repo.ProjectTask) string {
 }
 
 func preferredTaskDeliverableRoot(taskRecord repo.ProjectTask) string {
+	if explicit := strings.TrimSpace(explicitDeliverablePath(taskRecord)); explicit != "" {
+		return ""
+	}
 	if root := explicitParameterizedDeliverableRoot(taskRecord); root != "" {
 		return root
 	}
@@ -18097,6 +18101,9 @@ func deliverableTargetMatchesTaskContract(taskRecord repo.ProjectTask, candidate
 	candidate = normalizeWorkspaceRelativePath(candidate)
 	if candidate == "" {
 		return false
+	}
+	if explicit := normalizeWorkspaceRelativePath(explicitDeliverablePath(taskRecord)); explicit != "" {
+		return sameWorkspaceRelativePath(candidate, explicit)
 	}
 	if workspacePathLooksParameterized(candidate) {
 		return false
@@ -33341,6 +33348,13 @@ func explicitDeliverablePath(taskRecord repo.ProjectTask) string {
 				continue
 			}
 			return candidate
+		}
+		if match := leadingVerbDeliverablePathPattern.FindStringSubmatch(description); len(match) >= 2 {
+			rawCandidate := strings.TrimSpace(match[1])
+			candidate := normalizeExplicitDeliverablePathCandidate(rawCandidate)
+			if strings.Contains(candidate, "/") || strings.Contains(filepath.Base(candidate), ".") {
+				return candidate
+			}
 		}
 	}
 	return ""

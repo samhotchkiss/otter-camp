@@ -37335,6 +37335,36 @@ func TestSessionTaskDeliverablePathRejectsSameRootDependencyArtifactFromPromptHi
 	}
 }
 
+func TestRecoveryTargetPathForSessionPrefersExplicitDeliverableOverHistoricalReferenceMarkdown(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Produce planning/sambot-feature-spec.md — the comprehensive SamBot chat feature specification for Sam.blog."
+	taskRecord := repo.ProjectTask{
+		ID:          taskID,
+		TaskNumber:  96,
+		Title:       "Produce planning/sambot-feature-spec.md — the comprehensive SamBot chat feature specification for Sam.blog.",
+		Description: &description,
+	}
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks.(*fakeTaskRepo).items = map[uuid.UUID]repo.ProjectTask{
+		taskID: taskRecord,
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"file.read","output":{"path":"planning/sambot-conversations.md"}}`,
+	})
+
+	if got := fixture.engine.recoveryTargetPathForSession(context.Background(), fixture.session); got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("recoveryTargetPathForSession(...) = %q, want %q", got, "planning/sambot-feature-spec.md")
+	}
+}
+
 func TestNormalizeRecoveryCheckpointTargetForTaskClearsDependencyArtifactOutsidePreferredDeliverableRoot(t *testing.T) {
 	t.Parallel()
 
@@ -37446,6 +37476,36 @@ func TestExplicitDeliverablePathRejectsParameterizedMarkdownOutputPath(t *testin
 	}
 	if got := preferredTaskDeliverableRoot(taskRecord); got != "content/posts" {
 		t.Fatalf("preferredTaskDeliverableRoot(...) = %q, want %q", got, "content/posts")
+	}
+}
+
+func TestExplicitDeliverablePathDetectsDirectVerbPathWithoutPreposition(t *testing.T) {
+	t.Parallel()
+
+	description := "Produce planning/sambot-feature-spec.md — the comprehensive SamBot chat feature specification for Sam.blog."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  96,
+		Title:       "Produce planning/sambot-feature-spec.md — the comprehensive SamBot chat feature specification for Sam.blog.",
+		Description: &description,
+	}
+
+	if got := explicitDeliverablePath(taskRecord); got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("explicitDeliverablePath(...) = %q, want %q", got, "planning/sambot-feature-spec.md")
+	}
+}
+
+func TestPreferredTaskDeliverableRootIgnoresReferenceRootWhenExplicitDeliverableExists(t *testing.T) {
+	t.Parallel()
+
+	description := "Write the complete spec to planning/sambot-feature-spec.md. Reference the scraped blog posts in content/posts/ for voice/tone calibration. This is a single-file deliverable — do not produce planning artifacts or sub-plans."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  99,
+		Title:       "Write the complete spec to planning/sambot-feature-spec.md. Reference the scraped blog posts in content/posts/ for voice/tone calibration.",
+		Description: &description,
+	}
+
+	if got := preferredTaskDeliverableRoot(taskRecord); got != "" {
+		t.Fatalf("preferredTaskDeliverableRoot(...) = %q, want empty when explicit deliverable path exists", got)
 	}
 }
 
@@ -42383,6 +42443,36 @@ func TestBuildTaskReviewActionPromptIncludesPreferredDeliverableRoot(t *testing.
 	}
 	if !strings.Contains(prompt, "sample at most 4 files under `content/posts`") {
 		t.Fatalf("prompt = %q, want bounded root sampling guidance", prompt)
+	}
+}
+
+func TestBuildTaskReviewActionPromptPrefersExplicitDeliverableOverReferenceRoot(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Write the complete spec to planning/sambot-feature-spec.md. Reference the scraped blog posts in content/posts/ for voice/tone calibration. This is a single-file deliverable — do not produce planning artifacts or sub-plans."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  99,
+				Title:       "Write the complete spec to planning/sambot-feature-spec.md. Reference the scraped blog posts in content/posts/ for voice/tone calibration.",
+				Description: &description,
+				WorkStatus:  "review",
+			},
+		},
+	}
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "planning/sambot-feature-spec.md") {
+		t.Fatalf("prompt = %q, want explicit deliverable target guidance", prompt)
+	}
+	if strings.Contains(prompt, "Start with the preferred deliverable root `content/posts`") {
+		t.Fatalf("prompt = %q, did not want reference root treated as preferred deliverable root", prompt)
 	}
 }
 
