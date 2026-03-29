@@ -2324,3 +2324,19 @@
   - deploy / proof status:
     - pre-fix live evidence is the `task 80 -> task 81` duplicate closeout chain on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where one remaining `manual_recovery_repair` child kept task `34` out of closeout-ready state
     - the direct post-`3519` proof target is the next PM attempt to create another child beneath task `34`; it should now stop or close the parent instead of spawning task `82`
+- 2026-03-29 01:08:41 MDT - Finished locally and live-proven: reject parameterized review targets like `content/posts/{slug}.md` and fall back to the real deliverable root or a concrete historical file.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `deliverableTargetMatchesTaskContract(...)` now rejects parameterized workspace paths
+    - `looksLikeExplicitDeliverablePath(...)` now rejects parameterized placeholder paths as concrete explicit deliverables
+    - added `workspacePathLooksParameterized(...)` for shared placeholder-path detection
+    - added `explicitParameterizedDeliverableRoot(...)` so descriptions like `content/posts/{slug}.md` still yield preferred deliverable root `content/posts`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestExplicitDeliverablePathRejectsParameterizedMarkdownOutputPath`
+    - added `TestBuildTaskReviewActionPromptPrefersDeliverableRootWhenExplicitPathIsParameterized`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped runtime version to `3520`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ExplicitDeliverablePathRejectsParameterizedMarkdownOutputPath|BuildTaskReviewActionPromptPrefersDeliverableRootWhenExplicitPathIsParameterized|BuildTaskReviewActionPromptIgnoresHistoricalInputArtifactOutsidePreferredDeliverableRoot|BuildTaskReviewActionPromptIgnoresHistoricalInputArtifactInsidePreferredDeliverableRootForMarkdownBatch|BuildTaskReviewActionPromptIgnoresRecoveryCheckpointOutsidePreferredDeliverableRoot|BuildTaskReviewActionPromptPrefersDeliverableRootForBatchContentMigrationOutputs)$' -count=1`
+  - deploy / proof status:
+    - pre-fix live evidence is task `81` session `903bdd67-5384-430e-8fa0-a992cc7c5648`, where retry prompts `305/306` forced literal `content/posts/{slug}.md`
+    - direct post-`3520` proof landed immediately after restart: prompt `333` now starts with preferred deliverable target `content/posts/stop-preparing-your-kids-for-jobs.md`, and tool result `335` successfully reads that concrete file

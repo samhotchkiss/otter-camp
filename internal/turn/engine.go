@@ -17307,6 +17307,9 @@ func preferredTaskDeliverablePath(taskRecord repo.ProjectTask) string {
 }
 
 func preferredTaskDeliverableRoot(taskRecord repo.ProjectTask) string {
+	if root := explicitParameterizedDeliverableRoot(taskRecord); root != "" {
+		return root
+	}
 	for _, description := range taskContractDescriptionCandidates(taskRecord) {
 		for _, pattern := range preferredDeliverableRootPatterns {
 			matches := pattern.FindAllStringSubmatch(description, -1)
@@ -17333,6 +17336,26 @@ func preferredTaskDeliverableRoot(taskRecord repo.ProjectTask) string {
 		}
 	}
 	return preferredTaskDeliverableRootFromCheckpoint(taskRecord)
+}
+
+func explicitParameterizedDeliverableRoot(taskRecord repo.ProjectTask) string {
+	for _, description := range taskContractDescriptionCandidates(taskRecord) {
+		for _, pattern := range explicitDeliverablePathPatterns {
+			matches := pattern.FindStringSubmatch(description)
+			if len(matches) < 2 {
+				continue
+			}
+			candidate := normalizeExplicitDeliverablePathCandidate(strings.TrimSpace(matches[1]))
+			if candidate == "" || !workspacePathLooksParameterized(candidate) {
+				continue
+			}
+			root := normalizeWorkspaceRelativePath(path.Dir(candidate))
+			if looksLikePreferredDeliverableRootPath(root) {
+				return root
+			}
+		}
+	}
+	return ""
 }
 
 func preferredTaskDeliverableRootFromCheckpoint(taskRecord repo.ProjectTask) string {
@@ -17383,6 +17406,9 @@ func shouldReuseHistoricalDeliverableTargetForTask(taskRecord repo.ProjectTask, 
 func deliverableTargetMatchesTaskContract(taskRecord repo.ProjectTask, candidate string) bool {
 	candidate = normalizeWorkspaceRelativePath(candidate)
 	if candidate == "" {
+		return false
+	}
+	if workspacePathLooksParameterized(candidate) {
 		return false
 	}
 	if !taskExpectsMarkdownDeliverables(taskRecord) {
@@ -31949,6 +31975,9 @@ func looksLikeExplicitDeliverablePath(normalized, raw string) bool {
 	if normalized == "" {
 		return false
 	}
+	if workspacePathLooksParameterized(normalized) {
+		return false
+	}
 	if strings.Contains(normalized, "/") || strings.Contains(filepath.Base(normalized), ".") {
 		return true
 	}
@@ -31973,6 +32002,14 @@ func looksLikePreferredDeliverableRootPath(normalized string) bool {
 		return false
 	}
 	return !strings.Contains(filepath.Base(normalized), ".")
+}
+
+func workspacePathLooksParameterized(normalized string) bool {
+	normalized = normalizeWorkspaceRelativePath(normalized)
+	if normalized == "" {
+		return false
+	}
+	return strings.ContainsAny(normalized, "{}[]<>*?")
 }
 
 func workspacePathWithinRoot(path, root string) bool {

@@ -35642,6 +35642,24 @@ func TestExplicitDeliverablePathFallsBackToDecompositionSourceDescription(t *tes
 	}
 }
 
+func TestExplicitDeliverablePathRejectsParameterizedMarkdownOutputPath(t *testing.T) {
+	t.Parallel()
+
+	description := "Read content/technonymous-index.json for the full list of post URLs. For each URL, fetch the page and write a markdown file to content/posts/{slug}.md with YAML frontmatter."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  81,
+		Title:       "Scrape all technonymous.org posts from content/technonymous-index.json and save as markdown files in content/posts/",
+		Description: &description,
+	}
+
+	if got := explicitDeliverablePath(taskRecord); got != "" {
+		t.Fatalf("explicitDeliverablePath(...) = %q, want empty for parameterized output path", got)
+	}
+	if got := preferredTaskDeliverableRoot(taskRecord); got != "content/posts" {
+		t.Fatalf("preferredTaskDeliverableRoot(...) = %q, want %q", got, "content/posts")
+	}
+}
+
 func TestPreferredTaskDeliverableRootFallsBackToDecompositionSourceDescription(t *testing.T) {
 	t.Parallel()
 
@@ -40548,6 +40566,36 @@ func TestBuildTaskReviewActionPromptIgnoresRecoveryCheckpointOutsidePreferredDel
 	}
 	if strings.Contains(prompt, "Start with the preferred deliverable target `content/technonymous-index.json`") {
 		t.Fatalf("prompt = %q, did not want recovery checkpoint outside preferred root to become preferred review target", prompt)
+	}
+}
+
+func TestBuildTaskReviewActionPromptPrefersDeliverableRootWhenExplicitPathIsParameterized(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Read content/technonymous-index.json for the full list of post URLs. For each URL, fetch the page, extract the post title, date, and body content, and write a markdown file to content/posts/{slug}.md with YAML frontmatter (title, date, source_url) and the post body as markdown. Skip any posts that already exist in content/posts/."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  81,
+				Title:       "Scrape all technonymous.org posts from content/technonymous-index.json and save as markdown files in content/posts/",
+				Description: &description,
+				WorkStatus:  "review",
+			},
+		},
+	}
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "Start with the preferred deliverable root `content/posts`") {
+		t.Fatalf("prompt = %q, want preferred deliverable root guidance", prompt)
+	}
+	if strings.Contains(prompt, "Start with the preferred deliverable target `content/posts/{slug}.md`") {
+		t.Fatalf("prompt = %q, did not want parameterized markdown path to become preferred review target", prompt)
 	}
 }
 
