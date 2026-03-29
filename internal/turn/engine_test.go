@@ -44673,6 +44673,45 @@ func TestBuildTaskReviewActionPromptIncludesExplicitArtifactContractPaths(t *tes
 	}
 }
 
+func TestBuildTaskReviewActionPromptIncludesAcceptanceCriteria(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Write the architecture note.\n\nAcceptance criteria:\n1. planning/sambot-architecture.md exists\n2. Includes an Overview section\n3. Includes a monthly cost estimate table\n\n## Notes\nUse direct, opinionated language."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  150,
+				Title:       "Write the file planning/sambot-architecture.md containing the complete SamBot technical architecture specification.",
+				Description: &description,
+				WorkStatus:  "review",
+			},
+		},
+	}
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "Evaluate the deliverable against the explicit task acceptance criteria below.") {
+		t.Fatalf("prompt = %q, want acceptance-criteria review guidance", prompt)
+	}
+	if !strings.Contains(prompt, "- Acceptance criterion: planning/sambot-architecture.md exists") {
+		t.Fatalf("prompt = %q, want first acceptance criterion", prompt)
+	}
+	if !strings.Contains(prompt, "- Acceptance criterion: Includes an Overview section") {
+		t.Fatalf("prompt = %q, want overview acceptance criterion", prompt)
+	}
+	if !strings.Contains(prompt, "- Acceptance criterion: Includes a monthly cost estimate table") {
+		t.Fatalf("prompt = %q, want cost-estimate acceptance criterion", prompt)
+	}
+	if !strings.Contains(prompt, "If any criterion fails, call flow.review_decision reject") {
+		t.Fatalf("prompt = %q, want reject guidance tied to criteria failure", prompt)
+	}
+}
+
 func TestBuildTaskReviewActionPromptIncludesPreferredDeliverableTarget(t *testing.T) {
 	t.Parallel()
 

@@ -12,6 +12,14 @@
   - task now `blocked`
   - terminal message says the lane duplicates parent shared single-file deliverable owned by `OC-154`
   - no new synthetic recovery prompt was created after that turn
+
+## 2026-03-29 13:58 MDT
+
+- `add-0328b` first slice:
+  - `internal/turn/engine.go` extracts task-level `Acceptance criteria:` sections from task descriptions
+  - `buildTaskReviewActionPrompt(...)` now includes those criteria explicitly and instructs review lanes to reject against named failing criteria instead of generic quality language
+- Focused verification:
+  - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildTaskReviewActionPromptIncludesAcceptanceCriteria|EnqueueTaskValidationBlockedContinuationPromptBlocksMalformedDuplicateSharedFileChild|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren)$' -count=1`
 - 2026-03-29 13:11:45 MDT - `pending` `Parse markdown-emphasized deliverable labels for PM task hints`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `explicitDeliverablePathPatterns` now accept markdown-emphasized labels like `**Deliverable:**` and `**Output:**`
   - this prevents `explicitDeliverablePath(...)` from falling back to a leading title token like `SamBot` when the description already includes the real path under an emphasized label

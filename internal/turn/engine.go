@@ -183,6 +183,7 @@ var projectContinuationCompletedBatchRangePattern = regexp.MustCompile(`\bThat c
 var projectContinuationWorkspacePathPattern = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\b`)
 var projectContinuationParentCompletionTaskLabelPattern = regexp.MustCompile(`(?i)\bOC-\d+\b`)
 var workspacePathInBackticksPattern = regexp.MustCompile("`([^`]+)`")
+var acceptanceCriteriaListItemPattern = regexp.MustCompile(`^\d+[.)]\s+(.+)$`)
 var explicitDeliverablePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:deliverable|output)\b(?:[*_]+)?\s*:\s*(?:[*_]+)?\s*([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
@@ -27743,11 +27744,109 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 		} else {
 			lines = append(lines, "Companion artifacts are only required when explicitly named by this task's metadata contract: "+strings.Join(contracts, ", ")+". Do not reject for any other missing sibling files.")
 		}
+		if criteria := reviewPromptAcceptanceCriteria(taskRecord); len(criteria) > 0 {
+			lines = append(lines, "Evaluate the deliverable against the explicit task acceptance criteria below. If any criterion fails, call flow.review_decision reject and cite the failing criterion(s) directly.")
+			for _, criterion := range criteria {
+				lines = append(lines, "- Acceptance criterion: "+criterion)
+			}
+		}
 	}
 	if executionID := flowNodeExecutionIDFromSessionMetadata(session); executionID != nil && *executionID != uuid.Nil {
 		lines = append(lines, "Use flow_node_execution_id "+executionID.String()+" in flow.review_decision.")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func reviewPromptAcceptanceCriteria(taskRecord repo.ProjectTask) []string {
+	if taskRecord.Description == nil {
+		return nil
+	}
+	lines := strings.Split(*taskRecord.Description, "\n")
+	criteria := make([]string, 0, 6)
+	collecting := false
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if !collecting {
+			if text, ok := acceptanceCriteriaHeadingText(line); ok {
+				collecting = true
+				if text != "" {
+					criteria = append(criteria, text)
+				}
+			}
+			continue
+		}
+		if line == "" {
+			if len(criteria) > 0 {
+				break
+			}
+			continue
+		}
+		if looksLikeMarkdownSectionHeading(line) {
+			break
+		}
+		if item, ok := acceptanceCriteriaListItem(line); ok {
+			criteria = append(criteria, item)
+			continue
+		}
+		if len(criteria) == 0 {
+			criteria = append(criteria, line)
+			continue
+		}
+		last := len(criteria) - 1
+		criteria[last] = strings.TrimSpace(criteria[last] + " " + line)
+	}
+	if len(criteria) == 0 {
+		return nil
+	}
+	if len(criteria) > 5 {
+		criteria = criteria[:5]
+	}
+	return criteria
+}
+
+func acceptanceCriteriaHeadingText(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return "", false
+	}
+	heading := strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+	normalized := strings.ToLower(heading)
+	switch {
+	case normalized == "acceptance criteria":
+		return "", true
+	case strings.HasPrefix(normalized, "acceptance criteria:"):
+		return strings.TrimSpace(heading[len("Acceptance criteria:"):]), true
+	default:
+		return "", false
+	}
+}
+
+func looksLikeMarkdownSectionHeading(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "#") {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(lower, "## ") || strings.HasPrefix(lower, "### ")
+}
+
+func acceptanceCriteriaListItem(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return "", false
+	}
+	for _, prefix := range []string{"- ", "* "} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, prefix)), true
+		}
+	}
+	if match := acceptanceCriteriaListItemPattern.FindStringSubmatch(trimmed); len(match) == 2 {
+		return strings.TrimSpace(match[1]), true
+	}
+	return "", false
 }
 
 func (e *TurnEngine) reviewPromptDeliverableTarget(ctx context.Context, session *chat.ChatSession, taskRecord repo.ProjectTask) string {
