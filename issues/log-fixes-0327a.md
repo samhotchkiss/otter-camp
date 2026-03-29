@@ -2352,10 +2352,10 @@
     - added `TestContinuationSummaryLooksUnavailableRejectsRuntimeOwnedCommitPlan`
     - added `TestHandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitWhenCheckpointUpdatedEarlierInTurn`
   - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
-    - bumped runtime version to `3522`
+    - bumped runtime version to `3523`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ContinuationSummaryLooksUnavailableRejects(RuntimeOwnedCommitPlan|PseudoToolCLITranscript)|HandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitWhenCheckpointUpdatedEarlierInTurn|HandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitWhenDeliverableAlreadyMutated|HandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitWhenDeliverableMutatedEarlierInTurn|HandleToolValidationResultsStopsAsyncTaskTurnAfterCheckpointOnlyDirtyTaskGitCommit)$' -count=1`
   - deploy / proof status:
     - pre-fix live evidence is task `81` session `92a98bde-c9b3-4f32-b9ce-f71e75b3bff7` message `130`, which preserved `Let me clean up by staging ... and committing:` in the continuation summary and replayed `git.status` / `git.commit` / `flow_owned_done_blocked`
     - secondary pre-fix live evidence is task `81` session `eb7c666e-00f3-4b53-862d-3eba852cecfd`, where `cli.execute(stdout_inline=wrote checkpoint)` followed by `git.commit -> task_git_commit_blocked` still reopened `task.update` / `flow_owned_done_blocked`
-    - direct post-`3522` proof target is the next task-81 or similar async execution retry on the new binary
+    - direct post-`3523` proof target is the next task-81 or similar async execution retry on the new binary
