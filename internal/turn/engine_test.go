@@ -39002,6 +39002,19 @@ This task has no deliverable to approve. Rejecting.
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReasonRejectsReviewerSummaryPlaceholderInPlanningDeliverable(t *testing.T) {
+	t.Parallel()
+
+	content := `The file content is clearly not a valid deliverable. It contains 988 bytes of meta-commentary about what would be delivered rather than actual spec content. There is no ` + "`## UI/UX Design`" + ` section, no chat widget placement details, no conversation flow patterns, no mobile responsiveness guidance, no conversation starters, and no error state definitions. The file is a self-referential summary describing what sections "would" contain.
+
+This is a ` + "`mismatched_deliverable_context`" + ` — rejecting.
+`
+	got := recoveryFileWriteDraftRejectReason(content, "planning/sambot-feature-spec.md")
+	if !strings.Contains(got, "reviewer assessment or rejection commentary") {
+		t.Fatalf("reason = %q, want reviewer-summary rejection", got)
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReasonRejectsDeliverableCompletionSummaryWithoutBody(t *testing.T) {
 	t.Parallel()
 

@@ -1218,6 +1218,55 @@ This task has no deliverable to approve. Rejecting.
 	}
 }
 
+func TestFileWriteRejectsReviewerSummaryPlaceholderInPlanningDeliverable(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "planning/sambot-feature-spec.md",
+		"content": "The file content is clearly not a valid deliverable. It contains 988 bytes of meta-commentary about what would be delivered rather than actual spec content. There is no `## UI/UX Design` section, no chat widget placement details, no conversation flow patterns, no mobile responsiveness guidance, no conversation starters, and no error state definitions. The file is a self-referential summary describing what sections \"would\" contain.\n\n" +
+			"This is a `mismatched_deliverable_context` — rejecting.\n",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
 func TestFileWriteRejectsProjectSessionExecutionDeliverableMutation(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

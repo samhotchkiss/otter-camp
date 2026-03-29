@@ -2881,3 +2881,28 @@
       - the first fresh task `111` execution session on `3566` is `6cd4921c-0690-4054-aab6-e681db237511`
       - it immediately exposed a different `988`-byte reviewer-summary placeholder (`The evidence is clear ...`) rather than the older runtime-owned completion-summary family
       - so this slice is deployed and test-green, but the exact runtime-owned completion-summary branch still needs a new natural retry to re-fire post-fix; the active live blocker has already narrowed to the adjacent reviewer-summary placeholder family
+- 2026-03-29 07:55 MDT - Widened reviewer-summary placeholder rejection so strong review prose is rejected even when it contaminates planning/spec deliverables like `planning/sambot-feature-spec.md`.
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - [`looksLikeReviewerAssessmentInDeliverable(...)`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go) now accepts a new `looksLikeStrongDeliverableReviewerSummaryPlaceholder(...)` fast path before the `planning/` early-return
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - [`looksLikeDeliverableReviewAssessmentPlaceholder(...)`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go) now accepts the same strong reviewer-summary placeholder family
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - [`looksLikeReviewerAssessmentInDeliverable(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now accepts the same strong reviewer-summary placeholder family before the `planning/` early-return
+  - changed tests:
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go)
+      - added `TestFileWriteRejectsReviewerSummaryPlaceholderInPlanningDeliverable`
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go)
+      - added `TestFileReadRejectsReviewerSummaryPlaceholderAtInProgressPlanningDeliverablePath`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestRecoveryFileWriteDraftRejectReasonRejectsReviewerSummaryPlaceholderInPlanningDeliverable`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(FileWriteRejects(ReviewerAssessmentInDeliverable|ReviewerSummaryPlaceholderInPlanningDeliverable)|FileReadRejects(ReviewerSummaryPlaceholderAtInProgressPlanningDeliverablePath|RuntimeAdvanceCompletionSummaryPlaceholderAtInProgressDeliverablePath))$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestRecoveryFileWriteDraftRejectReasonRejects(ReviewerAssessmentInDeliverable|ReviewerSummaryPlaceholderInPlanningDeliverable|RuntimeAdvanceCompletionSummaryPlaceholder)$' -count=1`
+  - deploy / proof status:
+    - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+      - runtime version is now `3568`
+    - rebuilt [`./bin/ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp), respawned tmux panes `%847/%848`, and [`./bin/ottercamp health --output json`](/Users/sam/dev/otter-camp/bin/ottercamp) returned `status=ok`
+    - fresh live effect:
+      - task `111` no longer stayed in the older open-ended recovery churn family; the new review session `c95f1f65-1a31-44e1-b833-124a2c6911af` rejected and blocked the corrupt deliverable immediately after bounded inspection
+    - current caveat:
+      - the exact `file.read -> placeholder_deliverable` transition for the short `The file content is clearly not a valid deliverable ... self-referential summary ...` body is still not directly live-proven, because that read returned the body content before the review lane rejected it

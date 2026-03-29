@@ -22750,6 +22750,9 @@ func looksLikeReviewerAssessmentInDeliverable(targetPath, content string) bool {
 	if looksLikeDeliverableReviewMetaPlaceholder(lower) {
 		return true
 	}
+	if looksLikeStrongDeliverableReviewerSummaryPlaceholder(lower) {
+		return true
+	}
 	if strings.HasPrefix(path, "planning/") ||
 		strings.HasPrefix(path, "review/") ||
 		strings.HasPrefix(path, "reviews/") ||
@@ -22816,6 +22819,33 @@ func looksLikeReviewerAssessmentInDeliverable(targetPath, content string) bool {
 		"deliverable does not match the task's scope",
 		"using this evidence",
 		"this is a stop condition",
+	)
+}
+
+func looksLikeStrongDeliverableReviewerSummaryPlaceholder(lower string) bool {
+	if lower == "" {
+		return false
+	}
+	if !containsAny(lower,
+		"the evidence is clear",
+		"here's my assessment",
+		"here is my assessment",
+		"here is my review assessment",
+		"the evidence is conclusive",
+		"the file content is clearly not a valid deliverable",
+	) {
+		return false
+	}
+	return containsAny(lower,
+		"contains a meta-summary of what was supposedly delivered",
+		"contains 988 bytes of meta-commentary about what would be delivered",
+		"meta-commentary about what would be delivered",
+		"what's present is a self-congratulatory summary",
+		"the file is a self-referential summary",
+		"this is a `mismatched_deliverable_context`",
+		"this is a mismatched_deliverable_context",
+		"not the actual",
+		"rejecting.",
 	)
 }
 
