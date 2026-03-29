@@ -23083,6 +23083,9 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	if looksLikeDeliverableCompletionSummaryWithoutBody(path, trimmed) {
 		return fmt.Sprintf("assistant draft for %s wrote a completion summary about deliverables/review readiness instead of the actual file body", path)
 	}
+	if looksLikeTaskBriefEchoPlaceholder(path, trimmed) {
+		return fmt.Sprintf("assistant draft for %s copied the task brief/instruction scaffold instead of the actual file body", path)
+	}
 	if containsAny(lower,
 		"what is the current state you need me to continue from",
 		"what is the target deliverable for",
@@ -23813,6 +23816,73 @@ func looksLikeContentMigrationTaskScaffoldWithoutBody(targetPath, content string
 		return false
 	}
 	return true
+}
+
+func looksLikeTaskBriefEchoPlaceholder(targetPath, content string) bool {
+	path := strings.ToLower(strings.TrimSpace(targetPath))
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || len(trimmed) > 12000 {
+		return false
+	}
+	if strings.HasPrefix(path, "review/") ||
+		strings.HasPrefix(path, "reviews/") ||
+		strings.HasPrefix(path, ".ottercamp/review/") ||
+		strings.HasPrefix(path, ".ottercamp/reviews/") {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	sectionHits := 0
+	for _, marker := range []string{
+		"## objective",
+		"## deliverable",
+		"## what to produce",
+		"## context",
+		"## do not",
+		"## validation criteria",
+		"## evidence expectations",
+	} {
+		if strings.Contains(lower, marker) {
+			sectionHits++
+		}
+	}
+	if sectionHits < 4 {
+		return false
+	}
+	instructionHits := 0
+	for _, marker := range []string{
+		"this is a write task",
+		"do not describe intent to write it",
+		"using file_write or python3 via cli_execute",
+		"read it first",
+		"write a complete ",
+		"write the file to `",
+		"replaces blocked oc-",
+	} {
+		if strings.Contains(lower, marker) {
+			instructionHits++
+		}
+	}
+	if instructionHits < 2 {
+		return false
+	}
+	firstLine := lower
+	if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
+		firstLine = strings.TrimSpace(firstLine[:idx])
+	}
+	if !strings.HasPrefix(firstLine, "# write ") &&
+		!strings.HasPrefix(firstLine, "# create ") &&
+		!strings.HasPrefix(firstLine, "# append ") &&
+		!strings.HasPrefix(firstLine, "# implement ") {
+		return false
+	}
+	return containsAny(lower,
+		"reference `planning/",
+		"feature spec exists at `planning/",
+		"architecture spec exists at `planning/",
+		"a markdown document covering:",
+		"each step includes:",
+		"what to produce",
+	)
 }
 
 func looksLikeRuntimeOwnedCommitHandoffPlaceholder(content string) bool {

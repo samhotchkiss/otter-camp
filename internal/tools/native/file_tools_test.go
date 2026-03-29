@@ -1488,6 +1488,83 @@ func TestFileReadRejectsReviewerSummaryPlaceholderAtInProgressPlanningDeliverabl
 	}
 }
 
+func TestFileReadRejectsTaskBriefEchoPlaceholderAtInProgressPlanningDeliverablePath(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "planning/sambot-mvp-spec.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "planning"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(planning): %v", err)
+	}
+	placeholder := `# Write SamBot MVP implementation plan to planning/sambot-mvp-spec.md (replaces blocked OC-170)
+
+## Objective
+## Deliverable
+Write a complete SamBot MVP implementation plan to ` + "`planning/sambot-mvp-spec.md`" + `.
+
+## What to produce
+A Markdown document covering:
+
+1. **Build Order** — Numbered, sequential steps to implement SamBot MVP.
+
+## Context
+- The feature spec exists at ` + "`planning/sambot-feature-spec.md`" + ` — read it first
+- The architecture spec exists at ` + "`planning/sambot-architecture.md`" + ` — read it first
+- This is a WRITE task — produce the actual .md file, do not describe intent to write it
+
+## DO NOT
+- Write the file to ` + "`planning/sambot-mvp-spec.md`" + ` using file_write or python3 via cli_execute.
+
+## Validation Criteria
+- Define explicit pass/fail checks for each relevant stage.
+
+## Evidence Expectations
+- Reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.
+`
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+
+	description := "Deliverable: Write a complete SamBot MVP implementation plan to planning/sambot-mvp-spec.md. Reference planning/sambot-feature-spec.md and planning/sambot-architecture.md, but produce the actual spec file rather than task instructions."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Write SamBot MVP implementation plan to planning/sambot-mvp-spec.md",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{{
+			SessionID: sessionID,
+			Role:      "user",
+			Content:   "Start work on task: Write SamBot MVP implementation plan to planning/sambot-mvp-spec.md",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+	if got := out["deliverable_path"]; got != "planning/sambot-mvp-spec.md" {
+		t.Fatalf("deliverable_path = %v, want planning/sambot-mvp-spec.md", got)
+	}
+}
+
 func TestFileReadRejectsContentMigrationStatusPlaceholderAtInProgressDeliverablePath(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

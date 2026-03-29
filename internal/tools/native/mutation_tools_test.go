@@ -1268,6 +1268,78 @@ func TestFileWriteRejectsReviewerSummaryPlaceholderInPlanningDeliverable(t *test
 	}
 }
 
+func TestFileWriteRejectsTaskBriefEchoPlaceholderInPlanningDeliverable(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("8a8a8a8a-8a8a-8a8a-8a8a-8a8a8a8a8a8a")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "planning/sambot-mvp-spec.md",
+		"content": `# Write SamBot MVP implementation plan to planning/sambot-mvp-spec.md (replaces blocked OC-170)
+
+## Objective
+## Deliverable
+Write a complete SamBot MVP implementation plan to ` + "`planning/sambot-mvp-spec.md`" + `.
+
+## What to produce
+A Markdown document covering:
+
+1. **Build Order** — Numbered, sequential steps to implement SamBot MVP.
+
+## Context
+- The feature spec exists at ` + "`planning/sambot-feature-spec.md`" + ` — read it first
+- The architecture spec exists at ` + "`planning/sambot-architecture.md`" + ` — read it first
+- This is a WRITE task — produce the actual .md file, do not describe intent to write it
+
+## DO NOT
+- Write the file to ` + "`planning/sambot-mvp-spec.md`" + ` using file_write or python3 via cli_execute.
+
+## Validation Criteria
+- Define explicit pass/fail checks for each relevant stage.
+
+## Evidence Expectations
+- Reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.
+`,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
 func TestFileWriteRejectsProjectSessionExecutionDeliverableMutation(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

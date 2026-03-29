@@ -898,6 +898,73 @@ func looksLikeContentMigrationStatusPlaceholder(content string) bool {
 	)
 }
 
+func looksLikeTaskBriefEchoPlaceholder(path, content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || len(trimmed) > 12000 {
+		return false
+	}
+	normalizedPath := strings.ToLower(normalizeWorkspacePath(path))
+	if strings.HasPrefix(normalizedPath, "review/") ||
+		strings.HasPrefix(normalizedPath, "reviews/") ||
+		strings.HasPrefix(normalizedPath, ".ottercamp/review/") ||
+		strings.HasPrefix(normalizedPath, ".ottercamp/reviews/") {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	sectionHits := 0
+	for _, marker := range []string{
+		"## objective",
+		"## deliverable",
+		"## what to produce",
+		"## context",
+		"## do not",
+		"## validation criteria",
+		"## evidence expectations",
+	} {
+		if strings.Contains(lower, marker) {
+			sectionHits++
+		}
+	}
+	if sectionHits < 4 {
+		return false
+	}
+	instructionHits := 0
+	for _, marker := range []string{
+		"this is a write task",
+		"do not describe intent to write it",
+		"using file_write or python3 via cli_execute",
+		"read it first",
+		"write a complete ",
+		"write the file to `",
+		"replaces blocked oc-",
+	} {
+		if strings.Contains(lower, marker) {
+			instructionHits++
+		}
+	}
+	if instructionHits < 2 {
+		return false
+	}
+	firstLine := lower
+	if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
+		firstLine = strings.TrimSpace(firstLine[:idx])
+	}
+	if !strings.HasPrefix(firstLine, "# write ") &&
+		!strings.HasPrefix(firstLine, "# create ") &&
+		!strings.HasPrefix(firstLine, "# append ") &&
+		!strings.HasPrefix(firstLine, "# implement ") {
+		return false
+	}
+	return containsAnySubstring(lower,
+		"reference `planning/",
+		"feature spec exists at `planning/",
+		"architecture spec exists at `planning/",
+		"a markdown document covering:",
+		"each step includes:",
+		"what to produce",
+	)
+}
+
 func taskDraftSemanticallyMismatchesScope(taskRecord repo.ProjectTask, content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
@@ -2062,6 +2129,12 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 		return map[string]any{
 			"error":   "non_substantive_content",
 			"message": "file.write content appears to be reviewer assessment or rejection commentary, not the task deliverable itself. Write the concrete work product or review decision through the proper review flow instead.",
+		}, nil
+	}
+	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikeTaskBriefEchoPlaceholder(renderedPath, content) {
+		return map[string]any{
+			"error":   "non_substantive_content",
+			"message": "file.write content appears to be a copied task brief or instruction scaffold, not the concrete deliverable body itself. Write the actual produced document or artifact contents directly.",
 		}, nil
 	}
 	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikeExecutionSpecCompletionMemoWithoutArtifacts(renderedPath, content) {

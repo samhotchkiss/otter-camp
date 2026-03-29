@@ -536,3 +536,14 @@
     - it did not treat terminal shared-deliverable guard families as decisive stop conditions for later pending `task_recovery_resume` prompts on the same execution
   - impact:
     - blocked child lanes could keep rearming identical recovery prompts even after the runtime had already proved the lane could not continue until a parent/shared-file prerequisite changed
+- 2026-03-29 15:09 MDT - Task lanes can still write the task brief itself into the deliverable path and then bounce through review until max visits are exhausted.
+  - fresh live evidence:
+    - task `171` wrote `planning/sambot-mvp-spec.md`
+    - the file body begins with `# Write SamBot MVP implementation plan to planning/sambot-mvp-spec.md (replaces blocked OC-170)` and then repeats the instruction scaffold sections `## Objective`, `## Deliverable`, `## What to produce`, `## Context`, `## DO NOT`, `## Validation Criteria`, and `## Evidence Expectations`
+    - review sessions rejected the file as non-deliverable, but the work lane kept reopening and rewriting from the same bad scaffold until the flow finally blocked on `flow rejection max visits exceeded`
+  - bug:
+    - existing placeholder guards catch narrated intent, runtime handoffs, reviewer summaries, and content-migration scaffolds
+    - they did not catch the more literal failure where the agent copies the task brief/instruction scaffold directly into the target deliverable file
+  - impact:
+    - a task can consume multiple work/review cycles while producing zero durable progress
+    - PM sees the task family as “active but churning” instead of getting an early bounded stop on the first bad write/read/recovery reuse

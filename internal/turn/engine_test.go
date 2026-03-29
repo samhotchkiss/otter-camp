@@ -41191,6 +41191,41 @@ This is a ` + "`mismatched_deliverable_context`" + ` — rejecting.
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReasonRejectsTaskBriefEchoPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	content := `# Write SamBot MVP implementation plan to planning/sambot-mvp-spec.md (replaces blocked OC-170)
+
+## Objective
+## Deliverable
+Write a complete SamBot MVP implementation plan to ` + "`planning/sambot-mvp-spec.md`" + `.
+
+## What to produce
+A Markdown document covering:
+
+1. **Build Order** — Numbered, sequential steps to implement SamBot MVP.
+
+## Context
+- The feature spec exists at ` + "`planning/sambot-feature-spec.md`" + ` — read it first
+- The architecture spec exists at ` + "`planning/sambot-architecture.md`" + ` — read it first
+- This is a WRITE task — produce the actual .md file, do not describe intent to write it
+
+## DO NOT
+- Write the file to ` + "`planning/sambot-mvp-spec.md`" + ` using file_write or python3 via cli_execute.
+
+## Validation Criteria
+- Define explicit pass/fail checks for each relevant stage.
+
+## Evidence Expectations
+- Reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.
+`
+
+	got := recoveryFileWriteDraftRejectReason(content, "planning/sambot-mvp-spec.md")
+	if !strings.Contains(got, "copied the task brief/instruction scaffold") {
+		t.Fatalf("reason = %q, want task-brief-echo rejection", got)
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReasonRejectsDeliverableCompletionSummaryWithoutBody(t *testing.T) {
 	t.Parallel()
 

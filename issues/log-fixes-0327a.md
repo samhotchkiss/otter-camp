@@ -3494,3 +3494,23 @@
   - deploy / proof status:
     - deployed on the current local runtime after rebuild/restart
     - fresh adjacent live proof landed immediately: PM turn `942` cancelled stale blocked child `OC-159` and then hit the existing task-lane ownership guard on `OC-171`, without repeating the older flow-recovery detour from turn `941`
+- 2026-03-29 15:09 MDT - Rejected copied task briefs/instruction scaffolds before they can churn through work/review loops.
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - added `looksLikeTaskBriefEchoPlaceholder(...)`
+    - `file.write` now returns `non_substantive_content` when a task attempts to write a deliverable file with the task brief scaffold itself (instruction sections + imperative write guidance) instead of actual produced content
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - in-progress deliverable rereads now return `placeholder_deliverable` for the same task-brief echo family, so review/recovery lanes stop reusing the scaffold as context
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `recoveryFileWriteDraftRejectReason(...)` now rejects this family with `copied the task brief/instruction scaffold instead of the actual file body`
+  - changed tests:
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go)
+      - added `TestFileWriteRejectsTaskBriefEchoPlaceholderInPlanningDeliverable`
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go)
+      - added `TestFileReadRejectsTaskBriefEchoPlaceholderAtInProgressPlanningDeliverablePath`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestRecoveryFileWriteDraftRejectReasonRejectsTaskBriefEchoPlaceholder`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(FileWriteRejects(TaskBriefEchoPlaceholderInPlanningDeliverable|ReviewerSummaryPlaceholderInPlanningDeliverable)|FileReadRejects(TaskBriefEchoPlaceholderAtInProgressPlanningDeliverablePath|ReviewerSummaryPlaceholderAtInProgressPlanningDeliverablePath|RuntimeAdvanceCompletionSummaryPlaceholderAtInProgressDeliverablePath))$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestRecoveryFileWriteDraftRejectReasonRejects(TaskBriefEchoPlaceholder|ReviewerSummaryPlaceholderInPlanningDeliverable|RuntimeAdvanceCompletionSummaryPlaceholder)$' -count=1`
+  - deploy / proof status:
+    - local and test-green at this checkpoint; fresh live proof is the next step after rebuild/restart

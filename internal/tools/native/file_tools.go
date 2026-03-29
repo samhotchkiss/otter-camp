@@ -180,7 +180,9 @@ func (e *NativeToolExecutor) rejectPlaceholderDeliverableRead(ctx context.Contex
 	if normalizedPath == "" {
 		return nil, false, nil
 	}
-	if !looksLikeRejectedDeliverablePlaceholder(content) && !looksLikeDeliverableCompletionSummaryWithoutBody(normalizedPath, content) {
+	if !looksLikeRejectedDeliverablePlaceholder(content) &&
+		!looksLikeDeliverableCompletionSummaryWithoutBody(normalizedPath, content) &&
+		!looksLikeTaskBriefEchoPlaceholder(normalizedPath, content) {
 		return nil, false, nil
 	}
 	if deliverablePath == "" {
