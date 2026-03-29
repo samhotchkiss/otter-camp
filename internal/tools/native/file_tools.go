@@ -324,29 +324,27 @@ func (e *NativeToolExecutor) allowRecoveryDeliverableRootInspection(ctx context.
 	if rootPath == "" || !workspacePathWithinRoot(targetPath, rootPath) {
 		return false, nil
 	}
+	reviewLane = reviewLane || strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review")
+	if !reviewLane && e.flowNodes != nil && taskRecord.CurrentFlowNodeID != nil && *taskRecord.CurrentFlowNodeID != uuid.Nil {
+		node, nodeErr := e.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
+		if nodeErr != nil && !errors.Is(nodeErr, repo.ErrNotFound) {
+			return false, nodeErr
+		}
+		reviewLane = nodeErr == nil && strings.EqualFold(strings.TrimSpace(node.NodeType), "review")
+	}
 	if checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata); ok {
 		if allow, allowErr := e.allowRecoveryCheckpointArtifactInspectionWhenTrackedOutputsComplete(ctx, taskRecord, checkpoint, normalizedPath, rootPath); allowErr != nil {
 			return false, allowErr
 		} else if allow {
 			return true, nil
 		}
+		if !reviewLane {
+			return false, nil
+		}
 	}
 	if taskAllowsPerItemDeliverableInspection(taskRecord, normalizedPath) ||
 		taskAllowsBatchRecoveryRootInspection(taskRecord, normalizedPath, targetPath) {
 		return true, nil
-	}
-	reviewLane = reviewLane || strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review")
-	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") && !reviewLane {
-		if e.flowNodes != nil && taskRecord.CurrentFlowNodeID != nil && *taskRecord.CurrentFlowNodeID != uuid.Nil {
-			node, nodeErr := e.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
-			if nodeErr != nil && !errors.Is(nodeErr, repo.ErrNotFound) {
-				return false, nodeErr
-			}
-			reviewLane = nodeErr == nil && strings.EqualFold(strings.TrimSpace(node.NodeType), "review")
-		}
-		if !reviewLane {
-			return false, nil
-		}
 	}
 	if !reviewLane {
 		return false, nil
@@ -369,9 +367,6 @@ func (e *NativeToolExecutor) allowRecoveryCheckpointArtifactInspectionWhenTracke
 	candidatePath = normalizeWorkspacePath(candidatePath)
 	if candidatePath == "" {
 		return false, nil
-	}
-	if workspacePathWithinRoot(candidatePath, rootPath) {
-		return true, nil
 	}
 	return contentMigrationCheckpointArtifactPathMatches(checkpoint, candidatePath), nil
 }
@@ -846,6 +841,11 @@ func contentMigrationCheckpointArtifactPathMatches(checkpoint taskcheckpoint.Con
 	}
 	for _, artifact := range checkpoint.Artifacts {
 		if normalizeWorkspacePath(artifact.Path) == candidatePath {
+			return true
+		}
+	}
+	for _, script := range checkpoint.Scripts {
+		if normalizeWorkspacePath(script.Path) == candidatePath {
 			return true
 		}
 	}

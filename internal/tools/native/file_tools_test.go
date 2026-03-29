@@ -384,7 +384,7 @@ func TestFileListAllowsBlockedReviewLaneDeliverableRootInspectionWithinRecoveryT
 	}
 }
 
-func TestFileListAllowsExecutionDeliverableRootInspectionWithinRecoveryTargetRootForBatchTask(t *testing.T) {
+func TestFileListRejectsExecutionDeliverableRootInspectionWithinRecoveryTargetRootForBatchTask(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()
 	projectID := uuid.New()
@@ -403,6 +403,17 @@ func TestFileListAllowsExecutionDeliverableRootInspectionWithinRecoveryTargetRoo
 	}
 
 	description := "Read the first 12 entries (indices 0-11) from content/technonymous-index.json. For each entry, use web_fetch to retrieve the full post HTML from its URL, convert the post body to clean markdown, and write each post as a separate .md file under content/posts/. Use the URL slug as the filename."
+	metadata, err := json.Marshal(map[string]any{
+		"content_migration_checkpoint": taskcheckpoint.ContentMigrationCheckpoint{
+			Outputs: []taskcheckpoint.WorkspaceFile{
+				{Path: targetPath},
+				{Path: "content/posts/discomfort-is-growth.md"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(metadata): %v", err)
+	}
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
 	executor.tasks = &mockTaskRepo{
 		task: repo.ProjectTask{
@@ -411,6 +422,7 @@ func TestFileListAllowsExecutionDeliverableRootInspectionWithinRecoveryTargetRoo
 			ProjectID:      projectID,
 			Title:          "Replacement: Fetch posts 13-24 from technonymous-index.json and save as markdown under content/posts/",
 			Description:    &description,
+			Metadata:       metadata,
 			WorkStatus:     "in_progress",
 		},
 	}
@@ -433,15 +445,15 @@ func TestFileListAllowsExecutionDeliverableRootInspectionWithinRecoveryTargetRoo
 	if err != nil {
 		t.Fatalf("executor.Execute(file.list): %v", err)
 	}
-	if got := out["error"]; got != nil {
-		t.Fatalf("error = %v, want nil", got)
+	if got := out["error"]; got != "recovery_target_focus_required" {
+		t.Fatalf("error = %v, want recovery_target_focus_required", got)
 	}
-	if got := out["total"]; got != 2 {
-		t.Fatalf("total = %v, want 2", got)
+	if got := out["deliverable_path"]; got != targetPath {
+		t.Fatalf("deliverable_path = %v, want %q", got, targetPath)
 	}
 }
 
-func TestFileReadAllowsExecutionSiblingDeliverableInspectionWithinRecoveryTargetRootForBatchTask(t *testing.T) {
+func TestFileReadRejectsExecutionSiblingDeliverableInspectionWithinRecoveryTargetRootForBatchTask(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()
 	projectID := uuid.New()
@@ -461,6 +473,17 @@ func TestFileReadAllowsExecutionSiblingDeliverableInspectionWithinRecoveryTarget
 	}
 
 	description := "Read the first 12 entries (indices 0-11) from content/technonymous-index.json. For each entry, use web_fetch to retrieve the full post HTML from its URL, convert the post body to clean markdown, and write each post as a separate .md file under content/posts/. Use the URL slug as the filename."
+	metadata, err := json.Marshal(map[string]any{
+		"content_migration_checkpoint": taskcheckpoint.ContentMigrationCheckpoint{
+			Outputs: []taskcheckpoint.WorkspaceFile{
+				{Path: targetPath},
+				{Path: siblingPath},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(metadata): %v", err)
+	}
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
 	executor.tasks = &mockTaskRepo{
 		task: repo.ProjectTask{
@@ -469,6 +492,7 @@ func TestFileReadAllowsExecutionSiblingDeliverableInspectionWithinRecoveryTarget
 			ProjectID:      projectID,
 			Title:          "Replacement: Fetch posts 13-24 from technonymous-index.json and save as markdown under content/posts/",
 			Description:    &description,
+			Metadata:       metadata,
 			WorkStatus:     "in_progress",
 		},
 	}
@@ -497,11 +521,11 @@ func TestFileReadAllowsExecutionSiblingDeliverableInspectionWithinRecoveryTarget
 	if err != nil {
 		t.Fatalf("executor.Execute(file.read): %v", err)
 	}
-	if got := out["error"]; got != nil {
-		t.Fatalf("error = %v, out=%v, want nil", got, out)
+	if got := out["error"]; got != "recovery_target_focus_required" {
+		t.Fatalf("error = %v, out=%v, want recovery_target_focus_required", got, out)
 	}
-	if got := out["path"]; got != siblingPath {
-		t.Fatalf("path = %v, want %q", got, siblingPath)
+	if got := out["deliverable_path"]; got != targetPath {
+		t.Fatalf("deliverable_path = %v, want %q", got, targetPath)
 	}
 }
 
