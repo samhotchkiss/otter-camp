@@ -75,6 +75,7 @@ const (
 var explicitDeliverablePathPatternsForWorker = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
+	regexp.MustCompile(`(?i)\b(?:write|create|produce)\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\bsave\s+as\s+([^\s,;]+)`),
 }
 
@@ -83,6 +84,8 @@ var projectContinuationBatchRangePatternForWorker = regexp.MustCompile(`(?i)\bpo
 var preferredDeliverableRootPatternsForWorker = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:under|in)\s+/?((?:content(?:/[A-Za-z0-9._-]+)+)/?)`),
 }
+
+var workspacePathInBackticksPatternForWorker = regexp.MustCompile("`([^`]+)`")
 
 func staleTriggeredTurnThreshold(scopeType string) time.Duration {
 	if strings.EqualFold(strings.TrimSpace(scopeType), "project_task") {
@@ -2852,11 +2855,12 @@ type projectContinuationChildActivityForWorker struct {
 	activeChildTaskCount             int
 	malformedChildTaskCount          int
 	replaceableBlockedChildTaskCount int
+	completedCloseoutChildTaskCount  int
 }
 
 func projectContinuationCountsAsOpenChildTaskForWorker(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "queued", "in_progress", "review", "blocked":
+	case "draft", "queued", "in_progress", "review", "blocked":
 		return true
 	default:
 		return false
@@ -2868,6 +2872,9 @@ func isProjectContinuationActionableDraftTaskForWorker(task repo.ProjectTask, ac
 }
 
 func projectContinuationDraftTaskNeedsFreshReplacementChildWorkForWorker(activity projectContinuationChildActivityForWorker) bool {
+	if projectContinuationDraftTaskReadyForParentClosureForWorker(activity) {
+		return false
+	}
 	if activity.activeChildTaskCount != 0 {
 		return false
 	}
@@ -2877,6 +2884,12 @@ func projectContinuationDraftTaskNeedsFreshReplacementChildWorkForWorker(activit
 	return activity.childTaskCount > 0 &&
 		activity.replaceableBlockedChildTaskCount > 0 &&
 		activity.replaceableBlockedChildTaskCount == activity.childTaskCount
+}
+
+func projectContinuationDraftTaskReadyForParentClosureForWorker(activity projectContinuationChildActivityForWorker) bool {
+	return activity.completedCloseoutChildTaskCount > 0 &&
+		activity.activeChildTaskCount == 0 &&
+		activity.childTaskCount == 0
 }
 
 func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, projectID uuid.UUID) (projectExecutionContinuationSnapshotForWorker, error) {
@@ -2921,6 +2934,15 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 			continue
 		}
 		if isActionableProjectDraftTaskForWorker(task) {
+			if projectContinuationDraftTaskReadyForParentClosureForWorker(activity) {
+				if len(draftTasks) < 4 {
+					draftTasks = append(draftTasks, taskRef)
+				}
+				if focusTask == "" {
+					focusTask = taskRef
+				}
+				continue
+			}
 			if activity.childTaskCount > 0 || activity.malformedChildTaskCount > 0 {
 				if projectContinuationDraftTaskNeedsFreshReplacementChildWorkForWorker(activity) {
 					if len(replacementDraftTasks) < 4 {
@@ -3181,8 +3203,16 @@ func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask, hin
 		if err != nil || parentID == uuid.Nil {
 			continue
 		}
+		parentTask, hasParent := tasksByID[parentID]
+		if hasParent &&
+			strings.EqualFold(strings.TrimSpace(task.WorkStatus), "done") &&
+			projectContinuationChildTaskClosesParentForWorker(task, parentTask, hintsByTask[task.ID], hintsByTask[parentID]) {
+			activity := activityByParentID[parentID]
+			activity.completedCloseoutChildTaskCount++
+			activityByParentID[parentID] = activity
+		}
 		if _, skip := malformedChildTaskIDs[task.ID]; skip {
-			if parentTask, ok := tasksByID[parentID]; ok && projectContinuationParentForbidsDecompositionForWorker(parentTask) {
+			if hasParent && projectContinuationParentForbidsDecompositionForWorker(parentTask) {
 				continue
 			}
 			activity := activityByParentID[parentID]
@@ -3207,6 +3237,55 @@ func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask, hin
 		activityByParentID[parentID] = activity
 	}
 	return activityByParentID
+}
+
+func projectContinuationChildTaskClosesParentForWorker(
+	childTask repo.ProjectTask,
+	parentTask repo.ProjectTask,
+	childHints projectContinuationTaskHintsForWorker,
+	parentHints projectContinuationTaskHintsForWorker,
+) bool {
+	if !strings.EqualFold(strings.TrimSpace(childTask.WorkStatus), "done") {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(childTask.Title))
+	if childTask.Description != nil {
+		if description := strings.ToLower(strings.TrimSpace(*childTask.Description)); description != "" {
+			text += "\n" + description
+		}
+	}
+	hasClosureSignal := strings.Contains(text, "close parent") ||
+		strings.Contains(text, "parent can close") ||
+		strings.Contains(text, "parent can be closed") ||
+		strings.Contains(text, "parent can be closed out") ||
+		strings.Contains(text, "confirms the parent") ||
+		strings.Contains(text, "mark done immediately") ||
+		strings.Contains(text, "delivered")
+	if !hasClosureSignal {
+		return false
+	}
+	parentDeliverablePath := normalizeWorkspaceRelativePathForWorker(parentHints.DeliverablePath)
+	childDeliverablePath := normalizeWorkspaceRelativePathForWorker(childHints.DeliverablePath)
+	if parentDeliverablePath != "" && childDeliverablePath != "" && sameWorkspaceRelativePathForWorker(parentDeliverablePath, childDeliverablePath) {
+		return true
+	}
+	parentDeliverableRoot := normalizeWorkspaceRelativePathForWorker(parentHints.DeliverableRoot)
+	childDeliverableRoot := normalizeWorkspaceRelativePathForWorker(childHints.DeliverableRoot)
+	if parentDeliverableRoot != "" && childDeliverableRoot != "" && sameWorkspaceRelativePathForWorker(parentDeliverableRoot, childDeliverableRoot) {
+		return true
+	}
+	parentDependsOnPath := normalizeWorkspaceRelativePathForWorker(parentHints.DependsOnPath)
+	if parentDependsOnPath != "" {
+		if childDeliverablePath != "" && sameWorkspaceRelativePathForWorker(parentDependsOnPath, childDeliverablePath) {
+			return true
+		}
+		if childDependsOnPath := normalizeWorkspaceRelativePathForWorker(childHints.DependsOnPath); childDependsOnPath != "" &&
+			sameWorkspaceRelativePathForWorker(parentDependsOnPath, childDependsOnPath) {
+			return true
+		}
+	}
+	return strings.Contains(text, fmt.Sprintf("oc-%d", parentTask.TaskNumber)) ||
+		strings.Contains(text, fmt.Sprintf("parent %d", parentTask.TaskNumber))
 }
 
 func projectContinuationMalformedChildTaskIDsForWorker(tasks []repo.ProjectTask) map[uuid.UUID]struct{} {
@@ -3315,6 +3394,9 @@ func projectExecutionContinuationTaskRefForWorker(task repo.ProjectTask, activit
 	if activity.malformedChildTaskCount > 0 {
 		parts = append(parts, "malformed_child_tasks="+strconv.Itoa(activity.malformedChildTaskCount))
 	}
+	if activity.completedCloseoutChildTaskCount > 0 {
+		parts = append(parts, "completed_closeout_child_tasks="+strconv.Itoa(activity.completedCloseoutChildTaskCount))
+	}
 	return strings.Join(parts, " ")
 }
 
@@ -3387,42 +3469,75 @@ func projectContinuationValidationGuardFailureCodeForWorker(metadata json.RawMes
 }
 
 func explicitDeliverablePathForWorker(task repo.ProjectTask) string {
-	if task.Description == nil {
-		return ""
-	}
-	description := strings.TrimSpace(*task.Description)
-	for _, pattern := range explicitDeliverablePathPatternsForWorker {
-		matches := pattern.FindStringSubmatch(description)
-		if len(matches) < 2 {
-			continue
+	for _, description := range taskContractDescriptionCandidatesForWorker(task) {
+		for _, pattern := range explicitDeliverablePathPatternsForWorker {
+			matches := pattern.FindStringSubmatch(description)
+			if len(matches) < 2 {
+				continue
+			}
+			rawCandidate := strings.TrimSpace(matches[1])
+			candidate := normalizeExplicitDeliverablePathCandidateForWorker(rawCandidate)
+			if !looksLikeExplicitDeliverablePathForWorker(candidate, rawCandidate) {
+				continue
+			}
+			return candidate
 		}
-		rawCandidate := strings.TrimSpace(matches[1])
-		candidate := normalizeExplicitDeliverablePathCandidateForWorker(rawCandidate)
-		if !looksLikeExplicitDeliverablePathForWorker(candidate, rawCandidate) {
-			continue
-		}
-		return candidate
 	}
 	return ""
 }
 
 func preferredTaskDeliverableRootForWorker(task repo.ProjectTask) string {
-	if task.Description == nil {
-		return ""
-	}
-	description := strings.TrimSpace(*task.Description)
-	for _, pattern := range preferredDeliverableRootPatternsForWorker {
-		matches := pattern.FindStringSubmatch(description)
-		if len(matches) < 2 {
-			continue
+	for _, description := range taskContractDescriptionCandidatesForWorker(task) {
+		for _, pattern := range preferredDeliverableRootPatternsForWorker {
+			matches := pattern.FindAllStringSubmatch(description, -1)
+			for _, match := range matches {
+				if len(match) < 2 {
+					continue
+				}
+				root := normalizeExplicitDeliverablePathCandidateForWorker(match[1])
+				if !looksLikePreferredDeliverableRootPathForWorker(root) {
+					continue
+				}
+				return root
+			}
 		}
-		root := normalizeExplicitDeliverablePathCandidateForWorker(matches[1])
-		if !looksLikePreferredDeliverableRootPathForWorker(root) {
-			continue
+		for _, match := range workspacePathInBackticksPatternForWorker.FindAllStringSubmatch(description, -1) {
+			if len(match) < 2 {
+				continue
+			}
+			root := normalizeExplicitDeliverablePathCandidateForWorker(match[1])
+			if !looksLikePreferredDeliverableRootPathForWorker(root) {
+				continue
+			}
+			return root
 		}
-		return root
 	}
 	return ""
+}
+
+func taskContractDescriptionCandidatesForWorker(task repo.ProjectTask) []string {
+	candidates := make([]string, 0, 2)
+	appendCandidate := func(raw string) {
+		normalized := strings.TrimSpace(raw)
+		if normalized == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if existing == normalized {
+				return
+			}
+		}
+		candidates = append(candidates, normalized)
+	}
+	if task.Description != nil {
+		appendCandidate(*task.Description)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(task.Metadata, &metadata); err == nil {
+		decomposition, _ := metadata["decomposition"].(map[string]any)
+		appendCandidate(fmt.Sprint(decomposition["source_description"]))
+	}
+	return candidates
 }
 
 func normalizeExplicitDeliverablePathCandidateForWorker(raw string) string {
@@ -3559,6 +3674,10 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 		lines = append(lines, draftLine)
 		lines = append(lines, "Do not begin with broad project.get, task.list, task.get, or flow.get_execution rediscovery when the actionable draft tasks above already identify the remaining bounded work.")
 		lines = append(lines, "If a named draft task above shows assigned_agent_id=missing, flow_template_id=missing, or requires_human_review=true, repair that exact prerequisite before trying to queue it.")
+		if strings.Contains(draftLine, "completed_closeout_child_tasks=") {
+			lines = append(lines, "If a named draft task above already shows completed_closeout_child_tasks=..., use that completed child proof to advance or close the parent instead of creating another replacement child.")
+			lines = append(lines, "When completed child proof and completed-task batch evidence are already present, do not re-verify broad artifact roots on disk before advancing the parent unless a concrete tool error says the artifact is missing.")
+		}
 		if strings.Contains(draftLine, "deliverable_path=") {
 			lines = append(lines, "If a named draft task above already shows deliverable_path=..., inspect or write that exact path instead of reopening broad workspace context.")
 		}
@@ -3580,16 +3699,21 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 	}
 	if focusLine := strings.TrimSpace(snapshot.FocusTaskLine); focusLine != "" {
 		lines = append(lines, focusLine)
+		focusHasCompletedCloseout := strings.Contains(focusLine, "completed_closeout_child_tasks=")
 		if strings.Contains(focusLine, "child_tasks=") && strings.TrimSpace(snapshot.ActiveTaskLine) != "" {
 			lines = append(lines, "If that focus draft already has child tasks and the active-task snapshot above already names those child lanes, do not reread the parent or child task records first. Queue the draft only if it is still runnable as-is, split it directly into smaller reviewable work if bounded-size policy still blocks it, or report one concrete blocker sentence.")
 		}
 		if strings.Contains(focusLine, "deliverable_path=") || strings.Contains(focusLine, "deliverable_root=") || strings.Contains(focusLine, "depends_on_path=") {
 			lines = append(lines, "When the focus task already includes exact deliverable or dependency hints, use those paths directly before any broader workspace search.")
 		}
-		if strings.Contains(focusLine, "replaceable_blocked_child_tasks=") {
+		if focusHasCompletedCloseout {
+			lines = append(lines, "Because that focus parent already has completed closeout child proof, advance or close the parent directly instead of creating another replacement child.")
+			lines = append(lines, "Do not relist `content/posts`, reread sibling batch outputs, or re-verify the same deliverable on disk unless a concrete tool error says the completed artifact is missing.")
+		}
+		if strings.Contains(focusLine, "replaceable_blocked_child_tasks=") && !focusHasCompletedCloseout {
 			lines = append(lines, "Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.")
 		}
-		if strings.Contains(focusLine, "malformed_child_tasks=") {
+		if strings.Contains(focusLine, "malformed_child_tasks=") && !focusHasCompletedCloseout {
 			lines = append(lines, "Because that focus parent only has malformed or stale child artifact lanes, do not queue the parent again from the project lane. Create the smallest fresh replacement child task under it now instead.")
 		}
 	}

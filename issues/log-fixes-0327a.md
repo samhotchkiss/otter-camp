@@ -1985,3 +1985,28 @@
     - `go test ./internal/turn -run 'Test(BuildProjectContinuationActionPrompt(AddsCompletedCloseoutGuidance|AddsReplacementChildGuidanceForMalformedChildren|AddsReplacementChildGuidanceForBlockedParent|AddsChildWorkGuidanceForDecomposedParent)|ProjectExecutionContinuationSnapshot(LiveTask44CompletedCloseoutBeatsReplacementBucket|PrefersDraftChildOverFreshReplacementParent)|ExplicitDeliverablePathFallsBackToDecompositionSourceDescription|PreferredTaskDeliverableRoot(FallsBackToDecompositionSourceDescription|SkipsDependencyArtifactAndUsesOutputRoot))$' -count=1`
   - deploy / proof status:
     - prompt-only slice is ready to deploy; fresh direct production proof will be the next PM continuation after the `3491` rebuild
+- 2026-03-28 21:44:10 MDT - Finished: align worker-authored PM continuation snapshots with the closeout-ready engine snapshot.
+  - live diagnosis:
+    - worker-generated prompt `5594` on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` still treated task `44` as replacement-child work and only surfaced `depends_on_path=content/technonymous-index.json`
+    - engine-generated prompt `5622` for the same task tree already showed task `44` as actionable closeout work with `deliverable_path=content/technonymous-index.json` and `completed_closeout_child_tasks=1`
+    - that mismatch meant worker recovery could reopen the `content/posts` / replacement-child verification loop even after the engine prompt had proven the parent should just close
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - extended worker child-activity accounting with `completedCloseoutChildTaskCount`
+    - added worker-side closeout detection for done child tasks that explicitly prove the parent can close
+    - counted `draft` children as open child work so the worker snapshot matches the engine’s notion of active child lanes
+    - widened deliverable-path/root extraction to fall back to `metadata.decomposition.source_description`
+    - updated worker prompt guidance so closeout-ready focus drafts suppress replacement-child instructions and instead tell the PM lane to advance/close the parent directly
+  - changed [`internal/jobqueue/worker_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_test.go):
+    - added coverage proving worker task hints recover `deliverable_path=content/technonymous-index.json` from decomposition source metadata
+    - added prompt coverage proving worker-built PM prompts include completed-closeout guidance and do not fall back to replacement-child instructions
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added an exact-live-shape snapshot regression where parent task `44`-style closeout proof keeps the parent in the actionable draft bucket instead of the replacement-child bucket
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3496`
+  - verified with:
+    - `go test ./internal/jobqueue -run 'Test(BuildProjectContinuationTaskHintsForWorker(UsesDecompositionSourceDescription|IncludesDeliverableAndDependencyHints)|BuildProjectExecutionContinuationPromptForWorker(IncludesCompletedCloseoutGuidance|IncludesBlockerReuseGuidance|IncludesCompletedBatchSupersessionGuidance))$' -count=1`
+    - `go test ./internal/jobqueue -count=1`
+    - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(ProjectExecutionContinuationSnapshot(TreatsCloseoutReadyParentAsActionableDraft|IgnoresMalformedNoDecomposeChildren|IgnoresMalformedProceduralChildren)|EnsureProjectContinuationMessageSuppressesRepeatedConsumed(RediscoveryBlockedContinuation|ActiveReplacementContinuation|TaskLaneBoundaryContinuation)|RequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailed(RediscoveryBlockedContinuation|BoundedSizeContinuation|ActiveReplacementContinuation|TaskLaneBoundaryContinuation))$' -count=1`
+  - deploy / proof status:
+    - direct live proof landed immediately after the `3496` rebuild: worker-authored prompt `5749` now keeps task `44` in the closeout-ready actionable draft bucket with `deliverable_path=content/technonymous-index.json` and `completed_closeout_child_tasks=1`
+    - the next remaining PM seam is no longer worker prompt drift; the same live turn `56f231cc-f563-4050-9127-9109c2cd1ac6` then hit parent-closeout/active-lane runtime guards instead of replacement-child churn

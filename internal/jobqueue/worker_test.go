@@ -1,6 +1,7 @@
 package jobqueue
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -140,6 +141,46 @@ func TestBuildProjectContinuationTaskHintsForWorkerIncludesDeliverableAndDepende
 	}
 }
 
+func TestBuildProjectContinuationTaskHintsForWorkerUsesDecompositionSourceDescription(t *testing.T) {
+	parentID := uuid.New()
+	childID := uuid.New()
+	parentDescription := "Close the recovered Technonymous index workstream."
+	sourceDescription := "## Deliverable\nA single file: `content/technonymous-index.json`\n\n## Important\nWrite the result to `content/technonymous-index.json`."
+	parentMetadata, err := json.Marshal(map[string]any{
+		"decomposition": map[string]any{
+			"source_description": sourceDescription,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal parent metadata: %v", err)
+	}
+	tasks := []repo.ProjectTask{
+		{
+			ID:          parentID,
+			TaskNumber:  44,
+			Title:       "Produce content/technonymous-index.json by crawling technonymous.org",
+			WorkStatus:  "draft",
+			Description: &parentDescription,
+			Metadata:    parentMetadata,
+		},
+		{
+			ID:         childID,
+			TaskNumber: 75,
+			Title:      "Verify content/technonymous-index.json delivered - close parent OC-44",
+			WorkStatus: "done",
+			Metadata:   []byte(`{"decomposition_parent_task_id":"` + parentID.String() + `"}`),
+		},
+	}
+
+	hints := buildProjectContinuationTaskHintsForWorker(tasks, nil)
+	if got := hints[parentID].DeliverablePath; got != "content/technonymous-index.json" {
+		t.Fatalf("parent deliverable path = %q, want content/technonymous-index.json", got)
+	}
+	if got := hints[childID].DeliverablePath; got != "content/technonymous-index.json" {
+		t.Fatalf("child deliverable path = %q, want inherited content/technonymous-index.json", got)
+	}
+}
+
 func TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompletedBatchSupersessionGuidance(t *testing.T) {
 	prompt := buildProjectExecutionContinuationPromptForWorker(
 		67,
@@ -172,5 +213,27 @@ func TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompletedBatchS
 	}
 	if !strings.Contains(prompt, "Do not create or queue replacement work for a batch_range already listed in the completed-task snapshot above") {
 		t.Fatalf("prompt = %q, want completed batch replacement suppression guidance", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompletedCloseoutGuidance(t *testing.T) {
+	prompt := buildProjectExecutionContinuationPromptForWorker(75, "Verify content/technonymous-index.json delivered - close parent OC-44", 1, projectExecutionContinuationSnapshotForWorker{
+		ProjectLine:       "Active project id: 123",
+		DraftTaskLine:     "Actionable draft tasks already in the tree: task 44 (Produce content/technonymous-index.json by crawling technonymous.org) id=aaa title=\"Produce content/technonymous-index.json by crawling technonymous.org\" work_status=draft deliverable_path=content/technonymous-index.json malformed_child_tasks=3 completed_closeout_child_tasks=1",
+		FocusTaskLine:     "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 44 (Produce content/technonymous-index.json by crawling technonymous.org) id=aaa title=\"Produce content/technonymous-index.json by crawling technonymous.org\" work_status=draft deliverable_path=content/technonymous-index.json malformed_child_tasks=3 completed_closeout_child_tasks=1",
+		CompletedTaskLine: "Recently completed bounded tasks already in the tree: task 75 (Verify content/technonymous-index.json delivered - close parent OC-44) id=bbb work_status=done deliverable_path=content/technonymous-index.json",
+	})
+
+	if !strings.Contains(prompt, "use that completed child proof to advance or close the parent instead of creating another replacement child") {
+		t.Fatalf("prompt = %q, want completed-closeout draft guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Because that focus parent already has completed closeout child proof, advance or close the parent directly instead of creating another replacement child.") {
+		t.Fatalf("prompt = %q, want completed-closeout focus guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not relist `content/posts`, reread sibling batch outputs, or re-verify the same deliverable on disk") {
+		t.Fatalf("prompt = %q, want no re-verification guidance", prompt)
+	}
+	if strings.Contains(prompt, "Create the smallest fresh replacement child task under it now instead.") {
+		t.Fatalf("prompt = %q, should not fall back to malformed-child replacement guidance once closeout proof exists", prompt)
 	}
 }
