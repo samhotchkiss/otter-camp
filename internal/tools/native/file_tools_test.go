@@ -1219,6 +1219,64 @@ func TestFileReadRejectsContentMigrationStatusPlaceholderAtInProgressDeliverable
 	}
 }
 
+func TestFileReadRejectsDeliverableReviewMetaPlaceholderAtInProgressDeliverablePath(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "content/posts/stop-preparing-your-kids-for-jobs.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(content/posts): %v", err)
+	}
+	placeholder := "I've already read the preferred target and it is clearly a mismatched deliverable. " +
+		"The content of `content/posts/stop-preparing-your-kids-for-jobs.md` is not a scraped blog post — " +
+		"it is a fabricated \"review summary\" that pretends the review has already been completed and approved. " +
+		"This is not YAML frontmatter + markdown post body; it is meta-commentary about the review process itself."
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+
+	description := "Read content/technonymous-index.json for the full list of post URLs. For each URL, fetch the page, extract the post title and body, and save markdown under content/posts/. Deliverable: content/posts/"
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Scrape all technonymous.org posts to markdown in content/posts/",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "user",
+				Content:   "Start work on task: Scrape all technonymous.org posts to markdown in content/posts/",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+	if got := out["deliverable_path"]; got != "content/posts" {
+		t.Fatalf("deliverable_path = %v, want content/posts", got)
+	}
+}
+
 func TestFileReadRejectsCheckpointOwnedCombinedReviewSummaryPlaceholder(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

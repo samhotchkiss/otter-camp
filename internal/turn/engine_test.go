@@ -37113,6 +37113,20 @@ func TestRecoveryFileWriteDraftRejectReasonRejectsContentMigrationStatusPlacehol
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReasonRejectsDeliverableReviewMetaPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	content := "I've already read the preferred target and it is clearly a mismatched deliverable. " +
+		"The content of `content/posts/stop-preparing-your-kids-for-jobs.md` is not a scraped blog post — " +
+		"it is a fabricated \"review summary\" that pretends the review has already been completed and approved. " +
+		"This is not YAML frontmatter + markdown post body; it is meta-commentary about the review process itself."
+
+	reason := recoveryFileWriteDraftRejectReason(content, "content/posts/stop-preparing-your-kids-for-jobs.md")
+	if !strings.Contains(reason, "reviewer assessment or rejection commentary") {
+		t.Fatalf("reason = %q, want deliverable-review-meta rejection", reason)
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReasonRejectsContentMigrationTaskScaffoldWithoutBody(t *testing.T) {
 	t.Parallel()
 
@@ -37375,6 +37389,57 @@ This migration plan operationalizes the staged cutover and validation strategy.
 	}
 	if !strings.Contains(draft, "## Executive Summary") {
 		t.Fatalf("draft = %q, want substantive draft", draft)
+	}
+}
+
+func TestRecoveryFileOutputContextIgnoresRejectedFallbackDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	oldTurnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	targetPath := "content/posts/stop-preparing-your-kids-for-jobs.md"
+	placeholder := "I've already read the preferred target and it is clearly a mismatched deliverable. " +
+		"The content of `content/posts/stop-preparing-your-kids-for-jobs.md` is not a scraped blog post — " +
+		"it is a fabricated \"review summary\" that pretends the review has already been completed and approved. " +
+		"This is not YAML frontmatter + markdown post body; it is meta-commentary about the review process itself."
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &oldTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":    targetPath,
+				"content": placeholder,
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	gotPath, draft, ok := fixture.engine.recoveryFileOutputContext(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery file output context")
+	}
+	if gotPath != targetPath {
+		t.Fatalf("targetPath = %q, want %q", gotPath, targetPath)
+	}
+	if draft != "" {
+		t.Fatalf("draft = %q, want rejected workspace draft to be dropped", draft)
 	}
 }
 

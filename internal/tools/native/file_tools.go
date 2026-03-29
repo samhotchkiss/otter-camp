@@ -966,6 +966,9 @@ func looksLikeDeliverableReviewAssessmentPlaceholder(lower string) bool {
 	if lower == "" {
 		return false
 	}
+	if looksLikeDeliverableReviewMetaPlaceholder(lower) {
+		return true
+	}
 	if !containsAnySubstring(lower,
 		"now i have all 12 existing files read",
 		"all 35 files exist in content/posts/",

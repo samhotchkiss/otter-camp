@@ -2401,3 +2401,25 @@
   - deploy / proof status:
     - pre-fix live evidence is task `81` session `2175bbde-f279-4b13-9c23-e418626de537`, where the `3525` runtime had already removed the exact commit-handoff paragraph but still accepted the shorter poisoned status note `missing valid frontmatter ... bad placeholder file I should remove`
     - direct post-`3526` proof target is the next task-81 recovery retry, which should reject both the earlier commit-handoff prose and this narrower status narration at `file.write` / `file.read`
+- 2026-03-29 01:48:48 MDT - Finished locally, queued for deploy: reject deliverable review/meta placeholders and stop reusing rejected fallback drafts.
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - added `looksLikeDeliverableReviewMetaPlaceholder(...)`
+    - `looksLikeReviewerAssessmentInDeliverable(...)` now rejects the task-81 family where a real deliverable path under `content/posts/` contains review/meta commentary like `preferred target`, `mismatched deliverable`, and `fabricated "review summary"`
+    - this closes the native `file.write` hole that still allowed that prose onto disk
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `looksLikeDeliverableReviewAssessmentPlaceholder(...)` now treats that same review/meta commentary as `placeholder_deliverable` on reread
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `looksLikeReviewerAssessmentInDeliverable(...)` now rejects the same task-81 review/meta placeholder family during recovery draft reuse
+    - `recoveryFileOutputContext(...)` now drops rejected workspace / fallback drafts instead of returning them as reusable recovery content
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): added `TestRecoveryFileWriteDraftRejectReasonRejectsDeliverableReviewMetaPlaceholder` and `TestRecoveryFileOutputContextIgnoresRejectedFallbackDraft`
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go): added `TestFileWriteRejectsDeliverableReviewMetaPlaceholderContent`
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go): added `TestFileReadRejectsDeliverableReviewMetaPlaceholderAtInProgressDeliverablePath`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - next runtime version should land as `3527`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(RecoveryFileWriteDraftRejectReasonRejects(DeliverableReviewMetaPlaceholder|ContentMigrationStatusPlaceholder|RuntimeOwnedCommitHandoffPlaceholder)|RecoveryFileOutputContext(IgnoresRejectedFallbackDraft|PrefersOlderSubstantiveReadOverNewerStubPath))$' -count=1`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(FileWriteRejects(DeliverableReviewMetaPlaceholderContent|ContentMigrationStatusPlaceholderContent)|FileReadRejects(DeliverableReviewMetaPlaceholderAtInProgressDeliverablePath|ContentMigrationStatusPlaceholderAtInProgressDeliverablePath))$' -count=1`
+  - deploy / proof status:
+    - pre-fix live evidence is the current task-81 worktree file [`content/posts/stop-preparing-your-kids-for-jobs.md`](/Users/sam/otter-data/task-worktrees/sam-blog-rebuild-restart-12/task-81/content/posts/stop-preparing-your-kids-for-jobs.md), which contains review/meta commentary instead of markdown post content while the parent workspace copy remains healthy
+    - direct post-`3527` proof target is the next task-81 retry: `file.write` should reject this review/meta prose, `file.read` should return `placeholder_deliverable`, and recovery reuse should not surface the poisoned draft as fallback context

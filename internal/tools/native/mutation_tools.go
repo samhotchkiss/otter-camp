@@ -499,6 +499,9 @@ func looksLikeReviewerAssessmentInDeliverable(path, content string) bool {
 	}
 	lower := strings.ToLower(trimmed)
 	normalizedPath := strings.ToLower(normalizeWorkspacePath(path))
+	if looksLikeDeliverableReviewMetaPlaceholder(lower) {
+		return true
+	}
 	if strings.HasPrefix(normalizedPath, "planning/") ||
 		strings.HasPrefix(normalizedPath, "review/") ||
 		strings.HasPrefix(normalizedPath, "reviews/") ||
@@ -560,6 +563,30 @@ func looksLikeReviewerAssessmentInDeliverable(path, content string) bool {
 		"further rejection cycles are unlikely",
 		"work file content |",
 		"core deliverable (",
+	)
+}
+
+func looksLikeDeliverableReviewMetaPlaceholder(lower string) bool {
+	if lower == "" {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"mismatched deliverable",
+		"fabricated \"review summary\"",
+		"fabricated 'review summary'",
+		"fabricated review summary",
+		"not yaml frontmatter + markdown post body",
+		"not a scraped blog post",
+		"meta-commentary about the review process itself",
+	) {
+		return false
+	}
+	return containsAnySubstring(lower,
+		"preferred target",
+		"pretends the review has already been completed and approved",
+		"review has already been completed and approved",
+		"review process itself",
+		"review summary",
 	)
 }
 

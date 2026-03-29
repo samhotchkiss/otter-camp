@@ -19540,7 +19540,10 @@ func (e *TurnEngine) recoveryFileOutputContext(ctx context.Context, rt *turnRunt
 	if taskRecord, ok := e.recoveryCheckpointTaskRecord(ctx, rt); ok {
 		if targetPath := strings.TrimSpace(e.sessionTaskDeliverablePath(ctx, rt.session.ID, taskRecord)); targetPath != "" {
 			if draft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath); found {
-				return targetPath, draft, true
+				if strings.TrimSpace(recoveryFileWriteDraftRejectReason(draft, targetPath)) == "" {
+					return targetPath, draft, true
+				}
+				return targetPath, "", true
 			}
 			return targetPath, "", true
 		}
@@ -19548,11 +19551,16 @@ func (e *TurnEngine) recoveryFileOutputContext(ctx context.Context, rt *turnRunt
 	if checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt); ok {
 		if targetPath := strings.TrimSpace(checkpoint.TargetPath); targetPath != "" {
 			if draft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath); found {
-				return targetPath, draft, true
+				if strings.TrimSpace(recoveryFileWriteDraftRejectReason(draft, targetPath)) == "" {
+					return targetPath, draft, true
+				}
 			}
 			if artifactPath := strings.TrimSpace(checkpoint.ArtifactPath); artifactPath != "" {
 				if draft, found := e.readRecoveryWorkspaceText(ctx, rt, artifactPath); found {
-					return targetPath, recoveryArtifactDraftContent(draft), true
+					artifactDraft := recoveryArtifactDraftContent(draft)
+					if strings.TrimSpace(artifactDraft) != "" && strings.TrimSpace(recoveryFileWriteDraftRejectReason(artifactDraft, targetPath)) == "" {
+						return targetPath, artifactDraft, true
+					}
 				}
 			}
 			return targetPath, "", true
@@ -19606,14 +19614,16 @@ func (e *TurnEngine) recoveryFileOutputContext(ctx context.Context, rt *turnRunt
 				}
 				if fallbackPath == "" {
 					fallbackPath = targetPath
-					fallbackDraft = workspaceDraft
+					fallbackDraft = ""
 				}
 				continue
 			}
 		}
 		if fallbackPath == "" {
 			fallbackPath = targetPath
-			fallbackDraft = draft
+			if strings.TrimSpace(recoveryFileWriteDraftRejectReason(draft, targetPath)) == "" {
+				fallbackDraft = draft
+			}
 		}
 	}
 	if fallbackPath != "" {
@@ -21765,6 +21775,9 @@ func looksLikeReviewerAssessmentInDeliverable(targetPath, content string) bool {
 		return false
 	}
 	lower := strings.ToLower(trimmed)
+	if looksLikeDeliverableReviewMetaPlaceholder(lower) {
+		return true
+	}
 	if strings.HasPrefix(path, "planning/") ||
 		strings.HasPrefix(path, "review/") ||
 		strings.HasPrefix(path, "reviews/") ||
@@ -21831,6 +21844,30 @@ func looksLikeReviewerAssessmentInDeliverable(targetPath, content string) bool {
 		"deliverable does not match the task's scope",
 		"using this evidence",
 		"this is a stop condition",
+	)
+}
+
+func looksLikeDeliverableReviewMetaPlaceholder(lower string) bool {
+	if lower == "" {
+		return false
+	}
+	if !containsAny(lower,
+		"mismatched deliverable",
+		"fabricated \"review summary\"",
+		"fabricated 'review summary'",
+		"fabricated review summary",
+		"not yaml frontmatter + markdown post body",
+		"not a scraped blog post",
+		"meta-commentary about the review process itself",
+	) {
+		return false
+	}
+	return containsAny(lower,
+		"preferred target",
+		"pretends the review has already been completed and approved",
+		"review has already been completed and approved",
+		"review process itself",
+		"review summary",
 	)
 }
 
