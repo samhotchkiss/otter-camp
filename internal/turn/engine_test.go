@@ -13829,6 +13829,149 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesMissingDependency
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnKeepsBoundedSizeContextWhenFocusedDeliverableIsMissing(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	boundedTaskID := uuid.New()
+	turnID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	boundedDescription := "Write the Editorial Longform layout to templates/template-08-replace.html for Sam.blog."
+	completedTask := repo.ProjectTask{
+		ID:         completedTaskID,
+		ProjectID:  projectID,
+		TaskNumber: 55,
+		Title:      "Scrape all 35 technonymous.org posts to markdown using web_fetch",
+		WorkStatus: "done",
+	}
+	boundedTask := repo.ProjectTask{
+		ID:              boundedTaskID,
+		ProjectID:       projectID,
+		TaskNumber:      84,
+		Title:           "Build HTML layout template 8 of 10 (Editorial Longform) — replacement for blocked OC-43/OC-38",
+		Description:     &boundedDescription,
+		WorkStatus:      "draft",
+		AssignedAgentID: uuidPtr(uuid.New()),
+		FlowTemplateID:  uuidPtr(uuid.New()),
+	}
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: completedTask,
+			boundedTaskID:   boundedTask,
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	latestUser := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content: buildProjectExecutionContinuationBoundedSizeRetryPrompt(
+			completedTask,
+			1,
+			projectExecutionContinuationSnapshot{ProjectLine: "Active project id: " + projectID.String()},
+			boundedTask,
+			projectContinuationChildActivity{},
+			projectContinuationTaskHints{DeliverablePath: "templates/template-08-replace.html"},
+		),
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "I should confirm whether templates/template-08-replace.html already exists before I split the parent.",
+		SequenceNumber: 11,
+	}
+	toolResult := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "tool_result",
+		Status:         "final",
+		Content:        `{"tool_name":"file.read","output":{"error":"not_found"}}`,
+		SequenceNumber: 12,
+	}
+	systemMessage := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "system",
+		Status:         "final",
+		Content:        "[Project continuation found that prerequisite artifact `templates/template-08-replace.html` is still missing. Queue or advance the smallest replacement task that produces it instead of browsing external sources or writing the file from the project session.]",
+		SequenceNumber: 13,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant, *toolResult, *systemMessage}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected focused missing deliverable stop to preserve bounded-size retry context")
+	}
+	if len(fixture.enqueuer.jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1", len(fixture.enqueuer.jobs))
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var retryMessage *repo.ChatMessage
+	for i := range storedMessages {
+		msg := &storedMessages[i]
+		if msg.ID == fixture.enqueuer.jobs[0].payload.MessageID {
+			retryMessage = msg
+			break
+		}
+	}
+	if retryMessage == nil {
+		t.Fatal("missing appended bounded-size missing-deliverable retry message")
+	}
+	if !strings.Contains(retryMessage.Content, "still too broad to queue as-is") {
+		t.Fatalf("retry message = %q, want bounded-size retry guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "Do not treat that missing deliverable as a separate prerequisite artifact") {
+		t.Fatalf("retry message = %q, want missing-deliverable bounded-size guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "split task 84") {
+		t.Fatalf("retry message = %q, want direct split guidance", retryMessage.Content)
+	}
+	if strings.Contains(retryMessage.Content, "must create, queue, or advance the smallest bounded replacement task") {
+		t.Fatalf("retry message = %q, want bounded-size guidance instead of generic missing-dependency coaching", retryMessage.Content)
+	}
+	updatedTask, err := taskRepo.GetByID(context.Background(), boundedTaskID)
+	if err != nil {
+		t.Fatalf("GetByID bounded task: %v", err)
+	}
+	if updatedTask.WorkStatus != "draft" {
+		t.Fatalf("bounded task work_status = %q, want draft", updatedTask.WorkStatus)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnSkipsMissingDependencyRetryWhenActiveReplacementExists(t *testing.T) {
 	t.Parallel()
 

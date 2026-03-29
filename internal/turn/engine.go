@@ -5042,6 +5042,47 @@ func (e *TurnEngine) retryProjectExecutionContinuationForMissingDependency(
 		)
 		return true, nil
 	}
+	if focusTask, focusActivity, focusHints, ok := projectContinuationBoundedSizeMissingDeliverableFocusTask(projectTasks, taskHintsByTask, strings.TrimSpace(latestUser.Content), missingPath); ok {
+		remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
+		if err != nil {
+			return false, err
+		}
+		snapshot, err := e.projectExecutionContinuationSnapshotForSummary(ctx, session.ScopeID, strings.TrimSpace(latestUser.Content))
+		if err != nil {
+			return false, err
+		}
+		agentID := latestCompleted.RespondingID
+		retryPrompt := buildProjectExecutionContinuationBoundedSizeMissingDeliverableRetryPrompt(
+			completedTask,
+			remainingDraftTasks,
+			snapshot,
+			focusTask,
+			focusActivity,
+			focusHints,
+			missingPath,
+		)
+		retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+		if err != nil {
+			return false, err
+		}
+		if retryMessage == nil {
+			return true, nil
+		}
+		nextPayload := AgentTurnPayload{
+			SessionID:  session.ID,
+			MessageID:  retryMessage.ID,
+			RetryCount: latestCompleted.RetryCount + 1,
+		}
+		if agentID != uuid.Nil {
+			nextPayload.AgentID = &agentID
+		}
+		runAfter := e.now().Add(defaultAutoContinueDelay).UTC()
+		enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+		if err != nil {
+			return false, err
+		}
+		return enqueued, nil
+	}
 	if nextTask, ok, err := e.nextRunnableDraftProjectTaskForPriorityPaths(ctx, session.ScopeID, singleProjectContinuationPriorityPath(missingPath)); err != nil {
 		return false, err
 	} else if ok {
@@ -5577,6 +5618,33 @@ func buildProjectExecutionContinuationBoundedSizeRetryPrompt(
 	if focusTask.ID != uuid.Nil {
 		retryPrompt += fmt.Sprintf(" Your next assistant action must split %s into smaller reviewable child tasks now, or queue an already-bounded direct child if one already exists unchanged. If you must inspect child lanes first, use only task.list(parent_task_id=%s).", focusLabel, focusTask.ID.String())
 	}
+	return retryPrompt
+}
+
+func buildProjectExecutionContinuationBoundedSizeMissingDeliverableRetryPrompt(
+	completedTask repo.ProjectTask,
+	remainingDraftTasks int,
+	snapshot projectExecutionContinuationSnapshot,
+	focusTask repo.ProjectTask,
+	focusActivity projectContinuationChildActivity,
+	focusHints projectContinuationTaskHints,
+	missingPath string,
+) string {
+	retryPrompt := buildProjectExecutionContinuationBoundedSizeRetryPrompt(
+		completedTask,
+		remainingDraftTasks,
+		snapshot,
+		focusTask,
+		focusActivity,
+		focusHints,
+	)
+	focusLabel := projectBootstrapTaskLabel(focusTask)
+	if normalized := normalizeWorkspaceRelativePath(missingPath); normalized != "" {
+		retryPrompt += fmt.Sprintf(" The exact deliverable `%s` is still missing because %s has not been split and executed yet.", normalized, focusLabel)
+	} else {
+		retryPrompt += fmt.Sprintf(" The exact deliverable for %s is still missing because that broad parent has not been split and executed yet.", focusLabel)
+	}
+	retryPrompt += fmt.Sprintf(" Do not treat that missing deliverable as a separate prerequisite artifact, do not reread it from the project lane, and do not try to queue %s again until you split it into smaller child tasks.", focusLabel)
 	return retryPrompt
 }
 
@@ -8798,6 +8866,42 @@ func (e *TurnEngine) projectContinuationBoundedSizeFocusTask(
 		return repo.ProjectTask{}, false, nil
 	}
 	return focusTask, true, nil
+}
+
+func projectContinuationPromptIsBoundedSizeRetry(content string) bool {
+	lower := strings.ToLower(strings.TrimSpace(content))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "still too broad to queue as-is") &&
+		strings.Contains(lower, "split task") &&
+		strings.Contains(lower, "smaller reviewable child tasks")
+}
+
+func projectContinuationBoundedSizeMissingDeliverableFocusTask(
+	projectTasks []repo.ProjectTask,
+	taskHintsByTask map[uuid.UUID]projectContinuationTaskHints,
+	latestUserContent string,
+	missingPath string,
+) (repo.ProjectTask, projectContinuationChildActivity, projectContinuationTaskHints, bool) {
+	if !projectContinuationPromptIsBoundedSizeRetry(latestUserContent) {
+		return repo.ProjectTask{}, projectContinuationChildActivity{}, projectContinuationTaskHints{}, false
+	}
+	normalizedMissingPath := normalizeWorkspaceRelativePath(missingPath)
+	if normalizedMissingPath == "" {
+		return repo.ProjectTask{}, projectContinuationChildActivity{}, projectContinuationTaskHints{}, false
+	}
+	priorityPaths := projectContinuationPriorityPathsFromText(strings.TrimSpace(latestUserContent))
+	focusTask, ok := projectContinuationCurrentFocusTask(projectTasks, taskHintsByTask, priorityPaths)
+	if !ok || !strings.EqualFold(strings.TrimSpace(focusTask.WorkStatus), "draft") {
+		return repo.ProjectTask{}, projectContinuationChildActivity{}, projectContinuationTaskHints{}, false
+	}
+	focusHints := taskHintsByTask[focusTask.ID]
+	if normalizeWorkspaceRelativePath(focusHints.DeliverablePath) != normalizedMissingPath {
+		return repo.ProjectTask{}, projectContinuationChildActivity{}, projectContinuationTaskHints{}, false
+	}
+	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
+	return focusTask, childActivity[focusTask.ID], focusHints, true
 }
 
 func (e *TurnEngine) HandleUserMessage(ctx context.Context, sessionID, messageID uuid.UUID) error {
