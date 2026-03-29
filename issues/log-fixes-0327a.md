@@ -1812,3 +1812,20 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildRecoveryResumeActionPrompt(HardensIntentOnlyCheckpointWithoutDraft|NoDraftContentPostTargetRequiresSourceBody|ForTrackedContentMigrationOutputsPrefersCheckpointContext)|LoadRecoveryResumeState(RejectsContentMigration(CheckpointSummaryDraft|RecoveryNoteDraft|TaskScaffoldSummaryDraft)|PrefersCheckpointContextForTrackedContentMigrationOutputs))$' -count=1`
   - proof target after deploy:
     - the next task-70 recovery turn should treat `content/posts/i-cant-picture-my-kids.md` as already-written batch context and start from checkpoint-owned `content/posts` / `content/technonymous-index.json` instead of trying to rewrite that same file again
+- 2026-03-28 19:03:38 MDT - Finished: let checkpoint-context recovery turns keep writes anywhere under the bounded deliverable root.
+  - live diagnosis:
+    - post-`3472` task-70 recovery did pivot the prompt correctly and immediately used checkpoint-owned `content/posts` plus `content/technonymous-index.json`
+    - but the same live turn still rewrote an early `file.write` back onto `content/posts/i-cant-picture-my-kids.md` before fetching the seven thin posts, which proved recovery-turn file-write canonicalization was still single-target even when the checkpoint context was authoritative
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `recoveryAllowsBatchWriteWithinPreferredDeliverableRoot(...)`
+    - `handleTaskFileWriteWrongPath(...)` now skips recovery-time path rewrites for multi-output content-migration tasks when checkpoint context is preferred and the attempted write stays inside the preferred deliverable root
+    - `handleRecoveryRejectedFileWriteContent(...)` now also skips canonicalizing same-root batch writes back onto the explicit recovery target in that same checkpoint-context mode
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added focused recovery-root write tests for both `handleTaskFileWriteWrongPath(...)` and `handleRecoveryRejectedFileWriteContent(...)`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3473`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleRecoveryRejectedFileWriteContent(AllowsCheckpointContextBatchWriteWithinPreferredRoot|CanonicalizesWrongPathBeforeDraftReplacement)|HandleTaskFileWriteWrongPath(AllowsBatchWritesWithinPreferredDeliverableRoot|AllowsRecoveryBatchWritesWithinPreferredDeliverableRootWhenCheckpointContextPreferred|PrefersRecoveryTargetDuringRecoveryTurn)|BuildRecoveryResumeActionPrompt(ForTrackedContentMigrationOutputsPrefersCheckpointContext)|LoadRecoveryResumeState(PrefersCheckpointContextForTrackedContentMigrationOutputs))$' -count=1`
+  - proof target after deploy:
+    - the next task-70 recovery retry should keep writes like `content/posts/stop-preparing-your-kids-for-jobs.md` under `content/posts/` instead of collapsing them back to `content/posts/i-cant-picture-my-kids.md`

@@ -34577,6 +34577,109 @@ Verify that well-formed speaker records are accepted and stored correctly.
 	}
 }
 
+func TestHandleRecoveryRejectedFileWriteContentAllowsCheckpointContextBatchWriteWithinPreferredRoot(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	dataDir := t.TempDir()
+	projectSlug := "content-migration-batch-recovery"
+	orgSlug := "default"
+	description := "Read the first 12 entries (indices 0-11) from content/technonymous-index.json. For each entry, use web_fetch to retrieve the full post HTML from its URL, convert the post body to clean markdown, and write each post as a separate .md file under content/posts/. Use the URL slug as the filename."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:             taskID,
+			ProjectID:      projectID,
+			OrganizationID: fixture.session.OrganizationID,
+			TaskNumber:     70,
+			Title:          "Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/",
+			Description:    &description,
+			WorkStatus:     "blocked",
+			Metadata: mustRawJSON(t, map[string]any{
+				"content_migration_checkpoint": map[string]any{
+					"version": 1,
+					"artifacts": []map[string]any{
+						{"path": "content/technonymous-index.json"},
+					},
+					"outputs": []map[string]any{
+						{"path": "content/posts/i-cant-picture-my-kids.md"},
+						{"path": "content/posts/the-year-the-phone-started-talking.md"},
+					},
+				},
+				"recovery_file_write_checkpoint": map[string]any{
+					"version":        1,
+					"blocker_class":  "durable_recovery_checkpoint",
+					"target_path":    "content/posts/i-cant-picture-my-kids.md",
+					"failure_reason": "repeated read-only recovery discovery for content/technonymous-index.json within the same recovery turn; write the deliverable or resume from the durable artifact instead of rereading context again",
+				},
+			}),
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	projectRoot := filepath.Join(dataDir, "workspaces", projectSlug)
+	if err := os.MkdirAll(filepath.Join(projectRoot, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("mkdir content/posts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "content", "posts", "i-cant-picture-my-kids.md"), []byte("# I Can't Picture My Kids\n\nExisting content.\n"), 0o644); err != nil {
+		t.Fatalf("write target output: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "content", "posts", "the-year-the-phone-started-talking.md"), []byte("# The Year the Phone Started Talking\n\nExisting content.\n"), 0o644); err != nil {
+		t.Fatalf("write sibling output: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "content", "technonymous-index.json"), []byte("{\"post_urls\":[]}"), 0o644); err != nil {
+		t.Fatalf("write checkpoint artifact: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn:       true,
+		recoveryTargetPath: "content/posts/i-cant-picture-my-kids.md",
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    "content/posts/stop-preparing-your-kids-for-jobs.md",
+			"content": "# Stop Preparing Your Kids for Jobs\n\nReal article body.\n",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleRecoveryRejectedFileWriteContent(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleRecoveryRejectedFileWriteContent: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["path"]); got != "content/posts/stop-preparing-your-kids-for-jobs.md" {
+		t.Fatalf("path = %q, want unchanged preferred-root batch write", got)
+	}
+	if got := stringValue(call.Arguments["content"]); got != "# Stop Preparing Your Kids for Jobs\n\nReal article body." {
+		t.Fatalf("content = %q, want unchanged substantive content", got)
+	}
+	if _, exists := call.Arguments["create_dirs"]; exists {
+		t.Fatalf("create_dirs = %v, want absent when canonical rewrite is skipped", call.Arguments["create_dirs"])
+	}
+}
+
 func TestHandleTaskFileWriteWrongPathPrefersSessionDeliverableTargetOverInferredReportPath(t *testing.T) {
 	t.Parallel()
 
@@ -34702,6 +34805,99 @@ func TestHandleTaskFileWriteWrongPathAllowsBatchWritesWithinPreferredDeliverable
 	}
 	if got := stringValue(call.Arguments["path"]); got != "content/posts/discomfort-is-growth.md" {
 		t.Fatalf("path = %q, want unchanged batch deliverable-root write", got)
+	}
+	if _, exists := call.Arguments["create_dirs"]; exists {
+		t.Fatalf("create_dirs = %v, want absent when rewrite is skipped", call.Arguments["create_dirs"])
+	}
+}
+
+func TestHandleTaskFileWriteWrongPathAllowsRecoveryBatchWritesWithinPreferredDeliverableRootWhenCheckpointContextPreferred(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	projectSlug := "content-migration-batch-recovery"
+	description := "Read content/technonymous-index.json. For each of the first 12 URLs in the post_urls array (indices 0-11), use web_fetch to retrieve the page content, then save the article text as clean markdown files under content/posts/.\n\nDeliverable: 12 markdown files in content/posts/."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.dataDir = t.TempDir()
+
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:             taskID,
+			OrganizationID: fixture.session.OrganizationID,
+			ProjectID:      projectID,
+			TaskNumber:     70,
+			Title:          "Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/",
+			Description:    &description,
+			WorkStatus:     "blocked",
+			Metadata: mustRawJSON(t, map[string]any{
+				"content_migration_checkpoint": map[string]any{
+					"version": 1,
+					"artifacts": []map[string]any{
+						{"path": "content/technonymous-index.json"},
+					},
+					"outputs": []map[string]any{
+						{"path": "content/posts/i-cant-picture-my-kids.md"},
+						{"path": "content/posts/the-year-the-phone-started-talking.md"},
+					},
+				},
+			}),
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: "default"},
+	}}
+
+	projectRoot := filepath.Join(fixture.engine.dataDir, "workspaces", projectSlug)
+	if err := os.MkdirAll(filepath.Join(projectRoot, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("mkdir content/posts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "content", "posts", "i-cant-picture-my-kids.md"), []byte("# I Can't Picture My Kids\n\nExisting content.\n"), 0o644); err != nil {
+		t.Fatalf("write target output: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "content", "posts", "the-year-the-phone-started-talking.md"), []byte("# The Year the Phone Started Talking\n\nExisting content.\n"), 0o644); err != nil {
+		t.Fatalf("write sibling output: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "content", "technonymous-index.json"), []byte("{\"post_urls\":[]}"), 0o644); err != nil {
+		t.Fatalf("write checkpoint artifact: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn:       true,
+		recoveryTargetPath: "content/posts/i-cant-picture-my-kids.md",
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    "content/posts/stop-preparing-your-kids-for-jobs.md",
+			"content": "# Stop Preparing Your Kids for Jobs\n\nReal article body.\n",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWrongPath(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWrongPath: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["path"]); got != "content/posts/stop-preparing-your-kids-for-jobs.md" {
+		t.Fatalf("path = %q, want unchanged recovery batch deliverable-root write", got)
 	}
 	if _, exists := call.Arguments["create_dirs"]; exists {
 		t.Fatalf("create_dirs = %v, want absent when rewrite is skipped", call.Arguments["create_dirs"])

@@ -15023,14 +15023,20 @@ func (e *TurnEngine) handleRecoveryRejectedFileWriteContent(ctx context.Context,
 	if !ok {
 		return false, false, nil
 	}
-	if canonicalTarget := strings.TrimSpace(e.recoverySynthesizedFileWriteTargetPath(ctx, rt)); canonicalTarget != "" &&
-		!sameWorkspaceRelativePath(normalizeWorkspaceRelativePath(targetPath), canonicalTarget) {
-		targetPath = canonicalTarget
-		normalized["path"] = canonicalTarget
-		if _, exists := normalized["create_dirs"]; !exists {
-			normalized["create_dirs"] = true
+	allowBatchWriteWithinRoot := false
+	if taskRecord, taskOK := e.recoveryCheckpointTaskRecord(ctx, rt); taskOK {
+		allowBatchWriteWithinRoot = e.recoveryAllowsBatchWriteWithinPreferredDeliverableRoot(ctx, rt, taskRecord, targetPath)
+	}
+	if !allowBatchWriteWithinRoot {
+		if canonicalTarget := strings.TrimSpace(e.recoverySynthesizedFileWriteTargetPath(ctx, rt)); canonicalTarget != "" &&
+			!sameWorkspaceRelativePath(normalizeWorkspaceRelativePath(targetPath), canonicalTarget) {
+			targetPath = canonicalTarget
+			normalized["path"] = canonicalTarget
+			if _, exists := normalized["create_dirs"]; !exists {
+				normalized["create_dirs"] = true
+			}
+			call.Arguments = normalized
 		}
-		call.Arguments = normalized
 	}
 
 	rejectReason := recoveryFileWriteDraftRejectReason(draft, targetPath)
@@ -15337,7 +15343,11 @@ func (e *TurnEngine) handleTaskFileWriteWrongPath(ctx context.Context, rt *turnR
 	if attemptedPath == "" {
 		return false, false, nil
 	}
-	if !rt.recoveryTurn {
+	if rt.recoveryTurn {
+		if e.recoveryAllowsBatchWriteWithinPreferredDeliverableRoot(ctx, rt, taskRecord, attemptedPath) {
+			return false, false, nil
+		}
+	} else {
 		preferredRoot := normalizeTurnWorkspacePath(preferredTaskDeliverableRoot(taskRecord))
 		if preferredRoot != "" &&
 			taskAllowsWritesWithinPreferredDeliverableRoot(taskRecord) &&
@@ -15433,6 +15443,22 @@ func taskAllowsWritesWithinPreferredDeliverableRoot(taskRecord repo.ProjectTask)
 	}
 	return strings.Contains(text, "for each") &&
 		containsAny(text, "markdown files", "save each", "save the markdown files", "under "+strings.ToLower(root), "in "+strings.ToLower(root))
+}
+
+func (e *TurnEngine) recoveryAllowsBatchWriteWithinPreferredDeliverableRoot(ctx context.Context, rt *turnRuntime, taskRecord repo.ProjectTask, attemptedPath string) bool {
+	if e == nil || rt == nil || !rt.recoveryTurn {
+		return false
+	}
+	attemptedPath = normalizeTurnWorkspacePath(attemptedPath)
+	if attemptedPath == "" || !taskAllowsWritesWithinPreferredDeliverableRoot(taskRecord) {
+		return false
+	}
+	preferredRoot := normalizeTurnWorkspacePath(preferredTaskDeliverableRoot(taskRecord))
+	if preferredRoot == "" || !sameOrNestedTurnWorkspacePath(attemptedPath, preferredRoot) {
+		return false
+	}
+	_, _, preferCheckpointContext := e.contentMigrationCheckpointResumeContext(ctx, rt, taskRecord)
+	return preferCheckpointContext
 }
 
 func classifyTaskFileArtifactFamily(value string) string {
