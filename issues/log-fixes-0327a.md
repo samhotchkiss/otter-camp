@@ -2053,3 +2053,30 @@
     - runtime rebuilt/restarted cleanly on `repo_version=3499`; health is `ok`
     - the hot PM session is now drained (`0` pending `project_execution_continuation`, `0` pending/claimed `agent_turn` jobs), but the clean same-family canary is mixed because several task-76 PM turns were already in motion while the slice was landing
     - the next remaining seam is narrower and sits in the turn-engine action path itself: once the prompt already names `resume_policy=resume_review_decision`, the PM lane still spends a blocked tool hop rereading the named task instead of converting that snapshot directly into the correct review-lane action
+- 2026-03-28 22:29:45 MDT - Finished: mirror same-completed-task PM wait-state suppression inside the turn engine retry path.
+  - live diagnosis:
+    - after the worker-side `3499` fix, the remaining duplicate-continuation risk moved into [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go): `appendProjectExecutionContinuationMessage(...)` still called [`shouldSuppressRepeatedProjectExecutionContinuation(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) with exact-fingerprint logic only
+    - that meant engine-origin generic or missing-dependency PM retries could still rearm a new `project_execution_continuation` when the same completed task was already waiting on active child work and the earlier PM turn had already ended with:
+      - `[Project continuation successfully handed off the focused replacement child work ...]`
+      - `[Project continuation resumed blocked review lane ... flow.review_decision ...]`
+    - the worker fix alone could not cover that path because the engine retry happens before the worker decides whether to synthesize another continuation row
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added engine-local prefix constants for the successful-handoff and blocked-review-resume system messages
+    - added `projectContinuationSnapshotWaitsOnActiveChildWork(...)`
+    - widened [`shouldSuppressRepeatedProjectExecutionContinuation(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so it now:
+      - loads the current project session snapshot and actionable draft count
+      - detects the PM wait state `remainingDraftTasks == 0`, no actionable/replacement/focus draft lines, and a non-empty `ChildActiveDraftLine`
+      - suppresses another same-completed-task continuation when the latest terminal prior PM turn already ended with a successful-handoff or review-lane-resume system message, even if the current continuation fingerprint changed
+    - kept the older exact-fingerprint validation-loop suppression unchanged for rediscovery / missing-dependency / task-lane-boundary repeats
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldSuppressRepeatedProjectExecutionContinuationAfterChildLaneWaitState`
+    - covered both wait-state prefixes: successful handoff and blocked review-lane resume
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3501`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `go test ./internal/turn -run 'Test(ShouldSuppressRepeatedProjectExecutionContinuationAfterChildLaneWaitState|HandleCompletedProjectExecutionContinuationTurnSuppressesRepeated(RediscoveryBlockedRetry|MissingDependencyRetry)|HandleCompletedProjectExecutionContinuationTurnRetries(GenericReplyWithFreshMessage|ReplacementChildWorkWithFreshMessage|MissingDependencyStopWithFreshMessage))$' -count=1`
+  - deploy / proof status:
+    - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and health is `ok` on `repo_version=3501` (`request_id=936923f4-4279-4282-a9c6-0fa60e531797`)
+    - the hot PM session is currently drained again (`0` pending `project_execution_continuation`, `0` pending/claimed `agent_turn` jobs), so fresh direct production proof for this exact engine path still depends on the next natural PM continuation wakeup
+    - the remaining PM seam is now smaller and more local: after the prompt already names `resume_policy=resume_review_decision`, the live PM turn still spends one blocked `task.get` / `task.list` hop before the completion handler performs the correct runtime resume

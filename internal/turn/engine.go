@@ -192,6 +192,8 @@ const reviewRepeatedFileReadNotFoundTurnStopSubstring = "[Repeated identical fil
 const projectContinuationRediscoveryGuardPrefix = "[Project continuation rediscovery guard blocked only broad rereads."
 const projectContinuationMissingDependencyGuardPrefix = "[Project continuation found that prerequisite artifact `"
 const projectContinuationTaskLaneBoundaryGuardPrefix = "[Project continuation found that task-owned active lane work must stay inside its project_task session."
+const projectContinuationSuccessfulHandoffPrefix = "[Project continuation successfully handed off the focused replacement child work."
+const projectContinuationReviewLaneResumePrefix = "[Project continuation resumed blocked review lane "
 
 var errTurnBranchAttachedToMainWorktree = errors.New("branch attached to main worktree")
 
@@ -7481,6 +7483,24 @@ func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx cont
 	if e == nil || e.messages == nil || e.chat == nil || sessionID == uuid.Nil || strings.TrimSpace(fingerprint) == "" {
 		return false, nil
 	}
+	allowSuccessfulHandoffSuppression := false
+	if completedTaskID != uuid.Nil {
+		session, err := e.chat.GetSession(ctx, sessionID)
+		if err != nil {
+			return false, err
+		}
+		if session != nil && strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") && session.ScopeID != uuid.Nil {
+			remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
+			if err != nil {
+				return false, err
+			}
+			snapshot, err := e.projectExecutionContinuationSnapshot(ctx, session.ScopeID)
+			if err != nil {
+				return false, err
+			}
+			allowSuccessfulHandoffSuppression = projectContinuationSnapshotWaitsOnActiveChildWork(remainingDraftTasks, snapshot)
+		}
+	}
 	messages, err := e.messages.ListBySession(ctx, sessionID)
 	if err != nil {
 		return false, err
@@ -7494,9 +7514,6 @@ func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx cont
 		if !strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), projectExecutionContinuationSource) {
 			continue
 		}
-		if strings.TrimSpace(stringValue(metadata["continuation_snapshot_fingerprint"])) != strings.TrimSpace(fingerprint) {
-			continue
-		}
 		priorCompletedTaskID, _ := parseUUIDAny(metadata["completed_task_id"])
 		if completedTaskID != uuid.Nil && priorCompletedTaskID != completedTaskID {
 			continue
@@ -7506,6 +7523,21 @@ func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx cont
 		}
 		turn, getErr := e.chat.GetTurn(ctx, *message.TurnID)
 		if getErr != nil || turn == nil || !isTerminalTurnStatus(turn.Status) {
+			continue
+		}
+		if allowSuccessfulHandoffSuppression && completedTaskID != uuid.Nil {
+			for _, turnMessage := range messagesForTurn(messages, *message.TurnID) {
+				if !strings.EqualFold(strings.TrimSpace(turnMessage.Role), "system") {
+					continue
+				}
+				trimmed := strings.TrimSpace(turnMessage.Content)
+				if strings.HasPrefix(trimmed, projectContinuationSuccessfulHandoffPrefix) ||
+					strings.HasPrefix(trimmed, projectContinuationReviewLaneResumePrefix) {
+					return true, nil
+				}
+			}
+		}
+		if strings.TrimSpace(stringValue(metadata["continuation_snapshot_fingerprint"])) != strings.TrimSpace(fingerprint) {
 			continue
 		}
 		if turn.StopReason == nil || !strings.EqualFold(strings.TrimSpace(*turn.StopReason), "validation_loop_blocked") {
@@ -18360,6 +18392,22 @@ type projectExecutionContinuationSnapshot struct {
 	ReplacementDraftLine string
 	ChildActiveDraftLine string
 	FocusTaskLine        string
+}
+
+func projectContinuationSnapshotWaitsOnActiveChildWork(remainingDraftTasks int, snapshot projectExecutionContinuationSnapshot) bool {
+	if remainingDraftTasks != 0 {
+		return false
+	}
+	if strings.TrimSpace(snapshot.DraftTaskLine) != "" {
+		return false
+	}
+	if strings.TrimSpace(snapshot.ReplacementDraftLine) != "" {
+		return false
+	}
+	if strings.TrimSpace(snapshot.FocusTaskLine) != "" {
+		return false
+	}
+	return strings.TrimSpace(snapshot.ChildActiveDraftLine) != ""
 }
 
 type projectContinuationTaskHints struct {

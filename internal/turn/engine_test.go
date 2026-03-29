@@ -13452,6 +13452,137 @@ func TestHandleCompletedProjectExecutionContinuationTurnSuppressesRepeatedMissin
 	}
 }
 
+func TestShouldSuppressRepeatedProjectExecutionContinuationAfterChildLaneWaitState(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name         string
+		systemPrefix string
+	}{
+		{
+			name:         "successful handoff",
+			systemPrefix: "[Project continuation successfully handed off the focused replacement child work. Ending this turn now so the new task lane can run instead of spending more PM tools re-checking the same handoff.]",
+		},
+		{
+			name:         "review lane resume",
+			systemPrefix: "[Project continuation resumed blocked review lane task 78 so it can complete flow.review_decision instead of creating replacement work.]",
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			projectID := uuid.New()
+			completedTaskID := uuid.New()
+			parentDraftTaskID := uuid.New()
+			childTaskID := uuid.New()
+			uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+			fixture := newUnitFixture(t, "async")
+			fixture.session.ScopeType = "project"
+			fixture.session.ScopeID = projectID
+
+			taskRepo := &fakeTaskRepo{
+				items: map[uuid.UUID]repo.ProjectTask{
+					completedTaskID: {
+						ID:              completedTaskID,
+						ProjectID:       projectID,
+						TaskNumber:      76,
+						Title:           "Fetch posts 25-35",
+						WorkStatus:      "done",
+						AssignedAgentID: uuidPtr(uuid.New()),
+						FlowTemplateID:  uuidPtr(uuid.New()),
+					},
+					parentDraftTaskID: {
+						ID:              parentDraftTaskID,
+						ProjectID:       projectID,
+						TaskNumber:      34,
+						Title:           "Close parent after child review",
+						WorkStatus:      "draft",
+						AssignedAgentID: uuidPtr(uuid.New()),
+						FlowTemplateID:  uuidPtr(uuid.New()),
+					},
+					childTaskID: {
+						ID:              childTaskID,
+						ProjectID:       projectID,
+						TaskNumber:      78,
+						Title:           "Review fetched child output",
+						WorkStatus:      "review",
+						AssignedAgentID: uuidPtr(uuid.New()),
+						FlowTemplateID:  uuidPtr(uuid.New()),
+						Metadata: mustJSONRaw(map[string]any{
+							"decomposition_parent_task_id": parentDraftTaskID.String(),
+						}),
+					},
+				},
+			}
+			fixture.engine.tasks = taskRepo
+
+			remainingDraftTasks, err := fixture.engine.countProjectDraftTasks(ctx, projectID)
+			if err != nil {
+				t.Fatalf("countProjectDraftTasks: %v", err)
+			}
+			if remainingDraftTasks != 0 {
+				t.Fatalf("remainingDraftTasks = %d, want 0", remainingDraftTasks)
+			}
+			snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(ctx, projectID)
+			if err != nil {
+				t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+			}
+			if strings.TrimSpace(snapshot.ChildActiveDraftLine) == "" {
+				t.Fatalf("snapshot.ChildActiveDraftLine = %q, want non-empty", snapshot.ChildActiveDraftLine)
+			}
+			retryPrompt := buildProjectExecutionContinuationPrompt(taskRepo.items[completedTaskID], remainingDraftTasks, snapshot) +
+				" Your last continuation turn returned a generic non-action reply instead of advancing the project." +
+				" Do not ask which function to call, do not offer to format JSON or tool calls, and do not ask the user for more parameters." +
+				" Your next assistant action must either emit the concrete tool calls that advance the project or report one concrete blocker sentence."
+			fingerprint := projectExecutionContinuationPromptFingerprint(completedTaskID, retryPrompt)
+
+			priorTurn, err := fixture.chat.CreateTurn(ctx, fixture.session.ID, fixture.chat.participants[0].ParticipantID)
+			if err != nil {
+				t.Fatalf("CreateTurn prior: %v", err)
+			}
+			if err := fixture.chat.StartTurn(ctx, priorTurn.ID); err != nil {
+				t.Fatalf("StartTurn prior: %v", err)
+			}
+			if err := fixture.chat.CompleteTurn(ctx, priorTurn.ID); err != nil {
+				t.Fatalf("CompleteTurn prior: %v", err)
+			}
+			fixture.messages.create(repo.ChatMessage{
+				SessionID: fixture.session.ID,
+				TurnID:    &priorTurn.ID,
+				Role:      "user",
+				Status:    "completed",
+				Content:   "Continue the active project execution now.",
+				Metadata: mustJSONRaw(map[string]any{
+					"source":                            projectExecutionContinuationSource,
+					"auto_continue":                     true,
+					"completed_task_id":                 completedTaskID.String(),
+					"continuation_snapshot_fingerprint": "older-fingerprint",
+				}),
+			})
+			fixture.messages.create(repo.ChatMessage{
+				SessionID: fixture.session.ID,
+				TurnID:    &priorTurn.ID,
+				Role:      "system",
+				Status:    "final",
+				Content:   tc.systemPrefix,
+			})
+
+			suppress, err := fixture.engine.shouldSuppressRepeatedProjectExecutionContinuation(ctx, fixture.session.ID, completedTaskID, fingerprint)
+			if err != nil {
+				t.Fatalf("shouldSuppressRepeatedProjectExecutionContinuation: %v", err)
+			}
+			if !suppress {
+				t.Fatal("expected same-completed-task child-lane wait state to suppress repeated continuation despite changed fingerprint")
+			}
+		})
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnRetriesDependencyErrorCoachingReplyWithFreshMessage(t *testing.T) {
 	t.Parallel()
 
