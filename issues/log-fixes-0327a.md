@@ -3219,3 +3219,14 @@
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(EnsureProjectContinuationMessage(AllowsRetryAfterProgressWithinBlockedTurn|SuppressesRepeatedConsumedRediscoveryBlockedContinuation)|RequeueActiveProjectSessionsWithoutTurns(AllowsRetryAfterProgressWithinBlockedTurn|SuppressesRepeatedFailedRediscoveryBlockedContinuation))$' -count=1`
   - deploy / proof status:
     - ready to deploy next; live canary is the next PM continuation family that blocks after a successful `task.update`, `task.create`, or `flow.review_decision`
+- 2026-03-29 11:20 MDT - Added a PM supervisory stop for rereads of terminally blocked leaf-task deliverables.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `projectContinuationPromptTerminalBlockedDeliverablePathPattern` plus [`projectContinuationPromptTerminalBlockedDeliverablePaths(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) to recover exact `deliverable_path=...` values from prompt entries that also carry `work_status=blocked` and `resume_policy=terminal_keep_blocked`
+    - [`shouldBlockProjectContinuationSnapshotRediscoveryTool(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now blocks `file.read` on those exact blocked-leaf deliverables and returns a focused PM stop message instead of allowing the reread
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksTerminalBlockedLeafDeliverableRead`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShouldBlockProjectContinuationSnapshotRediscoveryTool(BlocksActiveDeliverableRead|BlocksTerminalBlockedLeafDeliverableRead|BlocksCompanionPlanningArtifactRead)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; the live canary is Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where the old `task.list` guard + `file.read planning/sambot-feature-spec.md` sequence should collapse to the first guard only

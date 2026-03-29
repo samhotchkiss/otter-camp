@@ -177,6 +177,7 @@ var projectContinuationPromptTaskIDPattern = regexp.MustCompile(`id=([0-9a-fA-F-
 var projectContinuationPromptLeafTaskIDPattern = regexp.MustCompile(`leaf_task_id=([0-9a-fA-F-]{36})`)
 var projectContinuationPromptDependencyPathPattern = regexp.MustCompile(`(?:depends_on_path|deliverable_path)=([^\s]+)`)
 var projectContinuationPromptLiveDeliverablePathPattern = regexp.MustCompile(`(?s)work_status=(?:in_progress|review).*?deliverable_path=([^\s]+)`)
+var projectContinuationPromptTerminalBlockedDeliverablePathPattern = regexp.MustCompile(`(?s)work_status=blocked.*?deliverable_path=([^\s]+).*?resume_policy=terminal_keep_blocked`)
 var projectContinuationBatchRangePattern = regexp.MustCompile(`(?i)\bposts?\s+(\d{1,3})\s*[–-]\s*(\d{1,3})\b`)
 var projectContinuationCompletedBatchRangePattern = regexp.MustCompile(`\bThat completed task covers batch_range=([0-9]{1,3}-[0-9]{1,3})\b`)
 var projectContinuationWorkspacePathPattern = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\b`)
@@ -31216,6 +31217,11 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 				return true, buildProjectExecutionContinuationActiveDeliverableReadStopMessage(path)
 			}
 		}
+		if blockedDeliverables := projectContinuationPromptTerminalBlockedDeliverablePaths(initialMessage); len(blockedDeliverables) > 0 {
+			if _, ok := blockedDeliverables[path]; ok {
+				return true, buildProjectContinuationTerminalBlockedDeliverableReadGuardError(path)
+			}
+		}
 		completedBatchRange := projectContinuationCompletedBatchRangeFromPrompt(initialMessage)
 		if completedBatchRange == "" {
 			planningTargets := projectContinuationPromptPlanningTargetPaths(initialMessage)
@@ -31298,6 +31304,28 @@ func projectContinuationPromptLeafTaskIDs(initialMessage string) map[uuid.UUID]s
 
 func projectContinuationPromptLiveDeliverablePaths(initialMessage string) map[string]struct{} {
 	matches := projectContinuationPromptLiveDeliverablePathPattern.FindAllStringSubmatch(initialMessage, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	paths := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		if len(match) != 2 {
+			continue
+		}
+		path := normalizeWorkspaceRelativePath(strings.TrimSpace(match[1]))
+		if path == "" {
+			continue
+		}
+		paths[path] = struct{}{}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	return paths
+}
+
+func projectContinuationPromptTerminalBlockedDeliverablePaths(initialMessage string) map[string]struct{} {
+	matches := projectContinuationPromptTerminalBlockedDeliverablePathPattern.FindAllStringSubmatch(initialMessage, -1)
 	if len(matches) == 0 {
 		return nil
 	}
@@ -31432,6 +31460,14 @@ func buildProjectContinuationCompanionPlanningArtifactGuardError(targetPaths []s
 
 func buildProjectContinuationSnapshotFlowExecutionGuardError() string {
 	return "project continuation already has named active or draft tasks in the continuation prompt and no concrete flow_node_execution_id was named as the blocker. Do not probe flow.get_execution from the project lane first; act on the named task directly or advance the correct task execution lane."
+}
+
+func buildProjectContinuationTerminalBlockedDeliverableReadGuardError(path string) string {
+	normalized := normalizeWorkspaceRelativePath(path)
+	if normalized == "" {
+		normalized = strings.TrimSpace(path)
+	}
+	return fmt.Sprintf("project continuation already named terminally blocked task-owned deliverable `%s` in the continuation prompt. Do not reread that blocked deliverable from the project lane; keep the blocked lane blocked and create the smallest replacement, closeout, or parent-update action instead.", normalized)
 }
 
 func shouldBlockProjectContinuationDependencyFocusedExternalTool(rt *turnRuntime, toolName string) (bool, string) {

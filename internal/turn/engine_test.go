@@ -23760,6 +23760,41 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksActiveDelive
 	}
 }
 
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksTerminalBlockedLeafDeliverableRead(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	blockedLeafID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Continue the active project execution now.", projectExecutionContinuationSnapshot{
+			ProjectLine: "Active project id: " + projectID.String(),
+			ActiveTaskLine: strings.Join([]string{
+				"Already-active non-terminal tasks in the tree:",
+				`task 129 (Append "Overview & Purpose" section) id=` + blockedLeafID.String() + ` title="Append Overview & Purpose" work_status=blocked deliverable_path=planning/sambot-feature-spec.md assigned_agent_id=worker-1 resume_policy=terminal_keep_blocked blocker="flow rejection max visits exceeded"`,
+			}, " "),
+			LeafActiveTaskLine: "Active leaf tasks already have no child tasks to inspect: task 129 (Append Overview & Purpose) leaf_task_id=" + blockedLeafID.String(),
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "file.read", map[string]any{
+		"path": "planning/sambot-feature-spec.md",
+	})
+	if !blocked {
+		t.Fatal("expected PM file.read on terminally blocked leaf deliverable path to be blocked")
+	}
+	if !strings.Contains(reason, "terminally blocked task-owned deliverable") || !strings.Contains(reason, "planning/sambot-feature-spec.md") {
+		t.Fatalf("reason = %q, want blocked-deliverable guidance", reason)
+	}
+	if !strings.Contains(reason, "keep the blocked lane blocked") {
+		t.Fatalf("reason = %q, want blocked-lane guidance", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksCompanionPlanningArtifactRead(t *testing.T) {
 	t.Parallel()
 

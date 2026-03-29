@@ -34,6 +34,12 @@ They need sharper stopping rules than ordinary execution lanes.
 
 ### Working Notes
 
+- 2026-03-29 11:20 MDT - Fresh live PM proof on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`: continuation prompt `8369` already named only terminally blocked leaf tasks owning `planning/sambot-feature-spec.md` and explicitly said to leave `resume_policy=terminal_keep_blocked` lanes blocked, but the same PM turn still issued `file.read planning/sambot-feature-spec.md` (`8372`) after the broader `task.list` rediscovery guard had already fired at `8371`.
+- 2026-03-29 11:20 MDT - Picked up the next stop-condition slice in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go): project continuations should treat deliverable reads for terminally blocked leaf-task paths as supervisory stop candidates, not as legitimate PM inspection.
+- 2026-03-29 11:20 MDT - Initial implementation plan:
+  - parse `work_status=blocked ... deliverable_path=... resume_policy=terminal_keep_blocked` paths from the continuation prompt
+  - block `file.read` on those exact deliverables from the PM lane
+  - steer the PM lane toward replacement / closeout / parent-update actions instead of rereading the blocked leaf deliverable
 - 2026-03-29 05:46 MDT - The next explicit stop refinement is the task-recovery analogue of the same supervisory problem: once the runtime has already forced “write the file body or report one blocker sentence,” the turn still should not get a second blocked rediscovery hop in the same batch.
 - 2026-03-29 05:46 MDT - Fresh live proof before the follow-on stop: task `85` session `324f566b-751b-4d09-915f-f821abbfd37a` hit turns `43-44` with the new direct-write guard already active at messages `336` / `296` (`recovery_direct_write_required` on `planning/prd-spec/oc-34-prd.md` or the target file itself), but the same assistant batch still also spent one more blocked `file.list templates` hop (`337` / `297`) before the turn finally ended on the older repeated-focus stop (`338` / `298`).
 - 2026-03-29 05:46 MDT - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now treats direct-write-only recovery as a full blocked-batch stop family instead of only a per-tool guard:
