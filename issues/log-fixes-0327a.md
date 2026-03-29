@@ -2521,3 +2521,16 @@
     - pre-fix live SQL still showed only three lingering drafts (`39`, `55`, `58`) with no pending/claimed PM `agent_turn` jobs for session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`
     - fresh post-`3534` continuation message `67cc224a-267a-46d3-9aa1-51b609515efa` no longer includes tasks `39`, `55`, or `58` anywhere in the snapshot
     - the new PM snapshot instead starts from genuinely actionable blocked tasks `81`, `78`, `77`, and `71`, which proves stale duplicate drafts are no longer driving PM continuation focus
+- 2026-03-29 03:31:29 MDT - Finished and live-proven: stop ghost PM recovery counts after suppressed continuation decisions.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - [`RequeueActiveProjectSessionsWithoutTurns(...)`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) no longer increments `repaired` when `ensureProjectContinuationMessageDecision(...)` suppresses the continuation or returns `uuid.Nil`
+    - the same path now skips stale `project_bootstrap` fallthrough when no replacement continuation message is emitted, instead of treating that retired root like dispatchable PM work
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - widened the repeated-failed continuation suppression cluster so pure suppression/no-message cases now assert `repaired == 0`
+  - verified with:
+    - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailed(RediscoveryBlockedContinuation|BoundedSizeContinuation|ActiveReplacementContinuation|SuccessfulHandoffContinuation|ReviewLaneResumeContinuation|TaskLaneBoundaryContinuation)$' -count=1`
+    - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324` with `.env` exported, and `./bin/ottercamp health --output json` returned `status=ok`
+  - deploy / proof status:
+    - on `repo_version=3535`, worker startup still correctly logged `requeued active project sessions missing continuation on startup count=1` and created continuation message `50c6dc47-ae50-4a2e-97ea-fa9ae04c7ffe`
+    - PM turn `e4ecee9b-b599-4d8c-947b-3990b248c0e8` completed, that new continuation message failed, and SQL showed `jobs|0` for session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`
+    - unlike the pre-fix `3534` run, the worker log never emitted a follow-on `requeued active project sessions without turns count=1`, which proves the ghost repair-count path is gone

@@ -21338,8 +21338,8 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFail
 	if err != nil {
 		t.Fatalf("RequeueActiveProjectSessionsWithoutTurns: %v", err)
 	}
-	if repaired != 1 {
-		t.Fatalf("repaired = %d, want 1", repaired)
+	if repaired != 0 {
+		t.Fatalf("repaired = %d, want 0 after suppression without requeue", repaired)
 	}
 
 	var (
@@ -21552,8 +21552,8 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsRefreshesRediscoveryBl
 	if err != nil {
 		t.Fatalf("RequeueActiveProjectSessionsWithoutTurns: %v", err)
 	}
-	if repaired != 1 {
-		t.Fatalf("repaired = %d, want 1", repaired)
+	if repaired != 0 {
+		t.Fatalf("repaired = %d, want 0 after suppression without requeue", repaired)
 	}
 
 	var (
@@ -21793,8 +21793,8 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFail
 	if err != nil {
 		t.Fatalf("RequeueActiveProjectSessionsWithoutTurns: %v", err)
 	}
-	if repaired != 1 {
-		t.Fatalf("repaired = %d, want 1", repaired)
+	if repaired != 0 {
+		t.Fatalf("repaired = %d, want 0 after suppression without requeue", repaired)
 	}
 
 	var (
@@ -22008,8 +22008,8 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFail
 	if err != nil {
 		t.Fatalf("RequeueActiveProjectSessionsWithoutTurns: %v", err)
 	}
-	if repaired != 1 {
-		t.Fatalf("repaired = %d, want 1", repaired)
+	if repaired != 0 {
+		t.Fatalf("repaired = %d, want 0 after suppression without requeue", repaired)
 	}
 
 	var (
@@ -22257,8 +22257,8 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFail
 	if err != nil {
 		t.Fatalf("RequeueActiveProjectSessionsWithoutTurns: %v", err)
 	}
-	if repaired != 1 {
-		t.Fatalf("repaired = %d, want 1", repaired)
+	if repaired != 0 {
+		t.Fatalf("repaired = %d, want 0 after suppression without requeue", repaired)
 	}
 
 	var (
@@ -22511,8 +22511,8 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFail
 	if err != nil {
 		t.Fatalf("RequeueActiveProjectSessionsWithoutTurns: %v", err)
 	}
-	if repaired != 1 {
-		t.Fatalf("repaired = %d, want 1", repaired)
+	if repaired != 0 {
+		t.Fatalf("repaired = %d, want 0 after suppression without requeue", repaired)
 	}
 
 	var (
@@ -22726,8 +22726,8 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFail
 	if err != nil {
 		t.Fatalf("RequeueActiveProjectSessionsWithoutTurns: %v", err)
 	}
-	if repaired != 1 {
-		t.Fatalf("repaired = %d, want 1", repaired)
+	if repaired != 0 {
+		t.Fatalf("repaired = %d, want 0 after suppression without requeue", repaired)
 	}
 
 	var (

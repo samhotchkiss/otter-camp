@@ -1980,11 +1980,9 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 					return repaired, fmt.Errorf("refresh project continuation after resume for session %s: %w", sessionID, err)
 				}
 				if suppressed {
-					repaired++
 					continue
 				}
 				if synthMessageID == uuid.Nil {
-					repaired++
 					continue
 				}
 				messageID = synthMessageID
@@ -2002,7 +2000,9 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 				return repaired, fmt.Errorf("ensure project continuation message for session %s: %w", sessionID, err)
 			}
 			if suppressed {
-				repaired++
+				continue
+			}
+			if synthMessageID == uuid.Nil && strings.EqualFold(trimmedSource, "project_bootstrap") {
 				continue
 			}
 			if synthMessageID != uuid.Nil {
