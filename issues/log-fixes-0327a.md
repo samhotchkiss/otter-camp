@@ -3442,3 +3442,14 @@
     - task `165` stopped reopening and its active sessions closed
     - PM continuation turn `ddd2f2c4-a4e2-474c-b9bf-2a59e1169e70` then cancelled stale replacement parent `154` plus blocked children `164-167` by relying on completed task `158`'s existing `planning/sambot-example-conversations.md`
     - the example-conversations replacement churn family is now drained; remaining PM work has moved on to task `157`
+- 2026-03-29 14:19 MDT - Hardened PM rediscovery guards for planning-root browsing.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - project continuations now block `file.list(path=planning)` when the continuation prompt already names planning deliverable path(s), matching the existing companion-planning `file.read` guard
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksPlanningRootBrowseWhenPlanningTargetsNamed`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocks(CompanionPlanningArtifactRead|PlanningRootBrowseWhenPlanningTargetsNamed)|HandleToolValidationResultsBlocksRecoveryMissingInheritedSharedDeliverable|DispatchToolsStopsAfterSecondSingleBlockedProjectContinuationRediscoveryInSameTurn)$' -count=1`
+  - deploy / proof status:
+    - deployed on the current local runtime after rebuild/restart
+    - fresh live proof is still pending because the next PM canary turn `fa05f520-df52-4b32-bffa-c954b7b9bb60` is currently stalled in an in-flight model invocation before any tool calls on the new binary

@@ -24522,6 +24522,37 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksCompanionPla
 	}
 }
 
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksPlanningRootBrowseWhenPlanningTargetsNamed(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	draftTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Continue the active project execution now.", projectExecutionContinuationSnapshot{
+			ProjectLine:   "Active project id: " + projectID.String(),
+			DraftTaskLine: `Actionable draft tasks already in the tree: task 90 (Write SamBot architecture) id=` + draftTaskID.String() + ` title="Write SamBot architecture" work_status=draft deliverable_path=planning/sambot-architecture.md depends_on_path=planning/sambot-feature-spec.md`,
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "file.list", map[string]any{
+		"path": "planning",
+	})
+	if !blocked {
+		t.Fatal("expected planning root browse to be blocked when the continuation prompt already names planning deliverable paths")
+	}
+	if !strings.Contains(reason, "planning/sambot-architecture.md") {
+		t.Fatalf("reason = %q, want named planning deliverable path", reason)
+	}
+	if !strings.Contains(reason, "Do not browse the planning root") {
+		t.Fatalf("reason = %q, want planning-root browse guidance", reason)
+	}
+}
+
 func TestShouldNotBlockProjectContinuationSnapshotRediscoveryToolForPrimaryPlanningDeliverableRead(t *testing.T) {
 	t.Parallel()
 

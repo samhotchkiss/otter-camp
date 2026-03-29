@@ -179,3 +179,15 @@ They need sharper stopping rules than ordinary execution lanes.
   - post-deploy live proof:
     - task `165` is no longer relaunching; it settled out of the active lane and then the PM continuation cancelled stale tasks `164-167` and replacement parent `154`
     - current project state after that cleanup: `158 done`, `154 cancelled`, `164-167 cancelled`, with PM continuation moving on to the remaining architecture parent `157`
+- 2026-03-29 14:19 MDT - Follow-on PM rediscovery hardening is locally deployed and test-green: project continuations now block `file.list(path=planning)` when the continuation prompt already names the relevant planning deliverable path(s).
+  - motivation:
+    - fresh PM turn `c788dd5c-2726-4896-a6df-784a8589c422` spent its remaining tool budget on blocked named-`task.get`s plus a `planning/` browse after the continuation already named `planning/sambot-architecture.md` and `planning/sambot-feature-spec.md`
+    - that meant the existing broad-rediscovery guard fired only after extra planning-root rereads instead of converting the batch into an earlier pure blocked rediscovery stop
+  - local change:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now treats `file.list(path=planning)` the same way it already treats companion planning `file.read`s when the continuation prompt already names the planning targets
+    - widened [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) with `TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksPlanningRootBrowseWhenPlanningTargetsNamed`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocks(CompanionPlanningArtifactRead|PlanningRootBrowseWhenPlanningTargetsNamed)|HandleToolValidationResultsBlocksRecoveryMissingInheritedSharedDeliverable|DispatchToolsStopsAfterSecondSingleBlockedProjectContinuationRediscoveryInSameTurn)$' -count=1`
+  - deploy / proof status:
+    - deployed on the current local runtime after rebuild/restart
+    - direct live proof is still pending because the next PM canary turn `fa05f520-df52-4b32-bffa-c954b7b9bb60` is currently stuck in a long-running in-flight provider invocation before it has emitted any tool calls on the new binary

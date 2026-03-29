@@ -31993,6 +31993,10 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 		if path == "" || path == "." {
 			return true, buildProjectContinuationSnapshotArtifactBrowseGuardError(path)
 		}
+		planningTargets := projectContinuationPromptPlanningTargetPaths(initialMessage)
+		if sameWorkspaceRelativePath(path, "planning") && len(planningTargets) > 0 {
+			return true, buildProjectContinuationPlanningRootBrowseGuardError(planningTargets)
+		}
 		if !shouldBlockProjectContinuationSnapshotArtifactBrowse(path, arguments) {
 			return false, ""
 		}
@@ -32246,6 +32250,13 @@ func buildProjectContinuationCompanionPlanningArtifactGuardError(targetPaths []s
 		return fmt.Sprintf("project continuation already has the primary planning deliverable in the continuation prompt. Do not inspect companion planning artifact `%s` now; use the current deliverable evidence to issue task.update or the smallest bounded replacement-task action instead.", normalized)
 	}
 	return fmt.Sprintf("project continuation already has planning deliverable path(s) %s in the continuation prompt. Do not inspect companion planning artifact `%s` now; use the current deliverable evidence to issue task.update or the smallest bounded replacement-task action instead.", strings.Join(targetPaths, ", "), normalized)
+}
+
+func buildProjectContinuationPlanningRootBrowseGuardError(targetPaths []string) string {
+	if len(targetPaths) == 0 {
+		return "project continuation already has the relevant planning deliverable path in the continuation prompt. Do not browse the planning root now; use the current deliverable evidence to issue task.update or the smallest bounded replacement-task action instead."
+	}
+	return fmt.Sprintf("project continuation already has planning deliverable path(s) %s in the continuation prompt. Do not browse the planning root now; use the current deliverable evidence to issue task.update or the smallest bounded replacement-task action instead.", strings.Join(targetPaths, ", "))
 }
 
 func buildProjectContinuationSnapshotFlowExecutionGuardError() string {

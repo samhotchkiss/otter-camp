@@ -504,3 +504,12 @@
   - resolved live after deploy:
     - task `165` no longer relaunches
     - the PM lane was able to cancel stale replacement family tasks `154` and `164-167`, proving the blocked child session was the real suppressor
+- 2026-03-29 14:19 MDT - PM continuations still allowed planning-root rereads even when the exact planning targets were already named in the continuation prompt.
+  - fresh live evidence:
+    - PM turn `c788dd5c-2726-4896-a6df-784a8589c422` already had `planning/sambot-architecture.md` / `planning/sambot-feature-spec.md` in prompt context
+    - after blocked named-`task.get` rereads, the lane still spent a tool on `file.list(path=planning)` before the turn budget ran out
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) blocked companion planning `file.read`s from PM continuations but still allowed planning-root `file.list` browsing
+  - impact:
+    - PM turns can remain mixed rediscovery batches instead of collapsing into the earlier pure blocked-rediscovery stop
+    - that wastes the remaining tool budget on planning-root listing after the real next step is already named
