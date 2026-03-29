@@ -3252,3 +3252,18 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterBlockedProjectContinuationRediscovery|TrimBlockedProjectContinuationRediscoveryResultsKeepsMinimumEvidence|DispatchToolsStopsAfterPureBlockedProjectContinuationRediscoveryBatch|DispatchToolsTrimsPureBlockedProjectContinuationRediscoveryBatch|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksTerminalBlockedLeafDeliverableRead)$' -count=1`
   - deploy / proof status:
     - ready to deploy next; live canary remains the Sam.blog PM session, where longer pure blocked `task.get` rediscovery batches should now collapse to the minimum blocked evidence plus the existing stop message
+- 2026-03-29 11:49 MDT - Fixed explicit deliverable inference so long parent descriptions beat bare-title tokens like `SamBot`.
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go) and [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - widened the `write|create|produce ... to PATH` explicit-deliverable regex window from `80` to `240` characters
+    - this lets the real parent-task path `planning/sambot-feature-spec.md` match before the weaker leading-verb fallback can misclassify the bare title token `SamBot`
+  - changed tests:
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go)
+      - added `TestParseExplicitDeliverablePathPrefersLongDescriptionPathOverBareTitleToken`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestExplicitDeliverablePathPrefersLongDescriptionPathOverBareTitleToken`
+      - added `TestSessionTaskDeliverablePathInheritsLongDescriptionParentPathOverBareTitleToken`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(ParseExplicitDeliverablePath(PrefersLongDescriptionPathOverBareTitleToken|RejectsNonPathOutputAdjective|DetectsAppendTargetPath|UsesTitleWhenDescriptionStartsWithInputRead|PrefersDescriptionAppendTargetOverSlashTitle))$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ExplicitDeliverablePath(PrefersLongDescriptionPathOverBareTitleToken|FallsBackToDecompositionSourceDescription|DetectsDirectVerbPathWithoutPreposition|DetectsAppendTargetPath|UsesTitleWhenDescriptionStartsWithInputRead)|SessionTaskDeliverablePath(InheritsLongDescriptionParentPathOverBareTitleToken|InheritsParentExplicitDeliverableForDecomposedChild))$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; live canaries are active task sessions `c6bfa4ef-6f7c-4186-8014-3a620f065f96` and `8ca97cf6-f0ef-4ad3-ab53-b6e23f35a20f`, which should stop targeting bare `SamBot` after restart

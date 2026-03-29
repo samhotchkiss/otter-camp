@@ -1749,6 +1749,21 @@ func TestParseExplicitDeliverablePathPrefersDescriptionAppendTargetOverSlashTitl
 	}
 }
 
+func TestParseExplicitDeliverablePathPrefersLongDescriptionPathOverBareTitleToken(t *testing.T) {
+	t.Parallel()
+
+	title := "Write SamBot Chat Feature Specification (replacement for blocked OC-87/89/99/103)"
+	description := `Write a comprehensive, actionable feature specification for the "Chat with SamBot" feature to planning/sambot-feature-spec.md.`
+	taskRecord := repo.ProjectTask{
+		Title:       title,
+		Description: &description,
+	}
+
+	if got := parseExplicitDeliverablePath(taskRecord); got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("parseExplicitDeliverablePath() = %q, want planning/sambot-feature-spec.md", got)
+	}
+}
+
 func TestFileEditRejectsPlanningArtifactMutationForExecutionFirstTaskWithExplicitDeliverable(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

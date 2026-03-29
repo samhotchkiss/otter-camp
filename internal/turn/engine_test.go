@@ -38600,6 +38600,22 @@ func TestExplicitDeliverablePathUsesTitleWhenDescriptionStartsWithInputRead(t *t
 	}
 }
 
+func TestExplicitDeliverablePathPrefersLongDescriptionPathOverBareTitleToken(t *testing.T) {
+	t.Parallel()
+
+	title := "Write SamBot Chat Feature Specification (replacement for blocked OC-87/89/99/103)"
+	description := `Write a comprehensive, actionable feature specification for the "Chat with SamBot" feature to planning/sambot-feature-spec.md.`
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  139,
+		Title:       title,
+		Description: &description,
+	}
+
+	if got := explicitDeliverablePath(taskRecord); got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("explicitDeliverablePath(...) = %q, want %q", got, "planning/sambot-feature-spec.md")
+	}
+}
+
 func TestContentMigrationCheckpointPreferredOutputPathSkipsExplicitSingleFileDeliverable(t *testing.T) {
 	t.Parallel()
 
@@ -38648,6 +38664,42 @@ func TestSessionTaskDeliverablePathInheritsParentExplicitDeliverableForDecompose
 				ID:          parentID,
 				TaskNumber:  94,
 				Title:       "SamBot spec part 2",
+				Description: &parentDescription,
+			},
+			childID: childTask,
+		},
+	}
+
+	if got := fixture.engine.sessionTaskDeliverablePath(context.Background(), fixture.session.ID, childTask); got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("sessionTaskDeliverablePath(...) = %q, want %q", got, "planning/sambot-feature-spec.md")
+	}
+}
+
+func TestSessionTaskDeliverablePathInheritsLongDescriptionParentPathOverBareTitleToken(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	parentID := uuid.New()
+	childID := uuid.New()
+	parentTitle := "Write SamBot Chat Feature Specification (replacement for blocked OC-87/89/99/103)"
+	parentDescription := `Write a comprehensive, actionable feature specification for the "Chat with SamBot" feature to planning/sambot-feature-spec.md.`
+	childDescription := "Architecture & Tech Stack — Recommended approach (e.g., embeddings from scraped posts, RAG pipeline, LLM provider options, hosting)."
+	childTask := repo.ProjectTask{
+		ID:          childID,
+		TaskNumber:  142,
+		Title:       "Architecture & Tech Stack",
+		Description: &childDescription,
+		Metadata: mustRawJSON(t, map[string]any{
+			"decomposition_parent_task_id": parentID.String(),
+		}),
+	}
+
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:          parentID,
+				TaskNumber:  139,
+				Title:       parentTitle,
 				Description: &parentDescription,
 			},
 			childID: childTask,
