@@ -308,13 +308,6 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if repaired > 0 {
 		w.logger.Info("job queue: closed terminal project_task async sessions on startup", "count", repaired)
 	}
-	if repaired, err := w.CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(runCtx); err != nil {
-		if runCtx.Err() == nil {
-			w.logger.Error("startup blocked project_task non-live execution session cleanup failed", "error", err)
-		}
-	} else if repaired > 0 {
-		w.logger.Info("job queue: closed blocked project_task async sessions without live execution on startup", "count", repaired)
-	}
 	if purged, err := w.PurgeStaleAgentTurnJobs(runCtx); err != nil {
 		if runCtx.Err() == nil {
 			w.logger.Error("startup stale agent_turn purge failed", "error", err)
@@ -426,6 +419,20 @@ func (w *Worker) Start(ctx context.Context) error {
 		}
 	} else if requeued > 0 {
 		w.logger.Info("job queue: requeued active execution sessions without turns on startup", "count", requeued)
+	}
+	if requeued, err := w.RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup terminal recovery resume requeue failed", "error", err)
+		}
+	} else if requeued > 0 {
+		w.logger.Info("job queue: requeued terminal recovery resumes without live execution on startup", "count", requeued)
+	}
+	if repaired, err := w.CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup blocked project_task non-live execution session cleanup failed", "error", err)
+		}
+	} else if repaired > 0 {
+		w.logger.Info("job queue: closed blocked project_task async sessions without live execution on startup", "count", repaired)
 	}
 	if requeued, err := w.RequeueActiveProjectSessionsWithoutTurns(runCtx); err != nil {
 		if runCtx.Err() == nil {
@@ -1642,6 +1649,161 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 	}
 	if err := rows.Err(); err != nil {
 		return repaired, fmt.Errorf("iterate active execution sessions without turns: %w", err)
+	}
+	return repaired, nil
+}
+
+func (w *Worker) RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(ctx context.Context) (int64, error) {
+	limit := w.maxExecutionSessionRecoveryBatch()
+	rows, err := w.pool.Query(ctx, `
+		WITH terminal_execution AS (
+			SELECT DISTINCT ON (cs.id) cs.id AS session_id,
+			       fne.id AS execution_id
+			FROM chat_session cs
+			JOIN project_task pt
+			  ON pt.id = cs.scope_id
+			JOIN project p
+			  ON p.id = pt.project_id
+			JOIN flow_node_execution fne
+			  ON fne.session_id = cs.id
+			 AND fne.status IN ('abandoned', 'rejected')
+			WHERE cs.scope_type = 'project_task'
+			  AND cs.mode = 'async'
+			  AND cs.status = 'active'
+			  AND pt.work_status = 'blocked'
+			  AND COALESCE(p.settings->'pause'->>'is_paused', 'false') <> 'true'
+			  AND cs.current_turn_id IS NULL
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM flow_node_execution active_execution
+			    WHERE active_execution.session_id = cs.id
+			      AND active_execution.status = 'active'
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM chat_turn ct
+			    WHERE ct.session_id = cs.id
+			      AND ct.status IN ('pending', 'in_progress')
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM job_queue jq
+			    WHERE jq.job_type = $1
+			      AND jq.status IN ('pending', 'claimed')
+			      AND (jq.payload->>'session_id')::uuid = cs.id
+			  )
+			ORDER BY cs.id, fne.started_at DESC, fne.id DESC
+		),
+		candidates AS (
+			SELECT te.session_id,
+			       te.execution_id,
+			       cm.id AS message_id,
+			       EXISTS (
+			         SELECT 1
+			         FROM chat_turn ct
+			         WHERE ct.session_id = te.session_id
+			           AND ct.trigger_message_id = cm.id
+			           AND ct.status IN ('completed', 'failed', 'cancelled')
+			       ) AS message_consumed,
+			       COALESCE((
+			         SELECT MAX(ct.retry_count) + 1
+			         FROM chat_turn ct
+			         WHERE ct.session_id = te.session_id
+			           AND ct.trigger_message_id = cm.id
+			       ), 0) AS next_retry_count,
+			       COALESCE((
+			         SELECT ct.error_message
+			         FROM chat_turn ct
+			         WHERE ct.session_id = te.session_id
+			           AND ct.trigger_message_id = cm.id
+			         ORDER BY ct.turn_number DESC, ct.retry_count DESC, ct.created_at DESC, ct.id DESC
+			         LIMIT 1
+			       ), '') AS latest_turn_error,
+			       COALESCE((
+			         SELECT ct.completed_at
+			         FROM chat_turn ct
+			         WHERE ct.session_id = te.session_id
+			           AND ct.trigger_message_id = cm.id
+			         ORDER BY ct.turn_number DESC, ct.retry_count DESC, ct.created_at DESC, ct.id DESC
+			         LIMIT 1
+			       ), cm.created_at) AS latest_turn_completed_at
+			FROM terminal_execution te
+			JOIN LATERAL (
+				SELECT cm.id,
+				       cm.created_at
+				FROM chat_message cm
+				WHERE cm.session_id = te.session_id
+				  AND cm.role = 'user'
+				  AND COALESCE(cm.metadata->'agent_turn_dispatch'->>'cancelled_at', '') = ''
+				  AND COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
+				  AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = te.execution_id::text
+				ORDER BY cm.created_at DESC, cm.id DESC
+				LIMIT 1
+			) cm ON true
+		)
+		SELECT session_id, execution_id, message_id, message_consumed, next_retry_count, latest_turn_error, latest_turn_completed_at
+		FROM candidates
+		ORDER BY session_id ASC
+		LIMIT $2
+	`, agentTurnJobType, limit)
+	if err != nil {
+		return 0, fmt.Errorf("list terminal recovery resumes without live execution: %w", err)
+	}
+	defer rows.Close()
+
+	var repaired int64
+	for rows.Next() {
+		var sessionID uuid.UUID
+		var executionID uuid.UUID
+		var messageID uuid.UUID
+		var messageConsumed bool
+		var retryCount int
+		var latestTurnError string
+		var latestTurnCompletedAt time.Time
+		if err := rows.Scan(&sessionID, &executionID, &messageID, &messageConsumed, &retryCount, &latestTurnError, &latestTurnCompletedAt); err != nil {
+			return repaired, fmt.Errorf("scan terminal recovery resume without live execution: %w", err)
+		}
+		if messageConsumed {
+			successfulRecoveryWrite, recoveryErr := w.recoveryResumeMessageCompletedWithSuccessfulFileWrite(ctx, sessionID, messageID)
+			if recoveryErr != nil {
+				return repaired, fmt.Errorf("check completed terminal recovery resume for session %s: %w", sessionID, recoveryErr)
+			}
+			if successfulRecoveryWrite {
+				continue
+			}
+		}
+		var runAfter *time.Time
+		payload := agentTurnKeyPayload{
+			SessionID:           sessionID,
+			MessageID:           messageID,
+			RetryCount:          retryCount,
+			FlowNodeExecutionID: &executionID,
+		}
+		if retryAfterHint, ok := parseRateLimitRetryAfterFromText(latestTurnError); ok {
+			retryDelay := agentTurnRateLimitDelay(max(1, retryCount), retryAfterHint)
+			completedAt := latestTurnCompletedAt.UTC()
+			scheduled := completedAt.Add(retryDelay)
+			if scheduled.Before(w.clock.Now().UTC()) {
+				scheduled = w.clock.Now().UTC()
+			}
+			runAfter = &scheduled
+			payload.RateLimitJitterApplied = true
+		} else if retryAfterHint, transient := parseTransientModelRetryAfterFromText(latestTurnError); transient || looksLikeTransientModelFailureText(latestTurnError) {
+			retryDelay := agentTurnTransientDelay(max(1, retryCount), retryAfterHint)
+			completedAt := latestTurnCompletedAt.UTC()
+			scheduled := completedAt.Add(retryDelay)
+			if scheduled.Before(w.clock.Now().UTC()) {
+				scheduled = w.clock.Now().UTC()
+			}
+			runAfter = &scheduled
+		}
+		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, payload, runAfter); err != nil {
+			return repaired, fmt.Errorf("requeue terminal recovery resume without live execution for session %s: %w", sessionID, err)
+		}
+		repaired++
+	}
+	if err := rows.Err(); err != nil {
+		return repaired, fmt.Errorf("iterate terminal recovery resumes without live execution: %w", err)
 	}
 	return repaired, nil
 }
@@ -6667,11 +6829,6 @@ func (w *Worker) runStaleClaimRecovery(ctx context.Context) {
 			} else if repaired > 0 {
 				w.logger.Info("job queue: closed terminal project_task async sessions", "count", repaired)
 			}
-			if repaired, err := w.CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ctx); err != nil && ctx.Err() == nil {
-				w.logger.Error("blocked project_task non-live execution session cleanup failed", "error", err)
-			} else if repaired > 0 {
-				w.logger.Info("job queue: closed blocked project_task async sessions without live execution", "count", repaired)
-			}
 			if repaired, err := w.RetireClosedAsyncSessionRuns(ctx); err != nil && ctx.Err() == nil {
 				w.logger.Error("closed async session run cleanup failed", "error", err)
 			} else if repaired > 0 {
@@ -6711,6 +6868,16 @@ func (w *Worker) runStaleClaimRecovery(ctx context.Context) {
 				w.logger.Error("active execution session repair failed", "error", err)
 			} else if requeued > 0 {
 				w.logger.Info("job queue: requeued active execution sessions without turns", "count", requeued)
+			}
+			if requeued, err := w.RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("terminal recovery resume repair failed", "error", err)
+			} else if requeued > 0 {
+				w.logger.Info("job queue: requeued terminal recovery resumes without live execution", "count", requeued)
+			}
+			if repaired, err := w.CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("blocked project_task non-live execution session cleanup failed", "error", err)
+			} else if repaired > 0 {
+				w.logger.Info("job queue: closed blocked project_task async sessions without live execution", "count", repaired)
 			}
 			if requeued, err := w.RequeueActiveProjectSessionsWithoutTurns(ctx); err != nil && ctx.Err() == nil {
 				w.logger.Error("active project session repair failed", "error", err)

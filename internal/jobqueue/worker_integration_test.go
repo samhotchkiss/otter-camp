@@ -13976,6 +13976,33 @@ func createSuccessfulRecoveryResumeExecutionFixture(t *testing.T, pool *pgxpool.
 	return createRecoveryResumeExecutionFixture(t, pool, slug, nil)
 }
 
+func createTerminalRecoveryResumeExecutionFixture(t *testing.T, pool *pgxpool.Pool, slug string, stopReason *string) (context.Context, repo.ChatSession, repo.FlowNodeExecution, repo.ChatMessage) {
+	t.Helper()
+
+	ctx, session, execution, message := createRecoveryResumeExecutionFixture(t, pool, slug, stopReason)
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE flow_node_execution
+		SET status = 'abandoned',
+		    completed_at = COALESCE(completed_at, now())
+		WHERE id = $1
+	`, execution.ID); err != nil {
+		t.Fatalf("abandon recovery execution: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE project_task pt
+		SET work_status = 'blocked',
+		    updated_at = now()
+		FROM chat_session cs
+		WHERE cs.id = $1
+		  AND pt.id = cs.scope_id
+	`, session.ID); err != nil {
+		t.Fatalf("block recovery task: %v", err)
+	}
+
+	return ctx, session, execution, message
+}
+
 func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsSuccessfulRecoveryResumeWrite(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -14088,6 +14115,154 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsDoesNotSkipValidatio
 	}
 	if queuedJobs != 1 {
 		t.Fatalf("queued jobs = %d, want 1 after validation_loop_blocked recovery write", queuedJobs)
+	}
+}
+
+func TestJobWorkerRequeueTerminalRecoveryResumeSessionsWithoutLiveExecutionRequeuesLatestPendingResume(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	stopReason := "validation_loop_blocked"
+	ctx, session, execution, _ := createTerminalRecoveryResumeExecutionFixture(t, pool, "requeue-terminal-recovery-resume", &stopReason)
+
+	pendingResume, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active task recovery now.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"task_recovery_resume","synthetic_user_message":true,"flow_node_execution_id":"%s"}`, execution.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create pending recovery resume: %v", err)
+	}
+
+	requeued, err := worker.RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(ctx)
+	if err != nil {
+		t.Fatalf("RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued terminal recovery resumes = %d, want 1", requeued)
+	}
+
+	var queuedJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status IN ('pending', 'claimed')
+		  AND (payload->>'session_id')::uuid = $1
+	`, session.ID).Scan(&queuedJobs); err != nil {
+		t.Fatalf("count queued terminal recovery jobs: %v", err)
+	}
+	if queuedJobs != 1 {
+		t.Fatalf("queued jobs = %d, want 1", queuedJobs)
+	}
+	var queuedMessageID uuid.UUID
+	var queuedExecutionID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		SELECT (payload->>'message_id')::uuid,
+		       (payload->>'flow_node_execution_id')::uuid
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status IN ('pending', 'claimed')
+		  AND (payload->>'session_id')::uuid = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, session.ID).Scan(&queuedMessageID, &queuedExecutionID); err != nil {
+		t.Fatalf("load queued terminal recovery job: %v", err)
+	}
+	if queuedMessageID != pendingResume.ID {
+		t.Fatalf("queued message_id = %s, want latest pending recovery resume %s", queuedMessageID, pendingResume.ID)
+	}
+	if queuedExecutionID != execution.ID {
+		t.Fatalf("queued flow_node_execution_id = %s, want %s", queuedExecutionID, execution.ID)
+	}
+}
+
+func TestJobWorkerRequeueTerminalRecoveryResumeSessionsWithoutLiveExecutionSkipsSuccessfulWrite(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx, session, _, _ := createTerminalRecoveryResumeExecutionFixture(t, pool, "requeue-terminal-recovery-skip-successful-write", nil)
+
+	requeued, err := worker.RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(ctx)
+	if err != nil {
+		t.Fatalf("RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution: %v", err)
+	}
+	if requeued != 0 {
+		t.Fatalf("requeued terminal recovery resumes = %d, want 0 after successful recovery write", requeued)
+	}
+
+	var queuedJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status IN ('pending', 'claimed')
+		  AND (payload->>'session_id')::uuid = $1
+	`, session.ID).Scan(&queuedJobs); err != nil {
+		t.Fatalf("count queued jobs: %v", err)
+	}
+	if queuedJobs != 0 {
+		t.Fatalf("queued jobs = %d, want 0 when successful terminal recovery write should not requeue", queuedJobs)
+	}
+}
+
+func TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionSkipsRepairedTerminalRecoveryResume(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	stopReason := "validation_loop_blocked"
+	ctx, session, execution, _ := createTerminalRecoveryResumeExecutionFixture(t, pool, "close-blocked-skips-terminal-recovery-repair", &stopReason)
+
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active task recovery now.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"task_recovery_resume","synthetic_user_message":true,"flow_node_execution_id":"%s"}`, execution.ID)),
+	}); err != nil {
+		t.Fatalf("create pending recovery resume: %v", err)
+	}
+
+	requeued, err := worker.RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(ctx)
+	if err != nil {
+		t.Fatalf("RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued terminal recovery resumes = %d, want 1", requeued)
+	}
+
+	closed, err := worker.CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ctx)
+	if err != nil {
+		t.Fatalf("CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution: %v", err)
+	}
+	if closed != 0 {
+		t.Fatalf("closed blocked sessions = %d, want 0 after terminal recovery repair queued a job", closed)
+	}
+
+	var sessionStatus string
+	if err := pool.QueryRow(ctx, `
+		SELECT status
+		FROM chat_session
+		WHERE id = $1
+	`, session.ID).Scan(&sessionStatus); err != nil {
+		t.Fatalf("query session status: %v", err)
+	}
+	if sessionStatus != "active" {
+		t.Fatalf("session status = %q, want active after terminal recovery repair", sessionStatus)
 	}
 }
 
