@@ -2561,3 +2561,18 @@
   - deploy / proof status:
     - this slice is deployed and test-proven on the live `3536` runtime
     - fresh natural production proof for the malformed-task family is still pending the next actual bad task creation or queue attempt
+- 2026-03-29 04:00:00 MDT - Finished and live-proven: convert PM rediscovery-only stops into one focused supervisory retry instead of draining idle immediately.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - [`handleCompletedProjectExecutionContinuationTurn(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now follows a rediscovery-only PM stop with `retryProjectExecutionContinuationForRediscoveryStop(...)` after the existing replacement-child special case
+    - added `buildProjectExecutionContinuationRediscoveryRetryPrompt(...)` and `buildProjectExecutionContinuationRediscoveryActionInstruction(...)` so the retry names one bounded next move instead of just restating the generic continuation prompt
+    - added `projectContinuationCurrentActionableBlockedTask(...)` so the retry can focus a blocked PM task family when no actionable draft focus task exists
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleCompletedProjectExecutionContinuationTurnRetriesRediscoveryStopWithFocusedMessage`
+    - kept the adjacent repeated-rediscovery suppression and replacement-child retry coverage green
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurn(RetriesRediscoveryStopWithFocusedMessage|SuppressesRepeatedRediscoveryBlockedRetry|RetriesReplacementChildWorkWithFreshMessage)|ShouldStopAfterBlockedProjectContinuationRediscovery)$' -count=1`
+    - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, `./bin/ottercamp version` returned `repo_version=3538`, and `./bin/ottercamp health --output json` returned `status=ok`
+  - deploy / proof status:
+    - on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, the first post-restart PM continuation message `ecc1beb5-611a-4b1b-8115-b0ce755c0ef6` still ended on the old rediscovery-only stop in turn `73f6578c-f412-41f0-b4e0-e2c73d8262e0`
+    - the new runtime immediately appended focused retry message `e61befed-bd69-4dd8-a2e5-c74ef5a8f7b1`, which explicitly named blocked task `71` and told the PM lane to `create, queue, or update the smallest bounded recovery step`
+    - that follow-on turn `3877ecfa-9b43-44c7-866a-5eb50fd80895` no longer drained the session idle; it progressed to the narrower `task_lane_owned_by_project_task_session` stop after one blocked root probe and one exact deliverable read

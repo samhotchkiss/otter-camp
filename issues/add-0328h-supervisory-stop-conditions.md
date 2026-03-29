@@ -38,3 +38,9 @@ They need sharper stopping rules than ordinary execution lanes.
 - Likely touchpoints: PM/reviewer prompt builders and `shouldStop...` guard families in `internal/turn/engine.go`, plus continuation suppression in `internal/jobqueue/worker.go`.
 - Integration plan: consolidate supervisory stop families into explicit lane-level rules and metrics so PM/reviewer behavior is intentionally bounded rather than only patched case by case.
 - Status: first implementation candidate alongside bounded task contracts.
+- 2026-03-29 04:00 MDT - First explicit PM rediscovery-stop follow-on is now live. [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) appends one focused supervisory retry after a `projectContinuationRediscoveryGuardPrefix` stop instead of letting the PM session drain idle immediately.
+- 2026-03-29 04:00 MDT - Fresh production proof on `repo_version=3538`: Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` first hit the old broad-reread stop on turn `73f6578c-f412-41f0-b4e0-e2c73d8262e0`, then the runtime created focused continuation message `e61befed-bd69-4dd8-a2e5-c74ef5a8f7b1` and ran turn `3877ecfa-9b43-44c7-866a-5eb50fd80895` with the new instruction block:
+  - `Your last continuation turn spent its entire tool batch on broad rediscovery...`
+  - `Current blocked task: task 71 ...`
+  - `Your next assistant action must create, queue, or update the smallest bounded recovery step...`
+- 2026-03-29 04:00 MDT - The follow-on turn still ended `validation_loop_blocked` on `task_lane_owned_by_project_task_session`, so the stop-family improvement is now: `rediscovery-only stop -> one bounded supervisory retry`, not full autonomous settlement yet. Next leverage is teaching the focused retry to convert directly into a handoff or blocker report without even one blocked artifact-root probe.

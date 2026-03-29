@@ -12699,6 +12699,123 @@ func TestHandleCompletedProjectExecutionContinuationTurnSuppressesRepeatedRedisc
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnRetriesRediscoveryStopWithFocusedMessage(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	draftTaskID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 25,
+				Title:      "Write layout template comparison README",
+				WorkStatus: "done",
+			},
+			draftTaskID: {
+				ID:          draftTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  34,
+				Title:       "Repair technonymous index import task contract",
+				Description: stringPtr("Update the queued scrape/import task so it produces content/technonymous-index.json with the correct bounded contract."),
+				WorkStatus:  "draft",
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "I should inspect the broader project tree before deciding which PM repair to make.",
+		SequenceNumber: 11,
+	}
+	messages := []repo.ChatMessage{
+		*latestUser,
+		*assistant,
+		{
+			ID:             uuid.New(),
+			SessionID:      fixture.session.ID,
+			TurnID:         &turnID,
+			Role:           "system",
+			Status:         "final",
+			Content:        "[Project continuation rediscovery guard blocked only broad rereads. Ending this turn early so the next continuation can act directly on the named tasks instead of repeating blocked PM discovery.]",
+			SequenceNumber: 12,
+		},
+	}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected rediscovery-blocked continuation to enqueue a focused retry")
+	}
+	if len(fixture.enqueuer.jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1", len(fixture.enqueuer.jobs))
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var retryMessage *repo.ChatMessage
+	for i := range storedMessages {
+		msg := &storedMessages[i]
+		if msg.ID == fixture.enqueuer.jobs[0].payload.MessageID {
+			retryMessage = msg
+			break
+		}
+	}
+	if retryMessage == nil {
+		t.Fatal("missing appended rediscovery retry continuation message")
+	}
+	if !strings.Contains(retryMessage.Content, "spent its entire tool batch on broad rediscovery") {
+		t.Fatalf("retry message = %q, want rediscovery-stop guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "Do not begin with task.list without parent_task_id") {
+		t.Fatalf("retry message = %q, want narrower first-tool guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "issue one narrow task.update") {
+		t.Fatalf("retry message = %q, want direct prerequisite-repair guidance", retryMessage.Content)
+	}
+	if got := stringValue(messageMetadataMap(retryMessage.Metadata)["completed_task_id"]); got != completedTaskID.String() {
+		t.Fatalf("completed_task_id = %q, want %s", got, completedTaskID)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnRetriesReplacementChildWorkWithFreshMessage(t *testing.T) {
 	t.Parallel()
 
