@@ -179,6 +179,7 @@ var projectContinuationPromptLiveDeliverablePathPattern = regexp.MustCompile(`(?
 var projectContinuationBatchRangePattern = regexp.MustCompile(`(?i)\bposts?\s+(\d{1,3})\s*[–-]\s*(\d{1,3})\b`)
 var projectContinuationCompletedBatchRangePattern = regexp.MustCompile(`\bThat completed task covers batch_range=([0-9]{1,3}-[0-9]{1,3})\b`)
 var projectContinuationWorkspacePathPattern = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\b`)
+var projectContinuationParentCompletionTaskLabelPattern = regexp.MustCompile(`(?i)\bOC-\d+\b`)
 var workspacePathInBackticksPattern = regexp.MustCompile("`([^`]+)`")
 var explicitDeliverablePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`),
@@ -4920,6 +4921,13 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 			return true, nil
 		}
 	}
+	if requiredChildLabels, found := projectContinuationParentCompletionStopDetails(messages, completedTurn.ID); found {
+		if retried, retryErr := e.retryProjectExecutionContinuationForParentCompletionRequirements(ctx, session, completedTurn, latestUser, requiredChildLabels); retryErr != nil {
+			return false, retryErr
+		} else if retried {
+			return true, nil
+		}
+	}
 	if turnHasSuccessfulMutatingToolResult(messages, completedTurn.ID) {
 		return false, nil
 	}
@@ -5401,6 +5409,85 @@ func (e *TurnEngine) retryProjectExecutionContinuationForReplacementChildWork(
 	return enqueued, nil
 }
 
+func (e *TurnEngine) retryProjectExecutionContinuationForParentCompletionRequirements(
+	ctx context.Context,
+	session *chat.ChatSession,
+	latestCompleted *repo.ChatTurn,
+	latestUser *repo.ChatMessage,
+	requiredChildLabels []string,
+) (bool, error) {
+	if e == nil || session == nil || latestCompleted == nil || latestUser == nil || e.tasks == nil {
+		return false, nil
+	}
+	if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
+		return false, nil
+	}
+	completedTaskID, _ := parseUUIDAny(messageMetadataMap(latestUser.Metadata)["completed_task_id"])
+	var completedTask repo.ProjectTask
+	if completedTaskID != uuid.Nil {
+		if taskRecord, err := e.tasks.GetByID(ctx, completedTaskID); err == nil {
+			completedTask = taskRecord
+		}
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	taskHintsByTask, err := e.projectContinuationTaskHintsByTask(ctx, projectTasks)
+	if err != nil {
+		return false, err
+	}
+	priorityPaths := projectContinuationPriorityPathsFromText(strings.TrimSpace(latestUser.Content))
+	focusTask, ok := projectContinuationCurrentFocusTask(projectTasks, taskHintsByTask, priorityPaths)
+	if !ok {
+		return false, nil
+	}
+	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
+	focusActivity := childActivity[focusTask.ID]
+	if !projectContinuationDraftTaskReadyForParentClosureForTask(focusTask, focusActivity) {
+		return false, nil
+	}
+	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	snapshot, err := e.projectExecutionContinuationSnapshotForSummary(ctx, session.ScopeID, strings.TrimSpace(latestUser.Content))
+	if err != nil {
+		return false, err
+	}
+	agentID := latestCompleted.RespondingID
+	retryPrompt := buildProjectExecutionContinuationParentCompletionRetryPrompt(
+		completedTask,
+		remainingDraftTasks,
+		snapshot,
+		focusTask,
+		focusActivity,
+		taskHintsByTask[focusTask.ID],
+		requiredChildLabels,
+	)
+	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	if err != nil {
+		return false, err
+	}
+	if retryMessage == nil {
+		return true, nil
+	}
+	nextPayload := AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  retryMessage.ID,
+		RetryCount: latestCompleted.RetryCount + 1,
+	}
+	if agentID != uuid.Nil {
+		nextPayload.AgentID = &agentID
+	}
+	runAfter := e.now().Add(defaultAutoContinueDelay).UTC()
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	if err != nil {
+		return false, err
+	}
+	return enqueued, nil
+}
+
 func (e *TurnEngine) retryProjectExecutionContinuationForRediscoveryStop(
 	ctx context.Context,
 	session *chat.ChatSession,
@@ -5704,6 +5791,34 @@ func buildProjectExecutionContinuationReplacementChildRetryPrompt(
 	retryPrompt += fmt.Sprintf(" Do not queue parent task %s again from the project lane.", focusLabel)
 	retryPrompt += fmt.Sprintf(" Your next assistant action must create the smallest fresh replacement child task beneath %s now, or queue an existing direct child draft there if one already fits unchanged.", focusLabel)
 	retryPrompt += fmt.Sprintf(" If you must inspect child lanes first, use only task.list(parent_task_id=%s).", focusTask.ID.String())
+	return retryPrompt
+}
+
+func buildProjectExecutionContinuationParentCompletionRetryPrompt(
+	completedTask repo.ProjectTask,
+	remainingDraftTasks int,
+	snapshot projectExecutionContinuationSnapshot,
+	focusTask repo.ProjectTask,
+	focusActivity projectContinuationChildActivity,
+	focusHints projectContinuationTaskHints,
+	requiredChildLabels []string,
+) string {
+	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot)
+	focusLabel := projectBootstrapTaskLabel(focusTask)
+	focusRef := projectExecutionContinuationTaskRef(focusTask, focusActivity, focusHints)
+	retryPrompt += fmt.Sprintf(" Your last continuation turn proved that %s is already closeout-ready, but the parent completion gate still needs explicit parent_orchestration evidence before %s can finish.", focusRef, focusLabel)
+	retryPrompt += " Do not reread the deliverable file again and do not relist the broader project task tree."
+	if deliverablePath := strings.TrimSpace(focusHints.DeliverablePath); deliverablePath != "" {
+		retryPrompt += fmt.Sprintf(" Do not reread `%s` again from the project lane.", deliverablePath)
+	}
+	if len(requiredChildLabels) > 0 {
+		retryPrompt += fmt.Sprintf(" The completion gate specifically named completed child tasks %s.", strings.Join(requiredChildLabels, ", "))
+	}
+	if focusTask.ID != uuid.Nil {
+		retryPrompt += fmt.Sprintf(" If any required child task IDs are still unknown, use only task.list(parent_task_id=%s) once to fetch them.", focusTask.ID.String())
+	}
+	retryPrompt += fmt.Sprintf(" Your next assistant action must issue one narrow task.update for %s with child_output_verifications for the completed children, integration_check.status=passed, outcome_assessment.satisfied=true, and work_status=done.", focusLabel)
+	retryPrompt += " If the runtime still reports a missing child verification after that update, report that concrete missing child in one blocker sentence instead of rereading context again."
 	return retryPrompt
 }
 
@@ -8063,6 +8178,47 @@ func projectContinuationMissingDependencyStopPath(messages []repo.ChatMessage, t
 		}
 	}
 	return "", false
+}
+
+func projectContinuationParentCompletionStopDetails(messages []repo.ChatMessage, turnID uuid.UUID) ([]string, bool) {
+	if turnID == uuid.Nil {
+		return nil, false
+	}
+	for _, message := range messagesForTurn(messages, turnID) {
+		switch strings.ToLower(strings.TrimSpace(message.Role)) {
+		case "tool_result":
+			_, _, errText, ok := parseToolResultMessage(message.Content)
+			if ok && strings.Contains(strings.ToLower(strings.TrimSpace(errText)), "parent task requires child verification and passed integration before completion") {
+				return projectContinuationParentCompletionTaskLabels(errText), true
+			}
+		case "system":
+			if strings.Contains(strings.ToLower(strings.TrimSpace(message.Content)), "closeout-ready parent still needs parent_orchestration evidence") {
+				return projectContinuationParentCompletionTaskLabels(message.Content), true
+			}
+		}
+	}
+	return nil, false
+}
+
+func projectContinuationParentCompletionTaskLabels(text string) []string {
+	matches := projectContinuationParentCompletionTaskLabelPattern.FindAllString(strings.TrimSpace(text), -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(matches))
+	labels := make([]string, 0, len(matches))
+	for _, match := range matches {
+		label := strings.ToUpper(strings.TrimSpace(match))
+		if label == "" {
+			continue
+		}
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		seen[label] = struct{}{}
+		labels = append(labels, label)
+	}
+	return labels
 }
 
 func projectContinuationMissingDependencyStopPathFromSystemMessage(content string) (string, bool) {

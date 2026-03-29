@@ -3118,4 +3118,21 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectContinuationDraftTaskReadyForParentClosureAllows(SatisfiedOutcomeWithOnlyBlockedChildren|OnlyBlockedChildren)|BuildProjectContinuationActionPromptAdds(SatisfiedCloseoutGuidance|CompletedCloseoutGuidance)|ShouldBlockProjectContinuationFocusedDraft(TaskCreateForCloseoutReadyParent|MutationAllowsSatisfiedCloseoutReadyParent|MutationForAncestorPromotion))$' -count=1`
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshotSummarizesProjectState|BuildProjectContinuationActionPrompt|ShouldBlockProjectContinuationFocusedDraft(TaskCreateForCloseoutReadyParent|MutationAllowsSatisfiedCloseoutReadyParent|MutationForAncestorPromotion|MutationForMalformedChildren))$' -count=1`
   - deploy / proof status:
-    - ready to deploy next; expected live canary is PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where satisfied parents `113` / `106` / `94` should stop reopening replacement-child work and instead close directly once the post-restart continuation re-enters that branch
+    - live-proven on `repo_version=3588`: PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` no longer reopened replacement-child work for satisfied parent `113`; instead it attempted direct parent closeout and hit the next, narrower parent-orchestration completion gate
+- 2026-03-29 10:26 MDT - Added a dedicated continuation retry path for parent completion requirements.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added [`projectContinuationParentCompletionTaskLabelPattern`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - added [`projectContinuationParentCompletionStopDetails(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - added [`projectContinuationParentCompletionTaskLabels(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - [`handleCompletedProjectExecutionContinuationTurn(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now detects the parent-completion gate and routes it into a dedicated retry helper instead of the generic PM continuation path
+    - added [`retryProjectExecutionContinuationForParentCompletionRequirements(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - added [`buildProjectExecutionContinuationParentCompletionRetryPrompt(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go), which carries the exact `OC-*` children forward and instructs one direct `task.update` with `child_output_verifications`, `integration_check.status=passed`, `outcome_assessment.satisfied=true`, and `work_status=done`
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestProjectContinuationParentCompletionTaskLabelsDedupesTaskRefs`
+      - added `TestHandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionRequirementsWithFreshMessage`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectContinuationParentCompletionTaskLabelsDedupesTaskRefs|HandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionRequirementsWithFreshMessage)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurn(RetriesParentCompletionRequirementsWithFreshMessage|RetriesBoundedSizeStopWithFreshMessage|RetriesReplacementChildWorkWithFreshMessage|RetriesMissingDependencyStopWithFreshMessage)|BuildProjectContinuationActionPromptAdds(SatisfiedCloseoutGuidance|CompletedCloseoutGuidance)|ProjectContinuationDraftTaskReadyForParentClosureAllows(SatisfiedOutcomeWithOnlyBlockedChildren|OnlyBlockedChildren))$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary remains PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where the next parent-completion failure should append a fresh continuation that names the exact `OC-*` children and suppresses another file-read / child-list loop

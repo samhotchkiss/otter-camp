@@ -12815,6 +12815,195 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesBoundedSizeStopWi
 	}
 }
 
+func TestProjectContinuationParentCompletionTaskLabelsDedupesTaskRefs(t *testing.T) {
+	t.Parallel()
+
+	labels := projectContinuationParentCompletionTaskLabels("verify child outputs for OC-115, OC-124, OC-115 and record passed integration")
+	want := []string{"OC-115", "OC-124"}
+	if len(labels) != len(want) {
+		t.Fatalf("labels len = %d, want %d (%v)", len(labels), len(want), labels)
+	}
+	for i := range want {
+		if labels[i] != want[i] {
+			t.Fatalf("labels[%d] = %q, want %q (all labels: %v)", i, labels[i], want[i], labels)
+		}
+	}
+}
+
+func TestHandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionRequirementsWithFreshMessage(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	focusTaskID := uuid.New()
+	blockedChildID := uuid.New()
+	doneChildID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	focusDescription := "Append Overview & Purpose to planning/sambot-feature-spec.md"
+	focusMetadata := mustJSONRaw(map[string]any{
+		"parent_orchestration": map[string]any{
+			"outcome_assessment": map[string]any{
+				"satisfied": true,
+				"summary":   "planning/sambot-feature-spec.md already contains the required content.",
+			},
+		},
+	})
+	childMetadata := mustJSONRaw(map[string]any{
+		"decomposition_parent_task_id": focusTaskID.String(),
+	})
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 127,
+				Title:      "Conversation Flow",
+				WorkStatus: "done",
+			},
+			focusTaskID: {
+				ID:              focusTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      113,
+				Title:           "Append Overview & Purpose section",
+				Description:     &focusDescription,
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+				Metadata:        focusMetadata,
+			},
+			blockedChildID: {
+				ID:         blockedChildID,
+				ProjectID:  projectID,
+				TaskNumber: 129,
+				Title:      "Blocked replacement child",
+				WorkStatus: "blocked",
+				Metadata:   childMetadata,
+			},
+			doneChildID: {
+				ID:         doneChildID,
+				ProjectID:  projectID,
+				TaskNumber: 130,
+				Title:      "Done replacement child",
+				WorkStatus: "done",
+				Metadata:   childMetadata,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "I'll close the satisfied parent directly now.",
+		SequenceNumber: 11,
+	}
+	updateResult := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "tool_result",
+		Status:         "final",
+		SequenceNumber: 12,
+		Content: string(mustJSONRaw(map[string]any{
+			"tool_name": "task.update",
+			"output": map[string]any{
+				"error": "parent task requires child verification and passed integration before completion: all child tasks must complete before the parent can finish integration; verify child outputs for OC-115, OC-124, OC-130",
+			},
+		})),
+	}
+	systemMessage := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "system",
+		Status:         "final",
+		Content:        "[Project continuation found that the closeout-ready parent still needs parent_orchestration evidence before it can finish. Record parent_orchestration.child_verifications for the completed child tasks, set parent_orchestration.integration_check.status=passed, and set parent_orchestration.outcome_assessment.satisfied=true on the parent task itself. Do not cancel blocked stale child lanes from the project session first.]",
+		SequenceNumber: 13,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant, *updateResult, *systemMessage}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected parent-completion continuation stop to enqueue a fresh retry message")
+	}
+
+	jobs := fixture.enqueuer.jobs
+	if len(jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload.MessageID == userMessageID {
+		t.Fatal("retry reused original continuation message, want fresh message id")
+	}
+	if jobs[0].payload.RetryCount != 1 {
+		t.Fatalf("retry_count = %d, want 1", jobs[0].payload.RetryCount)
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var retryMessage *repo.ChatMessage
+	for i := range storedMessages {
+		msg := &storedMessages[i]
+		if msg.ID == jobs[0].payload.MessageID {
+			retryMessage = msg
+			break
+		}
+	}
+	if retryMessage == nil {
+		t.Fatal("missing appended parent-completion retry continuation message")
+	}
+	if !strings.Contains(retryMessage.Content, "task 113") {
+		t.Fatalf("retry message = %q, want focus task label", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "OC-115, OC-124, OC-130") {
+		t.Fatalf("retry message = %q, want required child labels", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "task.list(parent_task_id="+focusTaskID.String()+")") {
+		t.Fatalf("retry message = %q, want narrow child inspection guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "child_output_verifications") {
+		t.Fatalf("retry message = %q, want parent verification update guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "work_status=done") {
+		t.Fatalf("retry message = %q, want direct closeout guidance", retryMessage.Content)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnRetriesGenericReplyWithFreshMessage(t *testing.T) {
 	t.Parallel()
 
