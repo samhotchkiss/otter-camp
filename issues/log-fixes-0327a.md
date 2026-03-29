@@ -3283,3 +3283,14 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterBlockedTaskExecution(InheritedSharedWrite|SiblingMutation)|ShouldBlockTaskExecutionInheritedSharedDeliverableWriteTool|HandleRecoveryFileWriteWithoutContentStopsForInheritedSharedParentDeliverable)$' -count=1`
   - deploy / proof status:
     - ready to deploy next; live canary remains the SamBot child-task recovery family under parent task `139`, where `planning/sambot-feature-spec.md` should now stop with edit-oriented guidance instead of receiving another replayed whole-file write
+- 2026-03-29 12:05 MDT - Hardened the shared-deliverable recovery guard into a real blocked-recovery stop.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `haltRecoveryInheritedSharedDeliverableWrite(...)` now also sets `recoveryBlockReason` and calls `cancelRecoveryResumeDispatch(...)`
+    - this turns the inherited shared-file guard into a durable blocked recovery path instead of a soft validation stop that auto-requeues
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - `TestHandleRecoveryFileWriteWithoutContentStopsForInheritedSharedParentDeliverable` now asserts the shared-parent `recoveryBlockReason`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterBlockedTaskExecution(InheritedSharedWrite|SiblingMutation)|ShouldBlockTaskExecutionInheritedSharedDeliverableWriteTool|HandleRecoveryFileWriteWithoutContentStopsForInheritedSharedParentDeliverable)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; same live canary session `5c403c27-3662-4843-a19f-d957258f9ec5` should now stop once, cancel its own recovery dispatch, and block the child task instead of rearming more identical shared-deliverable retries

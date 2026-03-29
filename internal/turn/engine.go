@@ -17131,6 +17131,14 @@ func buildRecoveryInheritedSharedDeliverableWriteStopMessage(targetPath string) 
 	return fmt.Sprintf("[Recovery shared-deliverable guard: this decomposed child task inherits `%s` from its parent. Do not replay a whole-file file.write from persisted draft here. Read the current shared file and use file.edit for the bounded section update instead, or resume integration from the parent task. Ending the turn early.]", path)
 }
 
+func buildRecoveryInheritedSharedDeliverableBlockedTaskReason(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the shared parent deliverable"
+	}
+	return fmt.Sprintf("recovery halted because the decomposed child lane inherits shared parent deliverable %s; resume only with bounded file.edit updates on the current shared file or by moving integration back to the parent task", path)
+}
+
 func buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, failureReason string) string {
 	path := strings.TrimSpace(targetPath)
 	if path == "" {
@@ -17242,6 +17250,8 @@ func (e *TurnEngine) haltRecoveryInheritedSharedDeliverableWrite(ctx context.Con
 	if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, "", failureReason, message.ID); checkpointErr != nil {
 		return true, true, checkpointErr
 	}
+	rt.recoveryBlockReason = buildRecoveryInheritedSharedDeliverableBlockedTaskReason(targetPath)
+	_ = e.cancelRecoveryResumeDispatch(ctx, rt, rt.recoveryBlockReason)
 	return true, true, nil
 }
 

@@ -33710,6 +33710,9 @@ func TestHandleRecoveryFileWriteWithoutContentStopsForInheritedSharedParentDeliv
 	if rt.stopReason != stopReasonValidationBlocked {
 		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
 	}
+	if !strings.Contains(rt.recoveryBlockReason, "inherits shared parent deliverable") {
+		t.Fatalf("rt.recoveryBlockReason = %q, want shared parent deliverable block reason", rt.recoveryBlockReason)
+	}
 	if !fixture.messages.containsContentSubstring("[Recovery shared-deliverable guard: this decomposed child task inherits `planning/sambot-feature-spec.md` from its parent.") {
 		t.Fatal("expected shared-deliverable recovery stop message")
 	}
