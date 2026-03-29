@@ -20730,6 +20730,33 @@ func TestBuildRecoveryResumeActionPromptNoDraftContentPostTargetRequiresSourceBo
 	}
 }
 
+func TestBuildRecoveryResumeActionPromptForTrackedContentMigrationOutputsPrefersCheckpointContext(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildRecoveryResumeActionPrompt(recoveryResumeState{
+		targetPath:              "content/posts/i-cant-picture-my-kids.md",
+		targetDraft:             "# I Can't Picture My Kids\n\nExisting content.\n",
+		preferCheckpointContext: true,
+		preferredRoot:           "content/posts",
+		checkpointArtifactPaths: []string{"content/technonymous-index.json"},
+		blockerClass:            taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint,
+		failureReason:           "repeated read-only recovery discovery for content/technonymous-index.json within the same recovery turn; write the deliverable or resume from the durable artifact instead of rereading context again",
+	})
+
+	if strings.Contains(prompt, "A substantive durable draft is already available above.") {
+		t.Fatalf("prompt = %q, did not want target-file draft to count as reusable durable draft", prompt)
+	}
+	if !strings.Contains(prompt, "already-written batch-output reference") {
+		t.Fatalf("prompt = %q, want already-written batch output guidance", prompt)
+	}
+	if !strings.Contains(prompt, "`content/posts`, `content/technonymous-index.json`") {
+		t.Fatalf("prompt = %q, want bounded checkpoint root/artifact grounding", prompt)
+	}
+	if !strings.Contains(prompt, "identify the next remaining post instead of rewriting the current target file by default") {
+		t.Fatalf("prompt = %q, want next-post guidance", prompt)
+	}
+}
+
 func TestBuildRecoveryResumeActionPromptUsesAvailableDraftDirectly(t *testing.T) {
 	t.Parallel()
 
@@ -36316,6 +36343,106 @@ Read the first 12 entries (indices 0-11) from content/technonymous-index.json. F
 	}
 	if !strings.Contains(state.summaryDraftRejectedReason, "source-backed content-migration task scaffold") {
 		t.Fatalf("summaryDraftRejectedReason = %q, want source-backed scaffold rejection", state.summaryDraftRejectedReason)
+	}
+}
+
+func TestLoadRecoveryResumeStatePrefersCheckpointContextForTrackedContentMigrationOutputs(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	projectSlug := "content-migration-checkpoint-context"
+	orgSlug := "acme"
+	description := "Read the first 12 entries (indices 0-11) from content/technonymous-index.json. For each entry, use web_fetch to retrieve the full post HTML from its URL, convert the post body to clean markdown, and write each post as a separate .md file under content/posts/. Use the URL slug as the filename."
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			TaskNumber:     70,
+			Title:          "Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/",
+			Description:    &description,
+			WorkStatus:     "blocked",
+			Metadata: mustRawJSON(t, map[string]any{
+				"recovery_file_write_checkpoint": map[string]any{
+					"version":        1,
+					"target_path":    "content/posts/i-cant-picture-my-kids.md",
+					"failure_reason": "repeated read-only recovery discovery for content/technonymous-index.json within the same recovery turn; write the deliverable or resume from the durable artifact instead of rereading context again",
+				},
+				"content_migration_checkpoint": map[string]any{
+					"version": 1,
+					"artifacts": []map[string]any{
+						{"path": "content/technonymous-index.json"},
+					},
+					"outputs": []map[string]any{
+						{"path": "content/posts/i-cant-picture-my-kids.md"},
+						{"path": "content/posts/the-year-the-phone-started-talking.md"},
+					},
+				},
+			}),
+		},
+	}}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: orgID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		orgID: {ID: orgID, Slug: orgSlug},
+	}}
+
+	projectRoot := filepath.Join(dataDir, "workspaces", projectSlug)
+	if err := os.MkdirAll(filepath.Join(projectRoot, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("mkdir content/posts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "content", "posts", "i-cant-picture-my-kids.md"), []byte("# I Can't Picture My Kids\n\nExisting content.\n"), 0o644); err != nil {
+		t.Fatalf("write target output: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "content", "posts", "the-year-the-phone-started-talking.md"), []byte("# The Year the Phone Started Talking\n\nExisting content.\n"), 0o644); err != nil {
+		t.Fatalf("write sibling output: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "content", "technonymous-index.json"), []byte("{\"post_urls\":[]}"), 0o644); err != nil {
+		t.Fatalf("write checkpoint artifact: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	state, ok := fixture.engine.loadRecoveryResumeState(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery resume state")
+	}
+	if !state.preferCheckpointContext {
+		t.Fatal("expected checkpoint-complete content migration to prefer checkpoint context")
+	}
+	if state.preferredRoot != "content/posts" {
+		t.Fatalf("preferredRoot = %q, want %q", state.preferredRoot, "content/posts")
+	}
+	foundCheckpointArtifact := false
+	for _, path := range state.checkpointArtifactPaths {
+		if path == "content/technonymous-index.json" {
+			foundCheckpointArtifact = true
+			break
+		}
+	}
+	if !foundCheckpointArtifact {
+		t.Fatalf("checkpointArtifactPaths = %#v, want content/technonymous-index.json", state.checkpointArtifactPaths)
+	}
+	joined := strings.Join(state.contextNotes, "\n")
+	if !strings.Contains(joined, "Do not start by rewriting `content/posts/i-cant-picture-my-kids.md` again") {
+		t.Fatalf("contextNotes = %q, want anti-rewrite checkpoint guidance", joined)
 	}
 }
 

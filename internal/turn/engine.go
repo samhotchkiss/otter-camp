@@ -17398,6 +17398,9 @@ type recoveryResumeState struct {
 	failureReason               string
 	priorFailureReasons         []string
 	contextNotes                []string
+	preferCheckpointContext     bool
+	preferredRoot               string
+	checkpointArtifactPaths     []string
 }
 
 func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRuntime, preserveInitialMessage bool) (bool, error) {
@@ -17619,6 +17622,20 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 			state.summaryDraftRejectedReason = "draft content belongs to a different task"
 		}
 	}
+	if haveTaskRecord {
+		if preferredRoot, artifactPaths, preferCheckpointContext := e.contentMigrationCheckpointResumeContext(ctx, rt, taskRecord); preferCheckpointContext {
+			state.preferCheckpointContext = true
+			state.preferredRoot = preferredRoot
+			state.checkpointArtifactPaths = artifactPaths
+			state.contextNotes = append(state.contextNotes,
+				fmt.Sprintf("- Multi-output content-migration checkpoint is already substantive under `%s`.", preferredRoot),
+				fmt.Sprintf("- Do not start by rewriting `%s` again unless you are explicitly repairing that exact file.", strings.TrimSpace(state.targetPath)),
+			)
+			if len(artifactPaths) > 0 {
+				state.contextNotes = append(state.contextNotes, "- Use the checkpoint-owned root/artifact context to continue remaining outputs: "+joinQuotedPaths(append([]string{preferredRoot}, artifactPaths...))+".")
+			}
+		}
+	}
 	if strings.TrimSpace(state.targetDraft) == "" && strings.TrimSpace(state.artifactDraft) == "" && strings.TrimSpace(state.summaryDraft) == "" && haveTaskRecord {
 		if scaffold := inferredTaskDeliverableDraft(taskRecord); scaffold != "" {
 			state.summaryDraft = scaffold
@@ -17638,6 +17655,94 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 		return recoveryResumeState{}, false
 	}
 	return state, true
+}
+
+func (e *TurnEngine) contentMigrationCheckpointResumeContext(ctx context.Context, rt *turnRuntime, taskRecord repo.ProjectTask) (string, []string, bool) {
+	checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata)
+	if !ok || len(checkpoint.Outputs) == 0 {
+		return "", nil, false
+	}
+	preferredRoot := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
+	if preferredRoot == "" {
+		return "", nil, false
+	}
+	roots, err := e.recoveryWorkspaceRoots(ctx, rt)
+	if err != nil || len(roots) == 0 {
+		return "", nil, false
+	}
+	if !contentMigrationCheckpointOutputsCompleteAcrossRoots(roots, taskRecord, checkpoint, preferredRoot) {
+		return "", nil, false
+	}
+	return preferredRoot, contentMigrationCheckpointArtifactPaths(checkpoint), true
+}
+
+func contentMigrationCheckpointOutputsCompleteAcrossRoots(roots []string, taskRecord repo.ProjectTask, checkpoint taskcheckpoint.ContentMigrationCheckpoint, preferredRoot string) bool {
+	count := 0
+	for _, output := range checkpoint.Outputs {
+		targetPath := normalizeWorkspaceRelativePath(output.Path)
+		if targetPath == "" || !deliverableTargetMatchesTaskContract(taskRecord, targetPath) {
+			continue
+		}
+		if preferredRoot != "" && !workspacePathWithinRoot(targetPath, preferredRoot) {
+			continue
+		}
+		if !recoveryWorkspaceFileExists(roots, targetPath) {
+			return false
+		}
+		count++
+	}
+	return count > 0
+}
+
+func recoveryWorkspaceFileExists(roots []string, relativePath string) bool {
+	relativePath = normalizeWorkspaceRelativePath(relativePath)
+	if relativePath == "" {
+		return false
+	}
+	for _, root := range roots {
+		absPath, _, err := resolveRecoveryWorkspacePath(root, relativePath)
+		if err != nil {
+			continue
+		}
+		info, statErr := os.Stat(absPath)
+		if statErr == nil && !info.IsDir() && info.Size() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func contentMigrationCheckpointArtifactPaths(checkpoint taskcheckpoint.ContentMigrationCheckpoint) []string {
+	if len(checkpoint.Artifacts) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(checkpoint.Artifacts))
+	paths := make([]string, 0, len(checkpoint.Artifacts))
+	for _, artifact := range checkpoint.Artifacts {
+		path := normalizeWorkspaceRelativePath(artifact.Path)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func joinQuotedPaths(paths []string) string {
+	parts := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		parts = append(parts, "`"+path+"`")
+	}
+	return strings.Join(parts, ", ")
 }
 
 func recoveryResumeDraftForPrompt(failureReason, targetPath, draft string) (string, string) {
@@ -17744,10 +17849,17 @@ func appendUniqueWorkspaceRoots(current []string, candidates ...string) []string
 }
 
 func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
-	lines := []string{
-		"[Recovery resume state]",
-		"Resume order: target file draft, then recovery artifact draft, then checkpoint metadata/failure reason.",
-		"Continue from the durable drafts below instead of asking which task to resume.",
+	lines := []string{"[Recovery resume state]"}
+	if state.preferCheckpointContext {
+		lines = append(lines,
+			"Resume order: checkpoint metadata/failure reason first, then recovery artifact draft, and only use the target-file excerpt if you are explicitly repairing that exact file.",
+			"This is a multi-output content-migration recovery. Continue from checkpoint-owned root/artifact context instead of treating the current target file as the only valid next write.",
+		)
+	} else {
+		lines = append(lines,
+			"Resume order: target file draft, then recovery artifact draft, then checkpoint metadata/failure reason.",
+			"Continue from the durable drafts below instead of asking which task to resume.",
+		)
 	}
 	if blockerClass := strings.TrimSpace(state.blockerClass); blockerClass != "" {
 		lines = append(lines, "Checkpoint blocker class: "+blockerClass)
@@ -17766,8 +17878,12 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 		lines = append(lines, "Target file: "+target)
 		if draft := strings.TrimSpace(state.targetDraft); draft != "" {
 			excerpt, truncated := truncateRecoveryResumeExcerpt(draft, recoveryResumeExcerptChars)
+			label := "Existing target file draft:"
+			if state.preferCheckpointContext {
+				label = "Existing target file excerpt (already-written batch output context):"
+			}
 			lines = append(lines,
-				"Existing target file draft:",
+				label,
 				"```text",
 				excerpt,
 				"```",
@@ -17840,9 +17956,9 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 }
 
 func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
-	hasDurableDraft := strings.TrimSpace(state.targetDraft) != "" ||
-		strings.TrimSpace(state.artifactDraft) != "" ||
-		strings.TrimSpace(state.summaryDraft) != ""
+	hasDurableDraft := strings.TrimSpace(state.artifactDraft) != "" ||
+		strings.TrimSpace(state.summaryDraft) != "" ||
+		(!state.preferCheckpointContext && strings.TrimSpace(state.targetDraft) != "")
 
 	lines := []string{
 		"Continue the active task recovery now.",
@@ -17857,16 +17973,34 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 		lines = append(lines, "Your next response must take direct recovery action from the validated checkpoint context above.")
 	}
 	if target := strings.TrimSpace(state.targetPath); target != "" {
-		lines = append(lines, "Treat "+target+" as the target file for this recovery turn.")
+		if state.preferCheckpointContext {
+			lines = append(lines, "Treat "+target+" as an already-written batch-output reference unless the checkpoint context above proves that exact file still needs repair.")
+		} else {
+			lines = append(lines, "Treat "+target+" as the target file for this recovery turn.")
+		}
 	}
-	lines = append(lines,
-		"Do not browse .ottercamp/recovery broadly or read recovery artifacts for other tasks during this recovery turn.",
-		"If you need grounding, limit reads to the target file, the named recovery artifact for this task, and same-task planning artifacts only.",
-		"Ignore unrelated OC-* artifacts even if a broad search returns them; they are not valid recovery context for this task.",
-	)
+	lines = append(lines, "Do not browse .ottercamp/recovery broadly or read recovery artifacts for other tasks during this recovery turn.")
+	if state.preferCheckpointContext {
+		paths := make([]string, 0, 1+len(state.checkpointArtifactPaths))
+		if root := strings.TrimSpace(state.preferredRoot); root != "" {
+			paths = append(paths, root)
+		}
+		paths = append(paths, state.checkpointArtifactPaths...)
+		if len(paths) > 0 {
+			lines = append(lines, "If you need grounding, limit reads to "+joinQuotedPaths(paths)+" and do not reopen broad workspace discovery.")
+		}
+		lines = append(lines, "Ignore unrelated OC-* artifacts even if a broad search returns them; only the checkpoint-owned output root/artifact context above is valid for continuing this batch.")
+	} else {
+		lines = append(lines,
+			"If you need grounding, limit reads to the target file, the named recovery artifact for this task, and same-task planning artifacts only.",
+			"Ignore unrelated OC-* artifacts even if a broad search returns them; they are not valid recovery context for this task.",
+		)
+	}
 	if !hasDurableDraft {
 		lines = append(lines, "No recovered draft body is available above. Do not reuse placeholder target-file text, checkpoint summaries, or task-brief scaffolds as the file body.")
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(state.targetPath)), "content/posts/") {
+		if state.preferCheckpointContext {
+			lines = append(lines, "For this multi-output content/posts batch, inspect the checkpoint-owned output root/artifact context to identify the next remaining post instead of rewriting the current target file by default.")
+		} else if strings.HasPrefix(strings.ToLower(strings.TrimSpace(state.targetPath)), "content/posts/") {
 			lines = append(lines, "For this content/posts target, any existing stub file is not authoritative. Fetch or source the real post body from same-task inputs before writing.")
 		}
 	}

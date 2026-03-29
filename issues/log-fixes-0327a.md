@@ -1795,3 +1795,20 @@
     - `GOFLAGS='' go test ./internal/tools/native -run 'Test(TaskExpectsMarkdownDeliverablesRecognizesSeparateMDFileWording|LatestRecoveryTargetPathForSession(PrefersFirstMissingMetadataBatchOutputOverCompletedOutput|PrefersMetadataBatchOutputOverDependencyArtifactHistory|IgnoresDependencyArtifactHistoryForMarkdownBatchWithoutMetadata)|File(ListAllowsExecutionDeliverableRootInspectionWithinRecoveryTargetRootForBatchTask|ReadAllowsExecutionSiblingDeliverableInspectionWithinRecoveryTargetRootForBatchTask|ReadAllowsCheckpointArtifactInspectionWhenTrackedBatchOutputsComplete))$' -count=1`
   - proof target after deploy:
     - the next task-70 retry should be able to inspect `content/posts` and `content/technonymous-index.json` from checkpoint-owned state instead of bouncing immediately back to `content/posts/i-cant-picture-my-kids.md`
+- 2026-03-28 18:54:29 MDT - Finished: make content-migration recovery resumes prefer checkpoint context over the current target-file draft.
+  - live diagnosis:
+    - even after the native root/artifact allowances landed, task-70 recovery was still re-centering the prompt on `content/posts/i-cant-picture-my-kids.md`
+    - that file already existed as one substantive batch output, but the recovery resume prompt still treated it like the primary durable draft, which kept encouraging another rewrite before inspecting checkpoint-owned root/artifact context
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `recoveryResumeState` now tracks `preferCheckpointContext`, `preferredRoot`, and `checkpointArtifactPaths`
+    - `loadRecoveryResumeState(...)` now recognizes multi-output content-migration checkpoints whose tracked outputs are already substantive on disk and appends explicit anti-rewrite context notes
+    - `buildRecoveryResumeStateMessage(...)` and `buildRecoveryResumeActionPrompt(...)` now pivot recovery guidance toward checkpoint-owned root/artifact context, demote the existing target-file draft to already-written batch-output reference text, and stop treating that target file as the primary durable draft source
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added focused coverage for checkpoint-context recovery prompt shaping and recovery state loading when tracked content-migration outputs are already substantive
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3472`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildRecoveryResumeActionPrompt(HardensIntentOnlyCheckpointWithoutDraft|NoDraftContentPostTargetRequiresSourceBody|ForTrackedContentMigrationOutputsPrefersCheckpointContext)|LoadRecoveryResumeState(RejectsContentMigration(CheckpointSummaryDraft|RecoveryNoteDraft|TaskScaffoldSummaryDraft)|PrefersCheckpointContextForTrackedContentMigrationOutputs))$' -count=1`
+  - proof target after deploy:
+    - the next task-70 recovery turn should treat `content/posts/i-cant-picture-my-kids.md` as already-written batch context and start from checkpoint-owned `content/posts` / `content/technonymous-index.json` instead of trying to rewrite that same file again
