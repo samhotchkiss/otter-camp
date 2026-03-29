@@ -7687,6 +7687,7 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		if strings.Contains(draftLine, "completed_closeout_child_tasks=") {
 			lines = append(lines, "If a named draft task above already shows completed_closeout_child_tasks=..., use that completed child proof to advance or close the parent instead of creating another replacement child.")
 			lines = append(lines, "When completed child proof and completed-task batch evidence are already present, do not re-verify broad artifact roots on disk before advancing the parent unless a concrete tool error says the artifact is missing.")
+			lines = append(lines, "Before marking that closeout-ready parent done, record parent_orchestration.child_verifications for the completed child outputs, parent_orchestration.integration_check.status=passed, and parent_orchestration.outcome_assessment.satisfied=true on the parent task itself.")
 		}
 		if strings.Contains(draftLine, "deliverable_path=") {
 			lines = append(lines, "If a named draft task above already shows deliverable_path=..., inspect or write that exact path instead of reopening broad workspace context.")
@@ -7719,6 +7720,7 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		if focusHasCompletedCloseout {
 			lines = append(lines, "Because that focus parent already has completed closeout child proof, advance or close the parent directly instead of creating another replacement child.")
 			lines = append(lines, "Do not relist `content/posts`, reread sibling batch outputs, or re-verify the same deliverable on disk unless a concrete tool error says the completed artifact is missing.")
+			lines = append(lines, "Do not cancel blocked stale child lanes first from the project session. If parent completion still requires child verification or integration, update the parent_orchestration metadata on the parent task and then close it.")
 		}
 		if strings.Contains(focusLine, "replaceable_blocked_child_tasks=") && !focusHasCompletedCloseout {
 			lines = append(lines, "Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.")
@@ -26929,6 +26931,7 @@ func shouldStopAfterBlockedProjectExecutionBlockedMutation(rt *turnRuntime, resu
 			"flow_owned_review_status_blocked",
 			"review_action_required",
 			"deliverable_path_required",
+			"parent task requires child verification and passed integration before completion",
 			"project continuation already has focused draft task",
 			"task must remain orchestration-only while executable child tasks exist",
 		) {
@@ -27043,6 +27046,9 @@ func projectExecutionBlockedMutationStopMessage(results []ToolResult) string {
 		}
 		if strings.Contains(errText, "project continuation already has focused draft task") {
 			return "[Project continuation already has a narrower focused draft task. Create or advance the smallest fresh child work beneath that focus task instead of re-queueing it or promoting its ancestors from the project lane.]"
+		}
+		if strings.Contains(errText, "parent task requires child verification and passed integration before completion") {
+			return "[Project continuation found that the closeout-ready parent still needs parent_orchestration evidence before it can finish. Record parent_orchestration.child_verifications for the completed child tasks, set parent_orchestration.integration_check.status=passed, and set parent_orchestration.outcome_assessment.satisfied=true on the parent task itself. Do not cancel blocked stale child lanes from the project session first.]"
 		}
 		if strings.Contains(errText, "task_execution_required") {
 			detail := strings.TrimSpace(anyString(result.Output["message"]))

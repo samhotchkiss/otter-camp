@@ -14084,6 +14084,7 @@ func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnTaskLaneBoundary
 		{Name: "file.write", Error: "task_execution_required: executable project tasks already exist"},
 		{Name: "file.write", Output: map[string]any{"error": "task_execution_required", "message": "Executable project tasks already exist for this project. Do not write deliverable files like `content/technonymous-index.json` from the project session."}},
 		{Name: "task.update", Error: "flow_owned_status_blocked: this task is flow-owned"},
+		{Name: "task.update", Error: "parent task requires child verification and passed integration before completion: verify child outputs for OC-66; record a passed integration or end-to-end check"},
 		{Name: "file.write", Error: "deliverable_path_required: continue the concrete deliverable instead"},
 		{Name: "task.update", Error: "task must remain orchestration-only while executable child tasks exist"},
 	}
@@ -14130,6 +14131,25 @@ func TestProjectExecutionBlockedMutationStopMessageOnTaskLaneBoundary(t *testing
 	}
 	if !strings.Contains(message, "Do not retry task.update on it from the PM lane") {
 		t.Fatalf("message = %q, want PM-lane retry guard", message)
+	}
+}
+
+func TestProjectExecutionBlockedMutationStopMessageOnParentCompletionRequirements(t *testing.T) {
+	t.Parallel()
+
+	message := projectExecutionBlockedMutationStopMessage([]ToolResult{{
+		Name:  "task.update",
+		Error: "parent task requires child verification and passed integration before completion: verify child outputs for OC-66, OC-67; record a passed integration or end-to-end check",
+	}})
+
+	if !strings.Contains(message, "parent_orchestration.child_verifications") {
+		t.Fatalf("message = %q, want parent_orchestration child verification guidance", message)
+	}
+	if !strings.Contains(message, "parent_orchestration.integration_check.status=passed") {
+		t.Fatalf("message = %q, want integration guidance", message)
+	}
+	if !strings.Contains(message, "Do not cancel blocked stale child lanes") {
+		t.Fatalf("message = %q, want anti-cancel guidance", message)
 	}
 }
 
@@ -20445,6 +20465,12 @@ func TestBuildProjectContinuationActionPromptAddsCompletedCloseoutGuidance(t *te
 	}
 	if !strings.Contains(prompt, "do not re-verify broad artifact roots on disk before advancing the parent") {
 		t.Fatalf("prompt = %q, want completed-closeout anti-reread guidance", prompt)
+	}
+	if !strings.Contains(prompt, "record parent_orchestration.child_verifications") {
+		t.Fatalf("prompt = %q, want parent_orchestration closeout guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not cancel blocked stale child lanes first from the project session") {
+		t.Fatalf("prompt = %q, want anti-cancel guidance for closeout-ready parent", prompt)
 	}
 	if strings.Contains(prompt, "Because that focus parent only has malformed or stale child artifact lanes") {
 		t.Fatalf("prompt = %q, should not append malformed-child replacement guidance once completed closeout proof exists", prompt)
