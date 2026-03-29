@@ -250,3 +250,15 @@ They need sharper stopping rules than ordinary execution lanes.
   - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockTaskExecution(BroadContextTool|CurrentTaskRediscoveryTool)|ShouldStopAfterBlockedTaskRecoveryDirectWriteOnly(Batch)?|DispatchToolsStopsAfter(PureBlockedDirectWriteOnlyRecoveryBatch|BlockedDirectWriteOnlyRecoveryBatchWithReadOnlyTail))$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is rebuild/restart and confirm the next task `175` work turn starts with `sambot/widget.html` directly instead of self-rediscovery
+- 2026-03-29 16:02 MDT - The next supervisory seam moved back to the PM continuation lane. Fresh live session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` emitted assistant message `9480`: `What would you like to know? I'm Jordan, the PM for the Sam.blog Rebuild project. Ask me about project status, tasks, workstreams, or anything else related to the project.`
+  - fresh live evidence:
+    - the message was emitted from a synthetic `project_execution_continuation` turn immediately after `[Project continuation resumed blocked review lane task 174 ...]`
+    - the existing generic-reply detector already retried obvious PM filler like `I'm ready to help`, but it did not match this Jordan/PM phrasing
+    - impact: the continuation could silently settle on generic chat instead of issuing a fresh bounded retry message for the actual blocked project work
+  - local fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now widens `looksLikeGenericTaskRecoveryReply(...)` to catch `what would you like to know` and `ask me about project status, tasks, workstreams`
+    - added [`TestHandleCompletedProjectExecutionContinuationTurnRetriesJordanGenericReplyWithFreshMessage`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurnRetries(GenericReplyWithFreshMessage|JordanGenericReplyWithFreshMessage)$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is rebuild/restart and confirm the next PM continuation treats the Jordan-style reply as generic and requeues bounded continuation work

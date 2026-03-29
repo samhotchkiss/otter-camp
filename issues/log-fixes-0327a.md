@@ -3641,3 +3641,13 @@
     - `GOFLAGS='' go test ./internal/turn -run 'TestRecoveryFileWriteDraftRejectReasonRejects(ReviewEvidenceSummaryPlaceholderAtExplicitDeliverable|PlaceholderEvidenceSummaryAtExplicitDeliverable|PlaceholderNarrationSummaryAtExplicitDeliverable)$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is rebuild/restart and confirm the next widget reread surfaces `placeholder_deliverable` directly
+- 2026-03-29 16:02 MDT - Widened project-continuation generic-reply detection for the Jordan-style PM filler that appeared live in Sam.blog session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `looksLikeGenericTaskRecoveryReply(...)` now matches `what would you like to know`, `ask me about project status`, and `ask me about project status, tasks, workstreams`
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestHandleCompletedProjectExecutionContinuationTurnRetriesJordanGenericReplyWithFreshMessage`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurnRetries(GenericReplyWithFreshMessage|JordanGenericReplyWithFreshMessage)$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is rebuild/restart and confirm the next PM continuation retries instead of settling on Jordan-style filler

@@ -631,3 +631,12 @@
   - impact:
     - the runtime still leaks another close cousin of review commentary through `file.read`
     - review can reject correctly, but task execution/recovery still sees the wrong content shape underneath
+- 2026-03-29 16:02 MDT - Async project continuations can still silently settle on Jordan-style generic PM chat because the generic-reply classifier does not recognize that phrasing family.
+  - fresh live evidence:
+    - Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` emitted message `9480`: `What would you like to know? I'm Jordan, the PM for the Sam.blog Rebuild project. Ask me about project status, tasks, workstreams, or anything else related to the project.`
+    - that message followed a synthetic `project_execution_continuation` resume for blocked review task `174`
+  - bug:
+    - [`looksLikeGenericTaskRecoveryReply(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) matched earlier filler (`I'm ready to help`, `what's your question`) but not `what would you like to know` / `ask me about project status, tasks, workstreams`
+  - impact:
+    - project continuation turns can be marked complete on generic PM chatter
+    - the PM lane can park instead of issuing the next bounded continuation retry
