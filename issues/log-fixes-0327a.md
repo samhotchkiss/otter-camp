@@ -3240,3 +3240,15 @@
     - `GOFLAGS='' go test ./internal/turn -run 'TestShouldBlockProjectContinuationSnapshotRediscoveryTool(BlocksActiveDeliverableRead|BlocksTerminalBlockedLeafDeliverableRead|BlocksCompanionPlanningArtifactRead)$' -count=1`
   - deploy / proof status:
     - ready to deploy next; live canary remains Sam.blog PM turn family reading `planning/sambot-feature-spec.md` from the project lane
+- 2026-03-29 11:44 MDT - Trimmed pure blocked PM rediscovery batches down to the minimum blocked evidence before the stop message.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added [`trimBlockedProjectContinuationRediscoveryResults(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - [`dispatchTools(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now applies that trim before appending blocked PM rediscovery batches, so pure blocked continuations keep only the minimum proof needed for the stop message instead of recording every blocked named-task reread in the same turn
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestTrimBlockedProjectContinuationRediscoveryResultsKeepsMinimumEvidence`
+      - added `TestDispatchToolsTrimsPureBlockedProjectContinuationRediscoveryBatch`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterBlockedProjectContinuationRediscovery|TrimBlockedProjectContinuationRediscoveryResultsKeepsMinimumEvidence|DispatchToolsStopsAfterPureBlockedProjectContinuationRediscoveryBatch|DispatchToolsTrimsPureBlockedProjectContinuationRediscoveryBatch|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksTerminalBlockedLeafDeliverableRead)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; live canary remains the Sam.blog PM session, where longer pure blocked `task.get` rediscovery batches should now collapse to the minimum blocked evidence plus the existing stop message

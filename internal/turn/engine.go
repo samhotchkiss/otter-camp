@@ -14909,6 +14909,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 
 	if len(blockedCalls) > 0 {
 		if len(toolCalls) == 0 {
+			blockedCalls = trimBlockedProjectContinuationRediscoveryResults(rt, blockedCalls)
 			if resumed, resumeErr := e.handleBlockedProjectContinuationReviewResume(ctx, rt, blockedCalls); resumeErr != nil {
 				return false, resumeErr
 			} else if resumed {
@@ -28545,6 +28546,15 @@ func shouldStopAfterBlockedProjectContinuationRediscovery(rt *turnRuntime, resul
 		return false
 	}
 	return true
+}
+
+func trimBlockedProjectContinuationRediscoveryResults(rt *turnRuntime, results []ToolResult) []ToolResult {
+	if !shouldStopAfterBlockedProjectContinuationRediscovery(rt, results) || len(results) <= 2 {
+		return results
+	}
+	trimmed := make([]ToolResult, 2)
+	copy(trimmed, results[:2])
+	return trimmed
 }
 
 func (e *TurnEngine) handleBlockedProjectContinuationReviewResume(ctx context.Context, rt *turnRuntime, results []ToolResult) (bool, error) {

@@ -15590,6 +15590,28 @@ func TestShouldStopAfterBlockedProjectContinuationRediscovery(t *testing.T) {
 	}
 }
 
+func TestTrimBlockedProjectContinuationRediscoveryResultsKeepsMinimumEvidence(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+	}
+	results := []ToolResult{
+		{Name: "task_get", Error: "project continuation already has named active or draft tasks in the continuation prompt. Do not re-read the same named task with task.get; act on it directly instead."},
+		{Name: "task_get", Error: "project continuation already has named active or draft tasks in the continuation prompt. Do not re-read the same named task with task.get; act on it directly instead."},
+		{Name: "task_get", Error: "project continuation already has named active or draft tasks in the continuation prompt. Do not re-read the same named task with task.get; act on it directly instead."},
+		{Name: "task_get", Error: "project continuation already has named active or draft tasks in the continuation prompt. Do not re-read the same named task with task.get; act on it directly instead."},
+	}
+
+	trimmed := trimBlockedProjectContinuationRediscoveryResults(rt, results)
+	if len(trimmed) != 2 {
+		t.Fatalf("len(trimmed) = %d, want 2", len(trimmed))
+	}
+}
+
 func TestShouldStopAfterBlockedTaskExecutionBoundaryMutation(t *testing.T) {
 	t.Parallel()
 
@@ -35777,8 +35799,12 @@ func TestDispatchToolsStopsAfterPureBlockedProjectContinuationRediscoveryBatch(t
 			TurnNumber: 1,
 			Status:     "in_progress",
 		},
-		startedAt:          time.Now(),
-		initialMessageText: "Project continuation resume.\nAlready-active non-terminal tasks in the tree:\n- [#35] Active task (task_id=" + activeTaskID.String() + ")\nActionable draft tasks already in the tree:\n- [#36] Draft task (task_id=" + draftTaskID.String() + ")",
+		startedAt: time.Now(),
+		initialMessageText: buildProjectContinuationActionPrompt("Project continuation resume.", projectExecutionContinuationSnapshot{
+			ProjectLine:    "Active project id: " + projectID.String(),
+			ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 35 (Active task) id=" + activeTaskID.String() + " title=\"Active task\" work_status=in_progress assigned_agent_id=worker-1",
+			DraftTaskLine:  "Actionable draft tasks already in the tree: task 36 (Draft task) id=" + draftTaskID.String() + " title=\"Draft task\" work_status=draft flow_template_id=template-1",
+		}),
 	}
 	fixture.chat.turns[turnID] = rt.turn
 	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turnID)
@@ -35808,6 +35834,64 @@ func TestDispatchToolsStopsAfterPureBlockedProjectContinuationRediscoveryBatch(t
 	}
 	if rt.stopReason != stopReasonValidationBlocked {
 		t.Fatalf("stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if !fixture.messages.containsContentSubstring("Project continuation rediscovery guard blocked only broad rereads") {
+		t.Fatal("expected project continuation rediscovery early-stop message")
+	}
+}
+
+func TestDispatchToolsTrimsPureBlockedProjectContinuationRediscoveryBatch(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	activeTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.session.Mode = "async"
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:         turnID,
+			SessionID:  fixture.session.ID,
+			TurnNumber: 1,
+			Status:     "in_progress",
+		},
+		startedAt:          time.Now(),
+		initialMessageText: "Project continuation resume.\nAlready-active non-terminal tasks in the tree:\n- [#35] Active task (task_id=" + activeTaskID.String() + ")\nActionable draft tasks already in the tree:\n- [#36] Draft task (task_id=" + draftTaskID.String() + ")",
+	}
+	fixture.chat.turns[turnID] = rt.turn
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turnID)
+
+	stop, err := fixture.engine.dispatchTools(context.Background(), rt, []ModelToolCall{
+		{ID: "blocked-task-get-1", Name: "task.get", Arguments: map[string]any{"task_id": activeTaskID.String()}},
+		{ID: "blocked-task-get-2", Name: "task.get", Arguments: map[string]any{"task_id": draftTaskID.String()}},
+		{ID: "blocked-task-get-3", Name: "task.get", Arguments: map[string]any{"task_id": activeTaskID.String()}},
+		{ID: "blocked-task-get-4", Name: "task.get", Arguments: map[string]any{"task_id": draftTaskID.String()}},
+	})
+	if err != nil {
+		t.Fatalf("dispatchTools: %v", err)
+	}
+	if !stop {
+		t.Fatal("expected dispatchTools to stop after pure blocked project-continuation rediscovery batch")
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	toolResultCount := 0
+	for _, message := range messages {
+		if strings.EqualFold(message.Role, "tool_result") {
+			toolResultCount++
+		}
+	}
+	if toolResultCount != 2 {
+		t.Fatalf("tool_result count = %d, want 2", toolResultCount)
 	}
 	if !fixture.messages.containsContentSubstring("Project continuation rediscovery guard blocked only broad rereads") {
 		t.Fatal("expected project continuation rediscovery early-stop message")
