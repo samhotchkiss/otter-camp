@@ -186,6 +186,12 @@ func (e *NativeToolExecutor) rejectPlaceholderDeliverableRead(ctx context.Contex
 	if deliverablePath == "" {
 		deliverablePath = parsePlaceholderDeliverableTarget(content)
 	}
+	if deliverablePath == "" && strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		outputs := currentTaskContentMigrationOutputSet(taskRecord)
+		if _, ok := outputs[normalizedPath]; ok {
+			deliverablePath = normalizedPath
+		}
+	}
 	if deliverablePath == "" || !sameOrNestedWorkspacePath(normalizedPath, deliverablePath) {
 		return nil, false, nil
 	}
@@ -222,7 +228,8 @@ func (e *NativeToolExecutor) rejectMismatchedTaskDeliverableRead(ctx context.Con
 	if taskAllowsPerItemDeliverableInspection(taskRecord, normalizedPath) {
 		return nil, false, nil
 	}
-	if !taskDraftSemanticallyMismatchesScope(taskRecord, content) {
+	if !reviewCheckpointOutputLooksLikeDecisionNarration(taskRecord, normalizedPath, content) &&
+		!taskDraftSemanticallyMismatchesScope(taskRecord, content) {
 		return nil, false, nil
 	}
 	return map[string]any{
@@ -234,6 +241,31 @@ func (e *NativeToolExecutor) rejectMismatchedTaskDeliverableRead(ctx context.Con
 			normalizedPath,
 		),
 	}, true, nil
+}
+
+func reviewCheckpointOutputLooksLikeDecisionNarration(taskRecord repo.ProjectTask, normalizedPath, content string) bool {
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		return false
+	}
+	outputs := currentTaskContentMigrationOutputSet(taskRecord)
+	if _, ok := outputs[normalizeWorkspacePath(normalizedPath)]; !ok {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(content))
+	if lower == "" {
+		return false
+	}
+	return containsAnySubstring(lower,
+		"the workspace is blocking further reads under",
+		"evidence already gathered across this review session",
+		"i have sufficient evidence from prior turns to render the decision now",
+	) && containsAnySubstring(lower,
+		"assessment against acceptance criteria",
+		"the deliverables satisfy the task's acceptance criteria",
+		"approving.",
+		"review decision: approve",
+		"review decision: reject",
+	)
 }
 
 func (e *NativeToolExecutor) rejectExecutionFirstDeliverableReread(ctx context.Context, wd SessionWorkDir, scope workspaceScope, relativePath string) (map[string]any, bool, error) {
@@ -891,6 +923,19 @@ func looksLikeRejectedDeliverablePlaceholder(content string) bool {
 	}
 	if strings.Contains(lower, "i don't see a durable draft") &&
 		(strings.Contains(lower, "please provide the substantive draft") || strings.Contains(lower, "please provide the recovery artifact")) {
+		return true
+	}
+	if containsAnySubstring(lower,
+		"the workspace is blocking further reads under",
+		"evidence already gathered across this review session",
+		"i have sufficient evidence from prior turns to render the decision now",
+	) && containsAnySubstring(lower,
+		"assessment against acceptance criteria",
+		"the deliverables satisfy the task's acceptance criteria",
+		"approving.",
+		"review decision: approve",
+		"review decision: reject",
+	) {
 		return true
 	}
 	if (strings.Contains(lower, "what i need from you:") || strings.Contains(lower, "**what i need from you**:")) &&

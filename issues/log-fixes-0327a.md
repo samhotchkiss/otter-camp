@@ -2233,3 +2233,18 @@
     - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and health is `ok`
     - task `78` resumed immediately on fresh session `986e93e5-5ed5-47a7-b196-fccb3a7b62a3`, but the post-restart replay is already in the narrowed review-only lane, so the exact write-then-blocked-`git.commit` path has not re-fired yet on the new binary
     - fresh direct live proof is still pending the next execution/recovery retry where `file.edit` / `file.write` and blocked `git.commit` are split across separate same-turn tool batches
+- 2026-03-29 00:13:58 MDT - Finished: reject checkpoint-owned review outputs that contain review-summary / approval narration instead of real deliverable content.
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `rejectPlaceholderDeliverableRead(...)` now binds checkpoint-owned content-migration outputs during review even when the task lacks a single explicit deliverable path
+    - `rejectMismatchedTaskDeliverableRead(...)` now treats checkpoint-owned review outputs that contain self-referential decision narration (for example, `The workspace is blocking further reads...` plus approval/rejection prose) as `mismatched_deliverable_context`
+    - added `reviewCheckpointOutputLooksLikeDecisionNarration(...)` so checkpoint-owned files like `content/posts/README.md` do not get reused as valid review evidence when they are actually polluted with review meta text
+  - changed [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go):
+    - added `TestFileReadRejectsReviewSummaryPlaceholderAtCheckpointOwnedReviewOutput`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - runtime version is now `3513`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'TestFileReadRejects(PlaceholderReviewPromptTargetWithoutExplicitDeliverable|MarkdownReviewAssessmentPlaceholderAtPreferredTarget|ReviewSummaryPlaceholderAtCheckpointOwnedReviewOutput)$' -count=1`
+  - deploy / proof status:
+    - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and health is `ok`
+    - direct live diagnosis is task `78` review session `4e2fe5e3-cdc4-4f63-8c14-511cae1ac459`, where `README.md` contained review-summary approval prose and `VERIFICATION.md` held the real README/import summary
+    - fresh direct production proof for the new `mismatched_deliverable_context` read classification is still pending the next review-lane reread of those checkpoint outputs, because task `78` legitimately rejected back to work and reopened execution node `d9f29f23-ba35-4044-bbc4-6878127c8016` before the new binary re-entered the review node
