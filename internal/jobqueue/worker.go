@@ -3398,9 +3398,14 @@ func projectContinuationChildTaskClosesParentForWorker(
 		}
 	}
 	hasClosureSignal := strings.Contains(text, "close parent") ||
+		strings.Contains(text, "close out parent") ||
+		strings.Contains(text, "close out oc-") ||
 		strings.Contains(text, "parent can close") ||
 		strings.Contains(text, "parent can be closed") ||
 		strings.Contains(text, "parent can be closed out") ||
+		strings.Contains(text, "mark parent") ||
+		strings.Contains(text, "parent complete") ||
+		strings.Contains(text, "complete the parent") ||
 		strings.Contains(text, "confirms the parent") ||
 		strings.Contains(text, "mark done immediately") ||
 		strings.Contains(text, "delivered")

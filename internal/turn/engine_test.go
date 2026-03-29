@@ -21258,6 +21258,58 @@ func TestProjectExecutionContinuationSnapshotLiveTask44CompletedCloseoutBeatsRep
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotTreatsMarkParentCompleteTitleAsCloseoutProof(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	closeoutDescription := "Verify the delivered posts and confirm the scrape is complete."
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	childMetadata := func(parentID uuid.UUID) json.RawMessage {
+		return json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentID.String()))
+	}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:         parentDraftID,
+				ProjectID:  projectID,
+				TaskNumber: 34,
+				Title:      "Scrape and import technonymous.org posts from URL index",
+				WorkStatus: "draft",
+			},
+			uuid.New(): {
+				ID:          uuid.New(),
+				ProjectID:   projectID,
+				TaskNumber:  80,
+				Title:       "Close out OC-34: verify content/posts/ contains all scraped posts and mark parent complete",
+				Description: &closeoutDescription,
+				WorkStatus:  "done",
+				Metadata:    childMetadata(parentDraftID),
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshotForSummary(context.Background(), projectID, "content/posts")
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshotForSummary: %v", err)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "task 34 (Scrape and import technonymous.org posts from URL index)") {
+		t.Fatalf("DraftTaskLine = %q, want closeout-ready parent 34 restored as actionable draft", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "completed_closeout_child_tasks=1") {
+		t.Fatalf("DraftTaskLine = %q, want mark-parent-complete title to count as closeout proof", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "task 34 (Scrape and import technonymous.org posts from URL index)") {
+		t.Fatalf("FocusTaskLine = %q, want focus to stay on closeout-ready parent 34", snapshot.FocusTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "completed_closeout_child_tasks=1") {
+		t.Fatalf("FocusTaskLine = %q, want focus to reflect mark-parent-complete closeout proof", snapshot.FocusTaskLine)
+	}
+}
+
 func TestShouldBlockProjectContinuationFocusedDraftMutationForMalformedChildParent(t *testing.T) {
 	t.Parallel()
 

@@ -2467,3 +2467,17 @@
   - deploy / proof status:
     - live diagnosis is Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, which remained idle after restart even though worker logged `requeued active project sessions missing continuation on startup count=1`; the latest failed continuation already carried `repo_version=3528`, so same-version suppression was still correctly active
     - the direct production proof target is the first restart after this slice is committed on the next repo version, where the same session should get a fresh pending `project_execution_continuation` and `agent_turn` dispatch instead of staying idle behind the old `3528` continuation
+- 2026-03-29 02:35:55 MDT - Finished locally and live-proven: restore PM closeout-ready parents for `close out OC-<n> ... mark parent complete` child titles.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - expanded `projectContinuationChildTaskClosesParent(...)` closeout-signal matching so titles/descriptions that say `close out OC-<n>`, `mark parent`, `parent complete`, or `complete the parent` unlock the existing parent-id fallback instead of being ignored as generic done children
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - expanded `projectContinuationChildTaskClosesParentForWorker(...)` with the same closeout-signal vocabulary so worker-authored PM continuation snapshots agree with the turn-engine snapshot
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): added `TestProjectExecutionContinuationSnapshotTreatsMarkParentCompleteTitleAsCloseoutProof`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go): added `TestJobWorkerProjectExecutionContinuationSnapshotTreatsMarkParentCompleteTitleAsCloseoutProof`
+  - verified with:
+    - `go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshotTreatsMarkParentCompleteTitleAsCloseoutProof|ProjectExecutionContinuationSnapshotForSummary|ShouldBlockProjectContinuationFocusedDraftTaskCreateForCloseoutReadyParent)$' -count=1`
+    - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(TreatsCloseoutReadyParentAsActionableDraft|TreatsMarkParentCompleteTitleAsCloseoutProof)$' -count=1`
+  - deploy / proof status:
+    - fresh live proof is Sam.blog PM continuation message `52fd2a72-1c20-4779-bdb1-3c4ea9b44c92`, which now includes `Actionable draft tasks already in the tree: task 34 ... completed_closeout_child_tasks=2` plus the direct-close guidance
+    - the next PM turn `30f9cb11-7827-4f61-b943-1157cbf0fd84` then acted on parent `34` itself, reading and rewriting the [`planning/prd-spec`](/Users/sam/otter-data/workspaces/sam-blog-rebuild-restart-12/planning/prd-spec) artifacts instead of reopening blocked child rediscovery
