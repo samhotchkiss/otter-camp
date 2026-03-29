@@ -907,6 +907,9 @@ func looksLikeRejectedDeliverablePlaceholder(content string) bool {
 	if looksLikeNarratedTaskFileWritePlaceholder(trimmed) {
 		return true
 	}
+	if looksLikeRuntimeOwnedCommitHandoffPlaceholder(trimmed) {
+		return true
+	}
 	if looksLikeDeliverableReviewAssessmentPlaceholder(lower) {
 		return true
 	}

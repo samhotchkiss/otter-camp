@@ -21288,6 +21288,9 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	if looksLikeContentMigrationTaskScaffoldWithoutBody(path, trimmed) {
 		return fmt.Sprintf("assistant draft for %s repeated a source-backed content-migration task scaffold instead of the file body", path)
 	}
+	if looksLikeRuntimeOwnedCommitHandoffPlaceholder(trimmed) {
+		return fmt.Sprintf("assistant draft for %s repeated runtime-owned commit handoff prose instead of the file body", path)
+	}
 	if looksLikeDeliverableCompletionSummaryWithoutBody(path, trimmed) {
 		return fmt.Sprintf("assistant draft for %s wrote a completion summary about deliverables/review readiness instead of the actual file body", path)
 	}
@@ -21964,6 +21967,37 @@ func looksLikeContentMigrationTaskScaffoldWithoutBody(targetPath, content string
 		return false
 	}
 	return true
+}
+
+func looksLikeRuntimeOwnedCommitHandoffPlaceholder(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if !containsAny(lower,
+		"the posts are all committed",
+		"the deliverables are all committed",
+		"the only uncommitted changes are",
+		"the only uncommitted change is",
+	) {
+		return false
+	}
+	if !containsAny(lower,
+		"checkpoint file",
+		"{slug}.md",
+		"placeholder",
+	) {
+		return false
+	}
+	return containsAny(lower,
+		"let me clean up by staging",
+		"let me commit the current state",
+		"let me commit everything cleanly",
+		"let me check git status and commit",
+		"let me update the task status",
+		"let me advance the flow",
+	)
 }
 
 func leadingToolStatusTargetPath(content string) (string, bool) {

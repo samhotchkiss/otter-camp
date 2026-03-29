@@ -684,6 +684,37 @@ func looksLikeDeliverableCompletionSummaryWithoutBody(path, content string) bool
 	return true
 }
 
+func looksLikeRuntimeOwnedCommitHandoffPlaceholder(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if !containsAnySubstring(lower,
+		"the posts are all committed",
+		"the deliverables are all committed",
+		"the only uncommitted changes are",
+		"the only uncommitted change is",
+	) {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"checkpoint file",
+		"{slug}.md",
+		"placeholder",
+	) {
+		return false
+	}
+	return containsAnySubstring(lower,
+		"let me clean up by staging",
+		"let me commit the current state",
+		"let me commit everything cleanly",
+		"let me check git status and commit",
+		"let me update the task status",
+		"let me advance the flow",
+	)
+}
+
 func taskDraftSemanticallyMismatchesScope(taskRecord repo.ProjectTask, content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
@@ -1718,6 +1749,12 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 		return map[string]any{
 			"error":   "non_substantive_content",
 			"message": "file.write content appears to be a completion summary about deliverables and review readiness, not the concrete deliverable body itself. Write the actual task document or produced artifact contents directly.",
+		}, nil
+	}
+	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikeRuntimeOwnedCommitHandoffPlaceholder(content) {
+		return map[string]any{
+			"error":   "non_substantive_content",
+			"message": "file.write content appears to be runtime-owned commit or flow handoff prose, not the concrete deliverable body itself. Write the real file contents directly.",
 		}, nil
 	}
 	encoding := "utf8"

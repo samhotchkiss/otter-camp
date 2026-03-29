@@ -37087,6 +37087,20 @@ Let me start fresh with the correct approach:
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReasonRejectsRuntimeOwnedCommitHandoffPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	content := "The posts are all committed. The only uncommitted changes are:\n" +
+		"1. A modified checkpoint file\n" +
+		"2. A deleted `{slug}.md` placeholder (which should be removed)\n\n" +
+		"Let me clean up by staging the deletion of the placeholder and committing:\n"
+
+	reason := recoveryFileWriteDraftRejectReason(content, "content/posts/stop-preparing-your-kids-for-jobs.md")
+	if !strings.Contains(reason, "runtime-owned commit handoff prose") {
+		t.Fatalf("reason = %q, want runtime-owned commit handoff rejection", reason)
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReasonRejectsContentMigrationTaskScaffoldWithoutBody(t *testing.T) {
 	t.Parallel()
 

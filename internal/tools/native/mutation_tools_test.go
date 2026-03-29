@@ -222,6 +222,62 @@ func TestFileWriteRejectsNarratedTaskPlaceholderContent(t *testing.T) {
 	}
 }
 
+func TestFileWriteRejectsRuntimeOwnedCommitHandoffPlaceholderContent(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("78787878-7878-7878-7878-787878787878")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project_task",
+				ScopeID:        taskID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "content/posts/stop-preparing-your-kids-for-jobs.md",
+		"content": "The posts are all committed. The only uncommitted changes are:\n" +
+			"1. A modified checkpoint file\n" +
+			"2. A deleted `{slug}.md` placeholder (which should be removed)\n\n" +
+			"Let me clean up by staging the deletion of the placeholder and committing:\n",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "content", "posts", "stop-preparing-your-kids-for-jobs.md")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("deliverable file should not be written for runtime-owned handoff prose, stat err = %v", statErr)
+	}
+}
+
 func TestCLIExecuteBlockedInReviewTaskSession(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

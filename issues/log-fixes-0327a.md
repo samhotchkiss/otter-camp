@@ -2359,3 +2359,24 @@
     - pre-fix live evidence is task `81` session `92a98bde-c9b3-4f32-b9ce-f71e75b3bff7` message `130`, which preserved `Let me clean up by staging ... and committing:` in the continuation summary and replayed `git.status` / `git.commit` / `flow_owned_done_blocked`
     - secondary pre-fix live evidence is task `81` session `eb7c666e-00f3-4b53-862d-3eba852cecfd`, where `cli.execute(stdout_inline=wrote checkpoint)` followed by `git.commit -> task_git_commit_blocked` still reopened `task.update` / `flow_owned_done_blocked`
     - direct post-`3523` proof target is the next task-81 or similar async execution retry on the new binary
+- 2026-03-29 01:22:35 MDT - Finished locally, queued for deploy: reject runtime-owned handoff prose when it leaks into task deliverables.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `recoveryFileWriteDraftRejectReason(...)` now rejects task-file drafts that are really runtime-owned commit/flow handoff prose (`The posts are all committed ... Let me clean up by staging ...`)
+    - added `looksLikeRuntimeOwnedCommitHandoffPlaceholder(...)` for the exact task-81 poisoned-markdown family
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - `file.write` now returns `non_substantive_content` when the payload is runtime-owned commit or flow handoff prose instead of a real deliverable body
+    - added the same `looksLikeRuntimeOwnedCommitHandoffPlaceholder(...)` classifier in the native tool layer
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `looksLikeRejectedDeliverablePlaceholder(...)` now treats the same runtime-owned handoff prose as placeholder deliverable content, so rereads stop returning it as if it were valid markdown
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): added `TestRecoveryFileWriteDraftRejectReasonRejectsRuntimeOwnedCommitHandoffPlaceholder`
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go): added `TestFileWriteRejectsRuntimeOwnedCommitHandoffPlaceholderContent`
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go): added `TestFileReadRejectsRuntimeOwnedCommitHandoffPlaceholderAtInProgressDeliverablePath`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - next runtime version should land as `3525`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(RecoveryFileWriteDraftRejectReasonRejectsRuntimeOwnedCommitHandoffPlaceholder|ContinuationSummaryLooksUnavailableRejectsRuntimeOwnedCommitPlan|HandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitWhenCheckpointUpdatedEarlierInTurn)$' -count=1`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(FileWriteRejectsRuntimeOwnedCommitHandoffPlaceholderContent|FileReadRejectsRuntimeOwnedCommitHandoffPlaceholderAtInProgressDeliverablePath)$' -count=1`
+  - deploy / proof status:
+    - pre-fix live evidence is task `81` session `2175bbde-f279-4b13-9c23-e418626de537`, where tool results `6`, `11`, and `17` kept rewriting [`content/posts/stop-preparing-your-kids-for-jobs.md`](/Users/sam/otter-data/task-worktrees/sam-blog-rebuild-restart-12/task-81/content/posts/stop-preparing-your-kids-for-jobs.md) with runtime handoff prose, and `file.read` result `80` later returned the same poisoned file body raw
+    - direct post-`3525` proof target is the next task-81 recovery retry, which should reject that prose at `file.write`/`file.read` time instead of treating it as valid markdown
