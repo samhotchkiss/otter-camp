@@ -1883,3 +1883,26 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleRecoveryRejectedFileWriteContent(AllowsCheckpointContextBatchWriteWithinPreferredRoot|CanonicalizesWrongPathBeforeDraftReplacement)|HandleTaskFileWriteWrongPath(AllowsBatchWritesWithinPreferredDeliverableRoot|AllowsRecoveryBatchWritesWithinPreferredDeliverableRootWhenCheckpointContextPreferred|PrefersRecoveryTargetDuringRecoveryTurn)|BuildRecoveryResumeActionPrompt(ForTrackedContentMigrationOutputsPrefersCheckpointContext)|LoadRecoveryResumeState(PrefersCheckpointContextForTrackedContentMigrationOutputs))$' -count=1`
   - proof target after deploy:
     - the next task-70 recovery retry should keep writes like `content/posts/stop-preparing-your-kids-for-jobs.md` under `content/posts/` instead of collapsing them back to `content/posts/i-cant-picture-my-kids.md`
+- 2026-03-28 20:28:28 MDT - Finished: give rediscovery-blocked PM turns one sharp replacement-child retry before suppression drains the session.
+  - live diagnosis:
+    - Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` repeatedly ended continuations `4865`, `4870`, and `4875` with the rediscovery-only guard even though the prompt already named draft parent task `44` as the next replacement-child parent
+    - because no runnable draft leaf existed, the existing project-continuation completion handler returned without enqueuing another turn, and worker-side identical-continuation suppression then left the session active-but-idle
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `projectContinuationTurnEndedWithRediscoveryOnlyStop(...)`
+    - added `retryProjectExecutionContinuationForReplacementChildWork(...)`
+    - added `buildProjectExecutionContinuationReplacementChildRetryPrompt(...)`
+    - `handleCompletedProjectExecutionContinuationTurn(...)` now uses that retry path when a rediscovery-only PM continuation has no runnable draft leaf but the current focus task is a draft parent that needs fresh replacement child work
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleCompletedProjectExecutionContinuationTurnRetriesReplacementChildWorkWithFreshMessage`
+    - kept the adjacent rediscovery suppression, missing-dependency retry, and generic-reply retry coverage green
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3486`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurnRetriesReplacementChildWorkWithFreshMessage|HandleCompletedProjectExecutionContinuationTurnSuppressesRepeatedRediscoveryBlockedRetry|HandleCompletedProjectExecutionContinuationTurnRetriesMissingDependencyStopWithFreshMessage|HandleCompletedProjectExecutionContinuationTurnRetriesGenericReplyWithFreshMessage)$' -count=1`
+  - proof target after deploy:
+    - the next PM continuation for session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` should enqueue one sharper follow-up that tells the lane to create the fresh replacement child under the named parent, instead of going idle immediately after a rediscovery-only guard stop
+- 2026-03-28 20:31:57 MDT - Live proof:
+  - after deploy on `repo_version=3486`, Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` picked up continuation `4885` with the new replacement-child retry wording
+  - the lane first hit the existing top-level-task guard at `4887`, then immediately corrected and created fresh child task `72` under parent `44` at `4889`
+  - the same turn queued task `72` at `4891`, proving the sharper retry converted the old rediscovery-only idle stop into the intended bounded PM action

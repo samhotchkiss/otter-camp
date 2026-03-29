@@ -4820,6 +4820,13 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 		return false, err
 	}
 	if !ok {
+		if projectContinuationTurnEndedWithRediscoveryOnlyStop(messages, completedTurn.ID) {
+			if retried, retryErr := e.retryProjectExecutionContinuationForReplacementChildWork(ctx, session, completedTurn, latestUser); retryErr != nil {
+				return false, retryErr
+			} else if retried {
+				return true, nil
+			}
+		}
 		if genericAssistant {
 			return e.retryGenericProjectExecutionContinuation(ctx, session, completedTurn, latestUser)
 		}
@@ -5019,6 +5026,83 @@ func (e *TurnEngine) retryProjectExecutionContinuationForMissingDependency(
 	return enqueued, nil
 }
 
+func (e *TurnEngine) retryProjectExecutionContinuationForReplacementChildWork(
+	ctx context.Context,
+	session *chat.ChatSession,
+	latestCompleted *repo.ChatTurn,
+	latestUser *repo.ChatMessage,
+) (bool, error) {
+	if e == nil || session == nil || latestCompleted == nil || latestUser == nil || e.tasks == nil {
+		return false, nil
+	}
+	if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
+		return false, nil
+	}
+	completedTaskID, _ := parseUUIDAny(messageMetadataMap(latestUser.Metadata)["completed_task_id"])
+	var completedTask repo.ProjectTask
+	if completedTaskID != uuid.Nil {
+		if taskRecord, err := e.tasks.GetByID(ctx, completedTaskID); err == nil {
+			completedTask = taskRecord
+		}
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	taskHintsByTask, err := e.projectContinuationTaskHintsByTask(ctx, projectTasks)
+	if err != nil {
+		return false, err
+	}
+	priorityPaths := projectContinuationPriorityPathsFromText(strings.TrimSpace(latestUser.Content))
+	focusTask, ok := projectContinuationCurrentFocusTask(projectTasks, taskHintsByTask, priorityPaths)
+	if !ok {
+		return false, nil
+	}
+	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
+	focusActivity := childActivity[focusTask.ID]
+	if !projectContinuationDraftTaskNeedsFreshReplacementChildWork(focusActivity) {
+		return false, nil
+	}
+	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	snapshot, err := e.projectExecutionContinuationSnapshotForSummary(ctx, session.ScopeID, strings.TrimSpace(latestUser.Content))
+	if err != nil {
+		return false, err
+	}
+	agentID := latestCompleted.RespondingID
+	retryPrompt := buildProjectExecutionContinuationReplacementChildRetryPrompt(
+		completedTask,
+		remainingDraftTasks,
+		snapshot,
+		focusTask,
+		focusActivity,
+		taskHintsByTask[focusTask.ID],
+	)
+	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	if err != nil {
+		return false, err
+	}
+	if retryMessage == nil {
+		return true, nil
+	}
+	nextPayload := AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  retryMessage.ID,
+		RetryCount: latestCompleted.RetryCount + 1,
+	}
+	if agentID != uuid.Nil {
+		nextPayload.AgentID = &agentID
+	}
+	runAfter := e.now().Add(defaultAutoContinueDelay).UTC()
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	if err != nil {
+		return false, err
+	}
+	return enqueued, nil
+}
+
 func buildProjectExecutionContinuationMissingDependencyRetryPrompt(
 	completedTask repo.ProjectTask,
 	remainingDraftTasks int,
@@ -5034,6 +5118,42 @@ func buildProjectExecutionContinuationMissingDependencyRetryPrompt(
 		fmt.Sprintf(" Your last continuation turn confirmed prerequisite artifact `%s` is still missing.", missingPath) +
 		fmt.Sprintf(" Do not browse external sources, do not reread broad project or workspace context, and do not write `%s` from the project session.", missingPath) +
 		fmt.Sprintf(" Your next assistant action must create, queue, or advance the smallest bounded replacement task that produces `%s`, or report one concrete blocker sentence if that handoff is impossible.", missingPath)
+}
+
+func buildProjectExecutionContinuationReplacementChildRetryPrompt(
+	completedTask repo.ProjectTask,
+	remainingDraftTasks int,
+	snapshot projectExecutionContinuationSnapshot,
+	focusTask repo.ProjectTask,
+	focusActivity projectContinuationChildActivity,
+	focusHints projectContinuationTaskHints,
+) string {
+	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot)
+	focusLabel := projectBootstrapTaskLabel(focusTask)
+	focusRef := projectExecutionContinuationTaskRef(focusTask, focusActivity, focusHints)
+	laneReason := "terminally blocked or malformed child lanes"
+	switch {
+	case focusActivity.malformedChildTaskCount > 0 && focusActivity.replaceableBlockedChildTaskCount == 0:
+		laneReason = "malformed or stale child artifact lanes"
+	case focusActivity.replaceableBlockedChildTaskCount > 0 && focusActivity.replaceableBlockedChildTaskCount == focusActivity.childTaskCount:
+		laneReason = "terminally blocked child lanes"
+	case focusActivity.malformedChildTaskCount > 0:
+		laneReason = "blocked or malformed child lanes"
+	}
+	retryPrompt += " Your last continuation turn was blocked after broad rediscovery even though the next bounded work was already named."
+	retryPrompt += fmt.Sprintf(" Current focus parent: %s.", focusRef)
+	retryPrompt += fmt.Sprintf(" That draft parent only has %s.", laneReason)
+	if dependsOnPath := strings.TrimSpace(focusHints.DependsOnPath); dependsOnPath != "" {
+		retryPrompt += fmt.Sprintf(" Do not reread prerequisite artifact `%s` first.", dependsOnPath)
+	}
+	if deliverableRoot := strings.TrimSpace(focusHints.DeliverableRoot); deliverableRoot != "" {
+		retryPrompt += fmt.Sprintf(" Keep the replacement child scoped to deliverable root `%s`.", deliverableRoot)
+	}
+	retryPrompt += " Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting."
+	retryPrompt += fmt.Sprintf(" Do not queue parent task %s again from the project lane.", focusLabel)
+	retryPrompt += fmt.Sprintf(" Your next assistant action must create the smallest fresh replacement child task beneath %s now, or queue an existing direct child draft there if one already fits unchanged.", focusLabel)
+	retryPrompt += fmt.Sprintf(" If you must inspect child lanes first, use only task.list(parent_task_id=%s).", focusTask.ID.String())
+	return retryPrompt
 }
 
 func projectContinuationProducerTaskRefsForPath(
@@ -7310,6 +7430,10 @@ func projectExecutionContinuationPromptFingerprint(completedTaskID uuid.UUID, co
 		_, _ = hasher.Write([]byte{0})
 	}
 	return strconv.FormatUint(hasher.Sum64(), 16)
+}
+
+func projectContinuationTurnEndedWithRediscoveryOnlyStop(messages []repo.ChatMessage, turnID uuid.UUID) bool {
+	return turnHasSystemMessageContaining(messages, turnID, projectContinuationRediscoveryGuardPrefix)
 }
 
 func projectContinuationMissingDependencyStopPath(messages []repo.ChatMessage, turnID uuid.UUID) (string, bool) {

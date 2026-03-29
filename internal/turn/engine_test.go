@@ -12419,6 +12419,236 @@ func TestHandleCompletedProjectExecutionContinuationTurnSuppressesRepeatedRedisc
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnRetriesReplacementChildWorkWithFreshMessage(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "project-continuation-replacement-child-retry",
+		DisplayName: "Project Continuation Replacement Child Retry",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "project-continuation-replacement-child-retry",
+		DisplayName:    "Project Continuation Replacement Child Retry",
+		Description:    "Project for replacement child continuation retry coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	eventRepo := repo.NewProjectTaskEventRepo(pool)
+	assignedAgent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Replacement Child Retry Worker",
+		AgentClass:      "staff",
+		AgentType:       "worker",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You execute bounded project tasks.",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create assigned agent: %v", err)
+	}
+	assignedAgentID := assignedAgent.ID
+	flowTemplate, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		Slug:           "replacement-child-retry-template",
+		DisplayName:    "Replacement Child Retry Template",
+		Description:    "Template for replacement child continuation retry coverage",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowTemplateID := flowTemplate.ID
+
+	completedTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     66,
+		Title:          "Fetch posts 13-24 from content/technonymous-index.json and save as markdown in content/posts/",
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &flowTemplateID,
+		CreatedByType:  "system",
+		CreatedByID:    &assignedAgentID,
+	})
+	if err != nil {
+		t.Fatalf("create completed task: %v", err)
+	}
+	focusParent, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      44,
+		Title:           "Produce content/technonymous-index.json by crawling technonymous.org",
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		AssignedAgentID: &assignedAgentID,
+		FlowTemplateID:  &flowTemplateID,
+		CreatedByType:   "system",
+		CreatedByID:     &assignedAgentID,
+	})
+	if err != nil {
+		t.Fatalf("create focus parent task: %v", err)
+	}
+
+	childMetadata := func(parentID uuid.UUID) json.RawMessage {
+		return mustJSONRaw(map[string]any{
+			"decomposition_parent_task_id": parentID.String(),
+		})
+	}
+	blockedChildren := []repo.ProjectTask{
+		{
+			OrganizationID: org.ID,
+			ProjectID:      project.ID,
+			TaskNumber:     45,
+			Title:          "Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/",
+			WorkStatus:     "blocked",
+			BlocksScope:    "task",
+			FlowTemplateID: &flowTemplateID,
+			Metadata:       childMetadata(focusParent.ID),
+			CreatedByType:  "system",
+			CreatedByID:    &assignedAgentID,
+		},
+		{
+			OrganizationID: org.ID,
+			ProjectID:      project.ID,
+			TaskNumber:     46,
+			Title:          "Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/ (retry)",
+			WorkStatus:     "blocked",
+			BlocksScope:    "task",
+			FlowTemplateID: &flowTemplateID,
+			Metadata:       childMetadata(focusParent.ID),
+			CreatedByType:  "system",
+			CreatedByID:    &assignedAgentID,
+		},
+	}
+	for _, childInput := range blockedChildren {
+		child, createErr := taskRepo.Create(ctx, childInput)
+		if createErr != nil {
+			t.Fatalf("create blocked child task %d: %v", childInput.TaskNumber, createErr)
+		}
+		if _, recordErr := eventRepo.Record(ctx, repo.ProjectTaskEvent{
+			TaskID:    child.ID,
+			ProjectID: project.ID,
+			EventType: "status.changed",
+			ActorType: "system",
+			Payload:   json.RawMessage(`{"to_status":"blocked","blocker_reason":"review turn repeatedly hit file.read not_found"}`),
+		}); recordErr != nil {
+			t.Fatalf("record blocked child event %d: %v", child.TaskNumber, recordErr)
+		}
+	}
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = pool
+	fixture.engine.tasks = taskRepo
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = project.ID
+	fixture.session.OrganizationID = org.ID
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTask.ID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "Task 44 needs a fresh replacement child, but I want to inspect the workspace first.",
+		SequenceNumber: 11,
+	}
+	messages := []repo.ChatMessage{
+		*latestUser,
+		*assistant,
+		{
+			ID:             uuid.New(),
+			SessionID:      fixture.session.ID,
+			TurnID:         &turnID,
+			Role:           "system",
+			Status:         "final",
+			Content:        "[Project continuation rediscovery guard blocked only broad rereads. Ending this turn early so the next continuation can act directly on the named tasks instead of repeating blocked PM discovery.]",
+			SequenceNumber: 12,
+		},
+	}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   1,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(ctx, fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected focused replacement-child retry to enqueue a fresh continuation message")
+	}
+
+	jobs := fixture.enqueuer.jobs
+	if len(jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload.MessageID == userMessageID {
+		t.Fatal("replacement-child retry reused original continuation message, want fresh message id")
+	}
+	if jobs[0].payload.RetryCount != 2 {
+		t.Fatalf("retry_count = %d, want 2", jobs[0].payload.RetryCount)
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(ctx, fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var retryMessage *repo.ChatMessage
+	for i := range storedMessages {
+		msg := &storedMessages[i]
+		if msg.ID == jobs[0].payload.MessageID {
+			retryMessage = msg
+			break
+		}
+	}
+	if retryMessage == nil {
+		t.Fatal("missing appended replacement-child retry continuation message")
+	}
+	if !strings.Contains(retryMessage.Content, "Current focus parent: "+projectBootstrapTaskLabel(focusParent)) {
+		t.Fatalf("retry message = %q, want focused parent context", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "create the smallest fresh replacement child task beneath "+projectBootstrapTaskLabel(focusParent)) {
+		t.Fatalf("retry message = %q, want replacement-child creation guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "task.list(parent_task_id="+focusParent.ID.String()+")") {
+		t.Fatalf("retry message = %q, want parent-scoped child inspection guidance", retryMessage.Content)
+	}
+}
+
 func TestProjectExecutionContinuationPromptFingerprintIncludesRepoVersion(t *testing.T) {
 	originalVersion := versionpkg.RepoVersion
 	defer func() {
