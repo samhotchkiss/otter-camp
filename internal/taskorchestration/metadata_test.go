@@ -96,3 +96,55 @@ func TestValidateCompletionAllowsVerifiedIntegratedParent(t *testing.T) {
 		t.Fatalf("ValidateCompletion: %v", err)
 	}
 }
+
+func TestValidateCompletionAllowsBlockedProceduralChildrenWithSatisfiedParent(t *testing.T) {
+	parentID := uuid.New()
+	blockedChildID := uuid.New()
+	doneChildID := uuid.New()
+	now := time.Date(2026, 3, 29, 3, 50, 0, 0, time.UTC)
+	description := "Crawl technonymous.org and produce a JSON index file at `content/technonymous-index.json`."
+	parent := repo.ProjectTask{
+		ID:         parentID,
+		TaskNumber: 44,
+		Title:      "Produce content/technonymous-index.json by crawling technonymous.org",
+		Metadata: taskdecomp.ApplyMetadata(json.RawMessage(`{}`), taskdecomp.Plan{
+			RequiresDecomposition: true,
+			PrimaryDeliverable:    "content/technonymous-index.json",
+			Deliverables: []string{
+				"content/technonymous-index.json",
+				"Use browser tools to navigate to https://technonymous.org",
+				"Verify content/technonymous-index.json delivered — close parent OC-44",
+			},
+		}, description, []uuid.UUID{blockedChildID, doneChildID}),
+	}
+	metadata, err := Apply(parent.Metadata, Update{
+		ChildVerifications: []ChildVerification{
+			NewChildVerification(doneChildID, "Verified the deliverable and confirmed the parent can close.", now),
+		},
+		IntegrationCheck:  NewIntegrationCheck("passed", "Verified the delivered index against downstream scrape work.", now),
+		OutcomeAssessment: NewOutcomeAssessment(true, "The parent deliverable is satisfied.", now),
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	parent.Metadata = metadata
+
+	blockedChild := repo.ProjectTask{
+		ID:         blockedChildID,
+		TaskNumber: 45,
+		Title:      "Use browser tools to navigate to https://technonymous.org",
+		WorkStatus: "blocked",
+	}
+	doneDescription := "Confirm the parent deliverable is complete and the parent can close."
+	doneChild := repo.ProjectTask{
+		ID:          doneChildID,
+		TaskNumber:  75,
+		Title:       "Verify content/technonymous-index.json delivered — close parent OC-44",
+		Description: &doneDescription,
+		WorkStatus:  "done",
+	}
+
+	if err := ValidateCompletion(parent, []repo.ProjectTask{blockedChild, doneChild}); err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+}

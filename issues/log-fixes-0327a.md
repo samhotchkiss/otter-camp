@@ -2010,3 +2010,20 @@
   - deploy / proof status:
     - direct live proof landed immediately after the `3496` rebuild: worker-authored prompt `5749` now keeps task `44` in the closeout-ready actionable draft bucket with `deliverable_path=content/technonymous-index.json` and `completed_closeout_child_tasks=1`
     - the next remaining PM seam is no longer worker prompt drift; the same live turn `56f231cc-f563-4050-9127-9109c2cd1ac6` then hit parent-closeout/active-lane runtime guards instead of replacement-child churn
+- 2026-03-28 21:56:04 MDT - Finished: let parent closeout ignore blocked malformed child artifact lanes.
+  - live diagnosis:
+    - after the worker prompt fix, PM turn `56f231cc-f563-4050-9127-9109c2cd1ac6` correctly tried `task.update(task 44, work_status=done, outcome_assessment=...)`
+    - the runtime still rejected that closeout with `parent task requires child verification and passed integration before completion` because blocked procedural children `45` and `46` were still counted as executable work
+  - changed [`internal/taskorchestration/metadata.go`](/Users/sam/dev/otter-camp/internal/taskorchestration/metadata.go):
+    - blocked procedural child tasks now count as logically terminal for parent completion checks
+    - blocked children under explicit no-decompose parents also count as logically terminal for parent completion checks
+    - this aligns parent completion semantics with the PM/worker snapshot logic that already ignores stale malformed child lanes
+  - changed [`internal/taskorchestration/metadata_test.go`](/Users/sam/dev/otter-camp/internal/taskorchestration/metadata_test.go):
+    - added coverage proving a satisfied parent can complete when the only remaining blocked child lane is a procedural artifact
+  - changed [`internal/task/service_integration_test.go`](/Users/sam/dev/otter-camp/internal/task/service_integration_test.go):
+    - added an integration regression for the live task-44 shape, where blocked procedural child tasks no longer prevent parent completion after closeout proof
+  - verified with:
+    - `go test ./internal/taskorchestration -count=1`
+    - `go test -tags=integration ./internal/task -run 'TestTaskServiceIntegration(ParentDoneRequiresVerificationAndIntegration|ParentDoneIgnoresBlockedProceduralChildrenAfterCloseoutProof|OrchestrationOnlyParentAutoCompletesWhenChildrenDone|OrchestrationOnlyParentWithoutFlowTemplateAutoCompletes)$' -count=1`
+  - deploy / proof status:
+    - live proof landed immediately on `repo_version=3497`: task `44` is now `done` with `completed_at=2026-03-28 21:55:55 MDT`, and the next PM continuation prompt is already advancing from “latest completed task was task 44” instead of reopening the closeout loop

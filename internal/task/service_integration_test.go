@@ -2396,6 +2396,77 @@ func TestTaskServiceIntegrationParentDoneRequiresVerificationAndIntegration(t *t
 	}
 }
 
+func TestTaskServiceIntegrationParentDoneIgnoresBlockedProceduralChildrenAfterCloseoutProof(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	parent, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Produce content/technonymous-index.json by crawling technonymous.org",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	parentRecord, children := seedOrchestrationChildrenForParent(t, ctx, svc, taskRepo, parent.ID, project.ID, template.ID, []string{
+		"Use browser tools to navigate to https://technonymous.org",
+		"Use browser_navigate, browser_extract_text, browser_click to crawl the site",
+		"Verify content/technonymous-index.json delivered — close parent OC-44",
+	})
+	if len(children) != 3 {
+		t.Fatalf("children len = %d, want 3", len(children))
+	}
+
+	for idx := 0; idx < 2; idx++ {
+		child := children[idx]
+		child.WorkStatus = "blocked"
+		if _, updateErr := taskRepo.Update(ctx, child); updateErr != nil {
+			t.Fatalf("Update blocked child %s: %v", child.ID, updateErr)
+		}
+	}
+	closeoutDescription := "Deliverable already exists, has been verified, and this child confirms the parent can close."
+	closeoutChild := children[2]
+	closeoutChild.WorkStatus = "done"
+	closeoutChild.Description = &closeoutDescription
+	if _, updateErr := taskRepo.Update(ctx, closeoutChild); updateErr != nil {
+		t.Fatalf("Update closeout child %s: %v", closeoutChild.ID, updateErr)
+	}
+
+	markTaskReadyForDone(t, ctx, pool, parentRecord.ID, template.ID)
+
+	parentRecord, err = taskRepo.GetByID(ctx, parentRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID parent after mark ready: %v", err)
+	}
+	now := time.Date(2026, 3, 29, 3, 55, 0, 0, time.UTC)
+	parentRecord.Metadata, err = taskorchestration.Apply(parentRecord.Metadata, taskorchestration.Update{
+		ChildVerifications: []taskorchestration.ChildVerification{
+			taskorchestration.NewChildVerification(closeoutChild.ID, "Verified content/technonymous-index.json delivered and parent can close.", now),
+		},
+		IntegrationCheck:  taskorchestration.NewIntegrationCheck("passed", "Verified the delivered index against downstream scrape work.", now),
+		OutcomeAssessment: taskorchestration.NewOutcomeAssessment(true, "The parent deliverable is satisfied.", now),
+	})
+	if err != nil {
+		t.Fatalf("Apply parent orchestration metadata: %v", err)
+	}
+	if _, err := taskRepo.Update(ctx, parentRecord); err != nil {
+		t.Fatalf("Update parent metadata: %v", err)
+	}
+
+	completed, err := svc.TransitionStatus(ctx, parentRecord.ID, "done", Actor{Type: "agent", ID: uuid.New()})
+	if err != nil {
+		t.Fatalf("TransitionStatus done: %v", err)
+	}
+	if completed.WorkStatus != "done" {
+		t.Fatalf("work_status = %q, want done", completed.WorkStatus)
+	}
+}
+
 func TestTaskServiceIntegrationOrchestrationOnlyParentAutoCompletesWithSynthesizedMetadata(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

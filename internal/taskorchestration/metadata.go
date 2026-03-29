@@ -192,6 +192,9 @@ func Evaluate(parentTask repo.ProjectTask, childTasks []repo.ProjectTask) Comple
 	for _, child := range childTasks {
 		status := normalizeStatus(child.WorkStatus)
 		terminal := status == "done" || status == "cancelled"
+		if !terminal && blockedMalformedChildDoesNotBlockParentCompletion(parentTask, child) {
+			terminal = true
+		}
 		completed := status == "done"
 		recorded, ok := verified[child.ID]
 		result.Children = append(result.Children, ChildStatus{
@@ -347,4 +350,34 @@ func taskLabel(task repo.ProjectTask) string {
 	default:
 		return task.ID.String()
 	}
+}
+
+func blockedMalformedChildDoesNotBlockParentCompletion(parentTask, childTask repo.ProjectTask) bool {
+	if normalizeStatus(childTask.WorkStatus) != "blocked" {
+		return false
+	}
+	if taskdecomp.TaskLooksProceduralInstructionArtifact(strings.TrimSpace(childTask.Title), childTask.Description) {
+		return true
+	}
+	return parentSourceDescriptionForbidsDecomposition(parentTask.Metadata)
+}
+
+func parentSourceDescriptionForbidsDecomposition(metadata json.RawMessage) bool {
+	if len(metadata) == 0 || !json.Valid(metadata) {
+		return false
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return false
+	}
+	raw, ok := payload["decomposition"]
+	if !ok || len(raw) == 0 || string(raw) == "null" {
+		return false
+	}
+	var decomp map[string]any
+	if err := json.Unmarshal(raw, &decomp); err != nil {
+		return false
+	}
+	sourceDescription, _ := decomp["source_description"].(string)
+	return taskdecomp.DescriptionForbidsDecomposition(strings.TrimSpace(sourceDescription))
 }
