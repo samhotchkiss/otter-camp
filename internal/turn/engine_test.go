@@ -39904,6 +39904,41 @@ func TestSessionTaskDeliverablePathInheritsLongDescriptionParentPathOverBareTitl
 	}
 }
 
+func TestSessionTaskDeliverablePathPrefersChildLeadingPathTitleOverParentDeliverable(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	parentID := uuid.New()
+	childID := uuid.New()
+	parentDescription := "Write the complete spec to planning/sambot-feature-spec.md."
+	childDescription := "Build the embeddable SamBot chat widget."
+	childTask := repo.ProjectTask{
+		ID:          childID,
+		TaskNumber:  175,
+		Title:       "sambot/widget.html (or sambot/index.html) — the frontend chat widget",
+		Description: &childDescription,
+		Metadata: mustRawJSON(t, map[string]any{
+			"decomposition_parent_task_id": parentID.String(),
+		}),
+	}
+
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:          parentID,
+				TaskNumber:  168,
+				Title:       "SamBot MVP spec",
+				Description: &parentDescription,
+			},
+			childID: childTask,
+		},
+	}
+
+	if got := fixture.engine.sessionTaskDeliverablePath(context.Background(), fixture.session.ID, childTask); got != "sambot/widget.html" {
+		t.Fatalf("sessionTaskDeliverablePath(...) = %q, want %q", got, "sambot/widget.html")
+	}
+}
+
 func TestRecoveryTargetPathForSessionPrefersParentExplicitDeliverableOverWrongCheckpoint(t *testing.T) {
 	t.Parallel()
 

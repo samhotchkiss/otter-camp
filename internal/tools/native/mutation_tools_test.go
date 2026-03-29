@@ -1836,6 +1836,29 @@ func TestParseExplicitDeliverablePathPrefersLongDescriptionPathOverBareTitleToke
 	}
 }
 
+func TestParseExplicitDeliverablePathDetectsLeadingPathTitleWithAlternates(t *testing.T) {
+	t.Parallel()
+
+	title := "sambot/widget.html (or sambot/index.html) — the frontend chat widget"
+	description := "Build the embeddable SamBot chat UI."
+	taskRecord := repo.ProjectTask{Title: title, Description: &description}
+
+	if got := parseExplicitDeliverablePath(taskRecord); got != "sambot/widget.html" {
+		t.Fatalf("parseExplicitDeliverablePath() = %q, want %q", got, "sambot/widget.html")
+	}
+}
+
+func TestParseExplicitDeliverablePathDetectsParenthesizedOptionPath(t *testing.T) {
+	t.Parallel()
+
+	description := "Frontend chat widget — a self-contained HTML/CSS/JS component (sambot/widget.html or similar) that renders a floating chat bubble and conversation panel."
+	taskRecord := repo.ProjectTask{Title: "Frontend chat widget", Description: &description}
+
+	if got := parseExplicitDeliverablePath(taskRecord); got != "sambot/widget.html" {
+		t.Fatalf("parseExplicitDeliverablePath() = %q, want %q", got, "sambot/widget.html")
+	}
+}
+
 func TestFileEditRejectsPlanningArtifactMutationForExecutionFirstTaskWithExplicitDeliverable(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

@@ -558,3 +558,15 @@
   - impact:
     - PM can loop on blocked child tasks even though the correct next action is to create or queue fresh replacement work under the hidden draft parent
     - a real draft successor can vanish from the continuation snapshot entirely, making the supervisory layer look idle or confused when the project still has bounded next work
+- 2026-03-29 15:21 MDT - Explicit child-task deliverables can still inherit the wrong recovery target when the contract is expressed as a path-first title or a parenthesized `(path or similar)` hint.
+  - fresh live evidence:
+    - task `175` session `2c86ec19-566c-4d6e-a5b7-e591506d1b9f` is supposed to build `sambot/widget.html`, but its recovery target was still `planning/sambot-feature-spec.md`
+    - task `176` session `12727f59-f7ea-4e3f-a8d0-ab3ff093110c` is supposed to build `sambot/api.js`, but its recovery target was also still `planning/sambot-feature-spec.md`
+    - task `173` session `a6fbb2a0-cdd6-4dfd-87a5-70a50f4c2020` tried to treat the unrelated root file `SamBot` as the deliverable because its own `(sambot/widget.html or similar)` hint was never recognized
+  - bug:
+    - explicit deliverable parsing handled `deliverable:`, `output at`, `write to`, and similar phrasing, but it did not recognize titles like `sambot/widget.html (or sambot/index.html) — ...`
+    - it also did not recognize description hints like `(sambot/widget.html or similar)`
+    - worker-side deliverable hints ignored task titles, so PM/worker snapshots could miss these explicit child outputs even when the title carried the only precise path
+  - impact:
+    - child execution lanes spend retries fighting `recovery_target_focus_required` against stale parent-spec targets instead of writing their actual `sambot/...` deliverables
+    - PM snapshots and worker-authored continuation prompts can under-specify the real output path for the active child work

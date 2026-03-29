@@ -85,6 +85,8 @@ var explicitDeliverablePathPatternsForWorker = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:write|create|produce)\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\bsave\s+as\s+([^\s,;]+)`),
 }
+var leadingExplicitDeliverablePathPatternForWorker = regexp.MustCompile(`^\s*([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)\s*(?:\([^)\n]*\)|[-—:])`)
+var parenthesizedDeliverableOptionPathPatternForWorker = regexp.MustCompile(`\(([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)\s+or\s+[^)\n]+\)`)
 
 var projectContinuationBatchRangePatternForWorker = regexp.MustCompile(`(?i)\bposts?\s+(\d{1,3})\s*[–-]\s*(\d{1,3})\b`)
 var projectContinuationWorkspacePathPatternForWorker = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\b`)
@@ -3704,6 +3706,9 @@ func projectContinuationExplicitDeliverablePathFromTextForWorker(text string) st
 	}
 	for _, rawPath := range projectContinuationWorkspacePathPatternForWorker.FindAllString(text, -1) {
 		candidate := normalizeWorkspaceRelativePathForWorker(rawPath)
+		if looksLikePreferredDeliverableRootPathForWorker(candidate) {
+			continue
+		}
 		if !looksLikeExplicitDeliverablePathForWorker(candidate, rawPath) {
 			continue
 		}
@@ -4136,10 +4141,27 @@ func explicitDeliverablePathForWorker(task repo.ProjectTask) string {
 		}
 		for _, rawPath := range projectContinuationWorkspacePathPatternForWorker.FindAllString(description, -1) {
 			candidate := normalizeWorkspaceRelativePathForWorker(rawPath)
+			if looksLikePreferredDeliverableRootPathForWorker(candidate) {
+				continue
+			}
 			if !looksLikeExplicitDeliverablePathForWorker(candidate, rawPath) {
 				continue
 			}
 			return candidate
+		}
+		if match := leadingExplicitDeliverablePathPatternForWorker.FindStringSubmatch(description); len(match) >= 2 {
+			rawCandidate := strings.TrimSpace(match[1])
+			candidate := normalizeExplicitDeliverablePathCandidateForWorker(rawCandidate)
+			if looksLikeExplicitDeliverablePathForWorker(candidate, rawCandidate) {
+				return candidate
+			}
+		}
+		if match := parenthesizedDeliverableOptionPathPatternForWorker.FindStringSubmatch(description); len(match) >= 2 {
+			rawCandidate := strings.TrimSpace(match[1])
+			candidate := normalizeExplicitDeliverablePathCandidateForWorker(rawCandidate)
+			if looksLikeExplicitDeliverablePathForWorker(candidate, rawCandidate) {
+				return candidate
+			}
 		}
 	}
 	return ""
@@ -4188,6 +4210,7 @@ func taskContractDescriptionCandidatesForWorker(task repo.ProjectTask) []string 
 		}
 		candidates = append(candidates, normalized)
 	}
+	appendCandidate(task.Title)
 	if task.Description != nil {
 		appendCandidate(*task.Description)
 	}

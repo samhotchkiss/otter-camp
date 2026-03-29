@@ -3530,3 +3530,28 @@
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(TreatsInheritedSharedDeliverableBlockedChildrenAsReplacementWork|PrefersParentCloseoutOverReplaceableBlockedChildren)$' -count=1`
   - deploy / proof status:
     - local and test-green at this checkpoint; fresh live proof is the next step after rebuild/restart
+- 2026-03-29 15:21 MDT - Recognized explicit child deliverables from path-first titles and `(path or similar)` hints so recovery targets stop inheriting stale parent-spec files.
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - `parseExplicitDeliverablePath(...)` now recognizes titles like `sambot/widget.html (or sambot/index.html) — ...`
+    - it also recognizes description hints like `(sambot/widget.html or similar)` and returns the first concrete path
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `explicitDeliverablePath(...)` now mirrors the same path-first title and parenthesized-option parsing
+    - `sessionTaskDeliverablePath(...)` can now prefer a child’s own explicit `sambot/...` deliverable over an inherited parent spec path
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - worker deliverable hints now include task titles as contract candidates
+    - worker explicit-path fallback now keeps `content/posts`-style roots as deliverable roots instead of misclassifying them as explicit file targets
+  - changed tests:
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go)
+      - added coverage for path-first titles and `(path or similar)` descriptions
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestSessionTaskDeliverablePathPrefersChildLeadingPathTitleOverParentDeliverable`
+    - [`internal/jobqueue/worker_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_test.go)
+      - added worker-hint coverage for both title-first and parenthesized-option paths
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'TestParseExplicitDeliverablePath(DetectsLeadingPathTitleWithAlternates|DetectsParenthesizedOptionPath|RejectsNonPathOutputAdjective|DetectsAppendTargetPath|UsesTitleWhenDescriptionStartsWithInputRead|PrefersDescriptionAppendTargetOverSlashTitle|PrefersLongDescriptionPathOverBareTitleToken)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestSessionTaskDeliverablePath(InheritsParentExplicitDeliverableForDecomposedChild|InheritsLongDescriptionParentPathOverBareTitleToken|PrefersChildLeadingPathTitleOverParentDeliverable)$' -count=1`
+    - `GOFLAGS='' go test ./internal/jobqueue -run 'TestBuildProjectContinuationTaskHintsForWorker(DetectsLeadingPathTitleDeliverable|DetectsParenthesizedOptionPath|IncludesDeliverableAndDependencyHints|UsesDecompositionSourceDescription)$' -count=1`
+  - deploy / proof status:
+    - rebuilt/restarted cleanly; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+    - fresh live proof on task `176` session `12727f59-f7ea-4e3f-a8d0-ab3ff093110c`: prompt `30` now continues directly from `sambot/api.js`, and tool result `32` blocks a stale reread of `planning/sambot-feature-spec.md` with `deliverable_path":"sambot/api.js"`
+    - task `173` / `175` still have older in-flight widget turns, so live proof for the `sambot/widget.html` side is still pending the next fresh retry window

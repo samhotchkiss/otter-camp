@@ -181,6 +181,40 @@ func TestBuildProjectContinuationTaskHintsForWorkerUsesDecompositionSourceDescri
 	}
 }
 
+func TestBuildProjectContinuationTaskHintsForWorkerDetectsLeadingPathTitleDeliverable(t *testing.T) {
+	tasks := []repo.ProjectTask{
+		{
+			ID:         uuid.New(),
+			TaskNumber: 175,
+			Title:      "sambot/widget.html (or sambot/index.html) — the frontend chat widget",
+			WorkStatus: "in_progress",
+		},
+	}
+
+	hints := buildProjectContinuationTaskHintsForWorker(tasks, nil)
+	if got := hints[tasks[0].ID].DeliverablePath; got != "sambot/widget.html" {
+		t.Fatalf("deliverable path = %q, want sambot/widget.html", got)
+	}
+}
+
+func TestBuildProjectContinuationTaskHintsForWorkerDetectsParenthesizedOptionPath(t *testing.T) {
+	description := "Frontend chat widget — a self-contained HTML/CSS/JS component (sambot/widget.html or similar) that renders a floating chat bubble."
+	tasks := []repo.ProjectTask{
+		{
+			ID:          uuid.New(),
+			TaskNumber:  173,
+			Title:       "Frontend chat widget",
+			Description: &description,
+			WorkStatus:  "in_progress",
+		},
+	}
+
+	hints := buildProjectContinuationTaskHintsForWorker(tasks, nil)
+	if got := hints[tasks[0].ID].DeliverablePath; got != "sambot/widget.html" {
+		t.Fatalf("deliverable path = %q, want sambot/widget.html", got)
+	}
+}
+
 func TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompletedBatchSupersessionGuidance(t *testing.T) {
 	prompt := buildProjectExecutionContinuationPromptForWorker(
 		67,

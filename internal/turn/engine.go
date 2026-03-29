@@ -192,6 +192,8 @@ var explicitDeliverablePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bsave\s+as\s+([^\s,;]+)`),
 }
 var leadingVerbDeliverablePathPattern = regexp.MustCompile(`(?i)^\s*(?:write|create|produce|append|add|update)\s+([^\s,;]+)`)
+var leadingExplicitDeliverablePathPattern = regexp.MustCompile(`^\s*([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)\s*(?:\([^)\n]*\)|[-—:])`)
+var parenthesizedDeliverableOptionPathPattern = regexp.MustCompile(`\(([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)\s+or\s+[^)\n]+\)`)
 var explicitDeliverableActionWords = map[string]struct{}{
 	"add":      {},
 	"append":   {},
@@ -34956,6 +34958,20 @@ func explicitDeliverablePath(taskRecord repo.ProjectTask) string {
 	}
 	for _, description := range taskContractDescriptionCandidates(taskRecord) {
 		if match := leadingVerbDeliverablePathPattern.FindStringSubmatch(description); len(match) >= 2 {
+			rawCandidate := strings.TrimSpace(match[1])
+			candidate := normalizeExplicitDeliverablePathCandidate(rawCandidate)
+			if looksLikeExplicitDeliverablePath(candidate, rawCandidate) {
+				return candidate
+			}
+		}
+		if match := leadingExplicitDeliverablePathPattern.FindStringSubmatch(description); len(match) >= 2 {
+			rawCandidate := strings.TrimSpace(match[1])
+			candidate := normalizeExplicitDeliverablePathCandidate(rawCandidate)
+			if looksLikeExplicitDeliverablePath(candidate, rawCandidate) {
+				return candidate
+			}
+		}
+		if match := parenthesizedDeliverableOptionPathPattern.FindStringSubmatch(description); len(match) >= 2 {
 			rawCandidate := strings.TrimSpace(match[1])
 			candidate := normalizeExplicitDeliverablePathCandidate(rawCandidate)
 			if looksLikeExplicitDeliverablePath(candidate, rawCandidate) {
