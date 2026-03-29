@@ -4815,13 +4815,20 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 	if !projectContinuationMessageRootsHistory(*latestUser) {
 		return false, nil
 	}
-	if turnHasSuccessfulMutatingToolResult(messages, completedTurn.ID) {
-		return false, nil
-	}
 	assistantContent := strings.TrimSpace(assistant.Content)
 	genericAssistant := assistantContent == "" || looksLikeGenericTaskRecoveryReply(assistantContent)
 	if missingPath, found := projectContinuationMissingDependencyStopPath(messages, completedTurn.ID); found {
 		return e.retryProjectExecutionContinuationForMissingDependency(ctx, session, completedTurn, latestUser, missingPath)
+	}
+	if projectContinuationTurnEndedWithBoundedSizeStop(messages, completedTurn.ID) {
+		if retried, retryErr := e.retryProjectExecutionContinuationForBoundedSizeStop(ctx, session, completedTurn, latestUser, messages); retryErr != nil {
+			return false, retryErr
+		} else if retried {
+			return true, nil
+		}
+	}
+	if turnHasSuccessfulMutatingToolResult(messages, completedTurn.ID) {
+		return false, nil
 	}
 	preferredResumeTaskIDs := projectContinuationPromptNamedTaskIDs(strings.TrimSpace(latestUser.Content))
 	if handled, shouldStop, err := e.resumeBlockedProjectContinuationReviewLane(ctx, completedTurn.ID, session.ID, session.ScopeID, preferredResumeTaskIDs); err != nil {
@@ -5079,6 +5086,82 @@ func (e *TurnEngine) retryProjectExecutionContinuationForMissingDependency(
 	}
 	agentID := latestCompleted.RespondingID
 	retryPrompt := buildProjectExecutionContinuationMissingDependencyRetryPrompt(completedTask, remainingDraftTasks, snapshot, missingPath)
+	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	if err != nil {
+		return false, err
+	}
+	if retryMessage == nil {
+		return true, nil
+	}
+	nextPayload := AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  retryMessage.ID,
+		RetryCount: latestCompleted.RetryCount + 1,
+	}
+	if agentID != uuid.Nil {
+		nextPayload.AgentID = &agentID
+	}
+	runAfter := e.now().Add(defaultAutoContinueDelay).UTC()
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	if err != nil {
+		return false, err
+	}
+	return enqueued, nil
+}
+
+func (e *TurnEngine) retryProjectExecutionContinuationForBoundedSizeStop(
+	ctx context.Context,
+	session *chat.ChatSession,
+	latestCompleted *repo.ChatTurn,
+	latestUser *repo.ChatMessage,
+	messages []repo.ChatMessage,
+) (bool, error) {
+	if e == nil || session == nil || latestCompleted == nil || latestUser == nil || e.tasks == nil {
+		return false, nil
+	}
+	if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
+		return false, nil
+	}
+	completedTaskID, _ := parseUUIDAny(messageMetadataMap(latestUser.Metadata)["completed_task_id"])
+	var completedTask repo.ProjectTask
+	if completedTaskID != uuid.Nil {
+		if taskRecord, err := e.tasks.GetByID(ctx, completedTaskID); err == nil {
+			completedTask = taskRecord
+		}
+	}
+	focusTask, ok, err := e.projectContinuationBoundedSizeFocusTask(ctx, session.ScopeID, latestUser, messages, latestCompleted.ID)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	taskHintsByTask, err := e.projectContinuationTaskHintsByTask(ctx, projectTasks)
+	if err != nil {
+		return false, err
+	}
+	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
+	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	snapshot, err := e.projectExecutionContinuationSnapshotForSummary(ctx, session.ScopeID, strings.TrimSpace(latestUser.Content))
+	if err != nil {
+		return false, err
+	}
+	agentID := latestCompleted.RespondingID
+	retryPrompt := buildProjectExecutionContinuationBoundedSizeRetryPrompt(
+		completedTask,
+		remainingDraftTasks,
+		snapshot,
+		focusTask,
+		childActivity[focusTask.ID],
+		taskHintsByTask[focusTask.ID],
+	)
 	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
 	if err != nil {
 		return false, err
@@ -5466,6 +5549,34 @@ func buildProjectExecutionContinuationReplacementChildRetryPrompt(
 	retryPrompt += fmt.Sprintf(" Do not queue parent task %s again from the project lane.", focusLabel)
 	retryPrompt += fmt.Sprintf(" Your next assistant action must create the smallest fresh replacement child task beneath %s now, or queue an existing direct child draft there if one already fits unchanged.", focusLabel)
 	retryPrompt += fmt.Sprintf(" If you must inspect child lanes first, use only task.list(parent_task_id=%s).", focusTask.ID.String())
+	return retryPrompt
+}
+
+func buildProjectExecutionContinuationBoundedSizeRetryPrompt(
+	completedTask repo.ProjectTask,
+	remainingDraftTasks int,
+	snapshot projectExecutionContinuationSnapshot,
+	focusTask repo.ProjectTask,
+	focusActivity projectContinuationChildActivity,
+	focusHints projectContinuationTaskHints,
+) string {
+	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot)
+	focusLabel := projectBootstrapTaskLabel(focusTask)
+	focusRef := projectExecutionContinuationTaskRef(focusTask, focusActivity, focusHints)
+	retryPrompt += fmt.Sprintf(" Your last continuation turn proved that %s is still too broad to queue as-is.", focusRef)
+	retryPrompt += fmt.Sprintf(" Do not try to queue %s again without narrowing it.", focusLabel)
+	retryPrompt += " Do not reread broad project context, do not inspect unrelated blocked tasks, and do not browse the workspace first."
+	if dependsOnPath := strings.TrimSpace(focusHints.DependsOnPath); dependsOnPath != "" {
+		retryPrompt += fmt.Sprintf(" Keep any child work anchored to prerequisite `%s` instead of rediscovering other inputs.", dependsOnPath)
+	}
+	if deliverablePath := strings.TrimSpace(focusHints.DeliverablePath); deliverablePath != "" {
+		retryPrompt += fmt.Sprintf(" Keep the new child work tightly scoped to deliverable `%s`.", deliverablePath)
+	} else if deliverableRoot := strings.TrimSpace(focusHints.DeliverableRoot); deliverableRoot != "" {
+		retryPrompt += fmt.Sprintf(" Keep the new child work tightly scoped inside deliverable root `%s`.", deliverableRoot)
+	}
+	if focusTask.ID != uuid.Nil {
+		retryPrompt += fmt.Sprintf(" Your next assistant action must split %s into smaller reviewable child tasks now, or queue an already-bounded direct child if one already exists unchanged. If you must inspect child lanes first, use only task.list(parent_task_id=%s).", focusLabel, focusTask.ID.String())
+	}
 	return retryPrompt
 }
 
@@ -8605,6 +8716,88 @@ func canonicalTurnExecutionNodeSlug(node repo.FlowNode) string {
 		return "node"
 	}
 	return out
+}
+
+func projectContinuationTurnEndedWithBoundedSizeStop(messages []repo.ChatMessage, turnID uuid.UUID) bool {
+	for _, message := range messagesForTurn(messages, turnID) {
+		switch strings.ToLower(strings.TrimSpace(message.Role)) {
+		case "system":
+			if strings.Contains(strings.ToLower(strings.TrimSpace(message.Content)), "violates the bounded size policy") {
+				return true
+			}
+		case "tool_result":
+			_, _, errText, ok := parseToolResultMessage(message.Content)
+			if ok && strings.Contains(strings.ToLower(strings.TrimSpace(errText)), "bounded size policy") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (e *TurnEngine) projectContinuationBoundedSizeFocusTask(
+	ctx context.Context,
+	projectID uuid.UUID,
+	latestUser *repo.ChatMessage,
+	messages []repo.ChatMessage,
+	turnID uuid.UUID,
+) (repo.ProjectTask, bool, error) {
+	if e == nil || e.tasks == nil || projectID == uuid.Nil || latestUser == nil {
+		return repo.ProjectTask{}, false, nil
+	}
+	var candidateID uuid.UUID
+	for _, message := range messagesForTurn(messages, turnID) {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, _, ok := parseToolResultMessage(message.Content)
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "task.create", "task.update":
+		default:
+			continue
+		}
+		taskOutput, _ := output["task"].(map[string]any)
+		if taskOutput == nil {
+			continue
+		}
+		taskID, _ := parseUUIDAny(taskOutput["id"])
+		if taskID == uuid.Nil {
+			continue
+		}
+		workStatus := strings.ToLower(strings.TrimSpace(anyString(taskOutput["work_status"])))
+		if workStatus == "" {
+			workStatus = "draft"
+		}
+		if workStatus == "draft" {
+			candidateID = taskID
+		}
+	}
+	if candidateID != uuid.Nil {
+		taskRecord, err := e.tasks.GetByID(ctx, candidateID)
+		if err == nil {
+			return taskRecord, true, nil
+		}
+		if !errors.Is(err, repo.ErrNotFound) {
+			return repo.ProjectTask{}, false, err
+		}
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, projectID)
+	if err != nil {
+		return repo.ProjectTask{}, false, err
+	}
+	taskHintsByTask, err := e.projectContinuationTaskHintsByTask(ctx, projectTasks)
+	if err != nil {
+		return repo.ProjectTask{}, false, err
+	}
+	priorityPaths := projectContinuationPriorityPathsFromText(strings.TrimSpace(latestUser.Content))
+	focusTask, ok := projectContinuationCurrentFocusTask(projectTasks, taskHintsByTask, priorityPaths)
+	if !ok {
+		return repo.ProjectTask{}, false, nil
+	}
+	return focusTask, true, nil
 }
 
 func (e *TurnEngine) HandleUserMessage(ctx context.Context, sessionID, messageID uuid.UUID) error {

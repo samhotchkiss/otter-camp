@@ -12446,6 +12446,162 @@ func TestHandleCompletedProjectExecutionContinuationTurnConsumesBoundedSizeQueue
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnRetriesBoundedSizeStopWithFreshMessage(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	boundedTaskID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	boundedDescription := "Write SamBot feature specification to planning/sambot-feature-spec.md"
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 30,
+				Title:      "Write SamBot chat feature specification",
+				WorkStatus: "done",
+			},
+			boundedTaskID: {
+				ID:              boundedTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      82,
+				Title:           "Produce SamBot feature specification",
+				Description:     &boundedDescription,
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "I'll create and queue the replacement draft now.",
+		SequenceNumber: 11,
+	}
+	createResult := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "tool_result",
+		Status:         "final",
+		SequenceNumber: 12,
+		Content: string(mustJSONRaw(map[string]any{
+			"tool_name": "task.create",
+			"output": map[string]any{
+				"task": map[string]any{
+					"id":          boundedTaskID.String(),
+					"task_number": 82,
+					"work_status": "draft",
+				},
+			},
+		})),
+	}
+	updateResult := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "tool_result",
+		Status:         "final",
+		SequenceNumber: 13,
+		Content: string(mustJSONRaw(map[string]any{
+			"tool_name": "task.update",
+			"output": map[string]any{
+				"error": "task exceeds bounded size policy (estimated 75 minutes > 60 minute limit): split the work into smaller reviewable tasks before queueing",
+			},
+		})),
+	}
+	systemMessage := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "system",
+		Status:         "final",
+		Content:        "[Project continuation found that the remaining draft work still violates the bounded size policy. Split it into smaller reviewable child tasks instead of trying to queue the broad parent again.]",
+		SequenceNumber: 14,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant, *createResult, *updateResult, *systemMessage}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected bounded-size continuation stop to enqueue a fresh retry message")
+	}
+
+	jobs := fixture.enqueuer.jobs
+	if len(jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload.MessageID == userMessageID {
+		t.Fatal("retry reused original continuation message, want fresh message id")
+	}
+	if jobs[0].payload.RetryCount != 1 {
+		t.Fatalf("retry_count = %d, want 1", jobs[0].payload.RetryCount)
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var retryMessage *repo.ChatMessage
+	for i := range storedMessages {
+		msg := &storedMessages[i]
+		if msg.ID == jobs[0].payload.MessageID {
+			retryMessage = msg
+			break
+		}
+	}
+	if retryMessage == nil {
+		t.Fatal("missing appended bounded-size retry continuation message")
+	}
+	if !strings.Contains(retryMessage.Content, "task 82") {
+		t.Fatalf("retry message = %q, want bounded task label", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "split task 82") {
+		t.Fatalf("retry message = %q, want direct split guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "task.list(parent_task_id="+boundedTaskID.String()+")") {
+		t.Fatalf("retry message = %q, want narrow child inspection guidance", retryMessage.Content)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnRetriesGenericReplyWithFreshMessage(t *testing.T) {
 	t.Parallel()
 
