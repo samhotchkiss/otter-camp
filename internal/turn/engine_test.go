@@ -6377,6 +6377,19 @@ func TestInferredTaskDeliverableDraftBuildsExplicitMarkdownStarter(t *testing.T)
 	}
 }
 
+func TestInferredTaskDeliverableDraftSkipsSourceBackedContentPostsTask(t *testing.T) {
+	description := "Read content/technonymous-index.json. For each of the first 12 URLs in the post_urls array, use web_fetch to retrieve the page content, then save the article text as clean markdown files under content/posts/."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  70,
+		Title:       "Fetch posts 1-12 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+		Description: &description,
+	}
+
+	if draft := inferredTaskDeliverableDraft(taskRecord); draft != "" {
+		t.Fatalf("draft = %q, want no inferred draft for source-backed content/posts task", draft)
+	}
+}
+
 func TestReconcileRecoveryCheckpointCandidateNormalizesExecutionFirstReportTarget(t *testing.T) {
 	t.Parallel()
 
@@ -25299,6 +25312,57 @@ func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsUsesExplicitMarkdownDeliv
 	}
 }
 
+func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsSourceBackedContentPostsTask(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Read content/technonymous-index.json. For each of the first 12 URLs in the post_urls array, use web_fetch to retrieve the page content, then save the article text as clean markdown files under content/posts/."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     70,
+		Title:          "Fetch posts 1-12 from technonymous-index.json via web_fetch and save as markdown under content/posts/",
+		WorkStatus:     "in_progress",
+		Description:    &description,
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskExecutionFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"Fresh branch. I'll create the markdown files from the task description now.",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskExecutionFileWriteToolCalls: %v", err)
+	}
+	if synthesized {
+		t.Fatalf("synthesized = true, want false for source-backed content/posts task; toolCalls=%+v", toolCalls)
+	}
+	if toolCalls != nil {
+		t.Fatalf("toolCalls = %+v, want nil", toolCalls)
+	}
+}
+
 func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsOverridesBadImprovisedWrite(t *testing.T) {
 	t.Parallel()
 
@@ -36031,8 +36095,8 @@ I'll spot-check several before reporting back.`),
 	if !strings.Contains(state.summaryDraftRejectedReason, "content-migration checkpoint summary") {
 		t.Fatalf("summaryDraftRejectedReason = %q, want content-migration summary rejection", state.summaryDraftRejectedReason)
 	}
-	if !strings.Contains(state.summaryDraft, "## Validation Criteria") {
-		t.Fatalf("summaryDraft = %q, want safe inferred scaffold fallback", state.summaryDraft)
+	if state.summaryDraft != "" {
+		t.Fatalf("summaryDraft = %q, want no inferred fallback for source-backed content migration task", state.summaryDraft)
 	}
 }
 
@@ -36114,8 +36178,8 @@ Let me start fresh with the correct approach:
 	if !strings.Contains(state.targetDraftRejectedReason, "recovery-step narration") {
 		t.Fatalf("targetDraftRejectedReason = %q, want recovery-note rejection", state.targetDraftRejectedReason)
 	}
-	if !strings.Contains(state.summaryDraft, "## Validation Criteria") {
-		t.Fatalf("summaryDraft = %q, want safe inferred scaffold fallback", state.summaryDraft)
+	if state.summaryDraft != "" {
+		t.Fatalf("summaryDraft = %q, want no inferred fallback for source-backed content migration task", state.summaryDraft)
 	}
 }
 

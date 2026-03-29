@@ -1683,3 +1683,24 @@
     - rebuilt/restarted tmux `codex-e2e-20260324`; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
   - proof target after deploy:
     - the next task-70 execution continuation should stop carrying dirty review prose and should instead fall through to task-specific execution or checkpoint-backed continuation context
+- 2026-03-28 18:13:53 MDT - Finished: stop inferring fake article bodies for source-backed content-post fetch tasks.
+  - live diagnosis:
+    - task `70` recovery-resume state on session `30a79813-2880-4ae1-be7f-2dd76623f193` still surfaced `Continuation summary draft` text that was just the engine-authored task scaffold (`# Fetch posts 1-12 ... ## Objective ... ## Validation Criteria ... ## Evidence Expectations ...`)
+    - that scaffold is not a reusable article body; the next turns wrote it into `content/posts/...`, then immediately recognized the content was wrong and retried the same file mutations again
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `shouldSkipInferredTaskDeliverableDraft(...)`
+    - `inferredTaskDeliverableDraft(...)` now returns empty for source-backed content migration tasks whose contract clearly says to fetch page bodies from `technonymous-index.json` / `post_urls array` / `web_fetch` and save article markdown under `content/posts`
+    - because the helper is shared, both recovery-resume fallback and ordinary async task kickoff synthesis stop fabricating bogus markdown article bodies for these tasks
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestInferredTaskDeliverableDraftSkipsSourceBackedContentPostsTask`
+    - added `TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsSourceBackedContentPostsTask`
+    - updated the content-migration recovery-resume tests so they now expect no inferred scaffold fallback after rejecting checkpoint-summary / recovery-note drafts
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3463`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(InferredTaskDeliverableDraftSkipsSourceBackedContentPostsTask|LoadRecoveryResumeStateRejectsContentMigration(CheckpointSummaryDraft|RecoveryNoteDraft)|MaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsSourceBackedContentPostsTask)$' -count=1`
+  - caveat:
+    - `TestMaybeSynthesizeTaskExecutionFileWriteToolCallsUsesExplicitMarkdownDeliverableDraft` is currently red in the live tree even outside this patch path, so I kept that separate as existing test debt instead of widening this fix
+  - proof target after deploy:
+    - the next task-70 recovery-resume message should omit the fake scaffold draft entirely, and the next retry should stop starting from markdown-body text that was never fetched from the source posts

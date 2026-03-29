@@ -17173,6 +17173,9 @@ func inferredTaskDeliverableDraft(taskRecord repo.ProjectTask) string {
 	if targetPath == "" || !strings.HasSuffix(strings.ToLower(targetPath), ".md") {
 		return ""
 	}
+	if shouldSkipInferredTaskDeliverableDraft(taskRecord, targetPath) {
+		return ""
+	}
 
 	title := strings.TrimSpace(taskRecord.Title)
 	if title == "" {
@@ -17229,6 +17232,43 @@ func inferredTaskDeliverableDraft(taskRecord repo.ProjectTask) string {
 	b.WriteString("\n## Evidence Expectations\n")
 	b.WriteString("- Reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.\n")
 	return strings.TrimSpace(b.String())
+}
+
+func shouldSkipInferredTaskDeliverableDraft(taskRecord repo.ProjectTask, targetPath string) bool {
+	var context strings.Builder
+	context.WriteString(strings.ToLower(strings.TrimSpace(taskRecord.Title)))
+	if taskRecord.Description != nil {
+		if description := strings.ToLower(strings.TrimSpace(*taskRecord.Description)); description != "" {
+			if context.Len() > 0 {
+				context.WriteByte('\n')
+			}
+			context.WriteString(description)
+		}
+	}
+	lower := context.String()
+	if !containsAny(lower,
+		"content/posts/",
+		"content/posts",
+		"save as markdown",
+		"markdown files under content/posts/",
+		"markdown files in content/posts/",
+		"save the article text",
+	) {
+		return false
+	}
+	return containsAny(lower,
+		"content/technonymous-index.json",
+		"technonymous-index.json",
+		"post_urls array",
+		"use web_fetch",
+		"via web_fetch",
+		"retrieve the page content",
+		"fetch posts",
+		"save as markdown",
+		"save the article text",
+		"clean markdown files under content/posts/",
+		"clean markdown files in content/posts/",
+	)
 }
 
 func inferredTestExecutionSlug(title string, description *string) string {
