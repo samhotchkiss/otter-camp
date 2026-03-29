@@ -37746,6 +37746,22 @@ func TestExplicitDeliverablePathDetectsAppendTargetPath(t *testing.T) {
 	}
 }
 
+func TestExplicitDeliverablePathUsesTitleWhenDescriptionStartsWithInputRead(t *testing.T) {
+	t.Parallel()
+
+	title := `Append "Technical Architecture" section to planning/sambot-feature-spec.md — covering embedding model, vector store, retrieval pipeline, prompt engineering approach, and fallback handling. Read file first, append after existing content. Single-file deliverable only.`
+	description := "Read planning/sambot-feature-spec.md, then append a new ## Technical Architecture section after the existing content. Cover: embedding model selection, vector store choice, retrieval pipeline design, prompt engineering approach, and fallback/error handling. Reference the scraped blog posts in content/posts/ for context about Sam's technical depth. Do NOT overwrite existing content. No sub-plans or planning artifacts — single file deliverable only."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  109,
+		Title:       title,
+		Description: &description,
+	}
+
+	if got := explicitDeliverablePath(taskRecord); got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("explicitDeliverablePath(...) = %q, want %q", got, "planning/sambot-feature-spec.md")
+	}
+}
+
 func TestContentMigrationCheckpointPreferredOutputPathSkipsExplicitSingleFileDeliverable(t *testing.T) {
 	t.Parallel()
 

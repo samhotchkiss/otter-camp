@@ -286,7 +286,7 @@ func looksLikeExplicitDeliverablePath(normalized, raw string) bool {
 }
 
 func taskContractDescriptionCandidates(taskRecord repo.ProjectTask) []string {
-	candidates := make([]string, 0, 2)
+	candidates := make([]string, 0, 3)
 	appendCandidate := func(raw string) {
 		normalized := strings.TrimSpace(raw)
 		if normalized == "" {
@@ -299,6 +299,7 @@ func taskContractDescriptionCandidates(taskRecord repo.ProjectTask) []string {
 		}
 		candidates = append(candidates, normalized)
 	}
+	appendCandidate(taskRecord.Title)
 	if taskRecord.Description != nil {
 		appendCandidate(*taskRecord.Description)
 	}
