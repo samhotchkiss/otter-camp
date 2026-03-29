@@ -467,3 +467,16 @@
     - those lanes burn a full task turn before the downstream shared-file safety guards intervene
   - target fix:
     - treat those source-artifact support tasks as malformed procedural children up front so kickoff preflight blocks them before model call
+- 2026-03-29 13:56 MDT - The SamBot conversations replacement branch still had one more malformed child family after the support-only fix.
+  - fresh live evidence:
+    - task `155`
+    - title/description: `Produce the file planning/sambot-example-conversations.md containing 5-8 realistic example conversations between a site visitor and SamBot`
+    - parent task `154` already owns that exact same single-file deliverable path
+    - the child lane kept reopening the inherited shared-deliverable recovery path instead of representing a narrower section-scoped split
+  - bug:
+    - the malformed-child filters did not treat duplicate full-file children as malformed when they re-claimed the parent's exact single-file artifact
+  - impact:
+    - PM continuations can remain blocked behind a fake child lane that is not actually narrower than the parent
+    - that child then churns into the later shared-deliverable write guard instead of being rejected immediately
+  - target fix:
+    - treat same-path `produce/write the file <parent path>` children as malformed duplicate shared-file artifacts so kickoff preflight and PM/worker snapshots both ignore them

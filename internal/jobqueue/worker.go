@@ -3825,7 +3825,8 @@ func projectContinuationMalformedChildTaskIDsForWorker(tasks []repo.ProjectTask)
 			continue
 		}
 		if !projectContinuationParentForbidsDecompositionForWorker(parentTask) &&
-			!taskdecomp.TaskLooksProceduralInstructionArtifact(task.Title, task.Description) {
+			!taskdecomp.TaskLooksProceduralInstructionArtifact(task.Title, task.Description) &&
+			!projectContinuationMalformedDuplicateSharedFileChildForWorker(task, parentTask) {
 			continue
 		}
 		if malformed == nil {
@@ -3834,6 +3835,46 @@ func projectContinuationMalformedChildTaskIDsForWorker(tasks []repo.ProjectTask)
 		malformed[task.ID] = struct{}{}
 	}
 	return malformed
+}
+
+func projectContinuationMalformedDuplicateSharedFileChildForWorker(task, parentTask repo.ProjectTask) bool {
+	parentPath := normalizeWorkspaceRelativePathForWorker(explicitDeliverablePathForWorker(parentTask))
+	childPath := normalizeWorkspaceRelativePathForWorker(explicitDeliverablePathForWorker(task))
+	if parentPath == "" || childPath == "" || !sameWorkspaceRelativePathForWorker(parentPath, childPath) {
+		return false
+	}
+	if !strings.Contains(filepath.Base(parentPath), ".") {
+		return false
+	}
+	return taskClaimsWholeSharedFileOwnershipForWorker(task, parentPath)
+}
+
+func taskClaimsWholeSharedFileOwnershipForWorker(taskRecord repo.ProjectTask, sharedPath string) bool {
+	sharedPath = strings.ToLower(strings.TrimSpace(normalizeWorkspaceRelativePathForWorker(sharedPath)))
+	if sharedPath == "" || !strings.Contains(filepath.Base(sharedPath), ".") {
+		return false
+	}
+	description := ""
+	if taskRecord.Description != nil {
+		description = *taskRecord.Description
+	}
+	text := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(taskRecord.Title+" "+description)), " "))
+	if text == "" {
+		return false
+	}
+	for _, prefix := range []string{
+		"produce the file ",
+		"write the file ",
+		"draft the file ",
+		"create the file ",
+		"update the file ",
+		"replace the file ",
+	} {
+		if strings.Contains(text, prefix+sharedPath) {
+			return true
+		}
+	}
+	return false
 }
 
 func projectContinuationParentForbidsDecompositionForWorker(task repo.ProjectTask) bool {
@@ -3996,6 +4037,13 @@ func explicitDeliverablePathForWorker(task repo.ProjectTask) string {
 			rawCandidate := strings.TrimSpace(matches[1])
 			candidate := normalizeExplicitDeliverablePathCandidateForWorker(rawCandidate)
 			if !looksLikeExplicitDeliverablePathForWorker(candidate, rawCandidate) {
+				continue
+			}
+			return candidate
+		}
+		for _, rawPath := range projectContinuationWorkspacePathPatternForWorker.FindAllString(description, -1) {
+			candidate := normalizeWorkspaceRelativePathForWorker(rawPath)
+			if !looksLikeExplicitDeliverablePathForWorker(candidate, rawPath) {
 				continue
 			}
 			return candidate

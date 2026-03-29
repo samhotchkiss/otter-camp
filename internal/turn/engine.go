@@ -9555,6 +9555,11 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	} else if handled {
 		return nil
 	}
+	if handled, handleErr := e.handleMalformedDuplicateSharedFileChildTaskPreflight(ctx, runtime); handleErr != nil {
+		return handleErr
+	} else if handled {
+		return nil
+	}
 	cancelCtx, stopCancelWatch := e.watchTurnCancellation(ctx, runtime)
 	defer stopCancelWatch()
 
@@ -10500,6 +10505,138 @@ func buildMalformedProceduralChildTaskSystemMessage(taskRecord, parentTask repo.
 		lines = append(lines, "Resume the real bounded work from the parent task, or create a fresh bounded replacement child task instead of reopening this procedural lane.]")
 	}
 	return strings.Join(lines, " ")
+}
+
+func buildMalformedDuplicateSharedFileChildTaskBlockedReason(taskRecord, parentTask repo.ProjectTask, sharedPath string) string {
+	reason := fmt.Sprintf("%s was created as a child of %s but still duplicates the parent's shared single-file deliverable instead of narrowing the work; resume the bounded split from the parent task or create a real section-scoped child instead of this malformed lane", buildTaskLabel(taskRecord), buildTaskLabel(parentTask))
+	if sharedPath = strings.TrimSpace(sharedPath); sharedPath != "" {
+		reason += fmt.Sprintf(" (shared deliverable: %s)", sharedPath)
+	}
+	return reason
+}
+
+func buildMalformedDuplicateSharedFileChildTaskSystemMessage(taskRecord, parentTask repo.ProjectTask, sharedPath string) string {
+	lines := []string{
+		fmt.Sprintf("[Task lane halted: %s duplicates the parent shared single-file deliverable owned by %s.", buildTaskLabel(taskRecord), buildTaskLabel(parentTask)),
+		"This child still claims the parent's full file instead of a bounded subsection or replacement artifact, so this session should not continue.",
+	}
+	if sharedPath = strings.TrimSpace(sharedPath); sharedPath != "" {
+		lines = append(lines, fmt.Sprintf("Resume the bounded split from the parent task and target `%s` with real section-scoped child work instead of reopening this duplicate full-file child.]", sharedPath))
+	} else {
+		lines = append(lines, "Resume the bounded split from the parent task and create real section-scoped child work instead of reopening this duplicate full-file child.]")
+	}
+	return strings.Join(lines, " ")
+}
+
+func taskClaimsWholeSharedFileOwnership(taskRecord repo.ProjectTask, sharedPath string) bool {
+	sharedPath = strings.ToLower(strings.TrimSpace(normalizeWorkspaceRelativePath(sharedPath)))
+	if sharedPath == "" || !strings.Contains(filepath.Base(sharedPath), ".") {
+		return false
+	}
+	description := ""
+	if taskRecord.Description != nil {
+		description = *taskRecord.Description
+	}
+	text := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(taskRecord.Title+" "+description)), " "))
+	if text == "" {
+		return false
+	}
+	for _, prefix := range []string{
+		"produce the file ",
+		"write the file ",
+		"draft the file ",
+		"create the file ",
+		"update the file ",
+		"replace the file ",
+	} {
+		if strings.Contains(text, prefix+sharedPath) {
+			return true
+		}
+	}
+	return false
+}
+
+func taskDuplicateSharedFileDeliverablePath(taskRecord repo.ProjectTask) string {
+	description := ""
+	if taskRecord.Description != nil {
+		description = strings.TrimSpace(*taskRecord.Description)
+	}
+	if explicit := normalizeWorkspaceRelativePath(projectContinuationExplicitDeliverablePathFromText(description)); explicit != "" {
+		return explicit
+	}
+	if explicit := normalizeWorkspaceRelativePath(explicitDeliverablePath(taskRecord)); explicit != "" && strings.Contains(filepath.Base(explicit), ".") {
+		return explicit
+	}
+	return normalizeWorkspaceRelativePath(projectContinuationExplicitDeliverablePathFromText(strings.TrimSpace(taskRecord.Title) + " " + description))
+}
+
+func (e *TurnEngine) malformedDuplicateSharedFileParentTaskForChild(ctx context.Context, taskRecord repo.ProjectTask) (repo.ProjectTask, string, bool, error) {
+	parentTask, ok := e.decompositionParentTask(ctx, taskRecord)
+	if !ok {
+		return repo.ProjectTask{}, "", false, nil
+	}
+	parentPath := taskDuplicateSharedFileDeliverablePath(parentTask)
+	childPath := taskDuplicateSharedFileDeliverablePath(taskRecord)
+	if parentPath == "" || childPath == "" || !sameWorkspaceRelativePath(parentPath, childPath) {
+		return repo.ProjectTask{}, "", false, nil
+	}
+	if !strings.Contains(filepath.Base(parentPath), ".") || !taskClaimsWholeSharedFileOwnership(taskRecord, parentPath) {
+		return repo.ProjectTask{}, "", false, nil
+	}
+	return parentTask, parentPath, true, nil
+}
+
+func (e *TurnEngine) handleMalformedDuplicateSharedFileChildTaskPreflight(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if e == nil || e.tasks == nil || rt == nil || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
+
+	taskRecord, err := e.tasks.GetByID(ctx, rt.session.ScopeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return true, err
+	}
+	parentTask, sharedPath, malformed, err := e.malformedDuplicateSharedFileParentTaskForChild(ctx, taskRecord)
+	if err != nil || !malformed {
+		return malformed, err
+	}
+
+	reason := buildMalformedDuplicateSharedFileChildTaskBlockedReason(taskRecord, parentTask, sharedPath)
+	systemMessage := buildMalformedDuplicateSharedFileChildTaskSystemMessage(taskRecord, parentTask, sharedPath)
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, systemMessage); err != nil {
+		return true, err
+	}
+	if e.taskTransitions == nil {
+		return true, fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
+		if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
+			var transitionErr tasksvc.ErrInvalidStatusTransition
+			if errors.As(err, &transitionErr) {
+				refreshed, refreshErr := e.tasks.GetByID(ctx, taskRecord.ID)
+				if refreshErr == nil {
+					nextStatus := strings.ToLower(strings.TrimSpace(refreshed.WorkStatus))
+					if nextStatus != "blocked" && nextStatus != "done" && nextStatus != "cancelled" {
+						return true, err
+					}
+				} else {
+					return true, err
+				}
+			} else {
+				return true, err
+			}
+		}
+	}
+	rt.stopReason = stopReasonValidationBlocked
+	if err := e.completeTurn(ctx, rt); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 func (e *TurnEngine) projectBootstrapAutoContinueMessage(ctx context.Context, messageID uuid.UUID) bool {
@@ -20669,7 +20806,8 @@ func projectContinuationMalformedChildTaskIDs(tasks []repo.ProjectTask) map[uuid
 			continue
 		}
 		if !projectContinuationParentForbidsDecomposition(parentTask) &&
-			!taskdecomp.TaskLooksProceduralInstructionArtifact(task.Title, task.Description) {
+			!taskdecomp.TaskLooksProceduralInstructionArtifact(task.Title, task.Description) &&
+			!projectContinuationMalformedDuplicateSharedFileChild(task, parentTask) {
 			continue
 		}
 		if malformed == nil {
@@ -20678,6 +20816,18 @@ func projectContinuationMalformedChildTaskIDs(tasks []repo.ProjectTask) map[uuid
 		malformed[task.ID] = struct{}{}
 	}
 	return malformed
+}
+
+func projectContinuationMalformedDuplicateSharedFileChild(task, parentTask repo.ProjectTask) bool {
+	parentPath := taskDuplicateSharedFileDeliverablePath(parentTask)
+	childPath := taskDuplicateSharedFileDeliverablePath(task)
+	if parentPath == "" || childPath == "" || !sameWorkspaceRelativePath(parentPath, childPath) {
+		return false
+	}
+	if !strings.Contains(filepath.Base(parentPath), ".") {
+		return false
+	}
+	return taskClaimsWholeSharedFileOwnership(task, parentPath)
 }
 
 func projectContinuationParentForbidsDecomposition(task repo.ProjectTask) bool {

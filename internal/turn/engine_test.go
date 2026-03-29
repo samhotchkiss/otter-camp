@@ -23173,6 +23173,67 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedReferenceOnlyChildr
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	parentDescription := "Produce the file planning/sambot-example-conversations.md containing 5-8 realistic example conversations between a site visitor and SamBot."
+	childDescription := "Produce the file planning/sambot-example-conversations.md containing 5-8 realistic example conversations between a site visitor and SamBot."
+	childID := uuid.New()
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:          parentDraftID,
+				ProjectID:   projectID,
+				TaskNumber:  154,
+				Title:       "Write SamBot Example Conversations (replacement)",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"applied":             true,
+						"mode":                "parallel_children",
+						"orchestration_only":  true,
+						"source_description":  parentDescription,
+						"primary_deliverable": "planning/sambot-example-conversations.md",
+					},
+				}),
+			},
+			childID: {
+				ID:          childID,
+				ProjectID:   projectID,
+				TaskNumber:  155,
+				Title:       "Produce the file planning/sambot-example-conversations.md containing 5-8 realistic example conversations between a site visitor and SamBot",
+				Description: &childDescription,
+				WorkStatus:  "in_progress",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+		},
+	}
+	parentTask := fixture.engine.tasks.(*fakeTaskRepo).items[parentDraftID]
+	childTask := fixture.engine.tasks.(*fakeTaskRepo).items[childID]
+	if !projectContinuationMalformedDuplicateSharedFileChild(childTask, parentTask) {
+		t.Fatalf("duplicate shared-file matcher = false; parentPath=%q childPath=%q", taskDuplicateSharedFileDeliverablePath(parentTask), taskDuplicateSharedFileDeliverablePath(childTask))
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "task 155") {
+		t.Fatalf("ActiveTaskLine = %q, should omit malformed duplicate shared-file child artifact", snapshot.ActiveTaskLine)
+	}
+	if strings.Contains(snapshot.ChildActiveDraftLine, "task 154") {
+		t.Fatalf("ChildActiveDraftLine = %q, should not treat malformed duplicate shared-file child as active child work", snapshot.ChildActiveDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "task 154") {
+		t.Fatalf("ReplacementDraftLine = %q, want parent restored as replacement draft", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=1") {
+		t.Fatalf("ReplacementDraftLine = %q, want malformed child count", snapshot.ReplacementDraftLine)
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotPrefersDraftChildOverFreshReplacementParent(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

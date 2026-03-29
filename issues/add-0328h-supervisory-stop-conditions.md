@@ -45,6 +45,18 @@ They need sharper stopping rules than ordinary execution lanes.
 - 2026-03-29 13:24 MDT - Focused verification is green:
   - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(TaskLooksProceduralInstructionArtifact|ExtractDeliverablesIgnoresReferenceOnlyInstructionLines)$' -count=1`
   - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationMalformed(Procedural|Support)ChildKickoffPreflightBlocksBeforeModelCall$' -count=1`
+- 2026-03-29 13:56 MDT - The next stop family is the adjacent “duplicate full-file child” case. Fresh live state after the support-child fix:
+  - task `156` now blocks correctly in kickoff preflight
+  - sibling task `155` is still an active child lane even though its title/description simply re-claim the exact parent single-file deliverable `planning/sambot-example-conversations.md`
+  - that leaves the PM lane waiting behind a child that is not actually narrower than the parent; it just churns into the later shared-deliverable write guard
+- 2026-03-29 13:56 MDT - Local hardening is in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) and [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+  - duplicate child tasks that still say `produce/write the file <same parent single-file path>` are now treated as malformed child artifacts
+  - async kickoff preflight blocks those lanes before model call
+  - PM/worker continuation snapshots now ignore those duplicate full-file children the same way they already ignore procedural/reference-only junk
+- 2026-03-29 13:56 MDT - Focused verification is green:
+  - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshotIgnoresMalformed(DuplicateSharedFile|Procedural|ReferenceOnly)Children$' -count=1`
+  - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationMalformed(DuplicateSharedFile|Support|Procedural)ChildKickoffPreflightBlocksBeforeModelCall$' -count=1`
+  - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformed(DuplicateSharedFile|Procedural|ReferenceOnly)Children$' -count=1`
 
 - 2026-03-29 11:20 MDT - Fresh live PM proof on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`: continuation prompt `8369` already named only terminally blocked leaf tasks owning `planning/sambot-feature-spec.md` and explicitly said to leave `resume_policy=terminal_keep_blocked` lanes blocked, but the same PM turn still issued `file.read planning/sambot-feature-spec.md` (`8372`) after the broader `task.list` rediscovery guard had already fired at `8371`.
 - 2026-03-29 11:20 MDT - Picked up the next stop-condition slice in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go): project continuations should treat deliverable reads for terminally blocked leaf-task paths as supervisory stop candidates, not as legitimate PM inspection.

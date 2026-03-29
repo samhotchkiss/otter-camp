@@ -3376,3 +3376,24 @@
     - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationMalformed(Procedural|Support)ChildKickoffPreflightBlocksBeforeModelCall$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live effect is that support-only children like Sam.blog task `156` halt in kickoff preflight before any model/tool work, instead of surviving until the later shared-deliverable write guard
+- 2026-03-29 13:56 MDT - Hardened duplicate full-file child detection for decomposed single-file parents after task `156` unmasked task `155`.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `taskClaimsWholeSharedFileOwnership(...)` / `taskDuplicateSharedFileDeliverablePath(...)`
+    - duplicate child tasks that still say `produce/write the file <same parent single-file path>` now block in async kickoff preflight with a malformed-child explanation
+    - project continuation snapshots now also ignore those duplicate full-file children as malformed artifacts
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - worker snapshots now ignore the same duplicate shared-file child family
+    - `explicitDeliverablePathForWorker(...)` now falls back to workspace-path detection so worker continuation hints see file paths like `planning/sambot-example-conversations.md`
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren`
+    - [`internal/turn/engine_integration_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_integration_test.go)
+      - added `TestTurnEngineIntegrationMalformedDuplicateSharedFileChildKickoffPreflightBlocksBeforeModelCall`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+      - added `TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshotIgnoresMalformed(DuplicateSharedFile|Procedural|ReferenceOnly)Children$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationMalformed(DuplicateSharedFile|Support|Procedural)ChildKickoffPreflightBlocksBeforeModelCall$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformed(DuplicateSharedFile|Procedural|ReferenceOnly)Children$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live effect is that task `155` blocks immediately as a duplicate full-file child instead of reopening the inherited shared-deliverable recovery loop
