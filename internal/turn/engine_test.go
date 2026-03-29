@@ -19843,7 +19843,7 @@ func TestProjectExecutionContinuationSnapshotKeepsReviewDecisionBlockedChildrenA
 	}
 }
 
-func TestProjectExecutionContinuationSnapshotPrefersValidationGuardReviewResumePolicy(t *testing.T) {
+func TestProjectExecutionContinuationSnapshotKeepsTerminalBlockedPolicyOverStaleReviewGuard(t *testing.T) {
 	projectID := uuid.New()
 	assignedID := uuid.New()
 	taskID := uuid.New()
@@ -19872,11 +19872,35 @@ func TestProjectExecutionContinuationSnapshotPrefersValidationGuardReviewResumeP
 	})
 
 	snapshot, _ := buildProjectExecutionContinuationSnapshot(projectTasks, taskHintsByTask, nil)
-	if !strings.Contains(snapshot.ActiveTaskLine, "resume_policy=resume_review_decision") {
-		t.Fatalf("ActiveTaskLine = %q, want validation-guard review resume policy to override stale blocked reason", snapshot.ActiveTaskLine)
+	if !strings.Contains(snapshot.ActiveTaskLine, "resume_policy=terminal_keep_blocked") {
+		t.Fatalf("ActiveTaskLine = %q, want terminal blocked policy to override stale review guard", snapshot.ActiveTaskLine)
 	}
-	if strings.Contains(snapshot.ActiveTaskLine, "resume_policy=terminal_keep_blocked") {
-		t.Fatalf("ActiveTaskLine = %q, should not keep stale terminal policy when review guard is active", snapshot.ActiveTaskLine)
+	if strings.Contains(snapshot.ActiveTaskLine, "resume_policy=resume_review_decision") {
+		t.Fatalf("ActiveTaskLine = %q, should not keep stale review-resume policy once flow rejection max visits is exceeded", snapshot.ActiveTaskLine)
+	}
+}
+
+func TestProjectContinuationTaskNeedsReviewResumeSkipsTerminalBlockedReasonDespiteReviewGuard(t *testing.T) {
+	task := repo.ProjectTask{
+		ID:         uuid.New(),
+		ProjectID:  uuid.New(),
+		TaskNumber: 71,
+		Title:      "Final replacement: scrape technonymous posts 1-12 to markdown in content/posts/",
+		WorkStatus: "blocked",
+		Metadata: mustJSONRaw(map[string]any{
+			tasksvc.ValidationGuardMetadataKey: tasksvc.ValidationGuardState{
+				ToolName:      "flow.review_decision",
+				FailureClass:  "tool_validation",
+				FailureCode:   "review_decision_required",
+				FailureReason: "review turn completed without calling flow.review_decision",
+				Count:         1,
+				Blocked:       false,
+			},
+		}),
+	}
+
+	if projectContinuationTaskNeedsReviewResume(task, "flow rejection max visits exceeded") {
+		t.Fatal("expected terminal blocked reason to prevent review-resume selection")
 	}
 }
 

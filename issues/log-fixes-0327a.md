@@ -1,5 +1,13 @@
 # 0327a Fix Log
 
+- 2026-03-28 19:41:42 MDT - `pending` `Honor terminal blocked reason over stale review guard in PM continuations`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `projectContinuationTaskResumePolicy(...)` now gives explicit blocked-reason policy precedence over stale validation-guard metadata, which keeps `flow rejection max visits exceeded` lanes at `resume_policy=terminal_keep_blocked` instead of incorrectly surfacing them as `resume_review_decision`
+  - this also makes `projectContinuationTaskNeedsReviewResume(...)` and `nextResumableBlockedProjectTask(...)` stop selecting those terminal blocked review lanes for PM resume attempts, which is the direct cause of the Sam.blog session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` idle loop
+  - added focused regressions in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) covering the PM snapshot line and the blocked-task selector when stale review-guard metadata collides with `flow rejection max visits exceeded`
+  - bumped [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt) to `3479` so the idle PM session gets a fresh continuation identity after deploy instead of inheriting the prior suppression fingerprint
+  - verified with `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshotKeepsTerminalBlockedPolicyOverStaleReviewGuard|ProjectContinuationTaskNeedsReviewResumeSkipsTerminalBlockedReasonDespiteReviewGuard)$' -count=1`
+  - live status: deployed once the runtime is restarted; the idle Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` is the direct canary for whether the next continuation drops task `65`/`71` from resumable-review focus and moves to the next bounded repair step
+
 - 2026-03-28 19:29:08 MDT - `pending` `Reject markdown review-assessment stubs as placeholder deliverables`
   - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go) so preferred-target markdown reads now classify AI review-assessment stubs as `placeholder_deliverable` instead of ordinary success, which lets the existing review-turn guards reject from immediate evidence instead of expanding into sibling reads or source fetches
   - kept real markdown frontmatter safe by explicitly exempting `---`-prefixed files from the new detector before applying the review-assessment phrase heuristics

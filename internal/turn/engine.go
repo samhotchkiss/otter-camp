@@ -18490,13 +18490,16 @@ func buildProjectContinuationTaskHints(tasks []repo.ProjectTask, blockedReasons 
 }
 
 func projectContinuationTaskResumePolicy(task repo.ProjectTask, blockedReason string) string {
+	if blockedPolicy := projectContinuationBlockedTaskResumePolicy(blockedReason); blockedPolicy != "" {
+		return blockedPolicy
+	}
 	if guard, ok := tasksvc.ParseValidationGuard(task.Metadata); ok {
 		switch strings.ToLower(strings.TrimSpace(guard.FailureCode)) {
 		case "review_action_required", "review_decision_required":
 			return "resume_review_decision"
 		}
 	}
-	return projectContinuationBlockedTaskResumePolicy(blockedReason)
+	return ""
 }
 
 func projectContinuationTaskBatchRange(task repo.ProjectTask) string {
