@@ -2080,3 +2080,28 @@
     - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and health is `ok` on `repo_version=3501` (`request_id=936923f4-4279-4282-a9c6-0fa60e531797`)
     - the hot PM session is currently drained again (`0` pending `project_execution_continuation`, `0` pending/claimed `agent_turn` jobs), so fresh direct production proof for this exact engine path still depends on the next natural PM continuation wakeup
     - the remaining PM seam is now smaller and more local: after the prompt already names `resume_policy=resume_review_decision`, the live PM turn still spends one blocked `task.get` / `task.list` hop before the completion handler performs the correct runtime resume
+- 2026-03-28 22:36:52 MDT - Finished: resume named blocked review lanes directly from blocked PM rediscovery batches.
+  - live diagnosis:
+    - after the `3501` suppression slice, the next remaining waste was still visible in Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`
+    - the prompt already named task `78` with `resume_policy=resume_review_decision`, but the live turn still followed this path:
+      - assistant `5843` emitted blocked rediscovery tools
+      - tool results `5844-5845` recorded the `task.get` / `task.list` rediscovery guard errors
+      - only then did the runtime append `[Project continuation resumed blocked review lane task 78 ...]` at `5847`
+    - root cause: the engine only knew how to perform the runtime-owned review-lane resume in `handleCompletedProjectExecutionContinuationTurn(...)`, after the blocked tool-result batch had already been appended
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - factored the blocked-review-lane runtime action into `resumeBlockedProjectContinuationReviewLane(...)`
+    - preserved the older completion-path behavior where a non-resumable blocked review lane still appends the blocker message and then falls through to queue the next runnable draft
+    - added `handleBlockedProjectContinuationReviewResume(...)`, which detects blocked PM rediscovery-only batches, resolves the named blocked review task from the prompt snapshot, and performs the same runtime resume immediately
+    - wired the blocked-call path so a pure blocked PM rediscovery batch now short-circuits into that runtime resume before appending the blocked `task.get` / `task.list` tool results
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleBlockedProjectContinuationReviewResumeResumesWithoutBlockedToolResults`
+    - kept the existing completion-path review-resume tests green, including the non-resumable fallback that still queues the next bounded draft
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3503`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `go test ./internal/turn -run 'Test(HandleBlockedProjectContinuationReviewResumeResumesWithoutBlockedToolResults|ShouldSuppressRepeatedProjectExecutionContinuationAfterChildLaneWaitState|HandleCompletedProjectExecutionContinuationTurn(ResumesBlockedReviewTaskBeforeQueueingDraft|SkipsNonResumableBlockedReviewTaskAndQueuesDraft|SuppressesRepeated(RediscoveryBlockedRetry|MissingDependencyRetry)|Retries(GenericReplyWithFreshMessage|ReplacementChildWorkWithFreshMessage|MissingDependencyStopWithFreshMessage)))$' -count=1`
+  - deploy / proof status:
+    - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and health is `ok` on `repo_version=3503` (`request_id=c5929974-a36a-432d-9514-9769f3ab9eca`)
+    - the hot PM session is currently drained again (`0` pending `project_execution_continuation`, `0` pending/claimed `agent_turn` jobs), so direct production proof is still pending the next natural PM wakeup
+    - the concrete before/after canary is narrow and clear: on the new binary, the old `5842-5847` family should now collapse straight into the review-lane resume system message without recording the blocked rediscovery tool results first

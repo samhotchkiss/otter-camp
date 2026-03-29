@@ -4774,50 +4774,10 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 		return e.retryProjectExecutionContinuationForMissingDependency(ctx, session, completedTurn, latestUser, missingPath)
 	}
 	preferredResumeTaskIDs := projectContinuationPromptNamedTaskIDs(strings.TrimSpace(latestUser.Content))
-	if blockedReviewTask, ok, err := e.nextResumableBlockedProjectTask(ctx, session.ScopeID, preferredResumeTaskIDs); err != nil {
+	if handled, shouldStop, err := e.resumeBlockedProjectContinuationReviewLane(ctx, completedTurn.ID, session.ID, session.ScopeID, preferredResumeTaskIDs); err != nil {
 		return false, err
-	} else if ok {
-		resumed, resumeErr := e.taskTransitions.ResumeValidationBlockedTask(ctx, blockedReviewTask.ID, tasksvc.Actor{Type: "system"})
-		if resumeErr != nil {
-			var stateErr tasksvc.TaskResumeBlockedStateError
-			if !errors.As(resumeErr, &stateErr) {
-				return false, resumeErr
-			}
-			blockerClass := strings.TrimSpace(stateErr.BlockerClass)
-			if blockerClass == "" {
-				blockerClass = tasksvc.RecoveryBlockerClassBlockedWithoutResumableState
-			}
-			blockerReason := strings.TrimSpace(stateErr.BlockerReason)
-			if blockerReason != "" {
-				_, _ = e.appendSystemMessage(
-					ctx,
-					completedTurn.ID,
-					session.ID,
-					fmt.Sprintf("[Project continuation found blocked review lane %s but runtime resume is still blocked by %s: %s. Leave that lane blocked and continue with the next bounded task instead.]", projectBootstrapTaskLabel(blockedReviewTask), blockerClass, blockerReason),
-				)
-			} else {
-				_, _ = e.appendSystemMessage(
-					ctx,
-					completedTurn.ID,
-					session.ID,
-					fmt.Sprintf("[Project continuation found blocked review lane %s but runtime resume is still blocked by %s. Leave that lane blocked and continue with the next bounded task instead.]", projectBootstrapTaskLabel(blockedReviewTask), blockerClass),
-				)
-			}
-		} else {
-			resumedLabel := projectBootstrapTaskLabel(blockedReviewTask)
-			if resumed != nil && resumed.ID != uuid.Nil {
-				if resumed.TaskNumber > 0 || strings.TrimSpace(resumed.Title) != "" {
-					resumedLabel = projectBootstrapTaskLabel(repo.ProjectTask(*resumed))
-				}
-			}
-			_, _ = e.appendSystemMessage(
-				ctx,
-				completedTurn.ID,
-				session.ID,
-				fmt.Sprintf("[Project continuation resumed blocked review lane %s so it can complete flow.review_decision instead of creating replacement work.]", resumedLabel),
-			)
-			return true, nil
-		}
+	} else if handled && shouldStop {
+		return true, nil
 	}
 	nextTask, ok, err := e.nextRunnableDraftProjectTask(ctx, session.ScopeID)
 	if err != nil {
@@ -4864,6 +4824,60 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 		fmt.Sprintf("[Project continuation auto-queued %s after a non-mutating continuation left runnable draft work untouched.]", projectBootstrapTaskLabel(queuedTask)),
 	)
 	return true, nil
+}
+
+func (e *TurnEngine) resumeBlockedProjectContinuationReviewLane(ctx context.Context, turnID, sessionID, projectID uuid.UUID, preferredTaskIDs map[uuid.UUID]struct{}) (bool, bool, error) {
+	if e == nil || e.tasks == nil || e.taskTransitions == nil || turnID == uuid.Nil || sessionID == uuid.Nil || projectID == uuid.Nil {
+		return false, false, nil
+	}
+	blockedReviewTask, ok, err := e.nextResumableBlockedProjectTask(ctx, projectID, preferredTaskIDs)
+	if err != nil {
+		return false, false, err
+	}
+	if !ok {
+		return false, false, nil
+	}
+	resumed, resumeErr := e.taskTransitions.ResumeValidationBlockedTask(ctx, blockedReviewTask.ID, tasksvc.Actor{Type: "system"})
+	if resumeErr != nil {
+		var stateErr tasksvc.TaskResumeBlockedStateError
+		if !errors.As(resumeErr, &stateErr) {
+			return false, false, resumeErr
+		}
+		blockerClass := strings.TrimSpace(stateErr.BlockerClass)
+		if blockerClass == "" {
+			blockerClass = tasksvc.RecoveryBlockerClassBlockedWithoutResumableState
+		}
+		blockerReason := strings.TrimSpace(stateErr.BlockerReason)
+		if blockerReason != "" {
+			_, _ = e.appendSystemMessage(
+				ctx,
+				turnID,
+				sessionID,
+				fmt.Sprintf("[Project continuation found blocked review lane %s but runtime resume is still blocked by %s: %s. Leave that lane blocked and continue with the next bounded task instead.]", projectBootstrapTaskLabel(blockedReviewTask), blockerClass, blockerReason),
+			)
+		} else {
+			_, _ = e.appendSystemMessage(
+				ctx,
+				turnID,
+				sessionID,
+				fmt.Sprintf("[Project continuation found blocked review lane %s but runtime resume is still blocked by %s. Leave that lane blocked and continue with the next bounded task instead.]", projectBootstrapTaskLabel(blockedReviewTask), blockerClass),
+			)
+		}
+		return true, false, nil
+	}
+	resumedLabel := projectBootstrapTaskLabel(blockedReviewTask)
+	if resumed != nil && resumed.ID != uuid.Nil {
+		if resumed.TaskNumber > 0 || strings.TrimSpace(resumed.Title) != "" {
+			resumedLabel = projectBootstrapTaskLabel(repo.ProjectTask(*resumed))
+		}
+	}
+	_, _ = e.appendSystemMessage(
+		ctx,
+		turnID,
+		sessionID,
+		fmt.Sprintf("[Project continuation resumed blocked review lane %s so it can complete flow.review_decision instead of creating replacement work.]", resumedLabel),
+	)
+	return true, true, nil
 }
 
 func (e *TurnEngine) retryGenericProjectExecutionContinuation(
@@ -13911,6 +13925,13 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 	}
 
 	if len(blockedCalls) > 0 {
+		if len(toolCalls) == 0 {
+			if resumed, resumeErr := e.handleBlockedProjectContinuationReviewResume(ctx, rt, blockedCalls); resumeErr != nil {
+				return false, resumeErr
+			} else if resumed {
+				return true, nil
+			}
+		}
 		if err := e.appendToolResults(ctx, rt, blockedCalls); err != nil {
 			return false, err
 		}
@@ -26701,6 +26722,28 @@ func shouldStopAfterBlockedProjectContinuationRediscovery(rt *turnRuntime, resul
 		return false
 	}
 	return true
+}
+
+func (e *TurnEngine) handleBlockedProjectContinuationReviewResume(ctx context.Context, rt *turnRuntime, results []ToolResult) (bool, error) {
+	if e == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return false, nil
+	}
+	if !shouldStopAfterBlockedProjectContinuationRediscovery(rt, results) {
+		return false, nil
+	}
+	preferredTaskIDs := projectContinuationPromptNamedTaskIDs(strings.TrimSpace(rt.initialMessageText))
+	if len(preferredTaskIDs) == 0 {
+		return false, nil
+	}
+	handled, _, err := e.resumeBlockedProjectContinuationReviewLane(ctx, rt.turn.ID, rt.session.ID, rt.session.ScopeID, preferredTaskIDs)
+	if err != nil {
+		return false, err
+	}
+	if handled {
+		rt.stopReason = stopReasonValidationBlocked
+		return true, nil
+	}
+	return false, nil
 }
 
 func maybeInjectTaskExecutionSubtaskCreateExecutionID(rt *turnRuntime, toolName string, arguments map[string]any) {

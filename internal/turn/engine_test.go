@@ -11806,6 +11806,104 @@ func TestHandleCompletedProjectExecutionContinuationTurnSkipsNonResumableBlocked
 	}
 }
 
+func TestHandleBlockedProjectContinuationReviewResumeResumesWithoutBlockedToolResults(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	blockedReviewTaskID := uuid.New()
+	reviewNodeID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			blockedReviewTaskID: {
+				ID:                blockedReviewTaskID,
+				ProjectID:         projectID,
+				TaskNumber:        78,
+				Title:             "Close-out verification",
+				WorkStatus:        "blocked",
+				CurrentFlowNodeID: &reviewNodeID,
+				AssignedAgentID:   uuidPtr(uuid.New()),
+				FlowTemplateID:    uuidPtr(uuid.New()),
+				Metadata: mustJSONRaw(map[string]any{
+					"agent_turn_validation_guard": map[string]any{
+						"tool_name":       "flow.review_decision",
+						"failure_class":   "tool_validation",
+						"failure_code":    "review_decision_required",
+						"failure_reason":  "review turn completed without calling flow.review_decision",
+						"count":           3,
+						"block_threshold": 3,
+						"blocked":         true,
+					},
+				}),
+			},
+		},
+	}
+	taskTransitions := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = taskTransitions
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+		},
+		initialMessageText: "Already-active non-terminal tasks in the tree: task 78 (Close-out verification) id=" + blockedReviewTaskID.String() + " blocker=review_decision_required resume_policy=resume_review_decision",
+	}
+	blockedCalls := []ToolResult{
+		{
+			ToolCallID: "tool-1",
+			Name:       "task.get",
+			Error:      buildProjectContinuationSnapshotRediscoveryGuardError("task.get", blockedReviewTaskID),
+		},
+		{
+			ToolCallID: "tool-2",
+			Name:       "task.list",
+			Error:      buildProjectContinuationSnapshotRediscoveryGuardError("task.list", uuid.Nil),
+		},
+	}
+
+	handled, err := fixture.engine.handleBlockedProjectContinuationReviewResume(context.Background(), rt, blockedCalls)
+	if err != nil {
+		t.Fatalf("handleBlockedProjectContinuationReviewResume: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected blocked project continuation rediscovery batch to resume the named review lane directly")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(taskTransitions.resumeCalls) != 1 || taskTransitions.resumeCalls[0].taskID != blockedReviewTaskID {
+		t.Fatalf("resumeCalls = %+v, want blocked review task resume", taskTransitions.resumeCalls)
+	}
+
+	updatedBlockedTask, err := taskRepo.GetByID(context.Background(), blockedReviewTaskID)
+	if err != nil {
+		t.Fatalf("GetByID blocked review task: %v", err)
+	}
+	if updatedBlockedTask.WorkStatus != "review" {
+		t.Fatalf("blocked review task work_status = %q, want review", updatedBlockedTask.WorkStatus)
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	for _, msg := range storedMessages {
+		if strings.EqualFold(strings.TrimSpace(msg.Role), "tool_result") {
+			t.Fatalf("unexpected tool_result message recorded: %+v", msg)
+		}
+	}
+	if !fixture.messages.containsContentSubstring("resumed blocked review lane task 78") {
+		t.Fatal("expected system message recording direct review-lane resume")
+	}
+}
+
 func TestNextResumableBlockedProjectTaskSkipsMalformedBlockedReviewTask(t *testing.T) {
 	t.Parallel()
 
