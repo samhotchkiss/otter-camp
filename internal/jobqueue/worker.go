@@ -904,18 +904,19 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		  AND EXISTS (
 		    SELECT 1
 		    FROM chat_turn ct
-		    JOIN chat_message tool_result
-		      ON tool_result.session_id = ct.session_id
-		     AND tool_result.turn_id = ct.id
-		     AND tool_result.role = 'tool_result'
-		    WHERE ct.session_id = (jq.payload->>'session_id')::uuid
-		      AND ct.trigger_message_id = (jq.payload->>'message_id')::uuid
-		      AND ct.status = 'completed'
-		      AND COALESCE(ct.stop_reason, '') = ''
-		      AND COALESCE(tool_result.content::jsonb->>'tool_name', '') = 'file.write'
-		      AND COALESCE(tool_result.content::jsonb->>'error', '') = ''
-		      AND COALESCE(tool_result.content::jsonb->'output'->>'error', '') = ''
-		      AND COALESCE((tool_result.content::jsonb->'output'->>'byte_size')::int, 0) > 0
+			JOIN chat_message tool_result
+			  ON tool_result.session_id = ct.session_id
+			 AND tool_result.turn_id = ct.id
+			 AND tool_result.role = 'tool_result'
+			WHERE ct.session_id = (jq.payload->>'session_id')::uuid
+			  AND ct.trigger_message_id = (jq.payload->>'message_id')::uuid
+			  AND ct.status = 'completed'
+			  AND COALESCE(ct.stop_reason, '') = ''
+			  AND LEFT(LTRIM(tool_result.content), 1) = '{'
+			  AND COALESCE(tool_result.content::jsonb->>'tool_name', '') = 'file.write'
+			  AND COALESCE(tool_result.content::jsonb->>'error', '') = ''
+			  AND COALESCE(tool_result.content::jsonb->'output'->>'error', '') = ''
+			  AND COALESCE((tool_result.content::jsonb->'output'->>'byte_size')::int, 0) > 0
 		  )
 	`)
 	if err != nil {
@@ -1831,6 +1832,7 @@ func (w *Worker) recoveryResumeMessageCompletedWithSuccessfulFileWrite(ctx conte
 			  AND ct.trigger_message_id = $2
 			  AND ct.status = 'completed'
 			  AND COALESCE(ct.stop_reason, '') = ''
+			  AND LEFT(LTRIM(tool_result.content), 1) = '{'
 			  AND COALESCE(tool_result.content::jsonb->>'tool_name', '') = 'file.write'
 			  AND COALESCE(tool_result.content::jsonb->>'error', '') = ''
 			  AND COALESCE(tool_result.content::jsonb->'output'->>'error', '') = ''

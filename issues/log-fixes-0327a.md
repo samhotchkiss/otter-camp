@@ -2166,4 +2166,17 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(RecordTaskReviewPreferredDeliverableReadResultTracks(RootOnlyReviewSampling|AuthoritativeRootSamplingWithoutRootList)|ShouldBlockTaskReviewPreferredDeliverableRoot(ReadPastSampleCapAfterRootList|ReadPastSampleCapWithoutRootListWhenCheckpointOutputSetAuthoritative|ReadPastSampleCapWithinSameBatch|DependencyReadWithCheckpointOutputSet)|ProjectExecutionContinuationSnapshotSkipsBlockedReviewChildrenFromChildActiveDraftBucket)$' -count=1`
   - deploy / proof status:
     - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and health is `ok` on `repo_version=3508` (`request_id=fb3b03bb-7c3c-4a29-b744-9861acfd9864`)
-    - direct production proof for this exact same-batch overshoot guard is still pending the next natural task-78 review retry on the `3508` binary
+    - direct production proof landed immediately on task-78 review session `265cfc47-fd50-413f-b24f-5e775df41ba4`: messages `19-20` and again `49-54` returned the new authoritative-root sample-cap guard in production instead of allowing the same-batch overshoot that had produced messages `86-88` on `3507`
+- 2026-03-28 23:19:50 MDT - Finished: stop stale recovery-resume worker scans from JSON-casting plaintext tool_result noise.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - both successful-recovery-resume SQL paths now require `LEFT(LTRIM(tool_result.content), 1) = '{'` before casting `tool_result.content::jsonb`
+    - this keeps real JSON `tool_result` payloads eligible while skipping legacy plaintext noise rows that would otherwise raise `invalid input syntax for type json`
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `appendLegacyPlaintextToolResultToRecoveryTurn(...)`
+    - added `TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsSuccessfulRecoveryResumeWriteWithPlaintextToolResultNoise`
+    - added `TestJobWorkerPurgeStaleAgentTurnJobsPurgesSuccessfulRecoveryResumeWriteWithPlaintextToolResultNoise`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RequeueActiveExecutionSessionsWithoutTurnsSkipsSuccessfulRecoveryResumeWrite(WithPlaintextToolResultNoise)?|PurgeStaleAgentTurnJobsPurgesSuccessfulRecoveryResumeWrite(WithPlaintextToolResultNoise)?)$' -count=1`
+  - deploy / proof status:
+    - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and health is `ok` on `repo_version=3509` (`request_id=750635f2-df83-4c44-93a4-d8fbcce2d06a`)
+    - the old worker error is gone; after restart, pane `0.1` logs `purged stale agent_turn jobs count=1` at `23:19:50 MDT` and does not emit the prior `successful recovery resumes` JSON-cast failure

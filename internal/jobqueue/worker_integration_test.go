@@ -14070,6 +14070,33 @@ func createSuccessfulRecoveryResumeExecutionFixture(t *testing.T, pool *pgxpool.
 	return createRecoveryResumeExecutionFixture(t, pool, slug, nil)
 }
 
+func appendLegacyPlaintextToolResultToRecoveryTurn(t *testing.T, pool *pgxpool.Pool, sessionID, messageID uuid.UUID, content string) {
+	t.Helper()
+
+	ctx := context.Background()
+	var turnID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		SELECT id
+		FROM chat_turn
+		WHERE session_id = $1
+		  AND trigger_message_id = $2
+		ORDER BY turn_number DESC, id DESC
+		LIMIT 1
+	`, sessionID, messageID).Scan(&turnID); err != nil {
+		t.Fatalf("lookup recovery turn for plaintext tool_result: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID:     sessionID,
+		TurnID:        &turnID,
+		Role:          "tool_result",
+		Content:       content,
+		ContentFormat: "text",
+		Status:        "final",
+	}); err != nil {
+		t.Fatalf("create plaintext tool_result message: %v", err)
+	}
+}
+
 func createTerminalRecoveryResumeExecutionFixture(t *testing.T, pool *pgxpool.Pool, slug string, stopReason *string) (context.Context, repo.ChatSession, repo.FlowNodeExecution, repo.ChatMessage) {
 	t.Helper()
 
@@ -14130,6 +14157,26 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsSuccessfulRecov
 	}
 }
 
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsSuccessfulRecoveryResumeWriteWithPlaintextToolResultNoise(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx, session, _, message := createSuccessfulRecoveryResumeExecutionFixture(t, pool, "requeue-active-execution-skip-successful-recovery-resume-plaintext-noise")
+	appendLegacyPlaintextToolResultToRecoveryTurn(t, pool, session.ID, message.ID, "legacy plain-text tool_result that is not json")
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 0 {
+		t.Fatalf("requeued sessions = %d, want 0 when successful recovery write is still present alongside plaintext tool_result noise", requeued)
+	}
+}
+
 func TestJobWorkerPurgeStaleAgentTurnJobsPurgesSuccessfulRecoveryResumeWrite(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -14175,6 +14222,52 @@ func TestJobWorkerPurgeStaleAgentTurnJobsPurgesSuccessfulRecoveryResumeWrite(t *
 	}
 	if lastError != "purged stale recovery resume after successful file.write" {
 		t.Fatalf("last_error = %q, want successful recovery purge reason", lastError)
+	}
+}
+
+func TestJobWorkerPurgeStaleAgentTurnJobsPurgesSuccessfulRecoveryResumeWriteWithPlaintextToolResultNoise(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx, session, execution, message := createSuccessfulRecoveryResumeExecutionFixture(t, pool, "purge-successful-recovery-resume-plaintext-noise")
+	appendLegacyPlaintextToolResultToRecoveryTurn(t, pool, session.ID, message.ID, "legacy plain-text tool_result that should not break json casting")
+
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, $2, 70, $3, $4)
+		RETURNING id
+	`,
+		fmt.Sprintf(`{"session_id":"%s","message_id":"%s","flow_node_execution_id":"%s","retry_count":1}`, session.ID, message.ID, execution.ID),
+		time.Now().UTC(),
+		fmt.Sprintf("agent_turn:%s:%s:1", session.ID, message.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, message.ID, 1),
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert stale recovery resume job: %v", err)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 1 {
+		t.Fatalf("purged jobs = %d, want 1 even with plaintext tool_result noise", purged)
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx, `
+		SELECT status
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status); err != nil {
+		t.Fatalf("query purged job: %v", err)
+	}
+	if status != "dead_letter" {
+		t.Fatalf("job status = %q, want dead_letter", status)
 	}
 }
 
