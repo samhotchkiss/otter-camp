@@ -51,122 +51,123 @@ import (
 )
 
 const (
-	AgentTurnJobType                           = "agent_turn"
-	defaultAgentTurnJobPriority                = 70
-	backgroundSummarizeJobPriority             = 60
-	defaultMaxToolCalls                        = 75
-	asyncProjectMaxToolCalls                   = 8
-	asyncProjectTaskWorkMaxToolCalls           = 16
-	asyncProjectTaskReviewMaxToolCalls         = 6
-	defaultSyncMaxDuration                     = 5 * time.Minute
-	defaultAsyncMaxDuration                    = 30 * time.Minute
-	defaultProjectBootstrapTurnTimeout         = 90 * time.Second
-	defaultProjectBootstrapPromotionTimeout    = 2 * time.Second
-	defaultProjectBootstrapPromotionPollDelay  = 25 * time.Millisecond
-	defaultProjectBootstrapRestartRetryBudget  = 2
-	defaultListeningEvalDelay                  = 500 * time.Millisecond
-	defaultAutoContinueDelay                   = 2 * time.Second
-	postModelInvocationGrace                   = 30 * time.Second
-	defaultModelRetryBudget                    = 3
-	defaultRateLimitBackoff                    = 30 * time.Second
-	maxRateLimitBackoff                        = 30 * time.Minute
-	maxRateLimitRetries                        = 5
-	rateLimitRetryJitterThreshold              = 5 * time.Minute
-	maxRateLimitRetryJitter                    = 30 * time.Second
-	maxTransientModelRetries                   = 5
-	defaultTransientInfraBackoff               = 15 * time.Second
-	maxTransientInfraBackoff                   = 5 * time.Minute
-	maxTransientInfraRetries                   = 5
-	maxConsecutiveAutoTurns                    = 10
-	maxGenericRecoveryReplyRetries             = defaultModelRetryBudget - 1
-	maxProjectBootstrapAutoTurns               = 3
-	maxEmptyReviewOutputCapTurns               = 3
-	maxRepeatedReviewReadNotFoundCapTurns      = 3
-	defaultSummarizeLayerBudget                = 0
-	chunkPollSteerEveryNChunks                 = 10
-	maxContinuationTurnDepth                   = 3
-	maxReadOnlyDiscoveryCapTurns               = 5
-	maxReadOnlyDiscoveryCapTurnsReview         = 3
-	defaultTurnConsumerName                    = "turn-engine.user-message"
-	defaultReactionConsumerName                = "turn-engine.reactions"
-	defaultTurnCompletedName                   = "turn-engine.turn-completed"
-	defaultTurnCancelledName                   = "turn-engine.turn-cancelled"
-	defaultTaskStatusName                      = "turn-engine.task-status"
-	defaultProjectResumedName                  = "turn-engine.project-resumed"
-	defaultCancelConsumerPrefix                = "turn-engine.cancel"
-	stopReasonMaxToolCalls                     = "max_tool_calls"
-	stopReasonMaxDuration                      = "max_duration"
-	stopReasonRecoveryCLIRejected              = "model_error"
-	stopReasonRecoveryContinuation             = stopReasonRecoveryCLIRejected
-	stopReasonRecoveryFileRejected             = "recovery_content_required"
-	stopReasonRecoveryFileFallback             = stopReasonRecoveryCLIRejected
-	stopReasonValidationBlocked                = "validation_loop_blocked"
-	recoveryActionValidationResume             = "resume_validation_blocked_task"
-	workerPromptTokenGuardrail                 = 32000
-	defaultPromptTokenGuardrail                = 64000
-	asyncProjectPromptTokenGuardrail           = 25000
-	asyncProjectTaskWorkPromptGuardrail        = 35000
-	asyncProjectTaskReviewPromptGuardrail      = 20000
-	taskReviewPreferredDeliverableReadMaxBytes = 8192
-	taskReviewCheckpointOutputReadMaxBytes     = 1536
-	taskReviewCheckpointOutputSampleCap        = 4
-	validationLoopBlockThreshold               = 3
-	validationLoopTurnStopThreshold            = 2
-	duplicateSuccessfulFileWriteChurnCode      = "duplicate_successful_write_churn"
-	duplicateRedirectedFileWriteChurnCode      = "duplicate_redirected_file_write_churn"
-	duplicatePackageInstallChurnCode           = "duplicate_package_install_churn"
-	duplicateShellFileBuildChurnCode           = "duplicate_shell_file_build_churn"
-	duplicateShellFileReadbackChurnCode        = "duplicate_shell_file_readback_churn"
-	duplicateWrittenFileReadbackChurnCode      = "duplicate_written_file_readback_churn"
-	duplicateReadOnlyDiscoveryRoundChurnCode   = "duplicate_read_only_discovery_round_churn"
-	validationLoopSuppressionReason            = "validation_loop_blocked"
-	recoveryCLIRepairBudget                    = 1
-	recoveryFileWriteRepairBudget              = 1
-	taskFileWriteRepairBudget                  = 1
-	recoveryArtifactDir                        = ".ottercamp/recovery"
-	recoveryResumeExcerptChars                 = 3000
-	maxContinuationSummaryChars                = 4000
-	projectBootstrapStaffingDiscoveryBudget    = 2
-	projectBootstrapMetadataKey                = "project_bootstrap"
-	projectBootstrapStatusActive               = "active"
-	projectBootstrapStatusCompleted            = "completed"
-	projectBootstrapStatusFailed               = "failed"
-	projectBootstrapFailureStalled             = "stalled"
-	projectBootstrapFailureGuardrail           = "guardrail_loop"
-	projectBootstrapFailureMissingAssignments  = "missing_assignments"
-	projectBootstrapFailureMissingPM           = "pm_assignment_missing"
-	projectBootstrapFailureMissingReviewer     = "reviewer_assignment_missing"
-	projectBootstrapFailureRepoBinding         = "project_repo_binding_missing"
-	projectBootstrapFailureCompoundParent      = "compound_parent_missing_children"
-	projectBootstrapFailureSetupTaskScope      = "bootstrap_setup_task_unbounded"
-	projectBootstrapFailureSetupTaskChildren   = "bootstrap_setup_task_hidden_children"
-	projectBootstrapFailureFirstWaveFlow       = "first_wave_flow_invalid"
-	projectBootstrapFailureFirstWaveExecution  = "first_wave_execution_missing"
-	projectBootstrapFailureFirstWaveSize       = "first_wave_task_unbounded"
-	projectBootstrapValidationPending          = "pending"
-	projectBootstrapValidationPassed           = "passed"
-	projectBootstrapValidationFailed           = "failed"
-	projectBootstrapCheckpointStaffing         = projectBootstrapCheckpointStaffingPersisted
-	projectBootstrapCheckpointTaskTree         = projectBootstrapCheckpointTaskTreePersisted
-	projectBootstrapCheckpointFlowTemplates    = projectBootstrapCheckpointFlowTemplatesPersisted
-	projectBootstrapCheckpointFirstWave        = projectBootstrapCheckpointFirstWaveSelected
-	projectBootstrapCheckpointExecutions       = projectBootstrapCheckpointFirstWaveExecutions
-	projectBootstrapCheckpointJobsClaimed      = projectBootstrapCheckpointFirstWaveJobsClaimed
-	projectFailureActionArchive                = "archive"
-	projectFailureActionPause                  = "pause"
-	projectFailureCategoryBootstrap            = "bootstrap_product"
-	projectFailureCategoryExecution            = "execution_runtime"
-	projectFailureCategoryProvider             = "provider_api"
-	projectFailureClassExecutionRuntime        = "task_runtime_failed"
-	projectFailureClassProviderAuth            = projectBootstrapFailureProviderAuth
-	projectFailureClassProviderRateLimit       = projectBootstrapFailureProviderRateLimit
-	projectFailureClassProviderTransient       = projectBootstrapFailureProviderTransient
-	projectBootstrapSource                     = "project_bootstrap"
-	projectExecutionContinuationSource         = "project_execution_continuation"
-	projectBootstrapTemplateSlug               = "bootstrap-governance-gate"
-	bootstrapFrankSignOffStepSlug              = "record-frank-sign-off"
-	bootstrapChildTaskBoundednessError         = "parent integration follow-on tasks must already be bounded before they are created"
-	taskContinuationResumeMessageSource        = "task_continuation_resume"
+	AgentTurnJobType                              = "agent_turn"
+	defaultAgentTurnJobPriority                   = 70
+	backgroundSummarizeJobPriority                = 60
+	defaultMaxToolCalls                           = 75
+	asyncProjectMaxToolCalls                      = 8
+	asyncProjectTaskWorkMaxToolCalls              = 16
+	asyncProjectTaskReviewMaxToolCalls            = 6
+	defaultSyncMaxDuration                        = 5 * time.Minute
+	defaultAsyncMaxDuration                       = 30 * time.Minute
+	defaultProjectBootstrapTurnTimeout            = 90 * time.Second
+	defaultProjectBootstrapPromotionTimeout       = 2 * time.Second
+	defaultProjectBootstrapPromotionPollDelay     = 25 * time.Millisecond
+	defaultProjectBootstrapRestartRetryBudget     = 2
+	defaultListeningEvalDelay                     = 500 * time.Millisecond
+	defaultAutoContinueDelay                      = 2 * time.Second
+	postModelInvocationGrace                      = 30 * time.Second
+	defaultModelRetryBudget                       = 3
+	defaultRateLimitBackoff                       = 30 * time.Second
+	maxRateLimitBackoff                           = 30 * time.Minute
+	maxRateLimitRetries                           = 5
+	rateLimitRetryJitterThreshold                 = 5 * time.Minute
+	maxRateLimitRetryJitter                       = 30 * time.Second
+	maxTransientModelRetries                      = 5
+	defaultTransientInfraBackoff                  = 15 * time.Second
+	maxTransientInfraBackoff                      = 5 * time.Minute
+	maxTransientInfraRetries                      = 5
+	maxConsecutiveAutoTurns                       = 10
+	maxGenericRecoveryReplyRetries                = defaultModelRetryBudget - 1
+	maxProjectBootstrapAutoTurns                  = 3
+	maxEmptyReviewOutputCapTurns                  = 3
+	maxRepeatedReviewReadNotFoundCapTurns         = 3
+	defaultSummarizeLayerBudget                   = 0
+	chunkPollSteerEveryNChunks                    = 10
+	maxContinuationTurnDepth                      = 3
+	maxReadOnlyDiscoveryCapTurns                  = 5
+	maxReadOnlyDiscoveryCapTurnsReview            = 3
+	defaultTurnConsumerName                       = "turn-engine.user-message"
+	defaultReactionConsumerName                   = "turn-engine.reactions"
+	defaultTurnCompletedName                      = "turn-engine.turn-completed"
+	defaultTurnCancelledName                      = "turn-engine.turn-cancelled"
+	defaultTaskStatusName                         = "turn-engine.task-status"
+	defaultProjectResumedName                     = "turn-engine.project-resumed"
+	defaultCancelConsumerPrefix                   = "turn-engine.cancel"
+	stopReasonMaxToolCalls                        = "max_tool_calls"
+	stopReasonMaxDuration                         = "max_duration"
+	stopReasonRecoveryCLIRejected                 = "model_error"
+	stopReasonRecoveryContinuation                = stopReasonRecoveryCLIRejected
+	stopReasonRecoveryFileRejected                = "recovery_content_required"
+	stopReasonRecoveryFileFallback                = stopReasonRecoveryCLIRejected
+	stopReasonValidationBlocked                   = "validation_loop_blocked"
+	recoveryActionValidationResume                = "resume_validation_blocked_task"
+	workerPromptTokenGuardrail                    = 32000
+	defaultPromptTokenGuardrail                   = 64000
+	asyncProjectPromptTokenGuardrail              = 25000
+	asyncProjectTaskWorkPromptGuardrail           = 35000
+	asyncProjectTaskReviewPromptGuardrail         = 20000
+	taskReviewPreferredDeliverableReadMaxBytes    = 8192
+	taskReviewPreferredDeliverableGapReadMaxBytes = 2048
+	taskReviewCheckpointOutputReadMaxBytes        = 1536
+	taskReviewCheckpointOutputSampleCap           = 4
+	validationLoopBlockThreshold                  = 3
+	validationLoopTurnStopThreshold               = 2
+	duplicateSuccessfulFileWriteChurnCode         = "duplicate_successful_write_churn"
+	duplicateRedirectedFileWriteChurnCode         = "duplicate_redirected_file_write_churn"
+	duplicatePackageInstallChurnCode              = "duplicate_package_install_churn"
+	duplicateShellFileBuildChurnCode              = "duplicate_shell_file_build_churn"
+	duplicateShellFileReadbackChurnCode           = "duplicate_shell_file_readback_churn"
+	duplicateWrittenFileReadbackChurnCode         = "duplicate_written_file_readback_churn"
+	duplicateReadOnlyDiscoveryRoundChurnCode      = "duplicate_read_only_discovery_round_churn"
+	validationLoopSuppressionReason               = "validation_loop_blocked"
+	recoveryCLIRepairBudget                       = 1
+	recoveryFileWriteRepairBudget                 = 1
+	taskFileWriteRepairBudget                     = 1
+	recoveryArtifactDir                           = ".ottercamp/recovery"
+	recoveryResumeExcerptChars                    = 3000
+	maxContinuationSummaryChars                   = 4000
+	projectBootstrapStaffingDiscoveryBudget       = 2
+	projectBootstrapMetadataKey                   = "project_bootstrap"
+	projectBootstrapStatusActive                  = "active"
+	projectBootstrapStatusCompleted               = "completed"
+	projectBootstrapStatusFailed                  = "failed"
+	projectBootstrapFailureStalled                = "stalled"
+	projectBootstrapFailureGuardrail              = "guardrail_loop"
+	projectBootstrapFailureMissingAssignments     = "missing_assignments"
+	projectBootstrapFailureMissingPM              = "pm_assignment_missing"
+	projectBootstrapFailureMissingReviewer        = "reviewer_assignment_missing"
+	projectBootstrapFailureRepoBinding            = "project_repo_binding_missing"
+	projectBootstrapFailureCompoundParent         = "compound_parent_missing_children"
+	projectBootstrapFailureSetupTaskScope         = "bootstrap_setup_task_unbounded"
+	projectBootstrapFailureSetupTaskChildren      = "bootstrap_setup_task_hidden_children"
+	projectBootstrapFailureFirstWaveFlow          = "first_wave_flow_invalid"
+	projectBootstrapFailureFirstWaveExecution     = "first_wave_execution_missing"
+	projectBootstrapFailureFirstWaveSize          = "first_wave_task_unbounded"
+	projectBootstrapValidationPending             = "pending"
+	projectBootstrapValidationPassed              = "passed"
+	projectBootstrapValidationFailed              = "failed"
+	projectBootstrapCheckpointStaffing            = projectBootstrapCheckpointStaffingPersisted
+	projectBootstrapCheckpointTaskTree            = projectBootstrapCheckpointTaskTreePersisted
+	projectBootstrapCheckpointFlowTemplates       = projectBootstrapCheckpointFlowTemplatesPersisted
+	projectBootstrapCheckpointFirstWave           = projectBootstrapCheckpointFirstWaveSelected
+	projectBootstrapCheckpointExecutions          = projectBootstrapCheckpointFirstWaveExecutions
+	projectBootstrapCheckpointJobsClaimed         = projectBootstrapCheckpointFirstWaveJobsClaimed
+	projectFailureActionArchive                   = "archive"
+	projectFailureActionPause                     = "pause"
+	projectFailureCategoryBootstrap               = "bootstrap_product"
+	projectFailureCategoryExecution               = "execution_runtime"
+	projectFailureCategoryProvider                = "provider_api"
+	projectFailureClassExecutionRuntime           = "task_runtime_failed"
+	projectFailureClassProviderAuth               = projectBootstrapFailureProviderAuth
+	projectFailureClassProviderRateLimit          = projectBootstrapFailureProviderRateLimit
+	projectFailureClassProviderTransient          = projectBootstrapFailureProviderTransient
+	projectBootstrapSource                        = "project_bootstrap"
+	projectExecutionContinuationSource            = "project_execution_continuation"
+	projectBootstrapTemplateSlug                  = "bootstrap-governance-gate"
+	bootstrapFrankSignOffStepSlug                 = "record-frank-sign-off"
+	bootstrapChildTaskBoundednessError            = "parent integration follow-on tasks must already be bounded before they are created"
+	taskContinuationResumeMessageSource           = "task_continuation_resume"
 )
 
 var recoveryResumeBacktickedFragmentPattern = regexp.MustCompile("`([^`]+)`")
@@ -616,6 +617,7 @@ type turnRuntime struct {
 	reviewPreferredDeliverableByteSize      int
 	reviewPreferredDeliverableHeadTruncated bool
 	reviewPreferredDeliverableTailReadSeen  bool
+	reviewPreferredDeliverableGapReadSeen   bool
 	reviewCheckpointOutputSiblingReads      int
 }
 
@@ -29771,7 +29773,24 @@ func (e *TurnEngine) maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(ctx
 		}
 
 		explicitMaxBytes := intValue(call.Arguments["max_bytes"])
-		if explicitMaxBytes <= 0 || explicitMaxBytes > taskReviewPreferredDeliverableReadMaxBytes {
+		targetMaxBytes := taskReviewPreferredDeliverableReadMaxBytes
+		if !hasTailOffset {
+			if _, gapMaxBytes, ok := taskReviewPreferredDeliverableGapReadSpec(rt); ok {
+				targetMaxBytes = gapMaxBytes
+				if explicitOffsetBytes <= 0 {
+					if !changedCall {
+						if callCopy.Arguments == nil {
+							callCopy.Arguments = map[string]any{}
+						} else {
+							callCopy.Arguments = cloneMap(call.Arguments)
+						}
+					}
+					callCopy.Arguments["offset_bytes"] = taskReviewPreferredDeliverableReadMaxBytes
+					changedCall = true
+				}
+			}
+		}
+		if explicitMaxBytes <= 0 || explicitMaxBytes > targetMaxBytes {
 			if !changedCall {
 				if callCopy.Arguments == nil {
 					callCopy.Arguments = map[string]any{}
@@ -29779,7 +29798,7 @@ func (e *TurnEngine) maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(ctx
 					callCopy.Arguments = cloneMap(call.Arguments)
 				}
 			}
-			callCopy.Arguments["max_bytes"] = taskReviewPreferredDeliverableReadMaxBytes
+			callCopy.Arguments["max_bytes"] = targetMaxBytes
 			changedCall = true
 		}
 
@@ -29951,7 +29970,15 @@ func recordTaskReviewPreferredDeliverableReadResult(rt *turnRuntime, result Tool
 		rt.reviewPreferredDeliverableHeadTruncated = true
 	}
 	if offsetBytes > 0 && readBytes > 0 {
-		rt.reviewPreferredDeliverableTailReadSeen = true
+		tailOffset := 0
+		if rt.reviewPreferredDeliverableByteSize > taskReviewPreferredDeliverableReadMaxBytes {
+			tailOffset = rt.reviewPreferredDeliverableByteSize - taskReviewPreferredDeliverableReadMaxBytes
+		}
+		if tailOffset > 0 && offsetBytes < tailOffset {
+			rt.reviewPreferredDeliverableGapReadSeen = true
+		} else {
+			rt.reviewPreferredDeliverableTailReadSeen = true
+		}
 	}
 }
 
@@ -30022,26 +30049,64 @@ func rewriteTaskReviewPreferredDeliverableReadDispatchCall(rt *turnRuntime, tool
 	if !sameWorkspaceRelativePath(path, targetPath) {
 		return toolName, arguments
 	}
-	if !rt.reviewPreferredDeliverableHeadTruncated || rt.reviewPreferredDeliverableTailReadSeen || rt.reviewPreferredDeliverableByteSize <= taskReviewPreferredDeliverableReadMaxBytes {
-		return toolName, arguments
+	explicitOffsetBytes := intValue(arguments["offset_bytes"])
+	explicitMaxBytes := intValue(arguments["max_bytes"])
+	if tailOffset, ok := taskReviewPreferredDeliverableTailOffsetForRewrite(rt); ok {
+		if explicitOffsetBytes > 0 && explicitMaxBytes > 0 && explicitMaxBytes <= taskReviewPreferredDeliverableReadMaxBytes {
+			return toolName, arguments
+		}
+		rewritten := cloneMap(arguments)
+		if explicitOffsetBytes <= 0 {
+			rewritten["offset_bytes"] = tailOffset
+		}
+		if explicitMaxBytes <= 0 || explicitMaxBytes > taskReviewPreferredDeliverableReadMaxBytes {
+			rewritten["max_bytes"] = taskReviewPreferredDeliverableReadMaxBytes
+		}
+		return "file.read", rewritten
+	}
+	if gapOffset, gapMaxBytes, ok := taskReviewPreferredDeliverableGapReadSpec(rt); ok {
+		if explicitOffsetBytes > 0 && explicitMaxBytes > 0 && explicitMaxBytes <= gapMaxBytes {
+			return toolName, arguments
+		}
+		rewritten := cloneMap(arguments)
+		if explicitOffsetBytes <= 0 {
+			rewritten["offset_bytes"] = gapOffset
+		}
+		if explicitMaxBytes <= 0 || explicitMaxBytes > gapMaxBytes {
+			rewritten["max_bytes"] = gapMaxBytes
+		}
+		return "file.read", rewritten
+	}
+	return toolName, arguments
+}
+
+func taskReviewPreferredDeliverableTailOffsetForRewrite(rt *turnRuntime) (int, bool) {
+	if rt == nil || !rt.reviewPreferredDeliverableHeadTruncated || rt.reviewPreferredDeliverableTailReadSeen || rt.reviewPreferredDeliverableByteSize <= taskReviewPreferredDeliverableReadMaxBytes {
+		return 0, false
 	}
 	tailOffset := rt.reviewPreferredDeliverableByteSize - taskReviewPreferredDeliverableReadMaxBytes
 	if tailOffset <= 0 {
-		return toolName, arguments
+		return 0, false
 	}
-	explicitOffsetBytes := intValue(arguments["offset_bytes"])
-	explicitMaxBytes := intValue(arguments["max_bytes"])
-	if explicitOffsetBytes > 0 && explicitMaxBytes > 0 && explicitMaxBytes <= taskReviewPreferredDeliverableReadMaxBytes {
-		return toolName, arguments
+	return tailOffset, true
+}
+
+func taskReviewPreferredDeliverableGapReadSpec(rt *turnRuntime) (int, int, bool) {
+	if rt == nil || !rt.reviewPreferredDeliverableHeadTruncated || !rt.reviewPreferredDeliverableTailReadSeen || rt.reviewPreferredDeliverableGapReadSeen {
+		return 0, 0, false
 	}
-	rewritten := cloneMap(arguments)
-	if explicitOffsetBytes <= 0 {
-		rewritten["offset_bytes"] = tailOffset
+	gapBytes := rt.reviewPreferredDeliverableByteSize - (2 * taskReviewPreferredDeliverableReadMaxBytes)
+	if gapBytes <= 0 {
+		return 0, 0, false
 	}
-	if explicitMaxBytes <= 0 || explicitMaxBytes > taskReviewPreferredDeliverableReadMaxBytes {
-		rewritten["max_bytes"] = taskReviewPreferredDeliverableReadMaxBytes
+	gapMaxBytes := gapBytes
+	if gapMaxBytes > taskReviewPreferredDeliverableGapReadMaxBytes {
+		gapMaxBytes = taskReviewPreferredDeliverableGapReadMaxBytes
 	}
-	return "file.read", rewritten
+	if gapMaxBytes <= 0 {
+		return 0, 0, false
+	}
+	return taskReviewPreferredDeliverableReadMaxBytes, gapMaxBytes, true
 }
 
 func taskReviewCheckpointOutputSiblingReadMaxBytesForBatch(rt *turnRuntime, calls []ModelToolCall, path, targetPath string) (int, bool) {
@@ -30092,6 +30157,13 @@ func shouldBlockTaskReviewPreferredDeliverableFirstTool(rt *turnRuntime, toolNam
 		}
 		if sameWorkspaceRelativePath(path, targetPath) {
 			offsetBytes := intValue(arguments["offset_bytes"])
+			if sameWorkspaceRelativePath(strings.TrimSpace(rt.reviewPreferredDeliverablePath), targetPath) &&
+				rt.reviewPreferredDeliverableHeadTruncated &&
+				rt.reviewPreferredDeliverableTailReadSeen &&
+				rt.reviewPreferredDeliverableGapReadSeen &&
+				offsetBytes <= 0 {
+				return true, buildTaskReviewRepeatedPreferredDeliverableGapReadGuardError(targetPath)
+			}
 			if sameWorkspaceRelativePath(strings.TrimSpace(rt.reviewPreferredDeliverablePath), targetPath) &&
 				!rt.reviewPreferredDeliverableHeadTruncated &&
 				offsetBytes <= 0 {
@@ -31522,6 +31594,14 @@ func buildTaskReviewRepeatedPreferredDeliverableReadGuardError(targetPath string
 		return "the preferred deliverable target was already fully inspected in this turn. Do not reread it from byte 0 again; use that evidence or call flow.review_decision now."
 	}
 	return fmt.Sprintf("preferred deliverable target `%s` was already fully inspected in this turn. Do not reread `%s` from byte 0 again; use that existing read as evidence, inspect one bounded adjacent output if needed, or call flow.review_decision now.", targetPath, targetPath)
+}
+
+func buildTaskReviewRepeatedPreferredDeliverableGapReadGuardError(targetPath string) string {
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	if targetPath == "" {
+		return "the preferred deliverable target already has bounded head, tail, and gap evidence in this turn. Do not reread it from byte 0 again; use that evidence or call flow.review_decision now."
+	}
+	return fmt.Sprintf("preferred deliverable target `%s` already has bounded head, tail, and gap evidence in this turn. Do not reread `%s` from byte 0 again; use that evidence or call flow.review_decision now.", targetPath, targetPath)
 }
 
 func buildTaskReviewPreferredDeliverableRootFirstGuardError(rootPath, toolName string) string {

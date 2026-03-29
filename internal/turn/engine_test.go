@@ -4970,6 +4970,47 @@ func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsDoesNotReuseTail
 	}
 }
 
+func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsUsesGapSampleAfterHeadAndTailRead(t *testing.T) {
+	engine := &TurnEngine{messages: newFakeMessageRepo()}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        uuid.New(),
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `planning/sambot-feature-spec.md`.\n" +
+			"If `planning/sambot-feature-spec.md` may be large, start with `file.read` using `path=planning/sambot-feature-spec.md` and `max_bytes=8192` instead of an unconstrained full-file read.\n" +
+			"If that first bounded read is truncated and you need the tail, use a follow-up `file.read` on `planning/sambot-feature-spec.md` with `offset_bytes` near `byte_size-8192` instead of rereading from byte 0.\n" +
+			"Use flow.review_decision when the review is complete.\n",
+		reviewPreferredDeliverablePath:          "planning/sambot-feature-spec.md",
+		reviewPreferredDeliverableByteSize:      26580,
+		reviewPreferredDeliverableHeadTruncated: true,
+		reviewPreferredDeliverableTailReadSeen:  true,
+	}
+	toolCalls := []ModelToolCall{{
+		ID:   "read-target",
+		Name: "file.read",
+		Arguments: map[string]any{
+			"path": "planning/sambot-feature-spec.md",
+		},
+	}}
+
+	rewritten, changed, err := engine.maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(context.Background(), rt, toolCalls)
+	if err != nil {
+		t.Fatalf("maybeRewriteTaskReviewPreferredDeliverableReadToolCalls: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	if got := intValue(rewritten[0].Arguments["offset_bytes"]); got != taskReviewPreferredDeliverableReadMaxBytes {
+		t.Fatalf("offset_bytes = %d, want %d", got, taskReviewPreferredDeliverableReadMaxBytes)
+	}
+	if got := intValue(rewritten[0].Arguments["max_bytes"]); got != taskReviewPreferredDeliverableGapReadMaxBytes {
+		t.Fatalf("max_bytes = %d, want %d", got, taskReviewPreferredDeliverableGapReadMaxBytes)
+	}
+}
+
 func TestRewriteTaskReviewPreferredDeliverableReadDispatchCallUsesCurrentTurnTailOffset(t *testing.T) {
 	rt := &turnRuntime{
 		session: &chat.ChatSession{
@@ -4999,6 +5040,34 @@ func TestRewriteTaskReviewPreferredDeliverableReadDispatchCallUsesCurrentTurnTai
 	}
 	if got := intValue(arguments["max_bytes"]); got != taskReviewPreferredDeliverableReadMaxBytes {
 		t.Fatalf("max_bytes = %d, want %d", got, taskReviewPreferredDeliverableReadMaxBytes)
+	}
+}
+
+func TestShouldBlockTaskReviewPreferredDeliverableFirstToolAfterGapReadSeen(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        uuid.New(),
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `planning/sambot-feature-spec.md`.\n" +
+			"Use flow.review_decision when the review is complete.\n",
+		reviewPreferredDeliverablePath:          "planning/sambot-feature-spec.md",
+		reviewPreferredDeliverableByteSize:      26580,
+		reviewPreferredDeliverableHeadTruncated: true,
+		reviewPreferredDeliverableTailReadSeen:  true,
+		reviewPreferredDeliverableGapReadSeen:   true,
+	}
+
+	blocked, reason := shouldBlockTaskReviewPreferredDeliverableFirstTool(rt, "file.read", map[string]any{
+		"path": "planning/sambot-feature-spec.md",
+	})
+	if !blocked {
+		t.Fatal("blocked = false, want true after head/tail/gap sampling")
+	}
+	if !strings.Contains(reason, "head, tail, and gap evidence") {
+		t.Fatalf("reason = %q, want head/tail/gap guidance", reason)
 	}
 }
 
