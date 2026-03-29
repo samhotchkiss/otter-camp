@@ -40296,6 +40296,24 @@ func TestDeliverableTargetMatchesTaskContractRejectsFrontendArtifactForBackendTa
 	}
 }
 
+func TestDeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask(t *testing.T) {
+	t.Parallel()
+
+	description := "Backend API wiring — implement POST /api/sambot/chat that returns { response, session_id }."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  174,
+		Title:       "Backend API wiring",
+		Description: &description,
+	}
+
+	if deliverableTargetMatchesTaskContract(taskRecord, "sambot/test-api.js") {
+		t.Fatal("expected companion test artifact to be rejected for backend task")
+	}
+	if deliverableTargetMatchesTaskContract(taskRecord, "sambot/system-prompt-spec.md") {
+		t.Fatal("expected auxiliary spec artifact to be rejected for backend task")
+	}
+}
+
 func TestRecoveryTargetPathForSessionPrefersParentExplicitDeliverableOverWrongCheckpoint(t *testing.T) {
 	t.Parallel()
 

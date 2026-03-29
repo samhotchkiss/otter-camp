@@ -888,6 +888,9 @@ func deliverableTargetMatchesTaskContract(taskRecord repo.ProjectTask, target st
 	if taskTreatsPathAsDependencyArtifact(taskRecord, target) {
 		return false
 	}
+	if taskTreatsPathAsAuxiliaryArtifact(taskRecord, target) {
+		return false
+	}
 	if taskDeliverablePathConflictsWithRole(taskRecord, target) {
 		return false
 	}
@@ -926,6 +929,39 @@ func taskTreatsPathAsDependencyArtifact(taskRecord repo.ProjectTask, target stri
 		}
 	}
 	return false
+}
+
+func taskTreatsPathAsAuxiliaryArtifact(taskRecord repo.ProjectTask, target string) bool {
+	target = strings.ToLower(normalizeWorkspacePath(target))
+	if target == "" {
+		return false
+	}
+	if strings.HasPrefix(target, "planning/") {
+		return false
+	}
+	base := strings.ToLower(filepath.Base(target))
+	if !containsAnySubstring(base,
+		"test",
+		"spec",
+		"fixture",
+		"mock",
+	) {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	if taskRecord.Description != nil {
+		text += " " + strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	return !containsAnySubstring(text,
+		"test ",
+		"tests",
+		"testing",
+		"spec ",
+		"specs",
+		"specification",
+		"fixture",
+		"mock",
+	)
 }
 
 func taskDeliverablePathConflictsWithRole(taskRecord repo.ProjectTask, target string) bool {

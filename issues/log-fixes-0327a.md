@@ -3688,3 +3688,16 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(SessionTaskDeliverablePathIgnoresConflictingParentFrontendDeliverableForBackendChild|SessionTaskDeliverablePathPrefersChildLeadingPathTitleOverParentDeliverable|DeliverableTargetMatchesTaskContractRejectsFrontendArtifactForBackendTask)$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is rebuild/restart and confirm the next task-174 review retry stays on the API deliverable instead of `sambot/widget.html`
+- 2026-03-29 16:34 MDT - Fixed review-target selection so auxiliary test/spec companion files are no longer preferred deliverables for implementation tasks unless the task explicitly asks for them.
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `deliverableTargetMatchesTaskContract(...)` now rejects auxiliary companion artifacts like test/spec/mock files for non-test task contracts
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - the turn-engine version of `deliverableTargetMatchesTaskContract(...)` now applies the same auxiliary-artifact filter, so historical/session target reuse stops promoting `sambot/test-api.js` over `sambot/api.js`
+  - changed tests:
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go) adds `TestDeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) adds `TestDeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(DeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask|LatestRecoveryTargetPathForSessionIgnoresConflictingParentFrontendDeliverableForBackendChild|FileReadTreatsNotDirectoryPreferredTargetAsNotFound)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(DeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask|SessionTaskDeliverablePathIgnoresConflictingParentFrontendDeliverableForBackendChild|SessionTaskDeliverablePathPrefersChildLeadingPathTitleOverParentDeliverable)$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is rebuild/restart and confirm the next task-174 review retry prefers `sambot/api.js`

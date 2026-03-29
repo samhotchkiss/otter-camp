@@ -662,3 +662,14 @@
   - impact:
     - blocked review continuations can churn on sibling deliverables instead of the child’s own artifact
     - read-only validation guards fire repeatedly, but against the wrong target, so the lane settles slowly instead of making a clean review decision
+- 2026-03-29 16:34 MDT - Review-target reuse can still promote auxiliary companion files as the preferred deliverable for implementation tasks.
+  - fresh live evidence:
+    - task `174` review session `222eb92b-20ed-4269-802b-0d7c55ab97f2`
+    - the first clean review pass read both `sambot/api.js` and `sambot/test-api.js`
+    - later retries switched the preferred target to `sambot/test-api.js`, and repeated guardrails then blocked reads of `sambot/api.js` as “sibling files”
+  - bug:
+    - `deliverableTargetMatchesTaskContract(...)` allowed test/spec companion files for backend implementation tasks because they are code-adjacent and do not trip the existing dependency/frontend-role filters
+    - once historical/session reuse picked the test file, the review prompt and first-tool guards reinforced the wrong target across retries
+  - impact:
+    - review lanes can spend entire retries validating a companion test file instead of the actual deliverable
+    - the runtime appears to be “stuck on the wrong file” even though the intended implementation artifact is already present
