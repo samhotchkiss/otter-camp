@@ -232,7 +232,7 @@ func TestDeliverableTargetMatchesTaskContractRejectsFrontendArtifactForBackendTa
 }
 
 func TestDeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask(t *testing.T) {
-	description := "Backend API wiring — implement POST /api/sambot/chat that returns { response, session_id }."
+	description := "Backend API wiring — implement POST /api/sambot/chat that accepts { message, session_id } and returns { response, session_id }. Use the architecture and feature spec already at planning/sambot-feature-spec.md for context on personality, tone, and knowledge base approach."
 	taskRecord := repo.ProjectTask{
 		TaskNumber:  174,
 		Title:       "Backend API wiring",
@@ -299,6 +299,47 @@ func TestLatestRecoveryTargetPathForSessionIgnoresConflictingParentFrontendDeliv
 	got := executor.latestRecoveryTargetPathForSession(context.Background(), workspaceScope{sessionID: &sessionID, taskID: &childID})
 	if got != "sambot/api.js" {
 		t.Fatalf("latestRecoveryTargetPathForSession(...) = %q, want %q", got, "sambot/api.js")
+	}
+}
+
+func TestTaskExplicitDeliverablePathFindsMatchingParentDecompositionDeliverableForBackendChild(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+	parentID := uuid.New()
+	childID := uuid.New()
+	parentDescription := "Build the SamBot Chat MVP with two deliverables:\n- sambot/widget.html (or sambot/index.html) — the frontend chat widget\n- sambot/api.js (or sambot/server.js) — the backend API endpoint\nRead planning/sambot-feature-spec.md first for full context."
+	childDescription := "Backend API wiring — implement POST /api/sambot/chat that accepts { message, session_id } and returns { response, session_id }. Use the architecture and feature spec already at planning/sambot-feature-spec.md for context on personality, tone, and knowledge base approach."
+	childMetadata := json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentID))
+	parentMetadata := json.RawMessage(`{"decomposition":{"source_description":"Build the SamBot Chat MVP with two deliverables:\n- sambot/widget.html (or sambot/index.html) — the frontend chat widget\n- sambot/api.js (or sambot/server.js) — the backend API endpoint\nRead planning/sambot-feature-spec.md first for full context."}}`)
+
+	executor := &NativeToolExecutor{
+		tasks: &stubTaskRepo{
+			byID: map[uuid.UUID]repo.ProjectTask{
+				parentID: {
+					ID:             parentID,
+					OrganizationID: orgID,
+					ProjectID:      projectID,
+					TaskNumber:     172,
+					Title:          "Build SamBot Chat MVP: frontend widget + backend API wiring",
+					Description:    &parentDescription,
+					Metadata:       parentMetadata,
+				},
+				childID: {
+					ID:             childID,
+					OrganizationID: orgID,
+					ProjectID:      projectID,
+					TaskNumber:     174,
+					Title:          "Backend API wiring",
+					Description:    &childDescription,
+					Metadata:       childMetadata,
+				},
+			},
+		},
+	}
+
+	got := executor.taskExplicitDeliverablePath(context.Background(), executor.tasks.(*stubTaskRepo).byID[childID])
+	if got != "sambot/api.js" {
+		t.Fatalf("taskExplicitDeliverablePath(...) = %q, want %q", got, "sambot/api.js")
 	}
 }
 

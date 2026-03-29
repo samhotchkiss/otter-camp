@@ -40299,7 +40299,7 @@ func TestDeliverableTargetMatchesTaskContractRejectsFrontendArtifactForBackendTa
 func TestDeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask(t *testing.T) {
 	t.Parallel()
 
-	description := "Backend API wiring — implement POST /api/sambot/chat that returns { response, session_id }."
+	description := "Backend API wiring — implement POST /api/sambot/chat that accepts { message, session_id } and returns { response, session_id }. Use the architecture and feature spec already at planning/sambot-feature-spec.md for context on personality, tone, and knowledge base approach."
 	taskRecord := repo.ProjectTask{
 		TaskNumber:  174,
 		Title:       "Backend API wiring",
@@ -40311,6 +40311,53 @@ func TestDeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBack
 	}
 	if deliverableTargetMatchesTaskContract(taskRecord, "sambot/system-prompt-spec.md") {
 		t.Fatal("expected auxiliary spec artifact to be rejected for backend task")
+	}
+}
+
+func TestSessionTaskDeliverablePathIgnoresHistoricalAuxiliaryTestArtifactForBackendTaskReferencingFeatureSpec(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	sessionID := fixture.session.ID
+	parentID := uuid.New()
+	taskID := uuid.New()
+	parentDescription := "Build the SamBot Chat MVP with two deliverables:\n- sambot/widget.html (or sambot/index.html) — the frontend chat widget\n- sambot/api.js (or sambot/server.js) — the backend API endpoint\nRead planning/sambot-feature-spec.md first for full context."
+	parentMetadata := json.RawMessage(`{"decomposition":{"source_description":"Build the SamBot Chat MVP with two deliverables:\n- sambot/widget.html (or sambot/index.html) — the frontend chat widget\n- sambot/api.js (or sambot/server.js) — the backend API endpoint\nRead planning/sambot-feature-spec.md first for full context."}}`)
+	description := "Backend API wiring — implement POST /api/sambot/chat that accepts { message, session_id } and returns { response, session_id }. Use the architecture and feature spec already at planning/sambot-feature-spec.md for context on personality, tone, and knowledge base approach."
+	taskRecord := repo.ProjectTask{
+		ID:          taskID,
+		TaskNumber:  174,
+		Title:       "Backend API wiring",
+		Description: &description,
+		Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentID)),
+	}
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:          parentID,
+				TaskNumber:  172,
+				Title:       "Build SamBot Chat MVP: frontend widget + backend API wiring",
+				Description: &parentDescription,
+				Metadata:    parentMetadata,
+			},
+			taskID: taskRecord,
+		},
+	}
+	messageRepo := newFakeMessageRepo()
+	messageRepo.create(repo.ChatMessage{
+		SessionID: sessionID,
+		Role:      "tool_result",
+		Content:   `{"tool_name":"file.read","output":{"path":"sambot/test-api.js","byte_size":5067}}`,
+		Status:    "final",
+	})
+	fixture.messages = messageRepo
+	fixture.engine.messages = messageRepo
+
+	if got := fixture.engine.sessionTaskDeliverablePath(context.Background(), sessionID, taskRecord); got != "sambot/api.js" {
+		t.Fatalf("sessionTaskDeliverablePath(...) = %q, want %q", got, "sambot/api.js")
 	}
 }
 

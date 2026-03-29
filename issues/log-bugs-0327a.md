@@ -673,3 +673,13 @@
   - impact:
     - review lanes can spend entire retries validating a companion test file instead of the actual deliverable
     - the runtime appears to be “stuck on the wrong file” even though the intended implementation artifact is already present
+- 2026-03-29 16:47 MDT - The same task-174 family had a deeper fallback bug even after the auxiliary-companion filter was tightened.
+  - fresh live evidence:
+    - task `174`’s real brief references `planning/sambot-feature-spec.md`
+    - after rejecting `sambot/test-api.js` as the preferred deliverable, the child still had no strong path back to `sambot/api.js` unless some other message explicitly named it again
+  - bug:
+    - the auxiliary-artifact classifier treated a generic planning “feature spec” reference as enough to keep `*spec*`-named companion artifacts viable
+    - child explicit-deliverable inheritance only checked the parent’s first explicit path, so it could not recover a later matching deliverable like `sambot/api.js` from parent task `172`’s decomposition list
+  - impact:
+    - backend child tasks can oscillate between a wrong companion file and no preferred target at all
+    - even after the bad target is rejected, recovery/review targeting can stay weaker than it should be and reopen avoidable rediscovery

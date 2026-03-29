@@ -3701,3 +3701,22 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(DeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask|SessionTaskDeliverablePathIgnoresConflictingParentFrontendDeliverableForBackendChild|SessionTaskDeliverablePathPrefersChildLeadingPathTitleOverParentDeliverable)$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is rebuild/restart and confirm the next task-174 review retry prefers `sambot/api.js`
+- 2026-03-29 16:47 MDT - Tightened the same task-174 target-selection slice so a planning-spec reference no longer keeps unrelated `*spec*` or `test-*` files in play, and so backend child tasks can still recover the correct explicit path from parent decomposition metadata.
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `taskTreatsPathAsAuxiliaryArtifact(...)` now only waives auxiliary-artifact rejection when the task contract explicitly names that companion artifact, not just because the task mentions a planning “feature spec”
+    - `taskExplicitDeliverablePath(...)` now scans parent decomposition contract text for matching file-like deliverables, so backend child tasks can recover `sambot/api.js` from the parent MVP deliverable list
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - applied the same auxiliary-artifact tightening in the turn-layer contract matcher
+    - applied the same parent-decomposition deliverable scan in `taskExplicitDeliverablePath(...)`, so prompt targeting and native recovery targeting stay aligned
+  - changed tests:
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go)
+      - widened `TestDeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask` to the live task-174 wording that mentions `planning/sambot-feature-spec.md`
+      - added `TestTaskExplicitDeliverablePathFindsMatchingParentDecompositionDeliverableForBackendChild`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - widened `TestDeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask` to the same live wording
+      - added `TestSessionTaskDeliverablePathIgnoresHistoricalAuxiliaryTestArtifactForBackendTaskReferencingFeatureSpec`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(DeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask|TaskExplicitDeliverablePathFindsMatchingParentDecompositionDeliverableForBackendChild|LatestRecoveryTargetPathForSessionIgnoresConflictingParentFrontendDeliverableForBackendChild|FileReadTreatsNotDirectoryPreferredTargetAsNotFound)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(DeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask|SessionTaskDeliverablePathIgnoresHistoricalAuxiliaryTestArtifactForBackendTaskReferencingFeatureSpec|SessionTaskDeliverablePathIgnoresConflictingParentFrontendDeliverableForBackendChild|SessionTaskDeliverablePathPrefersChildLeadingPathTitleOverParentDeliverable)$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is rebuild/restart and confirm the next task-174 retry starts from `sambot/api.js`

@@ -499,9 +499,62 @@ func (e *NativeToolExecutor) taskExplicitDeliverablePath(ctx context.Context, ta
 	}
 	inherited := strings.TrimSpace(parseExplicitDeliverablePath(parentTask))
 	if inherited == "" || !deliverableTargetMatchesTaskContract(taskRecord, inherited) {
-		return ""
+		return strings.TrimSpace(matchingExplicitDeliverablePathForTaskContract(taskRecord, parentTask))
 	}
 	return inherited
+}
+
+func matchingExplicitDeliverablePathForTaskContract(taskRecord, sourceTask repo.ProjectTask) string {
+	filePathPattern := regexp.MustCompile(`([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+\.[A-Za-z0-9._-]+)`)
+	appendCandidate := func(rawCandidate string) string {
+		rawCandidate = strings.TrimSpace(rawCandidate)
+		candidate := normalizeWorkspacePath(rawCandidate)
+		if !looksLikeExplicitDeliverablePath(candidate, rawCandidate) {
+			return ""
+		}
+		if !deliverableTargetMatchesTaskContract(taskRecord, candidate) {
+			return ""
+		}
+		return candidate
+	}
+
+	for _, description := range taskContractDescriptionCandidates(sourceTask) {
+		for _, pattern := range explicitDeliverablePathPatterns {
+			matches := pattern.FindAllStringSubmatch(description, -1)
+			for _, match := range matches {
+				if len(match) < 2 {
+					continue
+				}
+				if candidate := appendCandidate(match[1]); candidate != "" {
+					return candidate
+				}
+			}
+		}
+		for _, pattern := range []*regexp.Regexp{
+			leadingVerbDeliverablePathPattern,
+			leadingExplicitDeliverablePathPattern,
+			parenthesizedDeliverableOptionPathPattern,
+		} {
+			matches := pattern.FindAllStringSubmatch(description, -1)
+			for _, match := range matches {
+				if len(match) < 2 {
+					continue
+				}
+				if candidate := appendCandidate(match[1]); candidate != "" {
+					return candidate
+				}
+			}
+		}
+		for _, match := range filePathPattern.FindAllStringSubmatch(description, -1) {
+			if len(match) < 2 {
+				continue
+			}
+			if candidate := appendCandidate(match[1]); candidate != "" {
+				return candidate
+			}
+		}
+	}
+	return ""
 }
 
 func (e *NativeToolExecutor) taskPreferredDeliverableRoot(ctx context.Context, taskRecord repo.ProjectTask) string {
@@ -940,13 +993,16 @@ func taskTreatsPathAsAuxiliaryArtifact(taskRecord repo.ProjectTask, target strin
 		return false
 	}
 	base := strings.ToLower(filepath.Base(target))
-	if !containsAnySubstring(base,
-		"test",
-		"spec",
-		"fixture",
-		"mock",
-	) {
+	testLike := containsAnySubstring(base, "test", "fixture", "mock")
+	specLike := strings.Contains(base, "spec")
+	if !testLike && !specLike {
 		return false
+	}
+	if taskExplicitlyTargetsAuxiliaryArtifact(taskRecord, target, base) {
+		return false
+	}
+	if specLike {
+		return true
 	}
 	text := strings.ToLower(strings.TrimSpace(taskRecord.Title))
 	if taskRecord.Description != nil {
@@ -956,12 +1012,35 @@ func taskTreatsPathAsAuxiliaryArtifact(taskRecord repo.ProjectTask, target strin
 		"test ",
 		"tests",
 		"testing",
-		"spec ",
-		"specs",
-		"specification",
+		"contract test",
+		"unit test",
+		"integration test",
 		"fixture",
 		"mock",
 	)
+}
+
+func taskExplicitlyTargetsAuxiliaryArtifact(taskRecord repo.ProjectTask, target, base string) bool {
+	target = strings.ToLower(normalizeWorkspacePath(target))
+	base = strings.ToLower(strings.TrimSpace(base))
+	if target == "" || base == "" {
+		return false
+	}
+	baseNoExt := strings.TrimSuffix(base, strings.ToLower(filepath.Ext(base)))
+	namePhrase := strings.TrimSpace(strings.NewReplacer("-", " ", "_", " ", ".", " ").Replace(baseNoExt))
+	for _, raw := range taskContractDescriptionCandidates(taskRecord) {
+		description := strings.ToLower(strings.TrimSpace(raw))
+		if description == "" {
+			continue
+		}
+		if strings.Contains(description, target) || strings.Contains(description, base) {
+			return true
+		}
+		if namePhrase != "" && namePhrase != base && strings.Contains(description, namePhrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func taskDeliverablePathConflictsWithRole(taskRecord repo.ProjectTask, target string) bool {
