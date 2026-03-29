@@ -2593,3 +2593,25 @@
     - worker startup launched exactly one PM continuation message `9534756d-2367-48b6-9dbf-10347e32976f` and turn `17e32c32-4665-4dcc-badf-293848a3eaa3`
     - that turn appended a `projectContinuationTaskLaneBoundaryGuardPrefix` system message stating task `71` already has an active `project_task` session and no second focused PM retry message was created
     - post-turn SQL and worker logs both stayed quiet, which proves the extra supervisory retry was eliminated
+- 2026-03-29 04:43:27 MDT - Finished locally, queued for deploy on `repo_version=3543`: narrow PM live-lane ownership to real executions and fix stale PM continuation-summary anchors.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `projectTaskAlreadyOwnsExecutionLane(...)` now requires a live `flow_node_execution` on the task's current node or an active async `project_task` session instead of trusting `current_flow_node_id` by itself
+    - project continuation summaries now prefer the just-finished turn's trigger message when available
+    - `project_execution_continuation` prompts are no longer treated like history-rooted resume prompts; only `project_continuation_resume` walks backward for a prior request anchor
+    - added `preferredContinuationTriggerMessage(...)`, `projectContinuationSummarySourceMessage(...)`, `projectContinuationMessageRootsHistory(...)`, and `projectContinuationResumeMessage(...)`
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - project-session task mutation blocking now checks for a real live task lane instead of stale `current_flow_node_id`
+    - `taskSessionDirectStatusBlocked(...)` now only applies to `project_task` sessions, so PM project sessions stop tripping task-session-only `flow_owned_status_blocked`
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): added stale-lane and continuation-anchor regressions
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go): added stale-lane and project-session binding regressions
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurn(RetriesRediscoveryStopWithFocusedMessage|SkipsRediscoveryRetryWhenBlockedTaskAlreadyOwnsExecutionLane|DoesNotTreatStaleCurrentFlowNodeAsLiveLane|SuppressesRepeatedRediscoveryBlockedRetry|RetriesReplacementChildWorkWithFreshMessage)|ShouldStopAfterBlockedProjectContinuationRediscovery$|ContinuationTurnUsesPriorRealRequestWhenTriggeredBySyntheticProjectContinuationPrompt$|ProjectActiveRequestContinuationSummary(PrefersPreviousTurnTriggerMessage|UsesNearestPriorProjectExecutionContinuationForResume))' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ContinuationTurnUsesDeterministicActiveRequestSummaryForAsync(Project|Organization)Session|ContinuationTurnUsesPriorRealRequestWhenTriggeredBySynthetic(Project|Organization)ContinuationPrompt|ProjectExecutionContinuationFallbackSummary)$' -count=1`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(TaskUpdateRejectsProjectSessionDirectAdvanceOfActiveTaskLane|ProjectSessionDirectTaskMutationBlockedIgnoresStaleCurrentFlowNodeWithoutLiveLane|TaskSessionDirectStatusBlockedIgnoresProjectSessionTaskBinding)$' -count=1`
+- 2026-03-29 04:46:28 MDT - Deployed on `repo_version=3543` and partially live-proven.
+  - rebuilt [`./bin/ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp), respawned tmux session `codex-e2e-20260324` with `tmux respawn-pane -k`, and [`./bin/ottercamp health --output json`](/Users/sam/dev/otter-camp/bin/ottercamp) returned `status=ok`
+  - fresh post-restart PM continuation message `6476` ran in turn `bb7e9a21-ee47-432c-a31b-e308f25c4ad6`
+  - that turn created replacement task `82` and then hit the bounded-size guard at tool result `6480` instead of bouncing on stale task-lane ownership or PM-side `flow_owned_status_blocked`
+  - remaining live-proof gap:
+    - the exact max-tool-calls continuation-summary branch did not re-fire on the first `3543` PM turn, so the stale-summary-anchor fix is deployed and test-green but still waiting on the next natural long PM continuation for direct production confirmation

@@ -916,10 +916,77 @@ func (e *NativeToolExecutor) projectSessionDirectTaskMutationBlocked(ctx context
 	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") {
 		return nil, false, nil
 	}
+	liveLane, err := e.projectTaskHasLiveExecutionLane(ctx, taskRecord)
+	if err != nil {
+		return nil, false, err
+	}
+	if !liveLane {
+		return nil, false, nil
+	}
 	return map[string]any{
 		"error":   "task_lane_owned_by_project_task_session",
 		"message": "This task already has an active execution lane. Do not mutate it from the project session. Let the project_task session advance the flow and write deliverables, or use flow.review_decision from the task's review lane when that lane is active.",
 	}, true, nil
+}
+
+func (e *NativeToolExecutor) projectTaskHasLiveExecutionLane(ctx context.Context, taskRecord repo.ProjectTask) (bool, error) {
+	if e == nil || taskRecord.ID == uuid.Nil {
+		return false, nil
+	}
+	if taskRecord.CurrentFlowNodeID != nil && *taskRecord.CurrentFlowNodeID != uuid.Nil && e.flowExecs != nil {
+		executions, err := e.flowExecs.ListByTask(ctx, taskRecord.ID)
+		if err != nil && !errors.Is(err, repo.ErrNotFound) {
+			return false, err
+		}
+		for _, execution := range executions {
+			if !strings.EqualFold(strings.TrimSpace(execution.Status), "active") {
+				continue
+			}
+			if execution.FlowNodeID != *taskRecord.CurrentFlowNodeID {
+				continue
+			}
+			if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+				return true, nil
+			}
+			if e.chatSessions == nil {
+				return true, nil
+			}
+			session, err := e.chatSessions.GetByID(ctx, *execution.SessionID)
+			if err != nil {
+				if errors.Is(err, repo.ErrNotFound) {
+					continue
+				}
+				return false, err
+			}
+			if strings.EqualFold(strings.TrimSpace(session.Status), "active") &&
+				strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+				return true, nil
+			}
+		}
+	}
+	if e.chatSessions == nil || taskRecord.OrganizationID == uuid.Nil {
+		return false, nil
+	}
+	sessions, err := e.chatSessions.ListByOrg(ctx, taskRecord.OrganizationID)
+	if err != nil {
+		return false, err
+	}
+	for _, session := range sessions {
+		if !strings.EqualFold(strings.TrimSpace(session.Status), "active") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+			continue
+		}
+		if session.ScopeID != taskRecord.ID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(session.Mode), "async") {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 func (e *NativeToolExecutor) projectSessionBootstrapGitCommitBlocked(ctx context.Context, scope workspaceScope) (map[string]any, bool, error) {
@@ -1010,6 +1077,9 @@ func (e *NativeToolExecutor) taskSessionContentMigrationCheckpointOnlyDirtyPath(
 
 func (e *NativeToolExecutor) taskSessionDirectStatusBlocked(ctx context.Context, scope workspaceScope, taskRecord repo.ProjectTask, desiredStatus string) (map[string]any, bool, error) {
 	if e == nil || scope.sessionID == nil || *scope.sessionID == uuid.Nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
+		return nil, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(scope.sessionScope), "project_task") {
 		return nil, false, nil
 	}
 	if taskRecord.ID == uuid.Nil || taskRecord.ID != *scope.taskID || taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID == uuid.Nil {

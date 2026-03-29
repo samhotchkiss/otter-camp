@@ -12999,7 +12999,7 @@ func TestHandleCompletedProjectExecutionContinuationTurnSkipsRediscoveryRetryWhe
 		if msg.TurnID == nil || *msg.TurnID != turnID || !strings.EqualFold(strings.TrimSpace(msg.Role), "system") {
 			continue
 		}
-		if strings.Contains(msg.Content, "already has an active project_task session") &&
+		if strings.Contains(msg.Content, "already has a live project_task execution lane") &&
 			strings.HasPrefix(strings.TrimSpace(msg.Content), projectContinuationTaskLaneBoundaryGuardPrefix) {
 			foundStop = true
 			break
@@ -13007,6 +13007,194 @@ func TestHandleCompletedProjectExecutionContinuationTurnSkipsRediscoveryRetryWhe
 	}
 	if !foundStop {
 		t.Fatal("expected active-lane supervisory stop message to be appended")
+	}
+}
+
+func TestHandleCompletedProjectExecutionContinuationTurnDoesNotTreatStaleCurrentFlowNodeAsLiveLane(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "project-continuation-stale-node-retry",
+		DisplayName: "Project Continuation Stale Node Retry",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "project-continuation-stale-node-retry",
+		DisplayName:    "Project Continuation Stale Node Retry",
+		Description:    "Project for stale current_flow_node_id PM retry coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	eventRepo := repo.NewProjectTaskEventRepo(pool)
+	assignedAgent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Stale Node Retry Worker",
+		AgentClass:      "staff",
+		AgentType:       "worker",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You execute bounded project tasks.",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create assigned agent: %v", err)
+	}
+	assignedAgentID := assignedAgent.ID
+	flowTemplate, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		Slug:           "project-continuation-stale-node-retry-template",
+		DisplayName:    "Project Continuation Stale Node Retry Template",
+		Description:    "Template for stale current_flow_node_id PM retry coverage",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	workNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: flowTemplate.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      2,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	flowTemplateID := flowTemplate.ID
+	completedCreatedByID := uuid.New()
+	completedTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      34,
+		Title:           "Scrape and import technonymous.org posts from URL index",
+		WorkStatus:      "done",
+		BlocksScope:     "task",
+		AssignedAgentID: &assignedAgentID,
+		FlowTemplateID:  &flowTemplateID,
+		CreatedByType:   "system",
+		CreatedByID:     &completedCreatedByID,
+	})
+	if err != nil {
+		t.Fatalf("create completed task: %v", err)
+	}
+	blockedCreatedByID := uuid.New()
+	blockedTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         project.ID,
+		TaskNumber:        71,
+		Title:             "Final replacement: scrape technonymous posts 1-12 to markdown in content/posts/",
+		Description:       stringPtr("Output the recovered posts under content/posts/ using content/technonymous-index.json as the source index."),
+		WorkStatus:        "blocked",
+		BlocksScope:       "task",
+		AssignedAgentID:   &assignedAgentID,
+		FlowTemplateID:    &flowTemplateID,
+		CurrentFlowNodeID: &workNode.ID,
+		CreatedByType:     "system",
+		CreatedByID:       &blockedCreatedByID,
+	})
+	if err != nil {
+		t.Fatalf("create blocked task: %v", err)
+	}
+	if _, err := eventRepo.Record(ctx, repo.ProjectTaskEvent{
+		TaskID:    blockedTask.ID,
+		ProjectID: project.ID,
+		EventType: "status.changed",
+		ActorType: "system",
+		Payload:   json.RawMessage(`{"to_status":"blocked","blocker_reason":"recovery halted after recovered file.write for content/posts/stop-preparing-your-kids-for-jobs.md failed: file.write"}`),
+	}); err != nil {
+		t.Fatalf("record blocked event: %v", err)
+	}
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = pool
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{}
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = project.ID
+	fixture.session.OrganizationID = org.ID
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTask.ID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "I should inspect the broader project tree before deciding what to do with the blocked scrape task.",
+		SequenceNumber: 11,
+	}
+	messages := []repo.ChatMessage{
+		*latestUser,
+		*assistant,
+		{
+			ID:             uuid.New(),
+			SessionID:      fixture.session.ID,
+			TurnID:         &turnID,
+			Role:           "system",
+			Status:         "final",
+			Content:        "[Project continuation rediscovery guard blocked only broad rereads. Ending this turn early so the next continuation can act directly on the named tasks instead of repeating blocked PM discovery.]",
+			SequenceNumber: 12,
+		},
+	}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(ctx, fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected rediscovery stop with stale current_flow_node_id to be handled")
+	}
+	if len(fixture.enqueuer.jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1 when current_flow_node_id has no live lane behind it", len(fixture.enqueuer.jobs))
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(ctx, fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	for _, msg := range storedMessages {
+		if msg.TurnID == nil || *msg.TurnID != turnID || !strings.EqualFold(strings.TrimSpace(msg.Role), "system") {
+			continue
+		}
+		if strings.Contains(msg.Content, "already has a live project_task execution lane") &&
+			strings.HasPrefix(strings.TrimSpace(msg.Content), projectContinuationTaskLaneBoundaryGuardPrefix) {
+			t.Fatalf("unexpected active-lane stop for stale current_flow_node_id: %q", msg.Content)
+		}
 	}
 }
 
@@ -19208,6 +19396,107 @@ func TestContinuationTurnUsesPriorRealRequestWhenTriggeredBySyntheticProjectCont
 	}
 	if strings.Contains(continuationSummary.Content, continuationPrompt.Content) {
 		t.Fatalf("continuation summary = %q, should not summarize synthetic continuation prompt", continuationSummary.Content)
+	}
+}
+
+func TestProjectActiveRequestContinuationSummaryPrefersPreviousTurnTriggerMessage(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.messages = newFakeMessageRepo()
+	fixture.engine.messages = fixture.messages
+
+	staleRequest := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Recover malformed scrape batch children and rebuild content/technonymous-index.json.",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","synthetic_user_message":true}`),
+	})
+	freshRequest := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Advance the blocked scrape batch by repairing task 71 and task 81 inside content/posts/ without broad rediscovery.",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","synthetic_user_message":true}`),
+	})
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: staleRequest.ID,
+	}
+	previousTurn := &repo.ChatTurn{TriggerMessageID: &freshRequest.ID}
+
+	summary, ok := fixture.engine.projectActiveRequestContinuationSummary(context.Background(), rt, previousTurn)
+	if !ok {
+		t.Fatal("projectActiveRequestContinuationSummary returned !ok")
+	}
+	if !strings.Contains(summary, freshRequest.Content) {
+		t.Fatalf("summary = %q, want fresh trigger message content", summary)
+	}
+	if strings.Contains(summary, staleRequest.Content) {
+		t.Fatalf("summary = %q, should not reuse stale initial message content", summary)
+	}
+}
+
+func TestProjectActiveRequestContinuationSummaryUsesNearestPriorProjectExecutionContinuationForResume(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.messages = newFakeMessageRepo()
+	fixture.engine.messages = fixture.messages
+
+	olderSynthetic := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Recover malformed scrape batch children and rebuild content/technonymous-index.json.",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","synthetic_user_message":true}`),
+	})
+	_ = olderSynthetic
+	latestSynthetic := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Advance the blocked scrape batch by repairing task 71 and task 81 inside content/posts/ without broad rediscovery.",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","synthetic_user_message":true}`),
+	})
+	ignoredSynthetic := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Continue the active project execution now from the continuation summary above.",
+		Metadata:  json.RawMessage(`{"source":"project_continuation_resume","synthetic_user_message":true}`),
+	})
+	_ = ignoredSynthetic
+	resumePrompt := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Continue the active project execution now from the continuation summary above.",
+		Metadata:  json.RawMessage(`{"source":"project_continuation_resume","synthetic_user_message":true}`),
+	})
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: resumePrompt.ID,
+	}
+
+	summary, ok := fixture.engine.projectActiveRequestContinuationSummary(context.Background(), rt, nil)
+	if !ok {
+		t.Fatal("projectActiveRequestContinuationSummary returned !ok")
+	}
+	if !strings.Contains(summary, latestSynthetic.Content) {
+		t.Fatalf("summary = %q, want nearest prior project_execution_continuation content", summary)
+	}
+	if strings.Contains(summary, "malformed scrape batch children") {
+		t.Fatalf("summary = %q, should not fall back to the older stale continuation request", summary)
 	}
 }
 

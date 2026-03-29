@@ -5860,6 +5860,7 @@ func TestTaskUpdateRejectsProjectSessionDirectAdvanceOfActiveTaskLane(t *testing
 	projectID := uuid.New()
 	taskID := uuid.New()
 	sessionID := uuid.New()
+	taskSessionID := uuid.New()
 	flowNodeID := uuid.New()
 	flowTemplateID := uuid.New()
 	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
@@ -5882,6 +5883,14 @@ func TestTaskUpdateRejectsProjectSessionDirectAdvanceOfActiveTaskLane(t *testing
 				OrganizationID: orgID,
 				ScopeType:      "project",
 				ScopeID:        projectID,
+				Mode:           "async",
+				Status:         "active",
+			},
+			{
+				ID:             taskSessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project_task",
+				ScopeID:        taskID,
 				Mode:           "async",
 				Status:         "active",
 			},
@@ -5909,6 +5918,78 @@ func TestTaskUpdateRejectsProjectSessionDirectAdvanceOfActiveTaskLane(t *testing
 	}
 	if tasks.updateCalls != 0 {
 		t.Fatalf("update calls = %d, want 0", tasks.updateCalls)
+	}
+}
+
+func TestProjectSessionDirectTaskMutationBlockedIgnoresStaleCurrentFlowNodeWithoutLiveLane(t *testing.T) {
+	orgID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	flowNodeID := uuid.New()
+	flowTemplateID := uuid.New()
+
+	taskRecord := repo.ProjectTask{
+		ID:                taskID,
+		OrganizationID:    orgID,
+		ProjectID:         projectID,
+		Title:             "Repair scrape batch",
+		WorkStatus:        "blocked",
+		FlowTemplateID:    &flowTemplateID,
+		CurrentFlowNodeID: &flowNodeID,
+	}
+	sessions := &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project",
+				ScopeID:        projectID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.chatSessions = sessions
+	executor.flowExecs = &mockFlowExecutionRepo{}
+
+	scope := workspaceScope{
+		sessionID: &sessionID,
+		projectID: &projectID,
+	}
+	out, blocked, err := executor.projectSessionDirectTaskMutationBlocked(context.Background(), scope, taskRecord)
+	if err != nil {
+		t.Fatalf("projectSessionDirectTaskMutationBlocked: %v", err)
+	}
+	if blocked {
+		t.Fatalf("blocked = true, want false for stale current_flow_node_id without live execution lane: %v", out)
+	}
+}
+
+func TestTaskSessionDirectStatusBlockedIgnoresProjectSessionTaskBinding(t *testing.T) {
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	flowNodeID := uuid.New()
+	taskRecord := repo.ProjectTask{
+		ID:                taskID,
+		WorkStatus:        "blocked",
+		CurrentFlowNodeID: &flowNodeID,
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+
+	out, blocked, err := executor.taskSessionDirectStatusBlocked(context.Background(), workspaceScope{
+		sessionID:      &sessionID,
+		taskID:         &taskID,
+		sessionScope:   "project",
+		sessionMode:    "async",
+		organizationID: uuid.New(),
+	}, taskRecord, "cancelled")
+	if err != nil {
+		t.Fatalf("taskSessionDirectStatusBlocked: %v", err)
+	}
+	if blocked {
+		t.Fatalf("blocked = true, want false for project session task binding: %v", out)
 	}
 }
 

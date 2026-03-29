@@ -4812,7 +4812,7 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 	if e == nil || session == nil || completedTurn == nil || latestUser == nil || assistant == nil || e.tasks == nil || e.taskTransitions == nil {
 		return false, nil
 	}
-	if !projectContinuationResumeMessageRootsHistory(*latestUser) {
+	if !projectContinuationMessageRootsHistory(*latestUser) {
 		return false, nil
 	}
 	if turnHasSuccessfulMutatingToolResult(messages, completedTurn.ID) {
@@ -5271,13 +5271,31 @@ func (e *TurnEngine) retryProjectExecutionContinuationForRediscoveryStop(
 }
 
 func (e *TurnEngine) projectTaskAlreadyOwnsExecutionLane(ctx context.Context, task repo.ProjectTask) (bool, error) {
-	if task.CurrentFlowNodeID != nil && *task.CurrentFlowNodeID != uuid.Nil {
-		return true, nil
-	}
 	if e == nil || e.pool == nil || task.ID == uuid.Nil {
 		return false, nil
 	}
-	session, err := repo.NewChatSessionRepo(e.pool).GetByScopeAndMode(ctx, "project_task", task.ID, "async")
+	sessionRepo := repo.NewChatSessionRepo(e.pool)
+	if task.CurrentFlowNodeID != nil && *task.CurrentFlowNodeID != uuid.Nil {
+		execution, err := repo.NewFlowNodeExecutionRepo(e.pool).GetActive(ctx, task.ID, *task.CurrentFlowNodeID)
+		if err != nil && !errors.Is(err, repo.ErrNotFound) {
+			return false, err
+		}
+		if err == nil {
+			if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+				return true, nil
+			}
+			session, err := sessionRepo.GetByID(ctx, *execution.SessionID)
+			if err != nil && !errors.Is(err, repo.ErrNotFound) {
+				return false, err
+			}
+			if err == nil &&
+				strings.EqualFold(strings.TrimSpace(session.Status), "active") &&
+				strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+				return true, nil
+			}
+		}
+	}
+	session, err := sessionRepo.GetByScopeAndMode(ctx, "project_task", task.ID, "async")
 	if err != nil {
 		return false, err
 	}
@@ -5333,7 +5351,7 @@ func buildProjectExecutionContinuationRediscoveryRetryPrompt(
 
 func buildProjectExecutionContinuationActiveTaskLaneStopMessage(task repo.ProjectTask) string {
 	label := projectBootstrapTaskLabel(task)
-	return fmt.Sprintf("%s %s already has an active project_task session. Leave that task lane alone from the project session. Do not create, queue, update, or inspect deliverables for %s from the PM lane; let the bound task lane continue or let its own review lane issue flow.review_decision if that review lane becomes active.]", projectContinuationTaskLaneBoundaryGuardPrefix, label, label)
+	return fmt.Sprintf("%s %s already has a live project_task execution lane. Leave that task lane alone from the project session. Do not create, queue, update, or inspect deliverables for %s from the PM lane; let the bound task lane continue or let its own review lane issue flow.review_decision if that review lane becomes active.]", projectContinuationTaskLaneBoundaryGuardPrefix, label, label)
 }
 
 func buildProjectExecutionContinuationRediscoveryActionInstruction(
@@ -8801,7 +8819,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		runtime.historyStartID = &message.ID
 		runtime.disableMemory = true
 		runtime.freshKickoff = true
-	} else if projectContinuationResumeMessageRootsHistory(message) {
+	} else if projectContinuationMessageRootsHistory(message) {
 		runtime.historyStartID = &message.ID
 	} else if taskContinuationResumeMessageRootsHistory(message) {
 		runtime.historyStartID = &message.ID
@@ -10942,7 +10960,7 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 			return e.appendContinuationSummaryAndAction(ctx, rt, currentTurn, summary)
 		}
 	}
-	if summary, ok := e.projectActiveRequestContinuationSummary(ctx, rt); ok {
+	if summary, ok := e.projectActiveRequestContinuationSummary(ctx, rt, currentTurn); ok {
 		return e.appendContinuationSummaryAndAction(ctx, rt, currentTurn, summary)
 	}
 	if summary, ok := e.organizationActiveRequestContinuationSummary(ctx, rt); ok {
@@ -11008,7 +11026,7 @@ func (e *TurnEngine) organizationActiveRequestContinuationSummary(ctx context.Co
 	return "Active organization request: " + request, true
 }
 
-func (e *TurnEngine) projectActiveRequestContinuationSummary(ctx context.Context, rt *turnRuntime) (string, bool) {
+func (e *TurnEngine) projectActiveRequestContinuationSummary(ctx context.Context, rt *turnRuntime, previousTurn *repo.ChatTurn) (string, bool) {
 	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.initialMessageID == uuid.Nil {
 		return "", false
 	}
@@ -11017,20 +11035,58 @@ func (e *TurnEngine) projectActiveRequestContinuationSummary(ctx context.Context
 		return "", false
 	}
 
-	message, err := e.messages.GetByID(ctx, rt.initialMessageID)
-	if err != nil || !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+	message, ok := e.projectContinuationSummarySourceMessage(ctx, rt, previousTurn)
+	if !ok {
 		return "", false
-	}
-	if projectContinuationResumeMessageRootsHistory(message) {
-		if prior, ok := e.latestSubstantiveProjectRequestMessage(ctx, rt.session.ID, message); ok {
-			message = prior
-		}
 	}
 	request := normalizeInstructionText(message.Content)
 	if strings.TrimSpace(request) == "" {
 		return "", false
 	}
 	return "Active project request: " + request, true
+}
+
+func (e *TurnEngine) projectContinuationSummarySourceMessage(ctx context.Context, rt *turnRuntime, previousTurn *repo.ChatTurn) (repo.ChatMessage, bool) {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil {
+		return repo.ChatMessage{}, false
+	}
+	message, ok := e.preferredContinuationTriggerMessage(ctx, rt, previousTurn)
+	if !ok {
+		return repo.ChatMessage{}, false
+	}
+	if projectContinuationResumeMessage(message) {
+		if prior, ok := e.latestSubstantiveProjectRequestMessage(ctx, rt.session.ID, message); ok {
+			return prior, true
+		}
+	}
+	return message, true
+}
+
+func (e *TurnEngine) preferredContinuationTriggerMessage(ctx context.Context, rt *turnRuntime, previousTurn *repo.ChatTurn) (repo.ChatMessage, bool) {
+	if e == nil || e.messages == nil || rt == nil {
+		return repo.ChatMessage{}, false
+	}
+	seen := map[uuid.UUID]struct{}{}
+	candidates := make([]uuid.UUID, 0, 2)
+	if previousTurn != nil && previousTurn.TriggerMessageID != nil && *previousTurn.TriggerMessageID != uuid.Nil {
+		candidates = append(candidates, *previousTurn.TriggerMessageID)
+		seen[*previousTurn.TriggerMessageID] = struct{}{}
+	}
+	if rt.initialMessageID != uuid.Nil {
+		if _, ok := seen[rt.initialMessageID]; !ok {
+			candidates = append(candidates, rt.initialMessageID)
+		}
+	}
+	for _, candidateID := range candidates {
+		message, err := e.messages.GetByID(ctx, candidateID)
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			return message, true
+		}
+	}
+	return repo.ChatMessage{}, false
 }
 
 func (e *TurnEngine) taskActiveRequestContinuationSummary(ctx context.Context, rt *turnRuntime) (string, bool) {
@@ -11105,8 +11161,14 @@ func (e *TurnEngine) latestSubstantiveProjectRequestMessage(ctx context.Context,
 		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
 			continue
 		}
-		if projectContinuationResumeMessageRootsHistory(message) {
+		if projectContinuationResumeMessage(message) {
 			continue
+		}
+		if synthetic, _ := messageMetadataMap(message.Metadata)["synthetic_user_message"].(bool); synthetic {
+			source := strings.TrimSpace(stringValue(messageMetadataMap(message.Metadata)["source"]))
+			if source != "" && !strings.EqualFold(source, projectExecutionContinuationSource) {
+				continue
+			}
 		}
 		if message.SequenceNumber >= before.SequenceNumber {
 			continue
@@ -13757,7 +13819,7 @@ func (e *TurnEngine) runListeningEval(ctx context.Context, rt *turnRuntime, asse
 	if rt != nil && rt.session != nil && rt.initialMessageID != uuid.Nil &&
 		strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") &&
 		e.messages != nil {
-		if message, err := e.messages.GetByID(ctx, rt.initialMessageID); err == nil && projectContinuationResumeMessageRootsHistory(message) {
+		if message, err := e.messages.GetByID(ctx, rt.initialMessageID); err == nil && projectContinuationMessageRootsHistory(message) {
 			return false, nil
 		}
 	}
@@ -26231,7 +26293,7 @@ func taskContinuationResumeMessageRootsHistory(message repo.ChatMessage) bool {
 	return rooted
 }
 
-func projectContinuationResumeMessageRootsHistory(message repo.ChatMessage) bool {
+func projectContinuationMessageRootsHistory(message repo.ChatMessage) bool {
 	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
 		return false
 	}
@@ -26242,6 +26304,14 @@ func projectContinuationResumeMessageRootsHistory(message repo.ChatMessage) bool
 	default:
 		return false
 	}
+}
+
+func projectContinuationResumeMessage(message repo.ChatMessage) bool {
+	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+		return false
+	}
+	metadata := messageMetadataMap(message.Metadata)
+	return strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), "project_continuation_resume")
 }
 
 func taskContinuationResumeMessageMetadata(session *chat.ChatSession, attempt int) json.RawMessage {
