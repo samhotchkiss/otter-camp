@@ -20665,6 +20665,45 @@ func TestTaskContentMigrationCheckpointSummarySkipsExplicitSingleFileDeliverable
 	}
 }
 
+func TestAppendContentMigrationCheckpointSkipsExplicitSingleFileDeliverable(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	title := `Append "Technical Architecture" section to planning/sambot-feature-spec.md — covering embedding model, vector store, retrieval pipeline, prompt engineering approach, and fallback handling. Read file first, append after existing content. Single-file deliverable only.`
+	description := "Read planning/sambot-feature-spec.md, then append a new ## Technical Architecture section after the existing content. Cover: embedding model selection, vector store choice, retrieval pipeline design, prompt engineering approach, and fallback/error handling. Reference the scraped blog posts in content/posts/ for context about Sam's technical depth. Do NOT overwrite existing content. No sub-plans or planning artifacts — single file deliverable only."
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      uuid.New(),
+				TaskNumber:     109,
+				Title:          title,
+				Description:    &description,
+			},
+		},
+	}
+
+	appended, err := fixture.engine.appendContentMigrationCheckpoint(context.Background(), &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	})
+	if err != nil {
+		t.Fatalf("appendContentMigrationCheckpoint: %v", err)
+	}
+	if appended {
+		t.Fatal("appended = true, want false for explicit single-file deliverable")
+	}
+}
+
 func TestContinuationTurnUsesTaskFallbackSummaryForSupervisorContextQuestionnaire(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

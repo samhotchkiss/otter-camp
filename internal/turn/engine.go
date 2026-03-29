@@ -13111,6 +13111,9 @@ func (e *TurnEngine) appendContentMigrationCheckpoint(ctx context.Context, rt *t
 	if err != nil {
 		return false, err
 	}
+	if strings.TrimSpace(explicitDeliverablePath(taskRecord)) != "" || !taskExpectsMarkdownDeliverables(taskRecord) {
+		return false, nil
+	}
 	if !taskcheckpoint.IsContentMigrationTask(taskRecord.Title, taskRecord.Description) {
 		return false, nil
 	}
