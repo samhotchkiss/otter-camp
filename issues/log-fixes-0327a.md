@@ -3467,3 +3467,18 @@
     - stale PM turn `6e6009d0-6d74-4de8-ba0d-847ea5e607dd` was failed at `14:30:02 MDT`
     - invocation `045e89f7-3ce4-43d8-a2e7-c7964f4e7d4e` was marked `failed/stale_model_invocation`
     - the session advanced into fresh retry turn `266abfb0-cc4f-48da-8403-695bba1c2908` at `14:30:09 MDT`, proving the dead slot was released under full-capacity pressure
+- 2026-03-29 14:42 MDT - Suppressed repeated terminal `task_recovery_resume` prompts after shared-deliverable dead ends.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(...)` now suppresses later pending `task_recovery_resume` prompts when the latest completed recovery turn for the same execution already ended `validation_loop_blocked` with a terminal shared-deliverable stop
+    - covered terminal families are the recovery shared-deliverable guard, the inherited shared-file `file.write` guard, and the sibling-responsibility shared-deliverable stop
+    - suppressed prompts are marked `failed` with `suppressed repeated identical task recovery resume after terminal blocked recovery stop` instead of being requeued again
+  - changed tests:
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+      - added `TestJobWorkerRequeueTerminalRecoveryResumeSessionsWithoutLiveExecutionSuppressesInheritedSharedDeliverableGuard`
+      - added `TestJobWorkerRequeueTerminalRecoveryResumeSessionsWithoutLiveExecutionSuppressesSiblingResponsibilityGuard`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(SuppressesInheritedSharedDeliverableGuard|SuppressesSiblingResponsibilityGuard|RequeuesLatestPendingResume|SkipsSuccessful(Write|Edit))|CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionSkipsRepairedTerminalRecoveryResume)$' -count=1`
+  - deploy / proof status:
+    - deployed on `repo_version=3569`
+    - fresh same-version live proof for the new suppression branch is still pending because the restart's stale-`repo_version` purge retired the task-170 canary prompt first
+    - adjacent live state is good: there are now `0` active pending `task_recovery_resume` prompts on blocked async task sessions after the restart

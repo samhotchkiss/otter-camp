@@ -14310,6 +14310,32 @@ func appendLegacyPlaintextToolResultToRecoveryTurn(t *testing.T, pool *pgxpool.P
 	}
 }
 
+func appendSystemMessageToRecoveryTurn(t *testing.T, pool *pgxpool.Pool, sessionID, messageID uuid.UUID, content string) {
+	t.Helper()
+
+	ctx := context.Background()
+	var turnID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		SELECT id
+		FROM chat_turn
+		WHERE session_id = $1
+		  AND trigger_message_id = $2
+		ORDER BY turn_number DESC, retry_count DESC, created_at DESC, id DESC
+		LIMIT 1
+	`, sessionID, messageID).Scan(&turnID); err != nil {
+		t.Fatalf("lookup recovery turn for system message: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: sessionID,
+		TurnID:    &turnID,
+		Role:      "system",
+		Content:   content,
+		Status:    "final",
+	}); err != nil {
+		t.Fatalf("create recovery system message: %v", err)
+	}
+}
+
 func createPendingSyntheticRecoveryResumeDispatchFixture(t *testing.T, pool *pgxpool.Pool, slug, repoVersion string) (context.Context, repo.ChatSession, repo.FlowNodeExecution, repo.ChatMessage, uuid.UUID) {
 	t.Helper()
 
@@ -14896,6 +14922,114 @@ func TestJobWorkerRequeueTerminalRecoveryResumeSessionsWithoutLiveExecutionSkips
 	}
 	if queuedJobs != 0 {
 		t.Fatalf("queued jobs = %d, want 0 when successful terminal recovery edit should not requeue", queuedJobs)
+	}
+}
+
+func TestJobWorkerRequeueTerminalRecoveryResumeSessionsWithoutLiveExecutionSuppressesInheritedSharedDeliverableGuard(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	stopReason := "validation_loop_blocked"
+	ctx, session, execution, message := createTerminalRecoveryResumeExecutionFixture(t, pool, "requeue-terminal-recovery-suppress-inherited-shared", &stopReason)
+	appendSystemMessageToRecoveryTurn(t, pool, session.ID, message.ID, "[Recovery shared-deliverable guard: inherited parent file `planning/sambot-mvp-spec.md` is still missing. This decomposed child lane cannot create the whole shared document from recovery. End this lane and resume the parent task or a write-owning replacement lane before retrying bounded section edits.]")
+
+	pendingResume, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active task recovery now.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"task_recovery_resume","synthetic_user_message":true,"flow_node_execution_id":"%s"}`, execution.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create pending recovery resume: %v", err)
+	}
+
+	requeued, err := worker.RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(ctx)
+	if err != nil {
+		t.Fatalf("RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("repaired terminal recovery resumes = %d, want 1 when pending resume is suppressed", requeued)
+	}
+
+	var messageStatus, errorMessage string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, pendingResume.ID).Scan(&messageStatus, &errorMessage); err != nil {
+		t.Fatalf("query failed recovery resume: %v", err)
+	}
+	if messageStatus != "failed" {
+		t.Fatalf("message status = %q, want failed", messageStatus)
+	}
+	if errorMessage != taskRecoveryResumeSuppressedErrorMessage {
+		t.Fatalf("message error = %q, want %q", errorMessage, taskRecoveryResumeSuppressedErrorMessage)
+	}
+
+	var queuedJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status IN ('pending', 'claimed')
+		  AND (payload->>'session_id')::uuid = $1
+	`, session.ID).Scan(&queuedJobs); err != nil {
+		t.Fatalf("count queued jobs: %v", err)
+	}
+	if queuedJobs != 0 {
+		t.Fatalf("queued jobs = %d, want 0 after suppressing terminal recovery resume", queuedJobs)
+	}
+}
+
+func TestJobWorkerRequeueTerminalRecoveryResumeSessionsWithoutLiveExecutionSuppressesSiblingResponsibilityGuard(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	stopReason := "validation_loop_blocked"
+	ctx, session, execution, message := createTerminalRecoveryResumeExecutionFixture(t, pool, "requeue-terminal-recovery-suppress-sibling-responsibility", &stopReason)
+	appendSystemMessageToRecoveryTurn(t, pool, session.ID, message.ID, "[Task sibling-responsibility guard blocked a discovery-only child lane from mutating the shared deliverable. Ending the turn early so the write-focused sibling can own the artifact.]")
+
+	pendingResume, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active task recovery now.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"task_recovery_resume","synthetic_user_message":true,"flow_node_execution_id":"%s"}`, execution.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create pending recovery resume: %v", err)
+	}
+
+	requeued, err := worker.RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(ctx)
+	if err != nil {
+		t.Fatalf("RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("repaired terminal recovery resumes = %d, want 1 when sibling-responsibility stop suppresses the pending resume", requeued)
+	}
+
+	var messageStatus, errorMessage string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, pendingResume.ID).Scan(&messageStatus, &errorMessage); err != nil {
+		t.Fatalf("query failed recovery resume: %v", err)
+	}
+	if messageStatus != "failed" {
+		t.Fatalf("message status = %q, want failed", messageStatus)
+	}
+	if errorMessage != taskRecoveryResumeSuppressedErrorMessage {
+		t.Fatalf("message error = %q, want %q", errorMessage, taskRecoveryResumeSuppressedErrorMessage)
 	}
 }
 

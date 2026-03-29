@@ -72,6 +72,11 @@ const (
 	projectContinuationDraftBoundedSizePrefix  = "[Project continuation found remaining draft "
 	projectContinuationBoundedSizeMarker       = "violates the bounded size policy:"
 	projectContinuationSuppressedErrorMessage  = "suppressed repeated identical project continuation after repeated validation block"
+	taskRecoveryResumeSuppressedErrorMessage   = "suppressed repeated identical task recovery resume after terminal blocked recovery stop"
+
+	recoverySharedDeliverableGuardPrefix      = "[Recovery shared-deliverable guard:"
+	taskSiblingResponsibilityGuardPrefix      = "[Task sibling-responsibility guard blocked a discovery-only child lane from mutating the shared deliverable."
+	taskInheritedSharedDeliverableGuardPrefix = "[Task shared-deliverable guard blocked a decomposed child lane from replacing the inherited parent file with file.write."
 )
 
 var explicitDeliverablePathPatternsForWorker = []*regexp.Regexp{
@@ -1857,6 +1862,14 @@ func (w *Worker) RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(ctx c
 		if err := rows.Scan(&sessionID, &executionID, &messageID, &messageConsumed, &retryCount, &latestTurnError, &latestTurnCompletedAt); err != nil {
 			return repaired, fmt.Errorf("scan terminal recovery resume without live execution: %w", err)
 		}
+		suppressed, suppressErr := w.suppressPendingTerminalRecoveryResumeMessage(ctx, sessionID, executionID, messageID)
+		if suppressErr != nil {
+			return repaired, fmt.Errorf("suppress terminal recovery resume for session %s: %w", sessionID, suppressErr)
+		}
+		if suppressed {
+			repaired++
+			continue
+		}
 		if messageConsumed {
 			successfulRecoveryMutation, recoveryErr := w.recoveryResumeMessageCompletedWithDurableArtifactMutation(ctx, sessionID, messageID)
 			if recoveryErr != nil {
@@ -1936,6 +1949,78 @@ func (w *Worker) recoveryResumeMessageCompletedWithDurableArtifactMutation(ctx c
 		return false, err
 	}
 	return successful, nil
+}
+
+func (w *Worker) suppressPendingTerminalRecoveryResumeMessage(ctx context.Context, sessionID, executionID, messageID uuid.UUID) (bool, error) {
+	if w == nil || w.pool == nil || sessionID == uuid.Nil || executionID == uuid.Nil || messageID == uuid.Nil {
+		return false, nil
+	}
+
+	terminalStop, err := w.latestRecoveryResumeTurnShowsTerminalBlockedStop(ctx, sessionID, executionID)
+	if err != nil || !terminalStop {
+		return false, err
+	}
+
+	tag, err := w.pool.Exec(ctx, `
+		UPDATE chat_message
+		SET status = 'failed',
+		    error_message = $4
+		WHERE id = $1
+		  AND session_id = $2
+		  AND role = 'user'
+		  AND status = 'pending'
+		  AND COALESCE(metadata->>'source', '') = 'task_recovery_resume'
+		  AND COALESCE(metadata->>'flow_node_execution_id', '') = $3::text
+	`, messageID, sessionID, executionID, taskRecoveryResumeSuppressedErrorMessage)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (w *Worker) latestRecoveryResumeTurnShowsTerminalBlockedStop(ctx context.Context, sessionID, executionID uuid.UUID) (bool, error) {
+	if w == nil || w.pool == nil || sessionID == uuid.Nil || executionID == uuid.Nil {
+		return false, nil
+	}
+
+	var blocked bool
+	if err := w.pool.QueryRow(ctx, `
+		WITH latest_turn AS (
+			SELECT ct.id
+			FROM chat_turn ct
+			JOIN chat_message cm
+			  ON cm.id = ct.trigger_message_id
+			WHERE ct.session_id = $1
+			  AND ct.status = 'completed'
+			  AND COALESCE(ct.stop_reason, '') = 'validation_loop_blocked'
+			  AND cm.session_id = $1
+			  AND cm.role = 'user'
+			  AND COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
+			  AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = $2::text
+			ORDER BY ct.turn_number DESC,
+			         ct.retry_count DESC,
+			         COALESCE(ct.completed_at, ct.created_at) DESC,
+			         ct.id DESC
+			LIMIT 1
+		)
+		SELECT EXISTS (
+			SELECT 1
+			FROM latest_turn lt
+			JOIN chat_message sm
+			  ON sm.turn_id = lt.id
+			 AND sm.role = 'system'
+			WHERE sm.content LIKE $3
+			   OR sm.content LIKE $4
+			   OR sm.content LIKE $5
+		)
+	`, sessionID, executionID,
+		recoverySharedDeliverableGuardPrefix+"%",
+		taskSiblingResponsibilityGuardPrefix+"%",
+		taskInheritedSharedDeliverableGuardPrefix+"%",
+	).Scan(&blocked); err != nil {
+		return false, err
+	}
+	return blocked, nil
 }
 
 func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (int64, error) {

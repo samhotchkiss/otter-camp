@@ -526,3 +526,13 @@
   - impact:
     - one dead PM continuation can occupy execution capacity indefinitely
     - queue saturation then masks the stale turn as simple “no slots” pressure instead of letting recovery happen promptly
+- 2026-03-29 14:42 MDT - Worker terminal recovery repair still retried shared-deliverable dead ends because it only classified successful file mutations as decisive progress.
+  - fresh live evidence before the fix:
+    - blocked task `170` session `ce909f54-8146-4cf7-af40-c24d3b1ac107` had latest completed turn `6d32f585-ba40-4c0e-b436-b13938384c1d` ending `validation_loop_blocked`
+    - that turn's terminal system message was `[Recovery shared-deliverable guard: inherited parent file \`planning/sambot-mvp-spec.md\` is still missing ...]`
+    - yet the same session still carried fresh pending synthetic recovery prompt `14e50ef1-b36e-4e2f-b8a5-f164350bc660`
+  - bug:
+    - `RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(...)` only skipped consumed recovery resumes after successful `file.write` / `file.edit`
+    - it did not treat terminal shared-deliverable guard families as decisive stop conditions for later pending `task_recovery_resume` prompts on the same execution
+  - impact:
+    - blocked child lanes could keep rearming identical recovery prompts even after the runtime had already proved the lane could not continue until a parent/shared-file prerequisite changed
