@@ -1470,6 +1470,14 @@ func SatisfiedDraftAutoCompletable(taskRecord repo.ProjectTask) bool {
 		Metadata:     taskRecord.Metadata,
 	})
 	if err != nil {
+		if singleFileDeliverable != "" && len(taskdecomp.ParseChildTaskIDs(taskRecord.Metadata)) == 0 && errors.Is(err, taskdecomp.ErrBoundedTaskTooLarge) {
+			if ok && len(plan.ArtifactEvidence) != 0 {
+				if _, reportErr := taskplan.CompletionReport(taskRecord.Metadata); reportErr != nil {
+					return false
+				}
+			}
+			return true
+		}
 		return false
 	}
 	if ok && len(plan.ArtifactEvidence) != 0 {

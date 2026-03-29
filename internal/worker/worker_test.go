@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
@@ -165,7 +167,7 @@ func TestDraftTaskAutoCompletesRejectsBroadTask(t *testing.T) {
 }
 
 func TestDraftTaskAutoCompletesWhenBroadSingleFileDeliverableIsSatisfied(t *testing.T) {
-	description := "Write `planning/sambot-feature-spec.md` as a complete SamBot feature specification covering mission, target users, personality, architecture, data sources, UI/UX, mobile responsiveness, accessibility, and implementation checklist."
+	description := "Produce the file `planning/sambot-feature-spec.md` — a complete feature specification for the \"Chat with SamBot\" feature on Sam.blog.\n\n## Deliverable\n- **File path:** `planning/sambot-feature-spec.md`\n\n## Requirements\nThe spec must cover:\n1. **Feature overview** — what \"Chat with SamBot\" is and why it exists (lets visitors interact with an AI version of Sam Hotchkiss, trained on his blog posts, public LinkedIn info, and professional background)\n2. **User experience** — where the chat widget lives on Sam.blog, how visitors invoke it, conversation UX (streaming responses, suggested prompts, etc.)\n3. **Personality & tone** — SamBot should reflect Sam's voice: thoughtful, technically sharp, warm, opinionated on ethics/AI/parenting/leadership\n4. **Knowledge sources** — scraped technonymous.org blog posts (already in content/posts/), Sam's public LinkedIn profile, any additional context documents\n5. **Technical architecture** — recommended LLM backend (e.g., Claude API), RAG pipeline for blog content retrieval, embedding strategy, hosting considerations\n6. **Content safety & guardrails** — what SamBot should and shouldn't discuss, how to handle off-topic or adversarial queries\n7. **MVP scope vs. future enhancements** — clear line between v1 launch features and later iterations\n8. **Integration with Sam.blog** — how the chat component fits into the HTML layout templates already produced"
 	plan := taskplan.Analyze("Write SamBot feature specification", &description)
 	metadata := taskplan.ApplyMetadata(json.RawMessage(`{}`), plan)
 	contracts := taskplan.ArtifactContractForPlan(plan)
@@ -189,6 +191,14 @@ func TestDraftTaskAutoCompletesWhenBroadSingleFileDeliverableIsSatisfied(t *test
 	})
 	if err != nil {
 		t.Fatalf("taskorchestration.Apply: %v", err)
+	}
+	if _, prepErr := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        "Write SamBot feature specification",
+		Description:  &description,
+		Metadata:     updated,
+	}); !errors.Is(prepErr, taskdecomp.ErrBoundedTaskTooLarge) {
+		t.Fatalf("PrepareQueueDecomposition err = %v, want ErrBoundedTaskTooLarge", prepErr)
 	}
 
 	if !draftTaskAutoCompletes(repo.ProjectTask{
@@ -343,7 +353,7 @@ func TestStartupCleanupProjectDraftsCompletesSatisfiedSingleFilePlanningDraft(t 
 		t.Fatalf("create flow template: %v", err)
 	}
 
-	description := "Write `planning/sambot-feature-spec.md` as a complete SamBot feature specification covering mission, target users, personality, architecture, data sources, UI/UX, mobile responsiveness, accessibility, and implementation checklist."
+	description := "Produce the file `planning/sambot-feature-spec.md` — a complete feature specification for the \"Chat with SamBot\" feature on Sam.blog.\n\n## Deliverable\n- **File path:** `planning/sambot-feature-spec.md`\n\n## Requirements\nThe spec must cover:\n1. **Feature overview** — what \"Chat with SamBot\" is and why it exists (lets visitors interact with an AI version of Sam Hotchkiss, trained on his blog posts, public LinkedIn info, and professional background)\n2. **User experience** — where the chat widget lives on Sam.blog, how visitors invoke it, conversation UX (streaming responses, suggested prompts, etc.)\n3. **Personality & tone** — SamBot should reflect Sam's voice: thoughtful, technically sharp, warm, opinionated on ethics/AI/parenting/leadership\n4. **Knowledge sources** — scraped technonymous.org blog posts (already in content/posts/), Sam's public LinkedIn profile, any additional context documents\n5. **Technical architecture** — recommended LLM backend (e.g., Claude API), RAG pipeline for blog content retrieval, embedding strategy, hosting considerations\n6. **Content safety & guardrails** — what SamBot should and shouldn't discuss, how to handle off-topic or adversarial queries\n7. **MVP scope vs. future enhancements** — clear line between v1 launch features and later iterations\n8. **Integration with Sam.blog** — how the chat component fits into the HTML layout templates already produced"
 	plan := taskplan.Analyze("Write SamBot feature specification", &description)
 	metadata := taskplan.ApplyMetadata(json.RawMessage(`{}`), plan)
 	contracts := taskplan.ArtifactContractForPlan(plan)

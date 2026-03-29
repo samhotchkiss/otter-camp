@@ -3195,3 +3195,15 @@
     - `GOFLAGS='' go test ./internal/worker -run 'Test(DraftTaskAutoCompletes(WhenPlanningAndOutcomeAreSatisfied|RejectsBroadTask|WhenBroadSingleFileDeliverableIsSatisfied|RejectsIncompletePlanning)|StartupCleanupProjectDrafts(SkipsSatisfiedDraftWithoutFlowTemplate|CompletesSatisfiedSingleFilePlanningDraft))$' -count=1`
   - deploy / proof status:
     - ready to deploy next; the live canary is worker startup cleanup on `repo_version=3592+`, where satisfied drafts `82` and `90` should disappear from the SamBot project draft set after restart
+- 2026-03-29 11:02 MDT - Let the satisfied-draft classifier survive bounded-size decomposition errors when the satisfied outcome already points at one concrete file.
+  - changed [`internal/task/service.go`](/Users/sam/dev/otter-camp/internal/task/service.go):
+    - [`SatisfiedDraftAutoCompletable(...)`](/Users/sam/dev/otter-camp/internal/task/service.go) no longer returns `false` immediately when [`PrepareQueueDecomposition(...)`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go) hits [`ErrBoundedTaskTooLarge`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go)
+    - if there are no child task ids and the satisfied outcome resolves to exactly one concrete workspace file, the classifier now allows auto-complete through that bounded-size error path
+  - changed tests:
+    - [`internal/worker/worker_test.go`](/Users/sam/dev/otter-camp/internal/worker/worker_test.go)
+      - tightened `TestDraftTaskAutoCompletesWhenBroadSingleFileDeliverableIsSatisfied` so it now asserts the live-like SamBot description really does hit `ErrBoundedTaskTooLarge`
+      - kept `TestStartupCleanupProjectDraftsCompletesSatisfiedSingleFilePlanningDraft` on the same live-style fixture
+  - verified with:
+    - `GOFLAGS='' go test ./internal/worker -run 'Test(DraftTaskAutoCompletes(WhenPlanningAndOutcomeAreSatisfied|RejectsBroadTask|WhenBroadSingleFileDeliverableIsSatisfied|RejectsIncompletePlanning)|StartupCleanupProjectDrafts(SkipsSatisfiedDraftWithoutFlowTemplate|CompletesSatisfiedSingleFilePlanningDraft))$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; the same live canary remains worker startup cleanup on `repo_version=3594+`, where drafts `82` and `90` should now settle to `done` after restart
