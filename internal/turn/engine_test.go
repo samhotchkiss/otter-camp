@@ -41912,6 +41912,37 @@ func TestExplicitExecutionDeliverableWriteCompletedRecognizesOutputPath(t *testi
 	}
 }
 
+func TestExplicitExecutionDeliverableWriteCompletedRecognizesExplicitFileEdit(t *testing.T) {
+	t.Parallel()
+
+	description := "Append \"Technical Architecture\" section to planning/sambot-feature-spec.md. Read file first, append after existing content. Single-file deliverable only."
+	plan := taskplan.Analyze("Append Technical Architecture section", &description)
+	taskRecord := repo.ProjectTask{
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+	}
+
+	if !explicitExecutionDeliverableWriteCompleted(taskRecord, ToolResult{
+		Name: "file.edit",
+		Output: map[string]any{
+			"path":              "planning/sambot-feature-spec.md",
+			"replacements_made": 1,
+		},
+	}) {
+		t.Fatal("expected explicit deliverable file.edit to count as completed work")
+	}
+
+	if explicitExecutionDeliverableWriteCompleted(taskRecord, ToolResult{
+		Name: "file.edit",
+		Output: map[string]any{
+			"path":              "planning/sambot-conversations.md",
+			"replacements_made": 1,
+		},
+	}) {
+		t.Fatal("unexpected completion from edit outside explicit deliverable path")
+	}
+}
+
 func TestExplicitExecutionDeliverableWriteCompletedIgnoresNonPathOutputHint(t *testing.T) {
 	t.Parallel()
 
@@ -42442,6 +42473,52 @@ func TestShouldStopAfterExecutionDeliverableWriteIgnoresNonTargetRecoveryWrite(t
 	}
 	if rt.recoveryWriteDone {
 		t.Fatal("recoveryWriteDone = true, want false for non-target write")
+	}
+}
+
+func TestShouldStopAfterExecutionDeliverableWriteStopsForExplicitFileEdit(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Append \"UI/UX Design\" section to planning/sambot-feature-spec.md — covering chat widget placement, conversation flow, mobile responsiveness, conversation starters, and error states. Read file first, append after existing content. Single-file deliverable only."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  111,
+				Title:       "Append UI/UX Design section",
+				Description: &description,
+				WorkStatus:  "in_progress",
+				Metadata:    taskplan.ApplyMetadata(nil, taskplan.Analyze("Append UI/UX Design section", &description)),
+			},
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	stop, err := fixture.engine.shouldStopAfterExecutionDeliverableWrite(context.Background(), rt, ToolResult{
+		Name: "file.edit",
+		Output: map[string]any{
+			"path":              "planning/sambot-feature-spec.md",
+			"replacements_made": 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("shouldStopAfterExecutionDeliverableWrite: %v", err)
+	}
+	if !stop {
+		t.Fatal("expected stop signal from explicit deliverable file.edit")
 	}
 }
 

@@ -2840,3 +2840,16 @@
       - task `103` review session `ec062d3c-08d5-475d-967b-03726b7a2f65` successfully read `planning/sambot-feature-spec.md`, but still ended blocked without `flow.review_decision reject`
     - expected live post-fix behavior:
       - the next preferred-target placeholder review should synthesize `flow.review_decision reject` immediately instead of ending as a prose-only blocked review turn
+- 2026-03-29 07:31 MDT - Fixed the append-task completion gap in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+  - [`explicitExecutionDeliverableWriteCompleted(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now treats explicit-target `file.edit` with `replacements_made>0` as completed deliverable work, alongside `file.write`
+  - [`shouldStopAfterExecutionDeliverableWrite(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now allows the existing terminal-stop path to trigger on explicit deliverable `file.edit`, not just `file.write`
+  - added focused tests in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - `TestExplicitExecutionDeliverableWriteCompletedRecognizesExplicitFileEdit`
+    - `TestShouldStopAfterExecutionDeliverableWriteStopsForExplicitFileEdit`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ExplicitExecutionDeliverableWriteCompleted(RecognizesExplicitFileEdit|RecognizesOutputPath)|ShouldStopAfterExecutionDeliverableWrite(StopsForExplicitFileEdit|StopsForRecoveryCheckpointTarget|IgnoresNonTargetRecoveryWrite))$' -count=1`
+  - strongest live pre-fix proof:
+    - task `111` session `fb9e5552-e69f-43a3-ad6d-1a1347685f96` successfully appended `planning/sambot-feature-spec.md`, then still drifted into `git.commit -> task_git_commit_blocked` and `task.update -> flow_owned_done_blocked`
+    - task `109` session `b832a073-a30d-4e16-8b80-81698696c8d2` repeated the same family across retries after a successful append
+  - expected live post-fix behavior:
+    - the next explicit-target append task should stop immediately on the successful `file.edit`, letting runtime flow advancement own the commit/closeout instead of reopening commit/done churn

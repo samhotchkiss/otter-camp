@@ -15036,10 +15036,11 @@ func (e *TurnEngine) shouldStopAfterExecutionDeliverableWrite(ctx context.Contex
 	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || rt.session.ScopeID == uuid.Nil {
 		return false, nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(result.Name), "file.write") || strings.TrimSpace(result.Error) != "" {
+	normalizedToolName := strings.ToLower(strings.TrimSpace(result.Name))
+	if (normalizedToolName != "file.write" && normalizedToolName != "file.edit") || strings.TrimSpace(result.Error) != "" {
 		return false, nil
 	}
-	if rt.recoveryTurn && e.recoveryDirectTargetWriteShouldStop(ctx, rt, result) {
+	if normalizedToolName == "file.write" && rt.recoveryTurn && e.recoveryDirectTargetWriteShouldStop(ctx, rt, result) {
 		if err := e.persistResolvedRecoveryTargetWritePath(ctx, rt, result); err != nil {
 			return false, err
 		}
@@ -33608,12 +33609,23 @@ func workspacePathWithinRoot(path, root string) bool {
 }
 
 func explicitExecutionDeliverableWriteCompleted(taskRecord repo.ProjectTask, result ToolResult) bool {
-	if !strings.EqualFold(strings.TrimSpace(result.Name), "file.write") || strings.TrimSpace(result.Error) != "" {
+	normalizedToolName := strings.ToLower(strings.TrimSpace(result.Name))
+	if (normalizedToolName != "file.write" && normalizedToolName != "file.edit") || strings.TrimSpace(result.Error) != "" {
 		return false
 	}
 	writtenPath := normalizeWorkspaceRelativePath(anyString(result.Output["path"]))
-	if writtenPath == "" || anyInt(result.Output["byte_size"]) <= 0 {
+	if writtenPath == "" {
 		return false
+	}
+	switch normalizedToolName {
+	case "file.write":
+		if anyInt(result.Output["byte_size"]) <= 0 {
+			return false
+		}
+	case "file.edit":
+		if anyInt(result.Output["replacements_made"]) <= 0 {
+			return false
+		}
 	}
 	if preferredPath := normalizeWorkspaceRelativePath(preferredTaskDeliverablePath(taskRecord)); preferredPath != "" && sameWorkspaceRelativePath(writtenPath, preferredPath) {
 		return true
