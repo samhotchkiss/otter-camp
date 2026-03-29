@@ -1928,3 +1928,24 @@
     - rebuilt and restarted the runtime on `repo_version=3488`
     - health is `ok`
     - fresh direct production proof is still pending because the first post-deploy PM continuation surfaced a newer task-44 focus bug and never reached the successful handoff branch again
+- 2026-03-28 21:03:00 MDT - Finished: treat completed closeout children as PM parent-closeout proof instead of fresh replacement demand.
+  - live diagnosis:
+    - Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` still showed task `44` under `Draft parent tasks need fresh replacement child work` even though child task `75` was already `done` as `Verify content/technonymous-index.json delivered — close parent OC-44`
+    - the parent also had completed sibling proofs `72` and `74`, so the remaining PM action was parent closeout, not another replacement child
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - extended `projectContinuationChildActivity` with `completedCloseoutChildTaskCount`
+    - added `projectContinuationDraftTaskReadyForParentClosure(...)`
+    - added `projectContinuationChildTaskClosesParent(...)`
+    - project-continuation snapshots now keep closeout-ready parents in the actionable draft/focus bucket instead of the replacement-child bucket
+    - task refs now emit `completed_closeout_child_tasks=...`, and prompt guidance tells the PM lane to advance/close the parent directly when that marker is present
+    - deliverable-path/root extraction now falls back to `metadata.decomposition.source_description`, so orchestration parents and their children can inherit the real deliverable contract even when the normal task description is procedural or empty
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - renamed the exact-live-shape task-44 test to the completed-closeout case
+    - added prompt guidance coverage for `completed_closeout_child_tasks=...`
+    - added source-description fallback coverage for both explicit deliverable paths and preferred deliverable roots
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3490`
+  - verified with:
+    - `go test ./internal/turn -run 'Test(BuildProjectContinuationActionPrompt(AddsCompletedCloseoutGuidance|AddsReplacementChildGuidanceForMalformedChildren|AddsReplacementChildGuidanceForBlockedParent|AddsChildWorkGuidanceForDecomposedParent)|ProjectExecutionContinuationSnapshot(LiveTask44CompletedCloseoutBeatsReplacementBucket|PrefersDraftChildOverFreshReplacementParent|IgnoresMalformedProceduralChildren|IgnoresMalformedNoDecomposeChildren)|ExplicitDeliverablePathFallsBackToDecompositionSourceDescription|PreferredTaskDeliverableRoot(FallsBackToDecompositionSourceDescription|SkipsDependencyArtifactAndUsesOutputRoot)|ShouldStopAfterSuccessfulProjectExecutionHandoffMutation(RequiresReplacementChildPrompt|IgnoresAssignmentOnlyUpdate)?)$' -count=1`
+  - deploy / proof status:
+    - direct production proof is still pending the next natural PM continuation because the currently active prompt/messages were created before the `3490` rebuild

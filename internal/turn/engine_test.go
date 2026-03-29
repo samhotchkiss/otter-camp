@@ -19816,6 +19816,21 @@ func TestBuildProjectContinuationActionPromptAddsReplacementChildGuidanceForMalf
 	}
 }
 
+func TestBuildProjectContinuationActionPromptAddsCompletedCloseoutGuidance(t *testing.T) {
+	prompt := buildProjectContinuationActionPrompt("Active project request: finish technonymous index closure", projectExecutionContinuationSnapshot{
+		ProjectLine:   "Active project id: 123",
+		DraftTaskLine: "Actionable draft tasks already in the tree: task 44 (Produce content/technonymous-index.json by crawling technonymous.org) id=bbb title=\"Produce content/technonymous-index.json by crawling technonymous.org\" work_status=draft deliverable_path=content/technonymous-index.json assigned_agent_id=worker-1 flow_template_id=ft-1 malformed_child_tasks=3 completed_closeout_child_tasks=1",
+		FocusTaskLine: "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 44 (Produce content/technonymous-index.json by crawling technonymous.org) id=bbb title=\"Produce content/technonymous-index.json by crawling technonymous.org\" work_status=draft deliverable_path=content/technonymous-index.json assigned_agent_id=worker-1 flow_template_id=ft-1 malformed_child_tasks=3 completed_closeout_child_tasks=1",
+	})
+
+	if !strings.Contains(prompt, "use that completed child proof to advance or close the parent instead of creating another replacement child") {
+		t.Fatalf("prompt = %q, want completed-closeout draft guidance", prompt)
+	}
+	if !strings.Contains(prompt, "already has completed closeout child proof, advance or close the parent directly instead of creating another replacement child") {
+		t.Fatalf("prompt = %q, want completed-closeout focus guidance", prompt)
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotSummarizesProjectState(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()
@@ -20378,6 +20393,189 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedProceduralChildren(
 	}
 	if count != 1 {
 		t.Fatalf("countProjectDraftTasks = %d, want 1 actionable parent after ignoring malformed procedural child artifact", count)
+	}
+}
+
+func TestProjectExecutionContinuationSnapshotPrefersDraftChildOverFreshReplacementParent(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	parentDescription := "Produce content/technonymous-index.json by crawling technonymous.org."
+	malformedChildDescription := "Use browser_navigate to go to https://technonymous.org."
+	closeoutChildDescription := "Verify content/technonymous-index.json delivered and close the parent."
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:          parentDraftID,
+				ProjectID:   projectID,
+				TaskNumber:  44,
+				Title:       "Produce content/technonymous-index.json by crawling technonymous.org",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+			},
+			uuid.New(): {
+				ID:          uuid.New(),
+				ProjectID:   projectID,
+				TaskNumber:  45,
+				Title:       "Use browser_navigate to go to https://technonymous.org",
+				Description: &malformedChildDescription,
+				WorkStatus:  "blocked",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+			uuid.New(): {
+				ID:          uuid.New(),
+				ProjectID:   projectID,
+				TaskNumber:  75,
+				Title:       "Verify content/technonymous-index.json delivered - close parent OC-44",
+				Description: &closeoutChildDescription,
+				WorkStatus:  "draft",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.ReplacementDraftLine, "task 44 (Produce content/technonymous-index.json by crawling technonymous.org)") {
+		t.Fatalf("ReplacementDraftLine = %q, should not keep parent 44 in fresh replacement-child work once draft child 75 exists", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ChildActiveDraftLine, "task 44 (Produce content/technonymous-index.json by crawling technonymous.org)") {
+		t.Fatalf("ChildActiveDraftLine = %q, want parent 44 treated as already having child work", snapshot.ChildActiveDraftLine)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "task 75 (Verify content/technonymous-index.json delivered - close parent OC-44)") {
+		t.Fatalf("DraftTaskLine = %q, want close-out child task 75 as the actionable draft", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "task 75 (Verify content/technonymous-index.json delivered - close parent OC-44)") {
+		t.Fatalf("FocusTaskLine = %q, want focus to move from parent 44 to draft child 75", snapshot.FocusTaskLine)
+	}
+
+	count, err := fixture.engine.countProjectDraftTasks(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("countProjectDraftTasks: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("countProjectDraftTasks = %d, want 1 actionable draft child after parent 44 gains task 75", count)
+	}
+}
+
+func TestProjectExecutionContinuationSnapshotLiveTask44CompletedCloseoutBeatsReplacementBucket(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	parentDescription := "Use browser tools to navigate to https://technonymous.org"
+	parentSourceDescription := "## Objective\nCrawl technonymous.org and produce a JSON index file at `content/technonymous-index.json`.\n\n## Deliverable\nA single file: `content/technonymous-index.json`\n\n## Steps\n1. Use browser tools to navigate to https://technonymous.org\n2. Extract all blog post URLs, titles, dates, and any summary/excerpt available from the site's archive/index pages\n3. If the site has pagination, follow all pages to get the complete list\n4. Write the result as a JSON array to `content/technonymous-index.json`\n5. Commit the file\n\n## Important\n- This is a CONCRETE DELIVERABLE task. The output is a JSON file, not a planning document.\n- Use browser_navigate, browser_extract_text, browser_click to crawl the site\n- Use cli_execute with python3 to write the file if file_write is intercepted\n- Do NOT produce planning artifacts - produce the JSON file directly\n- The file MUST be at exactly `content/technonymous-index.json`"
+	closeoutChildDescription := "Deliverable content/technonymous-index.json already exists (35 post URLs, verified by OC-74). This child task confirms the parent OC-44 deliverable is complete so the parent can close.\n\nAcceptance criteria:\n1. content/technonymous-index.json exists\n2. Contains 35 post URLs\n3. All URLs point to technonymous.org/p/ paths\n\nAll criteria already verified by OC-74. Mark done immediately."
+	childMetadata := func(parentID uuid.UUID) json.RawMessage {
+		return mustJSONRaw(map[string]any{"decomposition_parent_task_id": parentID.String()})
+	}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:          parentDraftID,
+				ProjectID:   projectID,
+				TaskNumber:  44,
+				Title:       "Produce content/technonymous-index.json by crawling technonymous.org",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"mode":                "parallel_children",
+						"applied":             true,
+						"primary_deliverable": "Use browser tools to navigate to https://technonymous.org",
+						"deliverables": []string{
+							"Use browser tools to navigate to https://technonymous.org",
+							"Use browser_navigate, browser_extract_text, browser_click to crawl the site",
+							"Use cli_execute with python3 to write the file if file_write is intercepted",
+							"Do NOT produce planning artifacts - produce the JSON file directly",
+						},
+						"orchestration_only": true,
+						"source_description": parentSourceDescription,
+					},
+				}),
+			},
+			uuid.New(): {
+				ID:         uuid.New(),
+				ProjectID:  projectID,
+				TaskNumber: 45,
+				Title:      "Use browser tools to navigate to https://technonymous.org",
+				WorkStatus: "blocked",
+				Metadata:   childMetadata(parentDraftID),
+			},
+			uuid.New(): {
+				ID:         uuid.New(),
+				ProjectID:  projectID,
+				TaskNumber: 46,
+				Title:      "Use browser_navigate, browser_extract_text, browser_click to crawl the site",
+				WorkStatus: "blocked",
+				Metadata:   childMetadata(parentDraftID),
+			},
+			uuid.New(): {
+				ID:         uuid.New(),
+				ProjectID:  projectID,
+				TaskNumber: 47,
+				Title:      "Use cli_execute with python3 to write the file if file_write is intercepted",
+				WorkStatus: "done",
+				Metadata:   childMetadata(parentDraftID),
+			},
+			uuid.New(): {
+				ID:         uuid.New(),
+				ProjectID:  projectID,
+				TaskNumber: 48,
+				Title:      "Do NOT produce planning artifacts - produce the JSON file directly",
+				WorkStatus: "done",
+				Metadata:   childMetadata(parentDraftID),
+			},
+			uuid.New(): {
+				ID:         uuid.New(),
+				ProjectID:  projectID,
+				TaskNumber: 72,
+				Title:      "Replacement: crawl technonymous.org and produce content/technonymous-index.json with all post URLs",
+				WorkStatus: "done",
+				Metadata:   childMetadata(parentDraftID),
+			},
+			uuid.New(): {
+				ID:         uuid.New(),
+				ProjectID:  projectID,
+				TaskNumber: 74,
+				Title:      "Verify content/technonymous-index.json exists and contains all post URLs",
+				WorkStatus: "done",
+				Metadata:   childMetadata(parentDraftID),
+			},
+			uuid.New(): {
+				ID:          uuid.New(),
+				ProjectID:   projectID,
+				TaskNumber:  75,
+				Title:       "Verify content/technonymous-index.json delivered - close parent OC-44",
+				Description: &closeoutChildDescription,
+				WorkStatus:  "done",
+				Metadata:    childMetadata(parentDraftID),
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshotForSummary(context.Background(), projectID, "content/technonymous-index.json content/posts")
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshotForSummary: %v", err)
+	}
+	if strings.Contains(snapshot.ReplacementDraftLine, "task 44 (Produce content/technonymous-index.json by crawling technonymous.org)") {
+		t.Fatalf("ReplacementDraftLine = %q, should not keep parent 44 in replacement bucket once task 75 already closed out the parent deliverable", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "task 44 (Produce content/technonymous-index.json by crawling technonymous.org)") {
+		t.Fatalf("DraftTaskLine = %q, want parent 44 visible as the actionable closeout-ready draft", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "malformed_child_tasks=3") {
+		t.Fatalf("DraftTaskLine = %q, want the live malformed-child count preserved for parent 44", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "completed_closeout_child_tasks=1") {
+		t.Fatalf("DraftTaskLine = %q, want closeout-ready marker for parent 44", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "task 44 (Produce content/technonymous-index.json by crawling technonymous.org)") {
+		t.Fatalf("FocusTaskLine = %q, want focus to stay on the parent closeout draft", snapshot.FocusTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "completed_closeout_child_tasks=1") {
+		t.Fatalf("FocusTaskLine = %q, want closeout-ready marker for parent 44", snapshot.FocusTaskLine)
 	}
 }
 
@@ -34492,6 +34690,42 @@ func TestPreferredTaskDeliverableRootSkipsDependencyArtifactAndUsesOutputRoot(t 
 		TaskNumber:  56,
 		Title:       "Scrape technonymous.org posts to markdown",
 		Description: &description,
+	}
+
+	if got := preferredTaskDeliverableRoot(taskRecord); got != "content/posts" {
+		t.Fatalf("preferredTaskDeliverableRoot(...) = %q, want %q", got, "content/posts")
+	}
+}
+
+func TestExplicitDeliverablePathFallsBackToDecompositionSourceDescription(t *testing.T) {
+	t.Parallel()
+
+	taskRecord := repo.ProjectTask{
+		TaskNumber: 44,
+		Title:      "Produce content/technonymous-index.json by crawling technonymous.org",
+		Metadata: mustJSONRaw(map[string]any{
+			"decomposition": map[string]any{
+				"source_description": "## Objective\nCrawl technonymous.org and produce a JSON index file at `content/technonymous-index.json`.\n\n## Deliverable\nA single file: `content/technonymous-index.json`",
+			},
+		}),
+	}
+
+	if got := explicitDeliverablePath(taskRecord); got != "content/technonymous-index.json" {
+		t.Fatalf("explicitDeliverablePath(...) = %q, want %q", got, "content/technonymous-index.json")
+	}
+}
+
+func TestPreferredTaskDeliverableRootFallsBackToDecompositionSourceDescription(t *testing.T) {
+	t.Parallel()
+
+	taskRecord := repo.ProjectTask{
+		TaskNumber: 49,
+		Title:      "Write posts under content/posts",
+		Metadata: mustJSONRaw(map[string]any{
+			"decomposition": map[string]any{
+				"source_description": "## Objective\nScrape all posts listed in `content/technonymous-index.json` and save each markdown file under `content/posts`.",
+			},
+		}),
 	}
 
 	if got := preferredTaskDeliverableRoot(taskRecord); got != "content/posts" {

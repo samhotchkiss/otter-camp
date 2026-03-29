@@ -7574,6 +7574,9 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		lines = append(lines, draftLine)
 		lines = append(lines, "Do not begin with broad project.get, task.list, task.get, or flow.get_execution rediscovery when the actionable draft tasks above already identify the remaining bounded work.")
 		lines = append(lines, "If a named draft task above shows assigned_agent_id=missing, flow_template_id=missing, or requires_human_review=true, repair that exact prerequisite before trying to queue it.")
+		if strings.Contains(draftLine, "completed_closeout_child_tasks=") {
+			lines = append(lines, "If a named draft task above already shows completed_closeout_child_tasks=..., use that completed child proof to advance or close the parent instead of creating another replacement child.")
+		}
 		if strings.Contains(draftLine, "deliverable_path=") {
 			lines = append(lines, "If a named draft task above already shows deliverable_path=..., inspect or write that exact path instead of reopening broad workspace context.")
 		}
@@ -7600,6 +7603,9 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		}
 		if strings.Contains(focusLine, "deliverable_path=") || strings.Contains(focusLine, "deliverable_root=") || strings.Contains(focusLine, "depends_on_path=") {
 			lines = append(lines, "When the focus task already includes exact deliverable or dependency hints, use those paths directly before any broader workspace search.")
+		}
+		if strings.Contains(focusLine, "completed_closeout_child_tasks=") {
+			lines = append(lines, "Because that focus parent already has completed closeout child proof, advance or close the parent directly instead of creating another replacement child.")
 		}
 		if strings.Contains(focusLine, "replaceable_blocked_child_tasks=") {
 			lines = append(lines, "Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.")
@@ -17134,13 +17140,21 @@ func preferredTaskDeliverablePath(taskRecord repo.ProjectTask) string {
 }
 
 func preferredTaskDeliverableRoot(taskRecord repo.ProjectTask) string {
-	if taskRecord.Description == nil {
-		return preferredTaskDeliverableRootFromCheckpoint(taskRecord)
-	}
-	description := strings.TrimSpace(*taskRecord.Description)
-	for _, pattern := range preferredDeliverableRootPatterns {
-		matches := pattern.FindAllStringSubmatch(description, -1)
-		for _, match := range matches {
+	for _, description := range taskContractDescriptionCandidates(taskRecord) {
+		for _, pattern := range preferredDeliverableRootPatterns {
+			matches := pattern.FindAllStringSubmatch(description, -1)
+			for _, match := range matches {
+				if len(match) < 2 {
+					continue
+				}
+				root := normalizeExplicitDeliverablePathCandidate(match[1])
+				if !looksLikePreferredDeliverableRootPath(root) {
+					continue
+				}
+				return root
+			}
+		}
+		for _, match := range workspacePathInBackticksPattern.FindAllStringSubmatch(description, -1) {
 			if len(match) < 2 {
 				continue
 			}
@@ -18418,6 +18432,15 @@ func buildProjectExecutionContinuationSnapshot(
 			continue
 		}
 		if isActionableProjectDraftTask(task) {
+			if projectContinuationDraftTaskReadyForParentClosure(activity) {
+				if len(draftTasks) < 4 {
+					draftTasks = append(draftTasks, taskRef)
+				}
+				if focusTask == "" {
+					focusTask = taskRef
+				}
+				continue
+			}
 			if activity.childTaskCount > 0 || activity.malformedChildTaskCount > 0 {
 				if projectContinuationDraftTaskNeedsFreshReplacementChildWork(activity) {
 					if len(replacementDraftTasks) < 4 {
@@ -18756,11 +18779,12 @@ type projectContinuationChildActivity struct {
 	activeChildTaskCount             int
 	malformedChildTaskCount          int
 	replaceableBlockedChildTaskCount int
+	completedCloseoutChildTaskCount  int
 }
 
 func projectContinuationCountsAsOpenChildTask(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "queued", "in_progress", "review", "blocked":
+	case "draft", "queued", "in_progress", "review", "blocked":
 		return true
 	default:
 		return false
@@ -18780,8 +18804,16 @@ func projectContinuationChildTaskActivity(tasks []repo.ProjectTask, hintsByTask 
 		if !ok || parentID == uuid.Nil {
 			continue
 		}
+		parentTask, hasParent := tasksByID[parentID]
+		if hasParent &&
+			strings.EqualFold(strings.TrimSpace(task.WorkStatus), "done") &&
+			projectContinuationChildTaskClosesParent(task, parentTask, hintsByTask[task.ID], hintsByTask[parentID]) {
+			activity := activityByParentID[parentID]
+			activity.completedCloseoutChildTaskCount++
+			activityByParentID[parentID] = activity
+		}
 		if _, skip := malformedChildTaskIDs[task.ID]; skip {
-			if parentTask, ok := tasksByID[parentID]; ok && projectContinuationParentForbidsDecomposition(parentTask) {
+			if hasParent && projectContinuationParentForbidsDecomposition(parentTask) {
 				continue
 			}
 			activity := activityByParentID[parentID]
@@ -18809,6 +18841,9 @@ func projectContinuationChildTaskActivity(tasks []repo.ProjectTask, hintsByTask 
 }
 
 func projectContinuationDraftTaskNeedsFreshReplacementChildWork(activity projectContinuationChildActivity) bool {
+	if projectContinuationDraftTaskReadyForParentClosure(activity) {
+		return false
+	}
 	if activity.activeChildTaskCount != 0 {
 		return false
 	}
@@ -18818,6 +18853,62 @@ func projectContinuationDraftTaskNeedsFreshReplacementChildWork(activity project
 	return activity.childTaskCount > 0 &&
 		activity.replaceableBlockedChildTaskCount > 0 &&
 		activity.replaceableBlockedChildTaskCount == activity.childTaskCount
+}
+
+func projectContinuationDraftTaskReadyForParentClosure(activity projectContinuationChildActivity) bool {
+	return activity.completedCloseoutChildTaskCount > 0 &&
+		activity.activeChildTaskCount == 0 &&
+		activity.childTaskCount == 0
+}
+
+func projectContinuationChildTaskClosesParent(
+	childTask repo.ProjectTask,
+	parentTask repo.ProjectTask,
+	childHints projectContinuationTaskHints,
+	parentHints projectContinuationTaskHints,
+) bool {
+	if !strings.EqualFold(strings.TrimSpace(childTask.WorkStatus), "done") {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(childTask.Title))
+	if childTask.Description != nil {
+		if description := strings.ToLower(strings.TrimSpace(*childTask.Description)); description != "" {
+			text += "\n" + description
+		}
+	}
+	if !containsAny(text,
+		"close parent",
+		"parent can close",
+		"parent can be closed",
+		"parent can be closed out",
+		"confirms the parent",
+		"mark done immediately",
+		"delivered",
+	) {
+		return false
+	}
+	parentDeliverablePath := normalizeWorkspaceRelativePath(parentHints.DeliverablePath)
+	childDeliverablePath := normalizeWorkspaceRelativePath(childHints.DeliverablePath)
+	if parentDeliverablePath != "" && childDeliverablePath != "" && sameWorkspaceRelativePath(parentDeliverablePath, childDeliverablePath) {
+		return true
+	}
+	parentDeliverableRoot := normalizeWorkspaceRelativePath(parentHints.DeliverableRoot)
+	childDeliverableRoot := normalizeWorkspaceRelativePath(childHints.DeliverableRoot)
+	if parentDeliverableRoot != "" && childDeliverableRoot != "" && sameWorkspaceRelativePath(parentDeliverableRoot, childDeliverableRoot) {
+		return true
+	}
+	parentDependsOnPath := normalizeWorkspaceRelativePath(parentHints.DependsOnPath)
+	if parentDependsOnPath != "" {
+		if childDeliverablePath != "" && sameWorkspaceRelativePath(parentDependsOnPath, childDeliverablePath) {
+			return true
+		}
+		if childDependsOnPath := normalizeWorkspaceRelativePath(childHints.DependsOnPath); childDependsOnPath != "" &&
+			sameWorkspaceRelativePath(parentDependsOnPath, childDependsOnPath) {
+			return true
+		}
+	}
+	return strings.Contains(text, fmt.Sprintf("oc-%d", parentTask.TaskNumber)) ||
+		strings.Contains(text, fmt.Sprintf("parent %d", parentTask.TaskNumber))
 }
 
 func projectContinuationMalformedChildTaskIDs(tasks []repo.ProjectTask) map[uuid.UUID]struct{} {
@@ -18861,6 +18952,9 @@ func projectContinuationParentForbidsDecomposition(task repo.ProjectTask) bool {
 func projectContinuationFocusCandidateTask(task repo.ProjectTask, activity projectContinuationChildActivity) bool {
 	if !isActionableProjectDraftTask(task) {
 		return false
+	}
+	if projectContinuationDraftTaskReadyForParentClosure(activity) {
+		return true
 	}
 	if activity.childTaskCount > 0 || activity.malformedChildTaskCount > 0 {
 		return projectContinuationDraftTaskNeedsFreshReplacementChildWork(activity)
@@ -18956,6 +19050,9 @@ func projectExecutionContinuationTaskRef(task repo.ProjectTask, activity project
 	}
 	if activity.malformedChildTaskCount > 0 {
 		parts = append(parts, "malformed_child_tasks="+strconv.Itoa(activity.malformedChildTaskCount))
+	}
+	if activity.completedCloseoutChildTaskCount > 0 {
+		parts = append(parts, "completed_closeout_child_tasks="+strconv.Itoa(activity.completedCloseoutChildTaskCount))
 	}
 	return strings.Join(parts, " ")
 }
@@ -31362,23 +31459,44 @@ func substantiveExecutionDeliverableReadCompleted(taskRecord repo.ProjectTask, r
 }
 
 func explicitDeliverablePath(taskRecord repo.ProjectTask) string {
-	if taskRecord.Description == nil {
-		return ""
-	}
-	description := strings.TrimSpace(*taskRecord.Description)
-	for _, pattern := range explicitDeliverablePathPatterns {
-		matches := pattern.FindStringSubmatch(description)
-		if len(matches) < 2 {
-			continue
+	for _, description := range taskContractDescriptionCandidates(taskRecord) {
+		for _, pattern := range explicitDeliverablePathPatterns {
+			matches := pattern.FindStringSubmatch(description)
+			if len(matches) < 2 {
+				continue
+			}
+			rawCandidate := strings.TrimSpace(matches[1])
+			candidate := normalizeExplicitDeliverablePathCandidate(rawCandidate)
+			if !looksLikeExplicitDeliverablePath(candidate, rawCandidate) {
+				continue
+			}
+			return candidate
 		}
-		rawCandidate := strings.TrimSpace(matches[1])
-		candidate := normalizeExplicitDeliverablePathCandidate(rawCandidate)
-		if !looksLikeExplicitDeliverablePath(candidate, rawCandidate) {
-			continue
-		}
-		return candidate
 	}
 	return ""
+}
+
+func taskContractDescriptionCandidates(taskRecord repo.ProjectTask) []string {
+	candidates := make([]string, 0, 2)
+	appendCandidate := func(raw string) {
+		normalized := strings.TrimSpace(raw)
+		if normalized == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if existing == normalized {
+				return
+			}
+		}
+		candidates = append(candidates, normalized)
+	}
+	if taskRecord.Description != nil {
+		appendCandidate(*taskRecord.Description)
+	}
+	metadata := messageMetadataMap(taskRecord.Metadata)
+	decomposition, _ := metadata["decomposition"].(map[string]any)
+	appendCandidate(anyString(decomposition["source_description"]))
+	return candidates
 }
 
 func normalizeExplicitDeliverablePathCandidate(raw string) string {
