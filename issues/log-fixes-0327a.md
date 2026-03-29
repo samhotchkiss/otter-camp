@@ -3083,3 +3083,21 @@
     - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurn(ConsumesBoundedSizeQueueFailure|RetriesBoundedSizeStopWithFreshMessage)$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live canary is PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where the old `task 90 ... violates the bounded size policy` stop should now be followed by a fresh bounded-size continuation prompt instead of ending the PM cycle on the warning alone
+- 2026-03-29 10:06 MDT - Allowed satisfied single-file replacement drafts without a planning-process contract to auto-complete cleanly.
+  - changed [`internal/task/service.go`](/Users/sam/dev/otter-camp/internal/task/service.go):
+    - [`SatisfiedDraftAutoCompletable(...)`](/Users/sam/dev/otter-camp/internal/task/service.go) now preserves the old strict planning-process path when artifact evidence exists, but it also allows auto-complete for draft tasks that:
+      - have `parent_orchestration.outcome_assessment.satisfied=true`
+      - have no decomposition child tasks
+      - carry concrete workspace-file evidence such as `planning/sambot-feature-spec.md` in the title, description, metadata primary deliverable, or outcome summary
+    - added [`satisfiedDraftHasConcreteDeliverableEvidence(...)`](/Users/sam/dev/otter-camp/internal/task/service.go)
+  - changed tests:
+    - [`internal/task/service_test.go`](/Users/sam/dev/otter-camp/internal/task/service_test.go)
+      - added `TestTransitionStatusAllowsSatisfiedDraftAutoCompleteWithoutPlanningContractWhenConcreteFileEvidenceExists`
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go)
+      - added `TestTaskUpdateAutoCompletesSatisfiedDraftTaskWithoutPlanningContractWhenConcreteFileEvidenceExists`
+      - retained `TestTaskUpdateDoesNotAutoCompleteBroadSatisfiedDraftTask` as the broad-task safety rail
+  - verified with:
+    - `GOFLAGS='' go test ./internal/task -run 'TestTransitionStatusAllowsSatisfiedDraftAutoComplete(WithoutPlanningContractWhenConcreteFileEvidenceExists)?$' -count=1`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'TestTaskUpdate(AutoCompletesSatisfiedDraftTaskWithoutPlanningContractWhenConcreteFileEvidenceExists|DoesNotAutoCompleteBroadSatisfiedDraftTask|RejectsSatisfiedDraftTaskWithIncompletePlanningContract)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary is SamBot replacement drafts `82` and `90`, which should now settle out of `draft` on restart / next metadata-touch instead of remaining PM-visible stale draft work

@@ -748,6 +748,47 @@ func TestTransitionStatusAllowsSatisfiedDraftAutoComplete(t *testing.T) {
 	}
 }
 
+func TestTransitionStatusAllowsSatisfiedDraftAutoCompleteWithoutPlanningContractWhenConcreteFileEvidenceExists(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	description := "Write the recovered SamBot feature specification to planning/sambot-feature-spec.md."
+	metadata, err := taskorchestration.Apply(json.RawMessage(`{}`), taskorchestration.Update{
+		OutcomeAssessment: taskorchestration.NewOutcomeAssessment(true, "planning/sambot-feature-spec.md is already complete and ready to keep.", time.Now().UTC()),
+	})
+	if err != nil {
+		t.Fatalf("taskorchestration.Apply: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "draft",
+				FlowTemplateID: &flowTemplateID,
+				Title:          "Write SamBot feature specification to planning/sambot-feature-spec.md (replacement)",
+				Description:    &description,
+				CreatedByType:  "system",
+				Metadata:       metadata,
+			},
+		},
+	}
+	svc := newUnitService(taskRepo)
+
+	doneTask, err := svc.TransitionStatus(context.Background(), taskID, "done", Actor{
+		Type:                            "system",
+		AllowDoneBypass:                 true,
+		AllowSatisfiedDraftAutoComplete: true,
+	})
+	if err != nil {
+		t.Fatalf("TransitionStatus done: %v", err)
+	}
+	if doneTask.WorkStatus != "done" {
+		t.Fatalf("work_status = %q, want done", doneTask.WorkStatus)
+	}
+}
+
 func TestTransitionStatusRequiresHumanApprovalGate(t *testing.T) {
 	taskID := uuid.New()
 	taskRepo := &fakeTaskRepo{

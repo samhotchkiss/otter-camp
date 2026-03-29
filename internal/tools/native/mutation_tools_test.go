@@ -23,6 +23,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
+	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
@@ -6221,6 +6222,57 @@ func TestTaskUpdateDoesNotAutoCompleteBroadSatisfiedDraftTask(t *testing.T) {
 	}
 	if taskService.transitionCalls != 0 {
 		t.Fatalf("transition calls = %d, want 0", taskService.transitionCalls)
+	}
+}
+
+func TestTaskUpdateAutoCompletesSatisfiedDraftTaskWithoutPlanningContractWhenConcreteFileEvidenceExists(t *testing.T) {
+	taskID := uuid.New()
+	description := "Write the recovered SamBot feature specification to planning/sambot-feature-spec.md."
+	metadata, err := taskorchestration.Apply(json.RawMessage(`{}`), taskorchestration.Update{
+		OutcomeAssessment: taskorchestration.NewOutcomeAssessment(true, "planning/sambot-feature-spec.md is already complete and ready to keep.", time.Now().UTC()),
+	})
+	if err != nil {
+		t.Fatalf("taskorchestration.Apply: %v", err)
+	}
+
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:          taskID,
+			Title:       "Write SamBot feature specification to planning/sambot-feature-spec.md (replacement)",
+			Description: &description,
+			WorkStatus:  "draft",
+			Metadata:    metadata,
+		},
+	}
+	taskService := &mockTaskTransitionService{}
+	executor := NewExecutor(ExecutorOptions{
+		WorkspaceRoot: t.TempDir(),
+		TaskService:   taskService,
+	})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id": taskID.String(),
+		"outcome_assessment": map[string]any{
+			"satisfied": true,
+			"summary":   "planning/sambot-feature-spec.md is already complete and ready to keep.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if taskOut["work_status"] != "done" {
+		t.Fatalf("work_status = %v, want done", taskOut["work_status"])
+	}
+	if taskService.transitionCalls != 1 {
+		t.Fatalf("transition calls = %d, want 1", taskService.transitionCalls)
+	}
+	if taskService.lastStatus != "done" {
+		t.Fatalf("transition status = %q, want done", taskService.lastStatus)
 	}
 }
 

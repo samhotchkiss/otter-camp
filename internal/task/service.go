@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -125,6 +126,8 @@ var inboxItemTypesRequiringSourceTask = map[string]struct{}{
 	"draft_action_review":     {},
 	"browser_handoff":         {},
 }
+
+var satisfiedDraftWorkspaceFilePathPattern = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\.[A-Za-z0-9]+\b`)
 
 type ErrInvalidStatusTransition struct {
 	From string
@@ -1459,12 +1462,6 @@ func SatisfiedDraftAutoCompletable(taskRecord repo.ProjectTask) bool {
 		return false
 	}
 	plan, ok := taskplan.Parse(taskRecord.Metadata)
-	if !ok || len(plan.ArtifactEvidence) == 0 {
-		return false
-	}
-	if _, err := taskplan.CompletionReport(taskRecord.Metadata); err != nil {
-		return false
-	}
 	prepared, err := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
 		ParentTaskID: taskRecord.ID,
 		Title:        taskRecord.Title,
@@ -1474,7 +1471,38 @@ func SatisfiedDraftAutoCompletable(taskRecord repo.ProjectTask) bool {
 	if err != nil {
 		return false
 	}
-	return !prepared.Applied
+	if ok && len(plan.ArtifactEvidence) != 0 {
+		if _, err := taskplan.CompletionReport(taskRecord.Metadata); err != nil {
+			return false
+		}
+		return !prepared.Applied
+	}
+	if len(taskdecomp.ParseChildTaskIDs(taskRecord.Metadata)) != 0 {
+		return false
+	}
+	return satisfiedDraftHasConcreteDeliverableEvidence(taskRecord, state)
+}
+
+func satisfiedDraftHasConcreteDeliverableEvidence(taskRecord repo.ProjectTask, state taskorchestration.ParentState) bool {
+	if primary := strings.TrimSpace(taskdecomp.ParsePrimaryDeliverable(taskRecord.Metadata)); primary != "" &&
+		satisfiedDraftWorkspaceFilePathPattern.MatchString(primary) {
+		return true
+	}
+	var text strings.Builder
+	text.WriteString(strings.TrimSpace(taskRecord.Title))
+	if taskRecord.Description != nil && strings.TrimSpace(*taskRecord.Description) != "" {
+		if text.Len() > 0 {
+			text.WriteByte('\n')
+		}
+		text.WriteString(strings.TrimSpace(*taskRecord.Description))
+	}
+	if state.OutcomeAssessment != nil && strings.TrimSpace(state.OutcomeAssessment.Summary) != "" {
+		if text.Len() > 0 {
+			text.WriteByte('\n')
+		}
+		text.WriteString(strings.TrimSpace(state.OutcomeAssessment.Summary))
+	}
+	return satisfiedDraftWorkspaceFilePathPattern.MatchString(text.String())
 }
 
 func allowsSatisfiedDraftAutoComplete(taskRecord repo.ProjectTask, from, target string, actor Actor) bool {
