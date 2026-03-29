@@ -15709,6 +15709,9 @@ func (e *TurnEngine) shouldStopAfterExecutionDeliverableWrite(ctx context.Contex
 	if err != nil {
 		return false, err
 	}
+	if executionInheritedSharedSingleFileEditCompleted(e.inheritedSharedSingleFileDeliverablePath(ctx, taskRecord), result) {
+		return true, nil
+	}
 	return shouldStopAfterExecutionArtifactWrite(taskRecord, result), nil
 }
 
@@ -35535,6 +35538,18 @@ func shouldStopAfterExecutionArtifactWrite(taskRecord repo.ProjectTask, result T
 		}
 	}
 	return false
+}
+
+func executionInheritedSharedSingleFileEditCompleted(sharedPath string, result ToolResult) bool {
+	if !strings.EqualFold(strings.TrimSpace(result.Name), "file.edit") || strings.TrimSpace(result.Error) != "" {
+		return false
+	}
+	sharedPath = normalizeWorkspaceRelativePath(sharedPath)
+	writtenPath := normalizeWorkspaceRelativePath(anyString(result.Output["path"]))
+	if sharedPath == "" || writtenPath == "" || !sameWorkspaceRelativePath(writtenPath, sharedPath) {
+		return false
+	}
+	return anyInt(result.Output["replacements_made"]) > 0
 }
 
 func normalizeWorkspaceRelativePath(value string) string {

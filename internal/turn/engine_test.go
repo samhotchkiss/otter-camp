@@ -45247,6 +45247,64 @@ func TestShouldStopAfterExecutionDeliverableWriteStopsForRecoveryCheckpointTarge
 	}
 }
 
+func TestShouldStopAfterExecutionDeliverableWriteStopsForInheritedSharedSingleFileEdit(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	parentTaskID := uuid.New()
+	childTaskID := uuid.New()
+
+	parentDescription := "Write the file planning/sambot-architecture.md containing the complete SamBot technical architecture specification."
+	childDescription := "Backend: Express.js API (sambot/api.js) — POST /api/sambot/chat accepting {message, session_id}, returning {response, session_id}. Already implemented with canned keyword-matched responses in Sam's voice, CORS, rate limiting (10 req/min per session), in-memory session store."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = childTaskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentTaskID: {
+				ID:          parentTaskID,
+				TaskNumber:  157,
+				Title:       "Write planning/sambot-architecture.md — SamBot technical architecture spec",
+				Description: &parentDescription,
+				WorkStatus:  "in_progress",
+			},
+			childTaskID: {
+				ID:          childTaskID,
+				TaskNumber:  180,
+				Title:       "Backend: Express.js API (sambot/api.js) — POST /api/sambot/chat accepting {message, session_id}, returning {response, session_id}. Already implemented with canned keyword-matched responses in Sam's voice, CORS, rate limiting (10 req/min per session), in-memory session store.",
+				Description: &childDescription,
+				WorkStatus:  "in_progress",
+				Metadata: mustRawJSON(t, map[string]any{
+					"decomposition_parent_task_id": parentTaskID.String(),
+				}),
+			},
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	stop, err := fixture.engine.shouldStopAfterExecutionDeliverableWrite(context.Background(), rt, ToolResult{
+		Name: "file.edit",
+		Output: map[string]any{
+			"path":              "planning/sambot-architecture.md",
+			"replacements_made": 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("shouldStopAfterExecutionDeliverableWrite: %v", err)
+	}
+	if !stop {
+		t.Fatal("expected stop signal from inherited shared single-file deliverable edit")
+	}
+}
+
 func TestShouldStopAfterExecutionDeliverableWriteIgnoresNonTargetRecoveryWrite(t *testing.T) {
 	t.Parallel()
 

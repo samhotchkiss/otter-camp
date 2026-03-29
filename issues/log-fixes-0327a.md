@@ -1,5 +1,25 @@
 # 0327a Fix Log
 
+## 2026-03-29 15:09 MDT
+
+- `add-0328c` follow-on:
+  - `internal/turn/engine.go` now stops async task turns after a successful `file.edit` against the inherited shared single-file deliverable owned by the decomposition parent
+  - the new stop path is intentionally narrow: it only fires when the resolved parent-shared path matches the edited file and `replacements_made > 0`
+  - this closes the fresh task-180 / task-181 churn family where real progress on `planning/sambot-architecture.md` was followed by extra verification reads and blocked `git.commit`
+- Focused verification:
+  - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterExecutionArtifactWriteForExplicitDirectoryOutput|ShouldStopAfterExecutionArtifactWriteIgnoresUndeclaredPath|ShouldStopAfterExecutionDeliverableWriteStopsForRecoveryCheckpointTarget|ShouldStopAfterExecutionDeliverableWriteStopsForInheritedSharedSingleFileEdit)$' -count=1`
+- Pre-deploy live proof:
+  - SamBot task `180`
+  - session `bfb35b67-7f32-434d-8192-91211488b6ea`
+  - successful `file.edit` on `planning/sambot-architecture.md`
+  - then extra `head` / `grep` / `wc` verification and blocked `git.commit` instead of immediate turn completion
+- Live proof:
+  - SamBot task `180`
+  - turn `68f64ed4-80d8-4ba1-8ec2-378cca571612`
+  - the lane still reached `git.status` / `git.diff` / blocked `git.commit` before its last newline fixup
+  - after `file.edit planning/sambot-architecture.md -> replacements_made=1`, the turn completed immediately with no further tool calls after that inherited shared-file edit
+  - remaining seam is earlier git verification / handoff churn, not post-edit continuation
+
 ## 2026-03-29 13:45 MDT
 
 - Fix: validation-blocked continuation creation now reuses malformed-child classifiers before emitting another synthetic recovery prompt.
