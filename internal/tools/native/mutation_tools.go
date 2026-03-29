@@ -43,7 +43,25 @@ import (
 var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
 var parentChildOrdinalTitlePattern = regexp.MustCompile(`^([a-z]+)\s+(\d+)\s*:`)
 var malformedParameterEchoPattern = regexp.MustCompile(`(?is)(<parameter\s+name\s*=\s*"[^"]+"\s*>|,?\s*antml:parameter>)`)
-var explicitDeliverablePathPattern = regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`)
+var explicitDeliverablePathPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`),
+	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
+	regexp.MustCompile(`(?i)\b(?:write|create|produce)\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
+	regexp.MustCompile(`(?i)\b(?:append|add|update)\b[^.;:\n]{0,120}?\s+(?:to|into)\s+(?:the\s+existing\s+)?([^\s,;]+)`),
+	regexp.MustCompile(`(?i)\bsave\s+as\s+([^\s,;]+)`),
+}
+var leadingVerbDeliverablePathPattern = regexp.MustCompile(`(?i)^\s*(?:write|create|produce|append|add|update)\s+([^\s,;]+)`)
+var explicitDeliverableActionWords = map[string]struct{}{
+	"add":      {},
+	"append":   {},
+	"build":    {},
+	"create":   {},
+	"draft":    {},
+	"generate": {},
+	"produce":  {},
+	"update":   {},
+	"write":    {},
+}
 var bootstrapWaveFamilyTitlePattern = regexp.MustCompile(`(?i)\b(?:[a-z0-9]+-)?(fw|lw)\s*[-:]?\s*(\d+)\b`)
 var contentMigrationCheckpointTaskPathPattern = regexp.MustCompile(`(?i)^\.ottercamp/checkpoints/oc-(\d+)-content-migration\.md$`)
 
@@ -212,22 +230,35 @@ func looksLikeBootstrapOrchestrationParent(title string, description *string) bo
 }
 
 func parseExplicitDeliverablePath(taskRecord repo.ProjectTask) string {
-	if taskRecord.Description == nil {
-		return ""
+	for _, description := range taskContractDescriptionCandidates(taskRecord) {
+		for _, pattern := range explicitDeliverablePathPatterns {
+			matches := pattern.FindStringSubmatch(description)
+			if len(matches) < 2 {
+				continue
+			}
+			rawCandidate := strings.TrimSpace(matches[1])
+			candidate := normalizeWorkspacePath(rawCandidate)
+			if !looksLikeExplicitDeliverablePath(candidate, rawCandidate) {
+				continue
+			}
+			return candidate
+		}
+		if match := leadingVerbDeliverablePathPattern.FindStringSubmatch(description); len(match) >= 2 {
+			rawCandidate := strings.TrimSpace(match[1])
+			candidate := normalizeWorkspacePath(rawCandidate)
+			if strings.Contains(candidate, "/") || strings.Contains(filepath.Base(candidate), ".") {
+				return candidate
+			}
+		}
 	}
-	matches := explicitDeliverablePathPattern.FindStringSubmatch(strings.TrimSpace(*taskRecord.Description))
-	if len(matches) < 2 {
-		return ""
-	}
-	candidate := normalizeWorkspacePath(matches[1])
-	if !looksLikeExplicitDeliverablePath(candidate, matches[1]) {
-		return ""
-	}
-	return candidate
+	return ""
 }
 
 func looksLikeExplicitDeliverablePath(normalized, raw string) bool {
 	if normalized == "" {
+		return false
+	}
+	if _, ok := explicitDeliverableActionWords[strings.ToLower(strings.TrimSpace(normalized))]; ok {
 		return false
 	}
 	if strings.Contains(normalized, "/") || strings.Contains(filepath.Base(normalized), ".") {
@@ -237,12 +268,44 @@ func looksLikeExplicitDeliverablePath(normalized, raw string) bool {
 	if trimmedRaw == "" {
 		return false
 	}
+	if _, ok := explicitDeliverableActionWords[strings.ToLower(trimmedRaw)]; ok {
+		return false
+	}
 	for _, r := range trimmedRaw {
 		if r >= 'A' && r <= 'Z' {
 			return true
 		}
 	}
 	return false
+}
+
+func taskContractDescriptionCandidates(taskRecord repo.ProjectTask) []string {
+	candidates := make([]string, 0, 2)
+	appendCandidate := func(raw string) {
+		normalized := strings.TrimSpace(raw)
+		if normalized == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if existing == normalized {
+				return
+			}
+		}
+		candidates = append(candidates, normalized)
+	}
+	if taskRecord.Description != nil {
+		appendCandidate(*taskRecord.Description)
+	}
+	if len(taskRecord.Metadata) == 0 {
+		return candidates
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(taskRecord.Metadata, &metadata); err != nil {
+		return candidates
+	}
+	decomposition, _ := metadata["decomposition"].(map[string]any)
+	appendCandidate(strings.TrimSpace(readStringValue(decomposition["source_description"])))
+	return candidates
 }
 
 func sameOrNestedWorkspacePath(path, root string) bool {

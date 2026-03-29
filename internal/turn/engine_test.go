@@ -16564,6 +16564,34 @@ func TestShouldBlockTaskReviewRepeatedPreferredDeliverableReadAfterFullRead(t *t
 	}
 }
 
+func TestRecordTaskReviewPreferredDeliverableReadResultIgnoresValidationError(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `planning/sambot-feature-spec.md`.\n" +
+			"Use flow.review_decision with the active flow_node_execution_id to approve or reject this review step.",
+	}
+
+	recordTaskReviewPreferredDeliverableReadResult(rt, ToolResult{
+		Name: "file.read",
+		Output: map[string]any{
+			"path":             "planning/sambot-feature-spec.md",
+			"deliverable_path": "Append",
+			"error":            "recovery_target_focus_required",
+		},
+	})
+
+	if rt.reviewPreferredDeliverablePath != "" {
+		t.Fatalf("reviewPreferredDeliverablePath = %q, want empty after validation-error payload", rt.reviewPreferredDeliverablePath)
+	}
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableFirstTool(rt, "file.read", map[string]any{"path": "planning/sambot-feature-spec.md"}); blocked {
+		t.Fatalf("expected preferred-target read to remain allowed after validation-error payload, reason = %q", reason)
+	}
+}
+
 func TestShouldNotBlockTaskReviewPreferredDeliverableTailReadAfterTruncatedHeadRead(t *testing.T) {
 	rt := &turnRuntime{
 		session: &chat.ChatSession{
@@ -37494,6 +37522,99 @@ func TestExplicitDeliverablePathDetectsDirectVerbPathWithoutPreposition(t *testi
 	}
 }
 
+func TestExplicitDeliverablePathDetectsAppendTargetPath(t *testing.T) {
+	t.Parallel()
+
+	description := "Deliverable: Append these sections to the existing planning/sambot-feature-spec.md file. Do not overwrite existing content — read the file first, then append the new sections."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  103,
+		Title:       "Append technical architecture, data sources, and UI/UX sections",
+		Description: &description,
+	}
+
+	if got := explicitDeliverablePath(taskRecord); got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("explicitDeliverablePath(...) = %q, want %q", got, "planning/sambot-feature-spec.md")
+	}
+}
+
+func TestSessionTaskDeliverablePathInheritsParentExplicitDeliverableForDecomposedChild(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	parentID := uuid.New()
+	childID := uuid.New()
+	parentDescription := "Produce planning/sambot-feature-spec.md — the comprehensive SamBot chat feature specification for Sam.blog."
+	childDescription := "Data Sources — scraped technonymous.org posts in content/posts/, Sam's LinkedIn profile data, any additional corpus sources."
+	childMetadata := mustRawJSON(t, map[string]any{
+		"decomposition_parent_task_id": parentID.String(),
+		"recovery_file_write_checkpoint": map[string]any{
+			"target_path": "content/posts/VERIFICATION.md",
+		},
+	})
+	childTask := repo.ProjectTask{
+		ID:          childID,
+		TaskNumber:  101,
+		Title:       "Data Sources — scraped technonymous.org posts in content/posts/, Sam's LinkedIn profile data, any additional corpus sources",
+		Description: &childDescription,
+		Metadata:    childMetadata,
+	}
+
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:          parentID,
+				TaskNumber:  94,
+				Title:       "SamBot spec part 2",
+				Description: &parentDescription,
+			},
+			childID: childTask,
+		},
+	}
+
+	if got := fixture.engine.sessionTaskDeliverablePath(context.Background(), fixture.session.ID, childTask); got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("sessionTaskDeliverablePath(...) = %q, want %q", got, "planning/sambot-feature-spec.md")
+	}
+}
+
+func TestRecoveryTargetPathForSessionPrefersParentExplicitDeliverableOverWrongCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	parentID := uuid.New()
+	childID := uuid.New()
+	parentDescription := "Produce planning/sambot-feature-spec.md — the comprehensive SamBot chat feature specification for Sam.blog."
+	childDescription := "Deliverable: Append these sections to the existing planning/sambot-feature-spec.md file. Do not overwrite existing content — read the file first, then append the new sections."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = childID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:          parentID,
+				TaskNumber:  94,
+				Title:       "SamBot spec part 2",
+				Description: &parentDescription,
+			},
+			childID: {
+				ID:          childID,
+				TaskNumber:  103,
+				Title:       "Append technical architecture, data sources, and UI/UX sections",
+				Description: &childDescription,
+				Metadata: mustRawJSON(t, map[string]any{
+					"decomposition_parent_task_id": parentID.String(),
+					"recovery_file_write_checkpoint": map[string]any{
+						"target_path": "Append",
+					},
+				}),
+			},
+		},
+	}
+
+	if got := fixture.engine.recoveryTargetPathForSession(context.Background(), fixture.session); got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("recoveryTargetPathForSession(...) = %q, want %q", got, "planning/sambot-feature-spec.md")
+	}
+}
+
 func TestPreferredTaskDeliverableRootIgnoresReferenceRootWhenExplicitDeliverableExists(t *testing.T) {
 	t.Parallel()
 
@@ -42470,6 +42591,47 @@ func TestBuildTaskReviewActionPromptPrefersExplicitDeliverableOverReferenceRoot(
 	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
 	if !strings.Contains(prompt, "planning/sambot-feature-spec.md") {
 		t.Fatalf("prompt = %q, want explicit deliverable target guidance", prompt)
+	}
+	if strings.Contains(prompt, "Start with the preferred deliverable root `content/posts`") {
+		t.Fatalf("prompt = %q, did not want reference root treated as preferred deliverable root", prompt)
+	}
+}
+
+func TestBuildTaskReviewActionPromptInheritsParentExplicitDeliverableForDecomposedChild(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	parentID := uuid.New()
+	childID := uuid.New()
+	parentDescription := "Produce planning/sambot-feature-spec.md — the comprehensive SamBot chat feature specification for Sam.blog."
+	childDescription := "UI/UX Design — chat widget placement, conversation flow, mobile responsiveness, conversation starters, error states. Use the voice/tone examples from content/posts/."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = childID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:          parentID,
+				TaskNumber:  94,
+				Title:       "SamBot spec part 2",
+				Description: &parentDescription,
+			},
+			childID: {
+				ID:          childID,
+				TaskNumber:  102,
+				Title:       "UI/UX Design — chat widget placement, conversation flow, mobile responsiveness",
+				Description: &childDescription,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"decomposition_parent_task_id": parentID.String(),
+				}),
+			},
+		},
+	}
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "planning/sambot-feature-spec.md") {
+		t.Fatalf("prompt = %q, want inherited explicit deliverable target", prompt)
 	}
 	if strings.Contains(prompt, "Start with the preferred deliverable root `content/posts`") {
 		t.Fatalf("prompt = %q, did not want reference root treated as preferred deliverable root", prompt)

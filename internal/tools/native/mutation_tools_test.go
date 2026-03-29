@@ -1485,6 +1485,17 @@ func TestParseExplicitDeliverablePathRejectsNonPathOutputAdjective(t *testing.T)
 	}
 }
 
+func TestParseExplicitDeliverablePathDetectsAppendTargetPath(t *testing.T) {
+	t.Parallel()
+
+	description := "Deliverable: Append these sections to the existing planning/sambot-feature-spec.md file. Do not overwrite existing content — read the file first, then append the new sections."
+	taskRecord := repo.ProjectTask{Description: &description}
+
+	if got := parseExplicitDeliverablePath(taskRecord); got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("parseExplicitDeliverablePath() = %q, want %q", got, "planning/sambot-feature-spec.md")
+	}
+}
+
 func TestFileEditRejectsPlanningArtifactMutationForExecutionFirstTaskWithExplicitDeliverable(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

@@ -183,9 +183,21 @@ var explicitDeliverablePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\b(?:write|create|produce)\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
+	regexp.MustCompile(`(?i)\b(?:append|add|update)\b[^.;:\n]{0,120}?\s+(?:to|into)\s+(?:the\s+existing\s+)?([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\bsave\s+as\s+([^\s,;]+)`),
 }
-var leadingVerbDeliverablePathPattern = regexp.MustCompile(`(?i)^\s*(?:write|create|produce)\s+([^\s,;]+)`)
+var leadingVerbDeliverablePathPattern = regexp.MustCompile(`(?i)^\s*(?:write|create|produce|append|add|update)\s+([^\s,;]+)`)
+var explicitDeliverableActionWords = map[string]struct{}{
+	"add":      {},
+	"append":   {},
+	"build":    {},
+	"create":   {},
+	"draft":    {},
+	"generate": {},
+	"produce":  {},
+	"update":   {},
+	"write":    {},
+}
 var preferredDeliverableRootPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:under|in)\s+/?((?:content(?:/[A-Za-z0-9._-]+)+)/?)`),
 }
@@ -17997,6 +18009,58 @@ func preferredTaskDeliverablePath(taskRecord repo.ProjectTask) string {
 	return ""
 }
 
+func decompositionParentTaskID(taskRecord repo.ProjectTask) uuid.UUID {
+	metadata := messageMetadataMap(taskRecord.Metadata)
+	parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+	if !ok {
+		return uuid.Nil
+	}
+	return parentID
+}
+
+func (e *TurnEngine) decompositionParentTask(ctx context.Context, taskRecord repo.ProjectTask) (repo.ProjectTask, bool) {
+	if e == nil || e.tasks == nil {
+		return repo.ProjectTask{}, false
+	}
+	parentID := decompositionParentTaskID(taskRecord)
+	if parentID == uuid.Nil {
+		return repo.ProjectTask{}, false
+	}
+	parentTask, err := e.tasks.GetByID(ctx, parentID)
+	if err != nil {
+		return repo.ProjectTask{}, false
+	}
+	return parentTask, true
+}
+
+func (e *TurnEngine) taskExplicitDeliverablePath(ctx context.Context, taskRecord repo.ProjectTask) string {
+	if explicit := strings.TrimSpace(explicitDeliverablePath(taskRecord)); explicit != "" {
+		return explicit
+	}
+	parentTask, ok := e.decompositionParentTask(ctx, taskRecord)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(explicitDeliverablePath(parentTask))
+}
+
+func (e *TurnEngine) taskPreferredDeliverableRoot(ctx context.Context, taskRecord repo.ProjectTask) string {
+	if explicit := strings.TrimSpace(e.taskExplicitDeliverablePath(ctx, taskRecord)); explicit != "" {
+		return ""
+	}
+	if root := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord)); root != "" {
+		return root
+	}
+	parentTask, ok := e.decompositionParentTask(ctx, taskRecord)
+	if !ok {
+		return ""
+	}
+	if explicit := strings.TrimSpace(explicitDeliverablePath(parentTask)); explicit != "" {
+		return ""
+	}
+	return strings.TrimSpace(preferredTaskDeliverableRoot(parentTask))
+}
+
 func preferredTaskDeliverableRoot(taskRecord repo.ProjectTask) string {
 	if explicit := strings.TrimSpace(explicitDeliverablePath(taskRecord)); explicit != "" {
 		return ""
@@ -21349,6 +21413,9 @@ func (e *TurnEngine) recoveryTargetPathForSession(ctx context.Context, session *
 	if e.tasks != nil && strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
 		if taskID := resolveTaskID(session); taskID != nil && *taskID != uuid.Nil {
 			if taskRecord, err := e.tasks.GetByID(ctx, *taskID); err == nil {
+				if target := e.taskExplicitDeliverablePath(ctx, taskRecord); target != "" {
+					return target
+				}
 				if target := metadataPreferredRecoveryTargetPathForTask(taskRecord); target != "" {
 					return target
 				}
@@ -21445,7 +21512,7 @@ func parseRecentDeliverableTargetFromToolResult(content string) string {
 }
 
 func (e *TurnEngine) sessionTaskDeliverablePath(ctx context.Context, sessionID uuid.UUID, taskRecord repo.ProjectTask) string {
-	if explicit := strings.TrimSpace(explicitDeliverablePath(taskRecord)); explicit != "" {
+	if explicit := strings.TrimSpace(e.taskExplicitDeliverablePath(ctx, taskRecord)); explicit != "" {
 		return explicit
 	}
 	if checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata); ok {
@@ -26796,7 +26863,7 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 	}
 	if taskRecord, ok := e.reviewPromptTaskRecord(ctx, session); ok {
 		targetPath := strings.TrimSpace(e.reviewPromptDeliverableTarget(ctx, session, taskRecord))
-		rootPath := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
+		rootPath := strings.TrimSpace(e.taskPreferredDeliverableRoot(ctx, taskRecord))
 		checkpointOutputs := e.reviewPromptCheckpointOutputPaths(ctx, taskRecord)
 		if targetPath != "" {
 			lines = append(lines, fmt.Sprintf("Start with the preferred deliverable target `%s`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `%s` is missing.", targetPath, targetPath))
@@ -26840,7 +26907,7 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 }
 
 func (e *TurnEngine) reviewPromptDeliverableTarget(ctx context.Context, session *chat.ChatSession, taskRecord repo.ProjectTask) string {
-	rootPath := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
+	rootPath := strings.TrimSpace(e.taskPreferredDeliverableRoot(ctx, taskRecord))
 	targetEligible := func(targetPath string) bool {
 		normalized := normalizeWorkspaceRelativePath(targetPath)
 		if normalized == "" {
@@ -26866,6 +26933,12 @@ func (e *TurnEngine) reviewPromptDeliverableTarget(ctx context.Context, session 
 			}
 			return ""
 		}
+	}
+	if targetPath := strings.TrimSpace(e.taskExplicitDeliverablePath(ctx, taskRecord)); targetPath != "" {
+		if targetEligible(targetPath) {
+			return targetPath
+		}
+		return ""
 	}
 	if targetPath := strings.TrimSpace(preferredTaskDeliverablePath(taskRecord)); targetPath != "" {
 		if targetEligible(targetPath) {
@@ -29749,6 +29822,16 @@ func recordTaskReviewPreferredDeliverableReadResult(rt *turnRuntime, result Tool
 		}
 		return
 	}
+	if strings.TrimSpace(result.Error) != "" || strings.TrimSpace(anyString(result.Output["error"])) != "" {
+		return
+	}
+	readBytes := intValue(result.Output["bytes_read"])
+	if readBytes <= 0 {
+		readBytes = len([]byte(anyString(result.Output["content"])))
+	}
+	if readBytes <= 0 && intValue(result.Output["byte_size"]) <= 0 {
+		return
+	}
 	rt.reviewPreferredDeliverablePath = targetPath
 	if size := intValue(result.Output["byte_size"]); size > rt.reviewPreferredDeliverableByteSize {
 		rt.reviewPreferredDeliverableByteSize = size
@@ -29756,10 +29839,6 @@ func recordTaskReviewPreferredDeliverableReadResult(rt *turnRuntime, result Tool
 	offsetBytes := intValue(result.Output["offset_bytes"])
 	if offsetBytes < 0 {
 		offsetBytes = 0
-	}
-	readBytes := intValue(result.Output["bytes_read"])
-	if readBytes <= 0 {
-		readBytes = len([]byte(anyString(result.Output["content"])))
 	}
 	truncated, _ := boolValue(result.Output["truncated"])
 	if offsetBytes == 0 && truncated && readBytes > 0 {
@@ -33399,11 +33478,17 @@ func looksLikeExplicitDeliverablePath(normalized, raw string) bool {
 	if workspacePathLooksParameterized(normalized) {
 		return false
 	}
+	if _, ok := explicitDeliverableActionWords[strings.ToLower(strings.TrimSpace(normalized))]; ok {
+		return false
+	}
 	if strings.Contains(normalized, "/") || strings.Contains(filepath.Base(normalized), ".") {
 		return true
 	}
 	trimmedRaw := strings.TrimSpace(raw)
 	if trimmedRaw == "" {
+		return false
+	}
+	if _, ok := explicitDeliverableActionWords[strings.ToLower(trimmedRaw)]; ok {
 		return false
 	}
 	for _, r := range trimmedRaw {

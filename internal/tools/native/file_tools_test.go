@@ -256,6 +256,72 @@ func TestLatestRecoveryTargetPathForSessionIgnoresDependencyArtifactHistoryForMa
 	}
 }
 
+func TestLatestRecoveryTargetPathForSessionInheritsParentExplicitDeliverableForDecomposedChild(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	parentID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+
+	parentDescription := "Produce planning/sambot-feature-spec.md — the comprehensive SamBot chat feature specification for Sam.blog."
+	childDescription := "Deliverable: Append these sections to the existing planning/sambot-feature-spec.md file. Do not overwrite existing content — read the file first, then append the new sections after the existing content."
+	childMetadata, err := json.Marshal(map[string]any{
+		"decomposition_parent_task_id": parentID.String(),
+		"recovery_file_write_checkpoint": map[string]any{
+			"target_path": "Append",
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(childMetadata): %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Append technical architecture, data sources, and UI/UX sections",
+			Description:    &childDescription,
+			Metadata:       childMetadata,
+			WorkStatus:     "in_progress",
+		},
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:             parentID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "SamBot spec part 2",
+				Description:    &parentDescription,
+			},
+			{
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "Append technical architecture, data sources, and UI/UX sections",
+				Description:    &childDescription,
+				Metadata:       childMetadata,
+				WorkStatus:     "in_progress",
+			},
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "system",
+				Content:   "[Recovery resume state]\nTarget file: Append\n",
+			},
+		},
+	}
+
+	got := executor.latestRecoveryTargetPathForSession(context.Background(), workspaceScope{sessionID: &sessionID, taskID: &taskID})
+	if got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("latestRecoveryTargetPathForSession(...) = %q, want %q", got, "planning/sambot-feature-spec.md")
+	}
+}
+
 func TestTaskExpectsMarkdownDeliverablesRecognizesSeparateMDFileWording(t *testing.T) {
 	description := "Read the first 12 entries from content/technonymous-index.json. For each entry, use web_fetch to retrieve the full post HTML, convert the post body to clean markdown, and write each post as a separate .md file under content/posts/."
 	taskRecord := repo.ProjectTask{Description: &description}
@@ -725,6 +791,96 @@ func TestFileListStillRejectsReviewInspectionOutsideDeliverableRoot(t *testing.T
 	}
 	if got := out["deliverable_path"]; got != targetPath {
 		t.Fatalf("deliverable_path = %v, want %s", got, targetPath)
+	}
+}
+
+func TestFileReadRejectsRecoveryRereadUsingParentExplicitDeliverableForDecomposedChild(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	parentID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	parentDescription := "Produce planning/sambot-feature-spec.md — the comprehensive SamBot chat feature specification for Sam.blog."
+	childDescription := "Deliverable: Append these sections to the existing planning/sambot-feature-spec.md file. Do not overwrite existing content — read the file first, then append the new sections after the existing content."
+	childMetadata, err := json.Marshal(map[string]any{
+		"decomposition_parent_task_id": parentID.String(),
+		"recovery_file_write_checkpoint": map[string]any{
+			"target_path": "Append",
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(childMetadata): %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "planning"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(planning): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "planning", "sambot-feature-spec.md"), []byte("# SamBot Feature Spec\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(spec): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("workspace overview\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(readme): %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Append technical architecture, data sources, and UI/UX sections",
+			Description:    &childDescription,
+			Metadata:       childMetadata,
+			WorkStatus:     "review",
+		},
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:             parentID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "SamBot spec part 2",
+				Description:    &parentDescription,
+			},
+			{
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "Append technical architecture, data sources, and UI/UX sections",
+				Description:    &childDescription,
+				Metadata:       childMetadata,
+				WorkStatus:     "review",
+			},
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "system",
+				Content:   "[Recovery resume state]\nTarget file: Append\n",
+			},
+			{
+				SessionID: sessionID,
+				Role:      "user",
+				Content:   "Review only.\nStart with the preferred deliverable target `planning/sambot-feature-spec.md`.\nUse flow.review_decision.",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": "README.md"})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != "recovery_target_focus_required" {
+		t.Fatalf("error = %v, out=%v, want recovery_target_focus_required", got, out)
+	}
+	if got := out["deliverable_path"]; got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("deliverable_path = %v, want %q", got, "planning/sambot-feature-spec.md")
 	}
 }
 

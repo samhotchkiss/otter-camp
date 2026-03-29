@@ -2787,3 +2787,41 @@
       - stale synthetic recovery prompt `eea93dae-c00c-4b0f-9337-d3552631fc34` on task `99`'s prior session `ddc0d9af-70c0-49a4-9fb3-7c1cd9a46bb6` was failed with `error_message=superseded stale synthetic prompt after repo_version change`
       - new review session `5b31a8d0-0582-4ec4-8e0a-40981622703d` carried `task_review_action` metadata with `repo_version=3558`
       - that same review session read `planning/sambot-feature-spec.md` at message `7`, which also live-proved the earlier explicit-deliverable-over-reference-root fix
+- 2026-03-29 07:13 MDT - Finished and deployed on `repo_version=3560`: inherit parent explicit deliverables across native file guards and ignore validation-error pseudo-reads in review preferred-target accounting.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added parent-aware task deliverable helpers for decomposed child sessions (`taskExplicitDeliverablePath`, `taskPreferredDeliverableRoot`) and used them in the hot recovery/review path selection points
+    - `explicitDeliverablePathPatterns` now recognize `append/add/update ... to FILE`
+    - `looksLikeExplicitDeliverablePath(...)` now rejects bare action words like `Append`
+    - `recordTaskReviewPreferredDeliverableReadResult(...)` now ignores validation-error `file.read` payloads, so the repeat-read guard only arms after a successful read with actual file content/size
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - native explicit-deliverable parsing now matches the same `append/add/update ... to FILE` forms and action-word rejection as the turn engine
+    - parsing now also consults decomposition `source_description` candidates instead of only the direct child description
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - native recovery target/file-read guards now inherit the decomposition parent’s explicit deliverable path before consulting raw child checkpoints
+    - native preferred recovery target selection now resolves `planning/sambot-feature-spec.md` ahead of stale child-local checkpoint target `Append`
+    - native recovery-root inspection logic now uses the inherited preferred deliverable root/explicit-target view
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestExplicitDeliverablePathDetectsAppendTargetPath`
+      - added `TestSessionTaskDeliverablePathInheritsParentExplicitDeliverableForDecomposedChild`
+      - added `TestRecoveryTargetPathForSessionPrefersParentExplicitDeliverableOverWrongCheckpoint`
+      - added `TestBuildTaskReviewActionPromptInheritsParentExplicitDeliverableForDecomposedChild`
+      - added `TestRecordTaskReviewPreferredDeliverableReadResultIgnoresValidationError`
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go)
+      - added `TestParseExplicitDeliverablePathDetectsAppendTargetPath`
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go)
+      - added `TestLatestRecoveryTargetPathForSessionInheritsParentExplicitDeliverableForDecomposedChild`
+      - added `TestFileReadRejectsRecoveryRereadUsingParentExplicitDeliverableForDecomposedChild`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(RecordTaskReviewPreferredDeliverableReadResultIgnoresValidationError|ShouldBlockTaskReviewRepeatedPreferredDeliverableReadAfterFullRead|ShouldNotBlockTaskReviewPreferredDeliverableTailReadAfterTruncatedHeadRead|BuildTaskReviewActionPromptInheritsParentExplicitDeliverableForDecomposedChild|RecoveryTargetPathForSessionPrefersParentExplicitDeliverableOverWrongCheckpoint)$' -count=1`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(ParseExplicitDeliverablePath(DetectsAppendTargetPath|RejectsNonPathOutputAdjective)|LatestRecoveryTargetPathForSession(InheritsParentExplicitDeliverableForDecomposedChild|PrefersMetadataBatchOutputOverDependencyArtifactHistory|IgnoresDependencyArtifactHistoryForMarkdownBatchWithoutMetadata)|FileReadRejectsRecoveryRereadUsingParentExplicitDeliverableForDecomposedChild)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn ./internal/tools/native -run 'Test(RecordTaskReviewPreferredDeliverableReadResultIgnoresValidationError|BuildTaskReviewActionPromptInheritsParentExplicitDeliverableForDecomposedChild|RecoveryTargetPathForSessionPrefersParentExplicitDeliverableOverWrongCheckpoint|ParseExplicitDeliverablePathDetectsAppendTargetPath|LatestRecoveryTargetPathForSessionInheritsParentExplicitDeliverableForDecomposedChild|FileReadRejectsRecoveryRereadUsingParentExplicitDeliverableForDecomposedChild)$' -count=1`
+  - deploy / proof status:
+    - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+      - runtime version is now `3560`
+    - rebuilt [`./bin/ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp), respawned tmux panes `%847/%848`, and [`./bin/ottercamp health --output json`](/Users/sam/dev/otter-camp/bin/ottercamp) returned `status=ok`
+    - strongest live pre-fix proof:
+      - task `103` work/review sessions `77d81cf9-b092-46b4-a540-3a5ec231e948` and `0190f0dc-9c58-4f5c-8d32-05292c38dc75` repeatedly emitted native `recovery_target_focus_required` payloads with `deliverable_path=Append` even while the engine prompt had already moved to `planning/sambot-feature-spec.md`
+      - the same review session then self-blocked on `preferred deliverable target ... already fully inspected in this turn` after only that validation-error payload
+    - current live caveat after deploy:
+      - task `103` is still `blocked` with no new pending `agent_turn` jobs, so fresh production proof for the corrected native/read-accounting path still depends on the next replay rather than the already-closed pre-fix session chain

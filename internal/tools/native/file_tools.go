@@ -167,7 +167,7 @@ func (e *NativeToolExecutor) rejectPlaceholderDeliverableRead(ctx context.Contex
 		return nil, false, err
 	}
 	plan, ok := taskplan.Parse(taskRecord.Metadata)
-	deliverablePath := parseExplicitDeliverablePath(taskRecord)
+	deliverablePath := e.taskExplicitDeliverablePath(ctx, taskRecord)
 	if deliverablePath == "" {
 		deliverablePath = e.latestRecoveryTargetPathForSession(ctx, scope)
 	}
@@ -217,7 +217,7 @@ func (e *NativeToolExecutor) rejectMismatchedTaskDeliverableRead(ctx context.Con
 		}
 		return nil, false, err
 	}
-	targetPath := preferredRecoveryTargetForTask(taskRecord)
+	targetPath := e.preferredRecoveryTargetForTask(ctx, taskRecord)
 	if targetPath == "" {
 		targetPath = e.latestRecoveryTargetPathForSession(ctx, scope)
 	}
@@ -297,7 +297,7 @@ func (e *NativeToolExecutor) rejectExecutionFirstDeliverableReread(ctx context.C
 	if !ok || !strings.EqualFold(strings.TrimSpace(plan.Mode), taskplan.ModeExecutionFirst) {
 		return nil, false, nil
 	}
-	deliverablePath := parseExplicitDeliverablePath(taskRecord)
+	deliverablePath := e.taskExplicitDeliverablePath(ctx, taskRecord)
 	if deliverablePath == "" {
 		return nil, false, nil
 	}
@@ -363,7 +363,7 @@ func (e *NativeToolExecutor) allowRecoveryDeliverableRootInspection(ctx context.
 		}
 		return false, err
 	}
-	rootPath := preferredTaskDeliverableRoot(taskRecord)
+	rootPath := e.taskPreferredDeliverableRoot(ctx, taskRecord)
 	if rootPath == "" || !workspacePathWithinRoot(targetPath, rootPath) {
 		return false, nil
 	}
@@ -433,6 +433,68 @@ func preferredTaskDeliverableRoot(taskRecord repo.ProjectTask) string {
 		}
 	}
 	return ""
+}
+
+func decompositionParentTaskID(taskRecord repo.ProjectTask) uuid.UUID {
+	if len(taskRecord.Metadata) == 0 {
+		return uuid.Nil
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(taskRecord.Metadata, &metadata); err != nil {
+		return uuid.Nil
+	}
+	parentIDText := strings.TrimSpace(readStringValue(metadata["decomposition_parent_task_id"]))
+	if parentIDText == "" {
+		return uuid.Nil
+	}
+	parentID, err := uuid.Parse(parentIDText)
+	if err != nil {
+		return uuid.Nil
+	}
+	return parentID
+}
+
+func (e *NativeToolExecutor) decompositionParentTask(ctx context.Context, taskRecord repo.ProjectTask) (repo.ProjectTask, bool) {
+	if e == nil || e.tasks == nil {
+		return repo.ProjectTask{}, false
+	}
+	parentID := decompositionParentTaskID(taskRecord)
+	if parentID == uuid.Nil {
+		return repo.ProjectTask{}, false
+	}
+	parentTask, err := e.tasks.GetByID(ctx, parentID)
+	if err != nil {
+		return repo.ProjectTask{}, false
+	}
+	return parentTask, true
+}
+
+func (e *NativeToolExecutor) taskExplicitDeliverablePath(ctx context.Context, taskRecord repo.ProjectTask) string {
+	if explicit := strings.TrimSpace(parseExplicitDeliverablePath(taskRecord)); explicit != "" {
+		return explicit
+	}
+	parentTask, ok := e.decompositionParentTask(ctx, taskRecord)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(parseExplicitDeliverablePath(parentTask))
+}
+
+func (e *NativeToolExecutor) taskPreferredDeliverableRoot(ctx context.Context, taskRecord repo.ProjectTask) string {
+	if explicit := strings.TrimSpace(e.taskExplicitDeliverablePath(ctx, taskRecord)); explicit != "" {
+		return ""
+	}
+	if root := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord)); root != "" {
+		return root
+	}
+	parentTask, ok := e.decompositionParentTask(ctx, taskRecord)
+	if !ok {
+		return ""
+	}
+	if explicit := strings.TrimSpace(parseExplicitDeliverablePath(parentTask)); explicit != "" {
+		return ""
+	}
+	return strings.TrimSpace(preferredTaskDeliverableRoot(parentTask))
 }
 
 func normalizeExplicitDeliverablePathCandidate(raw string) string {
@@ -579,12 +641,15 @@ func (e *NativeToolExecutor) latestRecoveryTargetPathForSession(ctx context.Cont
 	if e != nil && e.tasks != nil && scope.taskID != nil && *scope.taskID != uuid.Nil {
 		taskRecord, err := e.tasks.GetByID(ctx, *scope.taskID)
 		if err == nil {
+			if target := e.taskExplicitDeliverablePath(ctx, taskRecord); target != "" {
+				return target
+			}
 			if checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata); ok {
 				if target := e.contentMigrationCheckpointPreferredOutputPathForSession(ctx, taskRecord, checkpoint); target != "" {
 					return target
 				}
 			}
-			if target := preferredRecoveryTargetForTask(taskRecord); target != "" {
+			if target := e.preferredRecoveryTargetForTask(ctx, taskRecord); target != "" {
 				return target
 			}
 			if target := e.sessionRecoveryState(ctx, scope).targetPath; target != "" && deliverableTargetMatchesTaskContract(taskRecord, target) {
@@ -594,6 +659,13 @@ func (e *NativeToolExecutor) latestRecoveryTargetPathForSession(ctx context.Cont
 		}
 	}
 	return e.sessionRecoveryState(ctx, scope).targetPath
+}
+
+func (e *NativeToolExecutor) preferredRecoveryTargetForTask(ctx context.Context, taskRecord repo.ProjectTask) string {
+	if explicit := strings.TrimSpace(e.taskExplicitDeliverablePath(ctx, taskRecord)); explicit != "" {
+		return explicit
+	}
+	return preferredRecoveryTargetForTask(taskRecord)
 }
 
 func (e *NativeToolExecutor) contentMigrationCheckpointPreferredOutputPathForSession(ctx context.Context, taskRecord repo.ProjectTask, checkpoint taskcheckpoint.ContentMigrationCheckpoint) string {
