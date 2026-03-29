@@ -1647,3 +1647,39 @@
     - review continuations are now emitting deterministic summaries (`Active task request: Review only...`) instead of `Continuation summary unavailable.`
   - remaining direct proof target:
     - the next context-compressed execution retry that falls past both active-request and task-execution summaries should emit the new `Content migration checkpoint is active.` text and reuse the checkpoint/output paths directly
+- 2026-03-28 18:28:00 MDT - Finished: stop same-turn dirty review approval churn immediately.
+  - live diagnosis:
+    - task `70` review session `8ee30a7b-6e81-4b6a-8932-d49a8093c15a` hit `flow.review_decision approve -> review_approval_requires_clean_workspace`, then still burned extra blocked `git.status` / `git.diff` hops in the same turn before the later reject-only retry flow could help
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - after a tier2 `flow.review_decision approve` result comes back `review_approval_requires_clean_workspace`, the turn now stops immediately with `validation_loop_blocked`
+    - the engine appends a direct system correction telling the next retry to reject immediately instead of re-inspecting repo or deliverable state
+    - because the tier2 loop exits right there, the rest of the same model batch never dispatches `git.status`, `git.diff`, or similar follow-on churn tools
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestDispatchToolsStopsSameTurnAfterDirtyWorkspaceReviewApprovalFailure`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3460`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(DispatchToolsStopsSameTurnAfterDirtyWorkspaceReviewApprovalFailure|MaybeRewriteDirtyWorkspaceReviewApprovalToolCalls|HandleCompletedReviewTurnWithoutDecisionRetriesWithRejectPromptWhileWorkspaceStillDirty)$' -count=1`
+  - deploy status:
+    - rebuilt/restarted tmux `codex-e2e-20260324`; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+  - proof target after deploy:
+    - the next dirty review approval failure should append the same-turn stop message and end immediately, with no follow-on `git.status` / `git.diff` tool results in that turn
+- 2026-03-28 18:36:00 MDT - Finished: reject dirty review workspace prose as historical task continuation draft content.
+  - live diagnosis:
+    - task `70` execution session `30a79813-2880-4ae1-be7f-2dd76623f193` appended a continuation summary about dirty review approval after `max_tool_calls`, even though the execution lane had never been in review mode
+    - the wrong prose matched the historical task-draft selectors, so execution continuation was reusing review-lane narration from older task sessions
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `recoveryFileWriteDraftRejectReason(...)` now rejects dirty review workspace prose (`review sandbox`, `approval requires a clean workspace`, `workspace is still dirty`, and related wording) the same way it already rejects other review/rejection memos
+    - that keeps `latestPriorSubstantiveAssistantDraftContent(...)`, `latestTaskHistoricalSubstantiveDraftContent(...)`, and related continuation draft selectors from treating dirty review narration as reusable execution draft text
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestLatestSubstantiveAssistantFinalForTurnIgnoresDirtyReviewWorkspaceProse`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3461`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(LatestSubstantiveAssistantFinalForTurn(IgnoresTemplateReviewRejectionProse|IgnoresDirtyReviewWorkspaceProse)|ContinuationTurnUsesContentMigrationCheckpointSummaryForAsyncProjectTask)$' -count=1`
+  - deploy status:
+    - rebuilt/restarted tmux `codex-e2e-20260324`; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+  - proof target after deploy:
+    - the next task-70 execution continuation should stop carrying dirty review prose and should instead fall through to task-specific execution or checkpoint-backed continuation context

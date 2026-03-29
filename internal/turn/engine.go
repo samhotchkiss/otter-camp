@@ -13977,6 +13977,12 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if err := e.appendToolResults(ctx, rt, []ToolResult{result}); err != nil {
 			return false, err
 		}
+		if shouldStopAfterDirtyWorkspaceReviewApproval(rt, call, result) {
+			rt.toolCallsUsed++
+			rt.stopReason = stopReasonValidationBlocked
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Review approval failed because the workspace is still dirty. Ending this turn now so the next retry can reject immediately instead of re-inspecting repo or deliverable state.]")
+			return true, nil
+		}
 		if err := e.maybeRefreshBootstrapStateAfterExternalProjectMutations(ctx, rt, []ToolCall{call}, []ToolResult{result}); err != nil {
 			return false, err
 		}
@@ -14145,6 +14151,24 @@ func (e *TurnEngine) shouldStopAfterTerminalReviewReject(ctx context.Context, rt
 		return false, err
 	}
 	return strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked"), nil
+}
+
+func shouldStopAfterDirtyWorkspaceReviewApproval(rt *turnRuntime, call ToolCall, result ToolResult) bool {
+	if rt == nil || !taskReviewPromptActive(rt) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(call.Name)) {
+	case "flow.review_decision", "flow_review_decision":
+	default:
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(stringValue(call.Arguments["decision"])), "approve") {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(result.Name), "flow.review_decision") {
+		return false
+	}
+	return strings.EqualFold(toolResultErrorCode(result), "review_approval_requires_clean_workspace")
 }
 
 func (e *TurnEngine) persistResolvedRecoveryTargetWritePath(ctx context.Context, rt *turnRuntime, result ToolResult) error {
@@ -20411,6 +20435,11 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		"decision: reject",
 		"status: reject",
 		"status: reject ❌",
+		"review sandbox",
+		"approval requires a clean workspace",
+		"workspace is still dirty",
+		"cannot discard changes from within the review lane",
+		"review approval cannot proceed",
 	) {
 		return fmt.Sprintf("assistant draft for %s repeated a review or rejection memo instead of the file body", path)
 	}

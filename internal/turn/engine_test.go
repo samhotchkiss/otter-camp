@@ -4472,6 +4472,125 @@ func TestMaybeRewriteDirtyWorkspaceReviewApprovalToolCalls(t *testing.T) {
 	}
 }
 
+func TestDispatchToolsStopsSameTurnAfterDirtyWorkspaceReviewApprovalFailure(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	executionID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.chat.session.Mode = fixture.session.Mode
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:              taskID,
+		OrganizationID:  fixture.session.OrganizationID,
+		ProjectID:       projectID,
+		TaskNumber:      70,
+		Title:           "Review migrated batch outputs",
+		WorkStatus:      "review",
+		AssignedAgentID: &assignedID,
+	}
+
+	dispatched := make([]string, 0, 2)
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched = append(dispatched, call.Name)
+		runID := uuid.New()
+		onRunStarted(runID)
+		if len(dispatched) > 1 {
+			t.Fatalf("unexpected extra tier2 dispatch after dirty approval failure: %+v", dispatched)
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       "flow.review_decision",
+			Output: map[string]any{
+				"error": "review_approval_requires_clean_workspace",
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		agent: repo.Agent{
+			ID:             assignedID,
+			OrganizationID: fixture.session.OrganizationID,
+		},
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		startedAt: time.Now(),
+		toolSet: []tools.ToolDescriptor{
+			{Name: "flow.review_decision", APIName: "flow.review_decision", Tier: "tier2"},
+			{Name: "git.status", APIName: "git.status", Tier: "tier2"},
+		},
+		initialMessageText: "Review only.\n" +
+			"Inspect the current deliverables and use flow.review_decision to approve or reject this review step.\n" +
+			"Use flow_node_execution_id " + executionID.String() + " in flow.review_decision.\n",
+	}
+
+	stop, err := fixture.engine.dispatchTools(context.Background(), rt, []ModelToolCall{
+		{
+			ID:   "approve-1",
+			Name: "flow.review_decision",
+			Tier: "tier2",
+			Arguments: map[string]any{
+				"flow_node_execution_id": executionID.String(),
+				"decision":               "approve",
+			},
+		},
+		{
+			ID:        "git-status-1",
+			Name:      "git.status",
+			Tier:      "tier2",
+			Arguments: map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dispatchTools: %v", err)
+	}
+	if !stop {
+		t.Fatal("expected dispatchTools to stop after dirty approval failure")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(dispatched) != 1 || dispatched[0] != "flow.review_decision" {
+		t.Fatalf("dispatched = %#v, want only flow.review_decision", dispatched)
+	}
+	if !fixture.messages.containsContentSubstring("Ending this turn now so the next retry can reject immediately") {
+		t.Fatal("expected same-turn dirty-workspace stop message")
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	toolResults := 0
+	for _, msg := range messages {
+		if msg.TurnID == nil || *msg.TurnID != rt.turn.ID || !strings.EqualFold(msg.Role, "tool_result") {
+			continue
+		}
+		toolResults++
+	}
+	if toolResults != 1 {
+		t.Fatalf("tool_results in turn = %d, want 1", toolResults)
+	}
+}
+
 func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsAddsMaxBytes(t *testing.T) {
 	engine := &TurnEngine{}
 	rt := &turnRuntime{
@@ -33090,6 +33209,48 @@ func TestLatestSubstantiveAssistantFinalForTurnIgnoresTemplateReviewRejectionPro
 	}
 
 	got := latestSubstantiveAssistantFinalForTurn(messages, turnID, "templates/template-07-dark-mode-developer.html")
+	if got == nil {
+		t.Fatal("expected substantive assistant draft")
+	}
+	if got.SequenceNumber != 10 {
+		t.Fatalf("sequence_number = %d, want 10", got.SequenceNumber)
+	}
+}
+
+func TestLatestSubstantiveAssistantFinalForTurnIgnoresDirtyReviewWorkspaceProse(t *testing.T) {
+	t.Parallel()
+
+	turnID := uuid.New()
+	messages := []repo.ChatMessage{
+		{
+			ID:             uuid.New(),
+			TurnID:         &turnID,
+			Role:           "assistant",
+			Status:         "final",
+			SequenceNumber: 10,
+			Content: strings.TrimSpace(`---
+title: "I Can't Picture My Kids"
+date: 2025-11-11
+source_url: https://www.technonymous.org/p/i-cant-picture-my-kids
+slug: i-cant-picture-my-kids
+---
+
+# I Can't Picture My Kids
+
+Recovered post body content.
+`),
+		},
+		{
+			ID:             uuid.New(),
+			TurnID:         &turnID,
+			Role:           "assistant",
+			Status:         "final",
+			SequenceNumber: 11,
+			Content:        "The runtime is indicating uncommitted changes exist but the review sandbox is restricting me from inspecting them via git tools. Since the approval requires a clean workspace and the runtime reports it isn't clean, but I cannot discard changes from within the review lane, I need to reject the review instead of approving it.",
+		},
+	}
+
+	got := latestSubstantiveAssistantFinalForTurn(messages, turnID, "content/posts/i-cant-picture-my-kids.md")
 	if got == nil {
 		t.Fatal("expected substantive assistant draft")
 	}
