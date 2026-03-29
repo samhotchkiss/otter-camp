@@ -3611,3 +3611,18 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockTaskExecution(BroadContextTool|CurrentTaskRediscoveryTool)|ShouldStopAfterBlockedTaskRecoveryDirectWriteOnly(Batch)?|DispatchToolsStopsAfter(PureBlockedDirectWriteOnlyRecoveryBatch|BlockedDirectWriteOnlyRecoveryBatchWithReadOnlyTail))$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is rebuild/restart and verify the next task `175` work turn starts with `sambot/widget.html` directly
+- 2026-03-29 16:05 MDT - Widened the explicit-deliverable reviewer-summary placeholder family again, this time for `placeholder_deliverable` evidence prose.
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - `looksLikeStrongDeliverableReviewerSummaryPlaceholder(...)` now also matches direct review-evidence bodies that say a file `returned placeholder_deliverable`, `contains only placeholder narration`, and `this is dispositive`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - mirrored the same broader `placeholder_deliverable` evidence detection for recovery draft rejection so contaminated drafts stop before reuse
+  - changed tests:
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go)
+      - added `TestFileReadRejectsPlaceholderEvidenceSummaryAtExplicitDeliverablePath`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestRecoveryFileWriteDraftRejectReasonRejectsPlaceholderEvidenceSummaryAtExplicitDeliverable`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'TestFileReadRejects(ReviewEvidenceSummaryPlaceholderAtExplicitDeliverablePath|PlaceholderEvidenceSummaryAtExplicitDeliverablePath)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestRecoveryFileWriteDraftRejectReasonRejects(ReviewEvidenceSummaryPlaceholderAtExplicitDeliverable|PlaceholderEvidenceSummaryAtExplicitDeliverable)$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is rebuild/restart and confirm the next `sambot/widget.html` reread returns `placeholder_deliverable` instead of raw review prose

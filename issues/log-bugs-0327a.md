@@ -611,3 +611,13 @@
   - impact:
     - fresh work turns burn their first tools reloading context the prompt already provided
     - explicit deliverable work gets delayed before the lane ever reads or writes the owned artifact
+- 2026-03-29 16:05 MDT - Explicit deliverable files can still leak reviewer-summary placeholder prose through `file.read` when the summary names `placeholder_deliverable` instead of `mismatched_deliverable_context`.
+  - fresh live evidence:
+    - after the self-rediscovery fix, task `175` finally read `sambot/widget.html` directly
+    - tool result `15` returned ordinary success with content `The file returned \`placeholder_deliverable\` — it contains only placeholder narration, not an actual frontend chat widget implementation. Per the review protocol, this is dispositive. Rejecting now.`
+    - that body is plainly review commentary, but it bypassed `placeholder_deliverable` classification because the stronger reviewer-summary matcher was still keyed around the `mismatched_deliverable_context` wording family
+  - bug:
+    - the stronger explicit-deliverable reviewer-summary classifier matched `mismatched_deliverable_context` phrasing but not the parallel `placeholder_deliverable` / `contains only placeholder narration` wording
+  - impact:
+    - task execution can still treat review commentary as if it were real deliverable content
+    - recovery draft reuse can keep amplifying the same placeholder body instead of stopping cleanly
