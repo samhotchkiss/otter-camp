@@ -2666,7 +2666,7 @@
     - the turn then ended on the older repeated-focus stop `338` / `298`
   - remaining live-proof gap:
     - the direct post-deploy target is that the next natural retry on task `85` should stop immediately after the blocked direct-write-only batch without the extra `file.list templates` result
-- 2026-03-29 06:00:41 MDT - Finished locally and queued for deploy on `repo_version=3550`: purge stale synthetic prompts and dispatches from older runtime generations.
+- 2026-03-29 06:00:41 MDT - Finished and deployed on `repo_version=3551`: purge stale synthetic prompts and dispatches from older runtime generations.
   - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
     - [`PurgeStaleAgentTurnJobs(...)`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now dead-letters pending/claimed `agent_turn` rows tied to pending synthetic user prompts from an older `metadata.repo_version`
     - the same cleanup pass now fails those stale pending synthetic user messages with `superseded stale synthetic prompt after repo_version change`
@@ -2678,11 +2678,15 @@
     - added `TestJobWorkerPurgeStaleAgentTurnJobsPurgesOlderRepoVersionSyntheticRecoveryResumePrompt`
     - added `TestJobWorkerPurgeStaleAgentTurnJobsKeepsOlderRepoVersionSyntheticRecoveryResumePromptWithLiveTurn`
   - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
-    - runtime version is now `3550`
+    - runtime version is now `3551`
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerPurgeStaleAgentTurnJobs(PurgesOlderRepoVersionSyntheticRecoveryResumePrompt|KeepsOlderRepoVersionSyntheticRecoveryResumePromptWithLiveTurn|PurgesSuccessfulRecoveryResumeWrite|DoesNotPurgeValidationLoopBlockedRecoveryResumeWrite)$' -count=1`
   - pre-deploy live proof:
     - task `85` session `324f566b-751b-4d09-915f-f821abbfd37a` still had multiple pending synthetic recovery prompts at `metadata.repo_version=3548` while the runtime was already on `3549`
     - the latest session turns were therefore still draining older prompts instead of proving the new direct-write-only runtime stop
-  - remaining live-proof gap:
-    - after restart on `3550`, the direct proof target is that those older-version pending synthetic prompts are failed on startup and the next retry runs from a fresh `3550` prompt
+  - deploy / proof status:
+    - rebuilt [`./bin/ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp), respawned tmux panes `%847/%848`, and [`./bin/ottercamp health --output json`](/Users/sam/dev/otter-camp/bin/ottercamp) returned `status=ok`
+    - the live binary reports `repo_version=3551`
+    - task `85` session `324f566b-751b-4d09-915f-f821abbfd37a` now has `59` stale synthetic recovery prompts failed with `superseded stale synthetic prompt after repo_version change`
+    - the same session has `0` pending synthetic prompts from an older repo version without a live turn
+    - one `3549` prompt remains in flight only because turn `60` currently owns it, which matches the intended keep-live-turn exception path
