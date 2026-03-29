@@ -14940,6 +14940,18 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 		if len(toolCalls) == 0 && shouldStopAfterBlockedTaskExecutionInheritedSharedWrite(rt, blockedCalls) {
 			rt.stopReason = stopReasonValidationBlocked
+			if rt.recoveryTurn {
+				targetPath := strings.TrimSpace(e.recoverySynthesizedFileWriteTargetPath(ctx, rt))
+				if targetPath == "" && e.tasks != nil {
+					if taskID := resolveTaskID(rt.session); taskID != nil && *taskID != uuid.Nil {
+						if taskRecord, err := e.tasks.GetByID(ctx, *taskID); err == nil {
+							targetPath = strings.TrimSpace(e.inheritedSharedSingleFileDeliverablePath(ctx, taskRecord))
+						}
+					}
+				}
+				rt.recoveryBlockReason = buildRecoveryInheritedSharedDeliverableBlockedTaskReason(targetPath)
+				_ = e.cancelRecoveryResumeDispatch(ctx, rt, rt.recoveryBlockReason)
+			}
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Task shared-deliverable guard blocked a decomposed child lane from replacing the inherited parent file with file.write. Ending the turn early so the next continuation uses file.edit on the bounded section instead of overwriting the whole shared document.]")
 			return true, nil
 		}

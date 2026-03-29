@@ -36158,6 +36158,102 @@ func TestDispatchToolsStopsAfterPureBlockedTaskRecoveryDirectWriteBatch(t *testi
 	}
 }
 
+func TestDispatchToolsStopsAfterBlockedInheritedSharedWriteBatchAndBlocksRecovery(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	parentID := uuid.New()
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+
+	parentDescription := "Write the complete spec to planning/sambot-feature-spec.md."
+	childDescription := "Architecture & Tech Stack section for the SamBot spec."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.chat.session.Mode = fixture.session.Mode
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		parentID: {
+			ID:             parentID,
+			OrganizationID: fixture.session.OrganizationID,
+			ProjectID:      projectID,
+			TaskNumber:     139,
+			Title:          "Write SamBot Chat Feature Specification",
+			Description:    &parentDescription,
+		},
+		taskID: {
+			ID:             taskID,
+			OrganizationID: fixture.session.OrganizationID,
+			ProjectID:      projectID,
+			TaskNumber:     142,
+			Title:          "Architecture & Tech Stack",
+			Description:    &childDescription,
+			WorkStatus:     "in_progress",
+			Metadata: mustRawJSON(t, map[string]any{
+				"decomposition_parent_task_id": parentID.String(),
+			}),
+		},
+	}
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:         turnID,
+			SessionID:  fixture.session.ID,
+			TurnNumber: 1,
+			Status:     "in_progress",
+		},
+		startedAt:          time.Now(),
+		recoveryTurn:       true,
+		recoveryTargetPath: "planning/sambot-feature-spec.md",
+	}
+	fixture.chat.turns[turnID] = rt.turn
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turnID)
+
+	stop, err := fixture.engine.dispatchTools(context.Background(), rt, []ModelToolCall{{
+		ID:   "blocked-shared-write",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    "planning/sambot-feature-spec.md",
+			"content": "# replacement",
+		},
+	}})
+	if err != nil {
+		t.Fatalf("dispatchTools: %v", err)
+	}
+	if !stop {
+		t.Fatal("expected dispatchTools to stop after blocked inherited shared file.write batch")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if !strings.Contains(rt.recoveryBlockReason, "inherits shared parent deliverable") {
+		t.Fatalf("rt.recoveryBlockReason = %q, want shared parent deliverable block reason", rt.recoveryBlockReason)
+	}
+	updatedInitial, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID initial message: %v", err)
+	}
+	metadata := messageMetadataMap(updatedInitial.Metadata)
+	dispatchMeta, _ := metadata["agent_turn_dispatch"].(map[string]any)
+	if strings.TrimSpace(anyString(dispatchMeta["cancelled_at"])) == "" {
+		t.Fatal("expected cancelled_at metadata on initial recovery message")
+	}
+	if !fixture.messages.containsContentSubstring("Task shared-deliverable guard blocked a decomposed child lane") {
+		t.Fatal("expected shared-deliverable stop message")
+	}
+}
+
 type unitFixture struct {
 	engine        *TurnEngine
 	events        *fakeEventBus

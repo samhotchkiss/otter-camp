@@ -3294,3 +3294,13 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterBlockedTaskExecution(InheritedSharedWrite|SiblingMutation)|ShouldBlockTaskExecutionInheritedSharedDeliverableWriteTool|HandleRecoveryFileWriteWithoutContentStopsForInheritedSharedParentDeliverable)$' -count=1`
   - deploy / proof status:
     - ready to deploy next; same live canary session `5c403c27-3662-4843-a19f-d957258f9ec5` should now stop once, cancel its own recovery dispatch, and block the child task instead of rearming more identical shared-deliverable retries
+- 2026-03-29 12:09 MDT - Extended the same recovery block into the generic blocked-tool stop path that was still firing live.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - when `dispatchTools(...)` stops after a pure blocked inherited shared-file `file.write` batch during recovery, it now also sets `recoveryBlockReason` and cancels the triggering recovery dispatch metadata before appending the stop message
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestDispatchToolsStopsAfterBlockedInheritedSharedWriteBatchAndBlocksRecovery`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterBlockedTaskExecution(InheritedSharedWrite|SiblingMutation)|ShouldBlockTaskExecutionInheritedSharedDeliverableWriteTool|HandleRecoveryFileWriteWithoutContentStopsForInheritedSharedParentDeliverable|DispatchToolsStopsAfterBlockedInheritedSharedWriteBatchAndBlocksRecovery)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; live canary remains task `142` / session `5c403c27-3662-4843-a19f-d957258f9ec5`, where repeated `task_recovery_resume` messages should stop multiplying once the blocked-batch stop also cancels the recovery dispatch metadata
