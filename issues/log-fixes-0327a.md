@@ -2201,3 +2201,19 @@
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotKeepsHumanContinuationPolicyOverStaleReviewGuard$' -count=1`
   - deploy / proof status:
     - pending fresh post-deploy live proof on the next blocked review approval or PM snapshot for task `78`
+- 2026-03-28 23:45:53 MDT - Finished: keep multi-output content-migration recovery checkpoints anchored to checkpoint-owned outputs.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `normalizeRecoveryCheckpointTargetForTask(...)` now rejects stale recovery targets for multi-output content-migration tasks unless they are explicitly named in the checkpoint-owned output set
+    - when a stale target is rejected, normalization now falls back to the checkpoint-owned output set instead of preserving an arbitrary same-root file
+    - `reconcileRecoveryCheckpointCandidate(...)` now uses `normalizeRecoveryCheckpointPathsForTask(...)` so stale artifact paths are cleared whenever target normalization repoints the checkpoint
+    - added `contentMigrationCheckpointOwnsOutputPath(...)` to keep that ownership check explicit and shared
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestNormalizeRecoveryCheckpointTargetForTaskRepointsMultiOutputContentMigrationTargetToOwnedOutput`
+    - added `TestReconcileRecoveryCheckpointCandidateClearsStaleArtifactWhenMultiOutputCheckpointRepointsTarget`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - repo version remains `3511` for this slice because the local tree was already on that version when I picked up the fix
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(NormalizeRecoveryCheckpointTargetForTaskRepointsMultiOutputContentMigrationTargetToOwnedOutput|ReconcileRecoveryCheckpointCandidateClearsStaleArtifactWhenMultiOutputCheckpointRepointsTarget|ReconcileRecoveryCheckpointCandidateNormalizesExecutionFirstReportTarget)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildTaskReviewActionPrompt(PrefersDeliverableRootForBatchContentMigrationOutputs|IncludesCheckpointOutputSetWhenPreferredTargetExists)|NormalizeRecoveryCheckpointTargetForTaskRepointsMultiOutputContentMigrationTargetToOwnedOutput|ReconcileRecoveryCheckpointCandidateClearsStaleArtifactWhenMultiOutputCheckpointRepointsTarget)$' -count=1`
+  - deploy / proof status:
+    - pending rebuild/restart and fresh live proof on the next post-restart task-78 recovery turn or equivalent multi-output close-out recovery lane

@@ -6393,6 +6393,36 @@ func TestNormalizeRecoveryCheckpointTargetForTaskPreservesConcreteCheckpointTarg
 	}
 }
 
+func TestNormalizeRecoveryCheckpointTargetForTaskRepointsMultiOutputContentMigrationTargetToOwnedOutput(t *testing.T) {
+	t.Parallel()
+
+	description := "Close out the migrated technonymous batch. Verify all converted posts under content/posts/, then write README.md and VERIFICATION.md under content/posts/."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  78,
+		Title:       "Close out migrated technonymous content batch",
+		Description: &description,
+		Metadata: mustRawJSON(t, map[string]any{
+			"content_migration_checkpoint": map[string]any{
+				"version": 1,
+				"outputs": []map[string]any{
+					{"path": "content/posts/README.md"},
+					{"path": "content/posts/VERIFICATION.md"},
+				},
+				"artifacts": []map[string]any{
+					{"path": "content/technonymous-index.json"},
+				},
+			},
+		}),
+	}
+
+	normalized := normalizeRecoveryCheckpointTargetForTask(taskRecord, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath: "content/posts/happy-new-yeartechnonymous-isnt-dead.md",
+	})
+	if normalized.TargetPath != "content/posts/README.md" {
+		t.Fatalf("normalized target_path = %q, want checkpoint-owned output", normalized.TargetPath)
+	}
+}
+
 func TestPreferredTaskDeliverablePathInfersTestExecutionLogTarget(t *testing.T) {
 	description := "Execute test scenario 2 (edge cases): test capacity limits, concurrent assignments, boundary conditions. Log all test cases and verify system behavior under stress."
 	taskRecord := repo.ProjectTask{
@@ -6529,6 +6559,55 @@ func TestReconcileRecoveryCheckpointCandidateNormalizesExecutionFirstReportTarge
 	})
 	if checkpoint.TargetPath != "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md" {
 		t.Fatalf("TargetPath = %q, want normalized work report path", checkpoint.TargetPath)
+	}
+}
+
+func TestReconcileRecoveryCheckpointCandidateClearsStaleArtifactWhenMultiOutputCheckpointRepointsTarget(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Close out the migrated technonymous batch. Verify all converted posts under content/posts/, then write README.md and VERIFICATION.md under content/posts/."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  78,
+				WorkStatus:  "blocked",
+				Title:       "Close out migrated technonymous content batch",
+				Description: &description,
+				Metadata: mustRawJSON(t, map[string]any{
+					"content_migration_checkpoint": map[string]any{
+						"version": 1,
+						"outputs": []map[string]any{
+							{"path": "content/posts/README.md"},
+							{"path": "content/posts/VERIFICATION.md"},
+						},
+						"artifacts": []map[string]any{
+							{"path": "content/technonymous-index.json"},
+						},
+					},
+				}),
+			},
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+	}
+
+	checkpoint := fixture.engine.reconcileRecoveryCheckpointCandidate(context.Background(), rt, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:   "content/posts/happy-new-yeartechnonymous-isnt-dead.md",
+		ArtifactPath: ".ottercamp/recovery/content/posts/happy-new-yeartechnonymous-isnt-dead.md",
+	})
+	if checkpoint.TargetPath != "content/posts/README.md" {
+		t.Fatalf("TargetPath = %q, want checkpoint-owned output", checkpoint.TargetPath)
+	}
+	if checkpoint.ArtifactPath != "" {
+		t.Fatalf("ArtifactPath = %q, want empty after target repoint", checkpoint.ArtifactPath)
 	}
 }
 

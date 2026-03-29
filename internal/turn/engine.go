@@ -16825,7 +16825,7 @@ func (e *TurnEngine) reconcileRecoveryCheckpointCandidate(ctx context.Context, r
 			checkpoint.TargetPath = ""
 			checkpoint.ArtifactPath = ""
 		}
-		checkpoint = normalizeRecoveryCheckpointTargetForTask(taskRecord, checkpoint)
+		checkpoint = normalizeRecoveryCheckpointPathsForTask(taskRecord, checkpoint)
 	}
 	historicalHintTarget, hintOK := e.recoveryHistoricalTargetPathHint(ctx, rt)
 	historicalTarget, historicalDraft, ok := e.recoveryHistoricalSubstantiveOutputContext(ctx, rt)
@@ -17173,6 +17173,7 @@ func normalizeRecoveryCheckpointTargetForTask(taskRecord repo.ProjectTask, check
 	targetPath := strings.TrimSpace(checkpoint.TargetPath)
 	explicit := strings.TrimSpace(explicitDeliverablePath(taskRecord))
 	root := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
+	contentMigrationCheckpoint, hasContentMigrationCheckpoint := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata)
 	if targetPath != "" &&
 		recoveryLowSignalPackageMarkerPath(targetPath) &&
 		(explicit == "" || !sameWorkspaceRelativePath(explicit, targetPath)) {
@@ -17196,6 +17197,21 @@ func normalizeRecoveryCheckpointTargetForTask(taskRecord repo.ProjectTask, check
 		}
 		checkpoint.TargetPath = explicit
 		return checkpoint
+	}
+	if hasContentMigrationCheckpoint && len(contentMigrationCheckpoint.Outputs) > 1 {
+		if targetPath != "" && !contentMigrationCheckpointOwnsOutputPath(taskRecord, contentMigrationCheckpoint, targetPath) {
+			checkpoint.TargetPath = ""
+			targetPath = ""
+		}
+		if targetPath == "" {
+			if preferredCheckpointTarget := contentMigrationCheckpointPreferredOutputPath(taskRecord, contentMigrationCheckpoint); preferredCheckpointTarget != "" {
+				checkpoint.TargetPath = preferredCheckpointTarget
+				return checkpoint
+			}
+		}
+		if targetPath != "" {
+			return checkpoint
+		}
 	}
 	if targetPath != "" && !strings.HasPrefix(strings.ToLower(targetPath), "planning/") {
 		return checkpoint
@@ -20443,6 +20459,30 @@ func contentMigrationCheckpointPreferredOutputPath(taskRecord repo.ProjectTask, 
 		return targetPath
 	}
 	return ""
+}
+
+func contentMigrationCheckpointOwnsOutputPath(taskRecord repo.ProjectTask, checkpoint taskcheckpoint.ContentMigrationCheckpoint, candidate string) bool {
+	candidate = normalizeWorkspaceRelativePath(candidate)
+	if candidate == "" || len(checkpoint.Outputs) == 0 {
+		return false
+	}
+	root := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
+	for _, output := range checkpoint.Outputs {
+		targetPath := normalizeWorkspaceRelativePath(output.Path)
+		if targetPath == "" {
+			continue
+		}
+		if !deliverableTargetMatchesTaskContract(taskRecord, targetPath) {
+			continue
+		}
+		if root != "" && !workspacePathWithinRoot(targetPath, root) {
+			continue
+		}
+		if sameWorkspaceRelativePath(targetPath, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func reviewPromptCheckpointOutputPathsFromMetadata(taskRecord repo.ProjectTask) []string {
