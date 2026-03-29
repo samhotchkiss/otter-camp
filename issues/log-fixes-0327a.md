@@ -2423,3 +2423,20 @@
   - deploy / proof status:
     - pre-fix live evidence is the current task-81 worktree file [`content/posts/stop-preparing-your-kids-for-jobs.md`](/Users/sam/otter-data/task-worktrees/sam-blog-rebuild-restart-12/task-81/content/posts/stop-preparing-your-kids-for-jobs.md), which contains review/meta commentary instead of markdown post content while the parent workspace copy remains healthy
     - direct post-`3527` proof target is the next task-81 retry: `file.write` should reject this review/meta prose, `file.read` should return `placeholder_deliverable`, and recovery reuse should not surface the poisoned draft as fallback context
+- 2026-03-29 01:58:32 MDT - Finished locally, queued for deploy: close the recovery read-only shell discovery bypass for content-migration targets.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `shouldBlockTaskRecoveryReadScopeTool(...)` now covers read-only `cli.execute` in addition to `file.read`
+    - added `recoveryReadScopePathFromToolArguments(...)`, `readOnlyCLIDiscoveryPrimaryPath(...)`, and `readOnlyCLISegmentPrimaryPath(...)` so simple read-only shell discovery commands like `ls content/posts/` resolve to a workspace path for guard enforcement
+    - added `recoveryTargetPrefersCheckpointOwnedRootContext(...)` so `content/posts/...` recovery targets with checkpoint-owned context stop sibling input rereads and directory discovery even though they do not carry `OC-<n>` path hints
+    - `buildTaskRecoveryReadScopeToolGuardError(...)` now emits a specific `cli.execute` recovery-scope message for read-only shell discovery
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - expanded `TestShouldBlockTaskRecoveryReadScopeTool` with:
+      - `blocks content migration sibling input once checkpoint-owned context is named`
+      - `blocks read-only cli execute directory discovery for content migration recovery`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - next runtime version should land as `3528`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockTaskRecoveryReadScopeTool|RecoveryFileWriteDraftRejectReasonRejects(DeliverableReviewMetaPlaceholder|ContentMigrationStatusPlaceholder|RuntimeOwnedCommitHandoffPlaceholder)|RecoveryFileOutputContext(IgnoresRejectedFallbackDraft|PrefersOlderSubstantiveReadOverNewerStubPath)|MaybeBlockRepeatedReadOnlyDiscoveryCapTurnsBlocksCLIExecuteReadOnlyChurn)$' -count=1`
+  - deploy / proof status:
+    - pre-fix live evidence is task `81` session `2175bbde-f279-4b13-9c23-e418626de537` on `3527`, where assistant message `244` emitted `cli_execute(command="ls content/posts/")` and tool result `245` returned the directory listing under a prompt that already named checkpoint-owned context
+    - direct post-`3528` proof target is the next task-81 retry: the same `ls content/posts/` / `content/technonymous-index.json` discovery path should now return a recovery-scope guard instead of reopening verification churn

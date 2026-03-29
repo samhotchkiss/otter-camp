@@ -32374,7 +32374,9 @@ func TestShouldBlockTaskRecoveryReadScopeTool(t *testing.T) {
 		name               string
 		toolName           string
 		path               string
+		arguments          map[string]any
 		initialMessageText string
+		recoveryTargetPath string
 		wantBlock          bool
 	}{
 		{
@@ -32420,14 +32422,38 @@ func TestShouldBlockTaskRecoveryReadScopeTool(t *testing.T) {
 			path:      "Work",
 			wantBlock: false,
 		},
+		{
+			name:               "blocks content migration sibling input once checkpoint-owned context is named",
+			toolName:           "file.read",
+			path:               "content/technonymous-index.json",
+			recoveryTargetPath: "content/posts/stop-preparing-your-kids-for-jobs.md",
+			initialMessageText: "Continue the active task recovery now.\nThis is a multi-output content-migration recovery. Continue from checkpoint-owned root/artifact context instead of treating the current target file as the only valid next write.\nFor this multi-output content/posts batch, inspect the checkpoint-owned output root/artifact context to identify the next remaining post instead of rewriting the current target file by default.",
+			wantBlock:          true,
+		},
+		{
+			name:               "blocks read-only cli execute directory discovery for content migration recovery",
+			toolName:           "cli.execute",
+			arguments:          map[string]any{"command": "ls content/posts/"},
+			recoveryTargetPath: "content/posts/stop-preparing-your-kids-for-jobs.md",
+			initialMessageText: "Continue the active task recovery now.\nThis is a multi-output content-migration recovery. Continue from checkpoint-owned root/artifact context instead of treating the current target file as the only valid next write.\nFor this multi-output content/posts batch, inspect the checkpoint-owned output root/artifact context to identify the next remaining post instead of rewriting the current target file by default.",
+			wantBlock:          true,
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rt.initialMessageText = tc.initialMessageText
-			got := shouldBlockTaskRecoveryReadScopeTool(rt, tc.toolName, map[string]any{"path": tc.path})
+			rt.recoveryTargetPath = "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md"
+			if strings.TrimSpace(tc.recoveryTargetPath) != "" {
+				rt.recoveryTargetPath = tc.recoveryTargetPath
+			}
+			arguments := tc.arguments
+			if arguments == nil {
+				arguments = map[string]any{"path": tc.path}
+			}
+			got := shouldBlockTaskRecoveryReadScopeTool(rt, tc.toolName, arguments)
 			if got != tc.wantBlock {
-				t.Fatalf("shouldBlockTaskRecoveryReadScopeTool(%q, %q) = %v, want %v", tc.toolName, tc.path, got, tc.wantBlock)
+				t.Fatalf("shouldBlockTaskRecoveryReadScopeTool(%q, %#v) = %v, want %v", tc.toolName, arguments, got, tc.wantBlock)
 			}
 		})
 	}

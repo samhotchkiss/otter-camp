@@ -13903,7 +13903,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
 				Name:       name,
-				Error:      buildTaskRecoveryReadScopeToolGuardError(rt, arguments),
+				Error:      buildTaskRecoveryReadScopeToolGuardError(rt, name, arguments),
 			})
 			continue
 		}
@@ -28286,15 +28286,19 @@ func shouldBlockTaskRecoveryReadScopeTool(rt *turnRuntime, toolName string, argu
 	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
 		return false
 	}
-	if !strings.EqualFold(strings.TrimSpace(toolName), "file.read") {
+	normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
+	if normalizedToolName != "file.read" && normalizedToolName != "cli.execute" {
 		return false
 	}
 	targetPath := strings.TrimSpace(rt.recoveryTargetPath)
 	if targetPath == "" {
 		return false
 	}
-	path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+	path := recoveryReadScopePathFromToolArguments(normalizedToolName, arguments)
 	if path == "" {
+		if normalizedToolName == "cli.execute" && recoveryTargetPrefersCheckpointOwnedRootContext(rt, targetPath) {
+			return true
+		}
 		return false
 	}
 	if sameWorkspaceRelativePath(path, targetPath) {
@@ -28305,7 +28309,7 @@ func shouldBlockTaskRecoveryReadScopeTool(rt *turnRuntime, toolName string, argu
 	}
 	taskNumber, ok := recoveryCheckpointTaskNumberHint(targetPath)
 	if !ok || taskNumber <= 0 {
-		return false
+		return recoveryTargetPrefersCheckpointOwnedRootContext(rt, targetPath)
 	}
 	if taskRecoveryReadPathMatchesTask(path, taskNumber) {
 		if recoveryPromptHasDurableDraftInstruction(rt) && projectBootstrapRecoveryReadsPlanningPath(map[string]any{"path": path}) {
@@ -28314,6 +28318,98 @@ func shouldBlockTaskRecoveryReadScopeTool(rt *turnRuntime, toolName string, argu
 		return false
 	}
 	return true
+}
+
+func recoveryReadScopePathFromToolArguments(toolName string, arguments map[string]any) string {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "file.read":
+		return normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+	case "cli.execute":
+		if !isReadOnlyDiscoveryCLIExecuteCall(arguments) {
+			return ""
+		}
+		if targetPath, ok := shellFileReadbackTargetFromCLIExecuteArguments(arguments); ok {
+			return normalizeWorkspaceRelativePath(targetPath)
+		}
+		normalized := toolargs.Normalize("cli.execute", cloneMap(arguments))
+		return readOnlyCLIDiscoveryPrimaryPath(anyString(normalized["command"]))
+	default:
+		return ""
+	}
+}
+
+func readOnlyCLIDiscoveryPrimaryPath(command string) string {
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" || !isReadOnlyCLICommand(trimmed) {
+		return ""
+	}
+	replacer := strings.NewReplacer("&&", "\n", "||", "\n", ";", "\n", "|", "\n")
+	segments := strings.Split(replacer.Replace(trimmed), "\n")
+	for _, segment := range segments {
+		if path := readOnlyCLISegmentPrimaryPath(segment); path != "" {
+			return path
+		}
+	}
+	return ""
+}
+
+func readOnlyCLISegmentPrimaryPath(segment string) string {
+	fields := strings.Fields(strings.TrimSpace(segment))
+	if len(fields) < 2 {
+		return ""
+	}
+	command := strings.ToLower(fields[0])
+	extractFirst := func(tokens []string) string {
+		for _, token := range tokens {
+			candidate := normalizeWorkspaceRelativePath(strings.Trim(token, "\"'"))
+			if candidate == "" || candidate == "." || candidate == ".." {
+				continue
+			}
+			if strings.HasPrefix(strings.TrimSpace(token), "-") {
+				continue
+			}
+			return candidate
+		}
+		return ""
+	}
+	extractLast := func(tokens []string) string {
+		for i := len(tokens) - 1; i >= 0; i-- {
+			token := tokens[i]
+			if strings.HasPrefix(strings.TrimSpace(token), "-") {
+				continue
+			}
+			candidate := normalizeWorkspaceRelativePath(strings.Trim(token, "\"'"))
+			if candidate == "" || candidate == "." || candidate == ".." {
+				continue
+			}
+			return candidate
+		}
+		return ""
+	}
+	switch command {
+	case "ls", "find", "stat", "wc", "head", "tail", "cat", "test", "[":
+		return extractFirst(fields[1:])
+	case "sed", "grep", "rg":
+		return extractLast(fields[1:])
+	default:
+		return ""
+	}
+}
+
+func recoveryTargetPrefersCheckpointOwnedRootContext(rt *turnRuntime, targetPath string) bool {
+	if rt == nil {
+		return false
+	}
+	target := strings.ToLower(normalizeWorkspaceRelativePath(targetPath))
+	if !strings.HasPrefix(target, "content/posts/") {
+		return false
+	}
+	initial := strings.ToLower(strings.TrimSpace(rt.initialMessageText))
+	return containsAny(initial,
+		"checkpoint-owned root/artifact context",
+		"multi-output content/posts batch",
+		"instead of rewriting the current target file by default",
+	)
 }
 
 func shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt *turnRuntime, toolName string, arguments map[string]any) bool {
@@ -29982,12 +30078,12 @@ func buildTaskExecutionOffTargetEvidenceToolGuardError(targetPath, path, toolNam
 	}
 }
 
-func buildTaskRecoveryReadScopeToolGuardError(rt *turnRuntime, arguments map[string]any) string {
+func buildTaskRecoveryReadScopeToolGuardError(rt *turnRuntime, toolName string, arguments map[string]any) string {
 	target := ""
 	if rt != nil {
 		target = strings.TrimSpace(rt.recoveryTargetPath)
 	}
-	path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+	path := recoveryReadScopePathFromToolArguments(toolName, arguments)
 	if recoveryPromptHasDurableDraftInstruction(rt) && projectBootstrapRecoveryReadsPlanningPath(map[string]any{"path": path}) {
 		if target == "" {
 			return "task recovery already includes a substantive durable draft in the prompt. Do not reread planning artifacts now; write the target deliverable directly, or use only the matching recovery artifact if the target still needs repair."
@@ -29998,10 +30094,19 @@ func buildTaskRecoveryReadScopeToolGuardError(rt *turnRuntime, arguments map[str
 		return fmt.Sprintf("task recovery for `%s` already includes a substantive durable draft in the prompt. Do not reread planning artifact `%s` now; write `%s` directly, or use only the matching recovery artifact if `%s` still needs repair.", target, path, target, target)
 	}
 	if target == "" {
+		if strings.EqualFold(strings.TrimSpace(toolName), "cli.execute") {
+			return "task recovery should not use read-only cli.execute discovery on unrelated workspace artifacts. Continue from the current task deliverable, same-task planning artifacts, or the named recovery artifact only."
+		}
 		return "task recovery should not reread unrelated workspace artifacts. Continue from the current task deliverable, same-task planning artifacts, or the named recovery artifact only."
 	}
 	if path == "" {
+		if strings.EqualFold(strings.TrimSpace(toolName), "cli.execute") {
+			return fmt.Sprintf("task recovery for `%s` should not use read-only cli.execute discovery now. Continue from the target file, same-task planning artifacts, or the named recovery artifact only.", target)
+		}
 		return fmt.Sprintf("task recovery for `%s` should not reread unrelated workspace artifacts. Continue from the target file, same-task planning artifacts, or the named recovery artifact only.", target)
+	}
+	if strings.EqualFold(strings.TrimSpace(toolName), "cli.execute") {
+		return fmt.Sprintf("task recovery for `%s` should not use read-only cli.execute discovery against `%s`. Continue from `%s`, the matching recovery artifact path, or same-task planning artifacts only.", target, path, target)
 	}
 	return fmt.Sprintf("task recovery for `%s` should not read unrelated workspace artifact `%s`. Continue from `%s`, the matching recovery artifact path, or same-task planning artifacts only.", target, path, target)
 }
