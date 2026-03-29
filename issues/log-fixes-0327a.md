@@ -2771,3 +2771,19 @@
       - task `96` successor session `cc97cbdd-4a4b-490b-9dbb-01b63a5f2c17`
       - task `99` successor review session `cb850e6f-01b8-45ca-8d3c-5265c1453794`
     - both were already carrying pre-restart prompt state, so fresh direct proof for the new contract logic still depends on the next newly-created turn/session rather than those persisted prompts
+- 2026-03-29 06:42 MDT - Finished and deployed on `repo_version=3558`: stamp repo_version on task-scoped carry-forward synthetic prompts.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `syntheticContinuationActionMessageMetadataWithCarryForward(...)` now includes `repo_version`, matching the other synthetic continuation metadata helpers
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestSyntheticContinuationActionMessageMetadataWithCarryForwardIncludesRepoVersion`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(SyntheticContinuationActionMessageMetadata(IncludesFlowNodeExecutionID)|SyntheticContinuationActionMessageMetadataWithCarryForwardIncludesRepoVersion|TaskContinuationResumeMessageMetadataIncludesFlowNodeExecutionID)$' -count=1`
+  - deploy / proof status:
+    - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+      - runtime version is now `3558`
+    - rebuilt [`./bin/ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp), respawned tmux panes `%847/%848`, and [`./bin/ottercamp health --output json`](/Users/sam/dev/otter-camp/bin/ottercamp) returned `status=ok`
+    - live binary reports `repo_version=3558`
+    - fresh proof:
+      - stale synthetic recovery prompt `eea93dae-c00c-4b0f-9337-d3552631fc34` on task `99`'s prior session `ddc0d9af-70c0-49a4-9fb3-7c1cd9a46bb6` was failed with `error_message=superseded stale synthetic prompt after repo_version change`
+      - new review session `5b31a8d0-0582-4ec4-8e0a-40981622703d` carried `task_review_action` metadata with `repo_version=3558`
+      - that same review session read `planning/sambot-feature-spec.md` at message `7`, which also live-proved the earlier explicit-deliverable-over-reference-root fix

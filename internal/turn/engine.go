@@ -26733,6 +26733,7 @@ func syntheticContinuationActionMessageMetadata(session *chat.ChatSession, sourc
 func syntheticContinuationActionMessageMetadataWithCarryForward(session *chat.ChatSession, source string, existing json.RawMessage) json.RawMessage {
 	payload := map[string]any{
 		"source":                 strings.TrimSpace(source),
+		"repo_version":           strings.TrimSpace(versionpkg.RepoVersion),
 		"synthetic_user_message": true,
 	}
 	if len(existing) != 0 && json.Valid(existing) {

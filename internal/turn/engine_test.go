@@ -44258,6 +44258,40 @@ func TestSyntheticContinuationActionMessageMetadataIncludesFlowNodeExecutionID(t
 	}
 }
 
+func TestSyntheticContinuationActionMessageMetadataWithCarryForwardIncludesRepoVersion(t *testing.T) {
+	t.Parallel()
+
+	executionID := uuid.New()
+	session := &chat.ChatSession{
+		Metadata: mustRawJSON(t, map[string]any{
+			"flow_node_execution_id": executionID.String(),
+		}),
+	}
+	existing := mustRawJSON(t, map[string]any{
+		"run_id":         "run-123",
+		"run_step_id":    "step-456",
+		"run_attempt_id": "attempt-789",
+		"task_id":        "task-abc",
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal(syntheticContinuationActionMessageMetadataWithCarryForward(session, "task_review_action", existing), &payload); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	if payload["source"] != "task_review_action" {
+		t.Fatalf("source = %v, want task_review_action", payload["source"])
+	}
+	if payload["repo_version"] != versionpkg.RepoVersion {
+		t.Fatalf("repo_version = %v, want %s", payload["repo_version"], versionpkg.RepoVersion)
+	}
+	if payload["flow_node_execution_id"] != executionID.String() {
+		t.Fatalf("flow_node_execution_id = %v, want %s", payload["flow_node_execution_id"], executionID)
+	}
+	if payload["run_id"] != "run-123" || payload["run_step_id"] != "step-456" || payload["run_attempt_id"] != "attempt-789" || payload["task_id"] != "task-abc" {
+		t.Fatalf("carry-forward metadata missing run attribution: %#v", payload)
+	}
+}
+
 func mustRawJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)
