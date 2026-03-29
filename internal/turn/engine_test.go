@@ -41309,6 +41309,16 @@ This is a ` + "`mismatched_deliverable_context`" + ` — rejecting.
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReasonRejectsReviewEvidenceSummaryPlaceholderAtExplicitDeliverable(t *testing.T) {
+	t.Parallel()
+
+	content := "The file at `sambot/widget.html` returned `mismatched_deliverable_context`. Per the review protocol, this is a disqualifying result — the deliverable does not match the scope of this task (OC-175). Rejecting now with this evidence.\n"
+	got := recoveryFileWriteDraftRejectReason(content, "sambot/widget.html")
+	if !strings.Contains(got, "reviewer assessment or rejection commentary") {
+		t.Fatalf("reason = %q, want reviewer-summary rejection", got)
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReasonRejectsTaskBriefEchoPlaceholder(t *testing.T) {
 	t.Parallel()
 

@@ -3572,3 +3572,19 @@
   - deploy / proof status:
     - rebuilt/restarted cleanly; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
     - direct post-deploy proof for the review-target side is still pending because task `174` already had an in-flight review turn using the older widget target when this slice went live
+- 2026-03-29 15:42 MDT - Widened the explicit-deliverable reviewer-summary placeholder rejection family.
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - `looksLikeStrongDeliverableReviewerSummaryPlaceholder(...)` now also matches direct review-evidence prose like `The file at ... returned mismatched_deliverable_context ... Rejecting now with this evidence`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - mirrored the same stronger reviewer-summary detection in recovery draft rejection so contaminated drafts stop before another retry turn can reuse them
+  - changed tests:
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go)
+      - added `TestFileReadRejectsReviewEvidenceSummaryPlaceholderAtExplicitDeliverablePath`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestRecoveryFileWriteDraftRejectReasonRejectsReviewEvidenceSummaryPlaceholderAtExplicitDeliverable`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'TestFileReadRejectsReviewEvidenceSummaryPlaceholderAtExplicitDeliverablePath$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestRecoveryFileWriteDraftRejectReasonRejectsReviewEvidenceSummaryPlaceholderAtExplicitDeliverable$' -count=1`
+  - deploy / proof status:
+    - rebuilt/restarted cleanly; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+    - direct post-deploy proof is still pending because the fresh task `175` review session has not emitted its first tool result yet on the new binary

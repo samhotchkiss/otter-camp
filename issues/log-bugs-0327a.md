@@ -581,3 +581,12 @@
   - impact:
     - backend tasks can review or recover against sibling frontend files
     - dependency planning artifacts can keep poisoning target selection long after the real task-owned deliverable is known
+- 2026-03-29 15:42 MDT - Explicit deliverable-path tasks can still leak a stronger reviewer-summary placeholder family through `file.read` / recovery reuse even after the generic completion-summary and review-summary guards were tightened.
+  - fresh live evidence:
+    - the newest widget-review family was still carrying prose like `The file at \`sambot/widget.html\` returned \`mismatched_deliverable_context\` ... Rejecting now with this evidence.`
+    - that body is plainly review evidence, not the deliverable, but the placeholder detector was still tuned more narrowly around earlier completion-summary / assessment phrasing
+  - bug:
+    - the stronger reviewer-summary classifier did not explicitly match this more direct `Rejecting now with this evidence` / `mismatched_deliverable_context` family when it was written back into a real deliverable path
+  - impact:
+    - explicit output-file tasks can still reread review commentary as if it were real artifact content
+    - recovery draft reuse can keep amplifying that contamination instead of stopping on placeholder evidence

@@ -23712,6 +23712,8 @@ func looksLikeStrongDeliverableReviewerSummaryPlaceholder(lower string) bool {
 		"here is my review assessment",
 		"the evidence is conclusive",
 		"the file content is clearly not a valid deliverable",
+		"returned `mismatched_deliverable_context`",
+		"returned mismatched_deliverable_context",
 	) {
 		return false
 	}
@@ -23725,6 +23727,8 @@ func looksLikeStrongDeliverableReviewerSummaryPlaceholder(lower string) bool {
 		"this is a mismatched_deliverable_context",
 		"not the actual",
 		"rejecting.",
+		"per the review protocol",
+		"rejecting now with this evidence",
 	)
 }
 
