@@ -490,3 +490,17 @@
     - that child then churns into the later shared-deliverable write guard instead of being rejected immediately
   - target fix:
     - treat same-path `produce/write the file <parent path>` children as malformed duplicate shared-file artifacts so kickoff preflight and PM/worker snapshots both ignore them
+- 2026-03-29 14:11 MDT - Shared-deliverable recovery stops still allowed one child lane to relaunch after a terminal missing-file halt.
+  - fresh live evidence:
+    - task `165` / session `bf26e68d-a8b0-4330-960a-d8d5a9e0e2d8`
+    - earlier completed turns `096eb2b5-332c-455b-9eb2-b79bfa180962` and `4eddb044-98b3-41a1-8b26-b0c38abbce77` already stopped with `[Recovery shared-deliverable guard: inherited parent file \`planning/sambot-example-conversations.md\` is still missing ...]`
+    - despite that, the task remained `in_progress` and the worker reopened a new recovery turn instead of leaving the child lane terminally blocked
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) custom branch `missingInheritedSharedDeliverableStop` marked the task `blocked` but left `agent_turn_validation_guard.blocked=false`
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) active-execution recovery only suppresses blocked task sessions when that validation guard bit is terminal
+  - impact:
+    - inherited shared-file child tasks can keep relaunching after a terminal stop instead of draining and freeing the PM lane
+    - PM continuation wakeup then appears idle again even though the real problem is a stale child execution being treated as resumable
+  - resolved live after deploy:
+    - task `165` no longer relaunches
+    - the PM lane was able to cancel stale replacement family tasks `154` and `164-167`, proving the blocked child session was the real suppressor

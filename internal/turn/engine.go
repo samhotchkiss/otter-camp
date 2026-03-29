@@ -25462,6 +25462,13 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 		}
 	}
 
+	if missingInheritedSharedDeliverableStop {
+		if next.Count < validationLoopBlockThreshold {
+			next.Count = validationLoopBlockThreshold
+		}
+		next.Blocked = true
+	}
+
 	merged, mergeErr := mergeTaskValidationGuardMetadata(taskRecord.Metadata, next)
 	if mergeErr != nil {
 		return false, mergeErr

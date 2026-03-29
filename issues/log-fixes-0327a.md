@@ -3429,3 +3429,16 @@
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformed(DuplicateSharedFile|Procedural|ReferenceOnly)Children$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live effect is that task `155` blocks immediately as a duplicate full-file child instead of reopening the inherited shared-deliverable recovery loop
+- 2026-03-29 14:11 MDT - Hardened inherited shared-deliverable recovery stops so worker recovery respects them as terminal.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - when `missingInheritedSharedDeliverableStop` fires, the persisted validation guard is now forced to `blocked=true` at the normal threshold before metadata is merged back onto the task
+    - that keeps blocked shared-file child lanes out of `RequeueActiveExecutionSessionsWithoutTurns(...)`, which already suppresses blocked tasks only when the validation guard itself is terminal
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - widened `TestHandleToolValidationResultsBlocksRecoveryMissingInheritedSharedDeliverable` to assert terminal validation-guard metadata as well as `WorkStatus=blocked`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleToolValidationResultsBlocksRecoveryMissingInheritedSharedDeliverable|EnqueueTaskValidationBlockedContinuationPromptBlocksMalformedDuplicateSharedFileChild|BuildTaskReviewActionPromptIncludesAcceptanceCriteria)$' -count=1`
+  - live proof after redeploy:
+    - task `165` stopped reopening and its active sessions closed
+    - PM continuation turn `ddd2f2c4-a4e2-474c-b9bf-2a59e1169e70` then cancelled stale replacement parent `154` plus blocked children `164-167` by relying on completed task `158`'s existing `planning/sambot-example-conversations.md`
+    - the example-conversations replacement churn family is now drained; remaining PM work has moved on to task `157`

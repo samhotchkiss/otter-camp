@@ -164,3 +164,18 @@ They need sharper stopping rules than ordinary execution lanes.
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformed(Procedural|ReferenceOnly)Children$' -count=1`
   - deploy / proof target:
     - after redeploy, malformed reference-only children like Sam.blog task `148` should be treated as malformed child artifacts rather than as active bounded work, restoring parent task `146` as the PM-visible architecture work unit
+- 2026-03-29 14:11 MDT - Shared-deliverable recovery stops needed to persist terminal validation-loop metadata, not just mark the task blocked.
+  - fresh live evidence from Sam.blog task `165`:
+    - turns `096eb2b5-332c-455b-9eb2-b79bfa180962` and `4eddb044-98b3-41a1-8b26-b0c38abbce77` both ended with `[Recovery shared-deliverable guard: inherited parent file \`planning/sambot-example-conversations.md\` is still missing ...]`
+    - despite that terminal stop, a new async task session `bf26e68d-a8b0-4330-960a-d8d5a9e0e2d8` reopened immediately afterward and resumed the same child lane again
+  - root cause:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) marked the task `blocked`, but the custom `missingInheritedSharedDeliverableStop` branch kept `agent_turn_validation_guard.blocked=false`
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) intentionally skips active blocked task sessions only when that validation guard bit is set, so the stale execution remained eligible for resume
+  - local fix:
+    - force the validation guard state to `blocked=true` with count at the standard threshold whenever the inherited shared-deliverable recovery stop fires
+    - widened [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) so the existing missing-file regression now asserts both `WorkStatus=blocked` and terminal validation-guard metadata
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleToolValidationResultsBlocksRecoveryMissingInheritedSharedDeliverable|EnqueueTaskValidationBlockedContinuationPromptBlocksMalformedDuplicateSharedFileChild|BuildTaskReviewActionPromptIncludesAcceptanceCriteria)$' -count=1`
+  - post-deploy live proof:
+    - task `165` is no longer relaunching; it settled out of the active lane and then the PM continuation cancelled stale tasks `164-167` and replacement parent `154`
+    - current project state after that cleanup: `158 done`, `154 cancelled`, `164-167 cancelled`, with PM continuation moving on to the remaining architecture parent `157`

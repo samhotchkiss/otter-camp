@@ -34419,6 +34419,16 @@ func TestHandleToolValidationResultsBlocksRecoveryMissingInheritedSharedDelivera
 	if updated.WorkStatus != "blocked" {
 		t.Fatalf("updated.WorkStatus = %q, want blocked", updated.WorkStatus)
 	}
+	guard, ok := tasksvc.ParseValidationGuard(updated.Metadata)
+	if !ok {
+		t.Fatal("expected validation guard metadata")
+	}
+	if !guard.Blocked {
+		t.Fatalf("guard.Blocked = %v, want true", guard.Blocked)
+	}
+	if guard.Count < validationLoopBlockThreshold {
+		t.Fatalf("guard.Count = %d, want >= %d", guard.Count, validationLoopBlockThreshold)
+	}
 	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
 	if !ok {
 		t.Fatal("expected recovery checkpoint metadata")
