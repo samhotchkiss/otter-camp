@@ -255,6 +255,14 @@ func TestLatestRecoveryTargetPathForSessionIgnoresDependencyArtifactHistoryForMa
 	}
 }
 
+func TestTaskExpectsMarkdownDeliverablesRecognizesSeparateMDFileWording(t *testing.T) {
+	description := "Read the first 12 entries from content/technonymous-index.json. For each entry, use web_fetch to retrieve the full post HTML, convert the post body to clean markdown, and write each post as a separate .md file under content/posts/."
+	taskRecord := repo.ProjectTask{Description: &description}
+	if !taskExpectsMarkdownDeliverables(taskRecord) {
+		t.Fatal("expected exact .md-file wording to qualify as markdown deliverables")
+	}
+}
+
 func TestFileListAllowsReviewDeliverableRootInspectionWithinRecoveryTargetRoot(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()
@@ -394,7 +402,7 @@ func TestFileListAllowsExecutionDeliverableRootInspectionWithinRecoveryTargetRoo
 		t.Fatalf("os.WriteFile(sibling): %v", err)
 	}
 
-	description := "Read content/technonymous-index.json. For each of the next 12 URLs in the post_urls array (indices 12-23), use web_fetch to retrieve the page content, then save the article text as clean markdown files under content/posts/."
+	description := "Read the first 12 entries (indices 0-11) from content/technonymous-index.json. For each entry, use web_fetch to retrieve the full post HTML from its URL, convert the post body to clean markdown, and write each post as a separate .md file under content/posts/. Use the URL slug as the filename."
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
 	executor.tasks = &mockTaskRepo{
 		task: repo.ProjectTask{
@@ -452,7 +460,7 @@ func TestFileReadAllowsExecutionSiblingDeliverableInspectionWithinRecoveryTarget
 		t.Fatalf("os.WriteFile(sibling): %v", err)
 	}
 
-	description := "Read content/technonymous-index.json. For each of the next 12 URLs in the post_urls array (indices 12-23), use web_fetch to retrieve the page content, then save the article text as clean markdown files under content/posts/."
+	description := "Read the first 12 entries (indices 0-11) from content/technonymous-index.json. For each entry, use web_fetch to retrieve the full post HTML from its URL, convert the post body to clean markdown, and write each post as a separate .md file under content/posts/. Use the URL slug as the filename."
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
 	executor.tasks = &mockTaskRepo{
 		task: repo.ProjectTask{

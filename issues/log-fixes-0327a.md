@@ -1760,3 +1760,19 @@
     - `GOFLAGS='' go test -tags=integration ./internal/tools/native -run 'TestIntegration(FileListAllowsBlockedReviewNodeDeliverableRootInspectionWithinRecoveryTargetRoot|FileReadRejectsDependencyArtifactAgainstFirstMissingBatchOutput)$' -count=1`
   - proof target after deploy:
     - the next task-70-style content-migration recovery retry should report the next missing `content/posts/...` output as `deliverable_path` instead of pinning back to the already-written first post
+- 2026-03-28 18:39:24 MDT - Finished: recognize `.md file` batch wording as markdown deliverables for native recovery allowances.
+  - live diagnosis:
+    - post-`3467` task-70 still got `recovery_target_focus_required` on `file.list content/posts` even though its description said `write each post as a separate .md file under content/posts/`
+    - the output-root allowance was keyed off `taskExpectsMarkdownDeliverables(...)`, and that helper did not recognize the live `.md file` wording
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `taskExpectsMarkdownDeliverables(...)` now also accepts `clean markdown`, `.md file`, and `.md files`
+  - changed [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go):
+    - added `TestTaskExpectsMarkdownDeliverablesRecognizesSeparateMDFileWording`
+    - updated the execution-lane batch root/sibling inspection tests to use task-70’s exact replacement-task wording
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3469`
+  - verified with:
+    - `gofmt -w internal/tools/native/file_tools.go internal/tools/native/file_tools_test.go`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(TaskExpectsMarkdownDeliverablesRecognizesSeparateMDFileWording|LatestRecoveryTargetPathForSession(PrefersFirstMissingMetadataBatchOutputOverCompletedOutput|PrefersMetadataBatchOutputOverDependencyArtifactHistory|IgnoresDependencyArtifactHistoryForMarkdownBatchWithoutMetadata)|File(ListAllowsExecutionDeliverableRootInspectionWithinRecoveryTargetRootForBatchTask|ReadAllowsExecutionSiblingDeliverableInspectionWithinRecoveryTargetRootForBatchTask))$' -count=1`
+  - proof target after deploy:
+    - the next task-70 recovery retry should stop blocking bounded `content/posts` inspection just because the task brief says `.md file` instead of `markdown files`

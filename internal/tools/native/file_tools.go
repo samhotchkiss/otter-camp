@@ -726,7 +726,10 @@ func taskExpectsMarkdownDeliverables(taskRecord repo.ProjectTask) bool {
 	return strings.Contains(lower, "markdown file") ||
 		strings.Contains(lower, "markdown files") ||
 		strings.Contains(lower, "save as markdown") ||
-		strings.Contains(lower, "save the article text as a clean markdown")
+		strings.Contains(lower, "save the article text as a clean markdown") ||
+		strings.Contains(lower, "clean markdown") ||
+		strings.Contains(lower, ".md file") ||
+		strings.Contains(lower, ".md files")
 }
 
 func taskAllowsPerItemDeliverableInspection(taskRecord repo.ProjectTask, candidate string) bool {
