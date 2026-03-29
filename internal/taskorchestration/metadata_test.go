@@ -218,6 +218,80 @@ func TestValidateCompletionAllowsBlockedChildrenAfterCompletedCloseoutProof(t *t
 	}
 }
 
+func TestValidateCompletionAllowsBlockedChildrenWhenOutcomeAlreadySatisfied(t *testing.T) {
+	parentID := uuid.New()
+	blockedAID := uuid.New()
+	blockedBID := uuid.New()
+	doneAID := uuid.New()
+	doneBID := uuid.New()
+	doneCID := uuid.New()
+	now := time.Date(2026, 3, 29, 16, 40, 0, 0, time.UTC)
+	description := "Append Overview & Purpose to planning/sambot-feature-spec.md."
+	parent := repo.ProjectTask{
+		ID:         parentID,
+		TaskNumber: 113,
+		Title:      "Append Overview & Purpose section",
+		Metadata: taskdecomp.ApplyMetadata(json.RawMessage(`{}`), taskdecomp.Plan{
+			RequiresDecomposition: true,
+			PrimaryDeliverable:    "planning/sambot-feature-spec.md",
+			Deliverables: []string{
+				"planning/sambot-feature-spec.md",
+				"Mission statement child",
+				"Replacement child A",
+				"Replacement child B",
+			},
+		}, description, []uuid.UUID{blockedAID, blockedBID, doneAID, doneBID, doneCID}),
+	}
+	metadata, err := Apply(parent.Metadata, Update{
+		ChildVerifications: []ChildVerification{
+			NewChildVerification(doneAID, "Verified mission statement content exists in planning/sambot-feature-spec.md.", now),
+			NewChildVerification(doneBID, "Verified replacement child content already landed in planning/sambot-feature-spec.md.", now),
+			NewChildVerification(doneCID, "Verified final replacement child completed the Overview & Purpose deliverable.", now),
+		},
+		IntegrationCheck:  NewIntegrationCheck("passed", "Reviewed the delivered Overview & Purpose section end to end.", now),
+		OutcomeAssessment: NewOutcomeAssessment(true, "The parent Overview & Purpose outcome is already satisfied.", now),
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	parent.Metadata = metadata
+
+	blockedChildA := repo.ProjectTask{
+		ID:         blockedAID,
+		TaskNumber: 114,
+		Title:      "Append replacement child A",
+		WorkStatus: "blocked",
+	}
+	blockedChildB := repo.ProjectTask{
+		ID:         blockedBID,
+		TaskNumber: 129,
+		Title:      "Append replacement child B",
+		WorkStatus: "blocked",
+	}
+	doneChildA := repo.ProjectTask{
+		ID:         doneAID,
+		TaskNumber: 115,
+		Title:      "Mission statement child",
+		WorkStatus: "done",
+	}
+	doneChildB := repo.ProjectTask{
+		ID:         doneBID,
+		TaskNumber: 124,
+		Title:      "Replacement child A",
+		WorkStatus: "done",
+	}
+	doneChildC := repo.ProjectTask{
+		ID:         doneCID,
+		TaskNumber: 130,
+		Title:      "Replacement child B",
+		WorkStatus: "done",
+	}
+
+	if err := ValidateCompletion(parent, []repo.ProjectTask{blockedChildA, blockedChildB, doneChildA, doneChildB, doneChildC}); err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+}
+
 func TestValidateCompletionStillRejectsActiveChildAfterCompletedCloseoutProof(t *testing.T) {
 	parentID := uuid.New()
 	activeChildID := uuid.New()

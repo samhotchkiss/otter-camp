@@ -3169,3 +3169,17 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationFocusedDraftMutation(RequiresParentCompletionEvidence|AllowsSatisfiedCloseoutReadyParent|ForAncestorPromotion)|HandleCompletedProjectExecutionContinuationTurn(RetriesParentCompletionRequirementsWithFreshMessage|RetriesBoundedSizeStopWithFreshMessage|RetriesReplacementChildWorkWithFreshMessage|RetriesMissingDependencyStopWithFreshMessage)|ProjectContinuation(ParentCompletionTaskLabelsDedupesTaskRefs|CompletedChildTaskLabelsUsesDoneDirectChildren)|BuildProjectContinuationActionPromptAdds(SatisfiedCloseoutGuidance|CompletedCloseoutGuidance)|ProjectContinuationDraftTaskReadyForParentClosureAllows(SatisfiedOutcomeWithOnlyBlockedChildren|OnlyBlockedChildren))$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live canary is still task `113` on PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where the malformed closeout `task.update` should now be blocked before it reaches the native completion gate
+- 2026-03-29 10:45 MDT - Let the parent-orchestration completion gate treat stale blocked children as terminal once the parent outcome is already satisfied.
+  - changed [`internal/taskorchestration/metadata.go`](/Users/sam/dev/otter-camp/internal/taskorchestration/metadata.go):
+    - [`Evaluate(...)`](/Users/sam/dev/otter-camp/internal/taskorchestration/metadata.go) now marks `blocked` direct children as terminal whenever `parent_orchestration.outcome_assessment.satisfied=true`, instead of requiring a malformed-child shape or an explicit completed closeout child first
+    - this keeps the runtime completion gate aligned with the PM closeout contract: once replacement-child evidence has satisfied the parent outcome, stale blocked descendants no longer force the impossible `all child tasks must complete...` requirement
+  - changed tests:
+    - [`internal/taskorchestration/metadata_test.go`](/Users/sam/dev/otter-camp/internal/taskorchestration/metadata_test.go)
+      - added `TestValidateCompletionAllowsBlockedChildrenWhenOutcomeAlreadySatisfied`
+    - [`internal/task/service_integration_test.go`](/Users/sam/dev/otter-camp/internal/task/service_integration_test.go)
+      - added `TestTaskServiceIntegrationParentDoneAllowsBlockedChildrenWhenOutcomeAlreadySatisfied`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskorchestration -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/task -run 'TestTaskServiceIntegrationParentDone(RequiresVerificationAndIntegration|IgnoresBlockedProceduralChildrenAfterCloseoutProof|AllowsBlockedChildrenWhenOutcomeAlreadySatisfied)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary remains PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where task `113` should now be able to close once the parent-completion metadata is supplied, without cancelling blocked stale children first

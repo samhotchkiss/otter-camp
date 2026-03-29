@@ -202,6 +202,9 @@ func Evaluate(parentTask repo.ProjectTask, childTasks []repo.ProjectTask) Comple
 		if !terminal && blockedMalformedChildDoesNotBlockParentCompletion(parentTask, child) {
 			terminal = true
 		}
+		if !terminal && status == "blocked" && state.OutcomeAssessment != nil && state.OutcomeAssessment.Satisfied {
+			terminal = true
+		}
 		if !terminal && hasCompletedCloseoutChild && status == "blocked" {
 			terminal = true
 		}

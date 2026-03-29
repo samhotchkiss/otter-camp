@@ -2467,6 +2467,83 @@ func TestTaskServiceIntegrationParentDoneIgnoresBlockedProceduralChildrenAfterCl
 	}
 }
 
+func TestTaskServiceIntegrationParentDoneAllowsBlockedChildrenWhenOutcomeAlreadySatisfied(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	description := "Append Overview & Purpose to planning/sambot-feature-spec.md."
+	parent, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Append Overview & Purpose section",
+		Description:    &description,
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	parentRecord, children := seedOrchestrationChildrenForParent(t, ctx, svc, taskRepo, parent.ID, project.ID, template.ID, []string{
+		"Append stale replacement child A",
+		"Append stale replacement child B",
+		"Mission statement child",
+		"Replacement child A",
+		"Replacement child B",
+	})
+	if len(children) != 5 {
+		t.Fatalf("children len = %d, want 5", len(children))
+	}
+
+	for idx := 0; idx < 2; idx++ {
+		child := children[idx]
+		child.WorkStatus = "blocked"
+		if _, updateErr := taskRepo.Update(ctx, child); updateErr != nil {
+			t.Fatalf("Update blocked child %s: %v", child.ID, updateErr)
+		}
+	}
+	for idx := 2; idx < len(children); idx++ {
+		child := children[idx]
+		child.WorkStatus = "done"
+		if _, updateErr := taskRepo.Update(ctx, child); updateErr != nil {
+			t.Fatalf("Update done child %s: %v", child.ID, updateErr)
+		}
+	}
+
+	markTaskReadyForDone(t, ctx, pool, parentRecord.ID, template.ID)
+
+	parentRecord, err = taskRepo.GetByID(ctx, parentRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID parent after mark ready: %v", err)
+	}
+	now := time.Date(2026, 3, 29, 16, 40, 0, 0, time.UTC)
+	parentRecord.Metadata, err = taskorchestration.Apply(parentRecord.Metadata, taskorchestration.Update{
+		ChildVerifications: []taskorchestration.ChildVerification{
+			taskorchestration.NewChildVerification(children[2].ID, "Verified mission statement content exists in planning/sambot-feature-spec.md.", now),
+			taskorchestration.NewChildVerification(children[3].ID, "Verified replacement child content already landed in planning/sambot-feature-spec.md.", now),
+			taskorchestration.NewChildVerification(children[4].ID, "Verified final replacement child completed the Overview & Purpose deliverable.", now),
+		},
+		IntegrationCheck:  taskorchestration.NewIntegrationCheck("passed", "Reviewed the delivered Overview & Purpose section end to end.", now),
+		OutcomeAssessment: taskorchestration.NewOutcomeAssessment(true, "The parent Overview & Purpose outcome is already satisfied.", now),
+	})
+	if err != nil {
+		t.Fatalf("Apply parent orchestration metadata: %v", err)
+	}
+	if _, err := taskRepo.Update(ctx, parentRecord); err != nil {
+		t.Fatalf("Update parent metadata: %v", err)
+	}
+
+	completed, err := svc.TransitionStatus(ctx, parentRecord.ID, "done", Actor{Type: "agent", ID: uuid.New()})
+	if err != nil {
+		t.Fatalf("TransitionStatus done: %v", err)
+	}
+	if completed.WorkStatus != "done" {
+		t.Fatalf("work_status = %q, want done", completed.WorkStatus)
+	}
+}
+
 func TestTaskServiceIntegrationOrchestrationOnlyParentAutoCompletesWithSynthesizedMetadata(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
