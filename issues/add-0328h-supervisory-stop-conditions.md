@@ -92,3 +92,44 @@ They need sharper stopping rules than ordinary execution lanes.
 - 2026-03-29 12:05 MDT - Tightened the same slice in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go): inherited shared-deliverable recovery stops now set `recoveryBlockReason` and cancel the recovery dispatch metadata, so the child lane is treated like a real blocked recovery instead of a soft validation-only retry loop.
 - 2026-03-29 12:09 MDT - The first `recoveryBlockReason` hardening still missed the actual live path. The repeated task-142 retries were being stopped by the generic blocked-tool batch branch (`Task shared-deliverable guard ...`) rather than the narrower `haltRecoveryInheritedSharedDeliverableWrite(...)` helper, so the cancelled dispatch metadata never got applied on those turns.
 - 2026-03-29 12:09 MDT - Follow-on hardening is now in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go): when a pure blocked inherited-shared-file `file.write` batch stops a recovery turn, `dispatchTools(...)` now also sets the same shared-parent `recoveryBlockReason` and cancels the triggering recovery dispatch metadata before ending the turn.
+- 2026-03-29 12:34 MDT - The next supervisory-stop miss is the PM wake path after the last live child lane goes `blocked`.
+  - fresh live proof on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`: after task `142` blocked and its task session closed, the project lane still drained idle even though parent draft task `139` had flipped from `child work exists` into `fresh replacement child work`
+  - root cause split across both runtime layers:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) only tried to wake the PM lane from terminal task turns/status changes when the triggering task was `done` or `cancelled`
+    - both engine and worker settlement checks treated `remainingDraftTasks == 0` as “project settled” even when the snapshot still had `ReplacementDraftLine` / `FocusTaskLine` proving replacement-parent work remained
+- 2026-03-29 12:34 MDT - Local fix is now in place and focused tests are green.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - blocked task tails can now enter the PM continuation wake path
+    - blocked-tail wakes anchor the continuation prompt to the latest actual completed task instead of falsely calling the blocked task “latest completed”
+    - project-settled checks now keep PM work alive when the snapshot still shows replacement-draft or focused-parent work, even if `remainingDraftTasks == 0`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `ensureProjectContinuationMessageDecision(...)` now uses the same “replacement-draft parents still count as remaining work” rule, so idle-project recovery no longer suppresses this state as settled
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestMaybeContinueProjectExecutionAfterTaskCompletionUsesLatestCompletedTaskForBlockedTail`
+      - added `TestHandleTaskStatusChangedEventBlockedWakesProjectContinuation`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+      - added `TestJobWorkerEnsureProjectContinuationMessageKeepsReplacementDraftParentsActionable`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(MaybeContinueProjectExecutionAfterTaskCompletion(IgnoresBlockedTasksForWakeup|UsesLatestCompletedTaskForBlockedTail)|HandleTaskStatusChangedEventBlockedWakesProjectContinuation)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerEnsureProjectContinuationMessageKeepsReplacementDraftParentsActionable$' -count=1`
+  - direct post-deploy proof target:
+    - Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` should wake again after task `142`’s blocked tail and surface the `Draft parent tasks need fresh replacement child work` continuation instead of staying idle with no pending continuation message
+- 2026-03-29 12:39 MDT - The blocked-tail PM wake fix is now live-proven, and the remaining seam is decomposition quality rather than continuation recovery.
+  - fresh live proof on Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` after restart:
+    - continuation `cde7704d-640d-44eb-9735-9639a90957b0` woke immediately instead of leaving the project idle
+    - the PM lane created replacement task `146` for the blocked architecture slice
+    - the next PM continuation then correctly hit the bounded-size stop, decomposed `146`, and queued child tasks `147` / `148`
+  - the new problem exposed by that live run is narrower:
+    - child `147` / `148` are malformed decomposition artifacts, not real bounded deliverables
+    - `147` is procedural summary junk
+    - `148` is a reference-only instruction child (`Reference planning/sambot-feature-spec.md ...`) that should never have been created as executable work
+  - picked up the follow-on hardening in [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+    - `reference ... planning/...` / `refer to ...` instruction lines are now classified as procedural instruction artifacts
+    - that lets the existing malformed-child machinery ignore them in PM snapshots and block them on the task-lane side the same way it already does for `Use cli_execute ...` or browser-only junk children
+  - focused verification is green:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(TaskLooksProceduralInstructionArtifact|ExtractDeliverablesIgnoresReferenceOnlyInstructionLines)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshotIgnoresMalformed(Procedural|ReferenceOnly)Children$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformed(Procedural|ReferenceOnly)Children$' -count=1`
+  - deploy / proof target:
+    - after redeploy, malformed reference-only children like Sam.blog task `148` should be treated as malformed child artifacts rather than as active bounded work, restoring parent task `146` as the PM-visible architecture work unit

@@ -2352,7 +2352,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			if snapshotErr != nil {
 				return uuid.Nil, false, fmt.Errorf("build project continuation snapshot: %w", snapshotErr)
 			}
-			if remainingDrafts == 0 && !snapshot.HasActionableBlocked {
+			if !projectContinuationSnapshotHasRemainingWorkForWorker(remainingDrafts, snapshot) {
 				return uuid.Nil, false, nil
 			}
 			allowSuccessfulHandoffSuppression = projectContinuationSnapshotWaitsOnActiveChildWorkForWorker(remainingDrafts, snapshot)
@@ -3265,6 +3265,22 @@ func projectContinuationSnapshotWaitsOnActiveChildWorkForWorker(remainingDraftTa
 		return false
 	}
 	return strings.TrimSpace(snapshot.ChildActiveDraftLine) != ""
+}
+
+func projectContinuationSnapshotHasRemainingWorkForWorker(remainingDraftTasks int, snapshot projectExecutionContinuationSnapshotForWorker) bool {
+	if remainingDraftTasks > 0 {
+		return true
+	}
+	if snapshot.HasActionableBlocked {
+		return true
+	}
+	if strings.TrimSpace(snapshot.ReplacementDraftLine) != "" {
+		return true
+	}
+	if strings.TrimSpace(snapshot.FocusTaskLine) != "" {
+		return true
+	}
+	return false
 }
 
 func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, projectID uuid.UUID) (projectExecutionContinuationSnapshotForWorker, error) {

@@ -3591,7 +3591,7 @@ func (e *TurnEngine) maybeContinueProjectExecutionAfterTerminalTaskTurn(ctx cont
 		return false, nil
 	}
 	switch strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus)) {
-	case "done", "cancelled":
+	case "done", "cancelled", "blocked":
 	default:
 		return false, nil
 	}
@@ -3621,7 +3621,9 @@ func (e *TurnEngine) HandleTaskStatusChangedEvent(ctx context.Context, event eve
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(payload.ToStatus), "done") {
+	switch strings.ToLower(strings.TrimSpace(payload.ToStatus)) {
+	case "done", "blocked":
+	default:
 		return nil
 	}
 
@@ -3715,6 +3717,10 @@ func (e *TurnEngine) maybeContinueProjectExecutionAfterTaskCompletion(ctx contex
 	if err != nil {
 		return err
 	}
+	snapshot, err := e.projectExecutionContinuationSnapshot(ctx, session.ScopeID)
+	if err != nil {
+		return err
+	}
 
 	var activeTaskWork int
 	if err := e.pool.QueryRow(ctx, `
@@ -3765,7 +3771,7 @@ func (e *TurnEngine) maybeContinueProjectExecutionAfterTaskCompletion(ctx contex
 	if err != nil {
 		return err
 	}
-	if remainingDraftTasks == 0 {
+	if !projectContinuationSnapshotHasRemainingWork(remainingDraftTasks, snapshot) {
 		if pendingContinuationMessages > 0 {
 			if err := e.failPendingProjectContinuationMessages(ctx, session.ID, "project execution already settled"); err != nil {
 				return err
@@ -3782,17 +3788,20 @@ func (e *TurnEngine) maybeContinueProjectExecutionAfterTaskCompletion(ctx contex
 	if err != nil && !errors.Is(err, repo.ErrNotFound) {
 		return err
 	}
-	snapshot, err := e.projectExecutionContinuationSnapshot(ctx, session.ScopeID)
+	promptTask, ok, err := e.projectExecutionContinuationPromptTask(ctx, projectID, completedTask)
 	if err != nil {
 		return err
+	}
+	if !ok {
+		return nil
 	}
 
 	message, err := e.appendProjectExecutionContinuationMessage(
 		ctx,
 		session.ID,
 		agentID,
-		completedTask.ID,
-		buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot),
+		promptTask.ID,
+		buildProjectExecutionContinuationPrompt(promptTask, remainingDraftTasks, snapshot),
 	)
 	if err != nil {
 		return err
@@ -3810,6 +3819,59 @@ func (e *TurnEngine) maybeContinueProjectExecutionAfterTaskCompletion(ctx contex
 	}
 	_, err = e.enqueueAgentTurnIfActive(ctx, session, payload, nil)
 	return err
+}
+
+func projectContinuationSnapshotHasRemainingWork(remainingDraftTasks int, snapshot projectExecutionContinuationSnapshot) bool {
+	if remainingDraftTasks > 0 {
+		return true
+	}
+	if snapshot.HasActionableBlocked {
+		return true
+	}
+	if strings.TrimSpace(snapshot.ReplacementDraftLine) != "" {
+		return true
+	}
+	if strings.TrimSpace(snapshot.FocusTaskLine) != "" {
+		return true
+	}
+	return false
+}
+
+func (e *TurnEngine) projectExecutionContinuationPromptTask(ctx context.Context, projectID uuid.UUID, triggeringTask repo.ProjectTask) (repo.ProjectTask, bool, error) {
+	if projectID == uuid.Nil {
+		return repo.ProjectTask{}, false, nil
+	}
+	status := strings.ToLower(strings.TrimSpace(triggeringTask.WorkStatus))
+	if status == "done" || status == "cancelled" {
+		return triggeringTask, true, nil
+	}
+	if e == nil || e.pool == nil {
+		return repo.ProjectTask{}, false, nil
+	}
+
+	var latestCompletedTask repo.ProjectTask
+	err := e.pool.QueryRow(ctx, `
+		SELECT id, organization_id, project_id, task_number, title, work_status
+		FROM project_task
+		WHERE project_id = $1
+		  AND work_status = 'done'
+		ORDER BY updated_at DESC, task_number DESC, id DESC
+		LIMIT 1
+	`, projectID).Scan(
+		&latestCompletedTask.ID,
+		&latestCompletedTask.OrganizationID,
+		&latestCompletedTask.ProjectID,
+		&latestCompletedTask.TaskNumber,
+		&latestCompletedTask.Title,
+		&latestCompletedTask.WorkStatus,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return repo.ProjectTask{}, false, nil
+		}
+		return repo.ProjectTask{}, false, err
+	}
+	return latestCompletedTask, true, nil
 }
 
 func (e *TurnEngine) countPendingProjectContinuationMessages(ctx context.Context, sessionID uuid.UUID) (int, error) {

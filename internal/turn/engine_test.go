@@ -16238,6 +16238,328 @@ func TestMaybeContinueProjectExecutionAfterTaskCompletionIgnoresBlockedTasksForW
 	}
 }
 
+func TestMaybeContinueProjectExecutionAfterTaskCompletionUsesLatestCompletedTaskForBlockedTail(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	blockedTaskID := uuid.New()
+	flowTemplateID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	sessionMetadata := mustJSONRaw(map[string]any{
+		"project_bootstrap": map[string]any{
+			"status": "completed",
+		},
+	})
+	fixture.session.Metadata = sessionMetadata
+	fixture.chat.session.Metadata = sessionMetadata
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO organization (id, slug, display_name, created_at, updated_at)
+		VALUES ($1, $2, $3, now(), now())
+	`, fixture.session.OrganizationID, "blocked-tail-project-org", "Blocked Tail Project Org"); err != nil {
+		t.Fatalf("insert organization: %v", err)
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO project (id, organization_id, slug, display_name, status, settings, created_by_type, created_by_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'active', '{}'::jsonb, 'system', $5, now(), now())
+	`, projectID, fixture.session.OrganizationID, "project-blocked-tail-wake", "Project Blocked Tail Wake", uuid.New()); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO flow_template (
+			id, organization_id, project_id, slug, display_name, description, is_current, version, is_system, created_by_type, created_by_id, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, '', true, 1, false, 'system', $6, now(), now())
+	`, flowTemplateID, fixture.session.OrganizationID, projectID, "blocked-tail-flow", "Blocked Tail Flow", uuid.New()); err != nil {
+		t.Fatalf("insert flow_template: %v", err)
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO chat_session (
+			id, organization_id, scope_type, scope_id, mode, status, title,
+			created_by_type, created_by_id, current_turn_id, last_message_at, turn_count, message_count, metadata, created_at, updated_at
+		) VALUES ($1, $2, 'project', $3, 'async', 'active', 'Blocked Tail Project Session',
+			'system', $4, NULL, now(), 0, 0, $5, now(), now())
+	`, fixture.session.ID, fixture.session.OrganizationID, projectID, uuid.New(), sessionMetadata); err != nil {
+		t.Fatalf("insert chat_session: %v", err)
+	}
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				Status:         "active",
+			},
+		},
+	}
+	dbAgent, err := repo.NewAgentRepo(fixture.engine.pool).Create(context.Background(), repo.Agent{
+		OrganizationID:  fixture.session.OrganizationID,
+		DisplayName:     "Blocked Tail Project Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Test agent",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:              completedTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      11,
+				Title:           "Finish context corpus",
+				WorkStatus:      "done",
+				AssignedAgentID: uuidPtr(dbAgent.ID),
+				FlowTemplateID:  uuidPtr(flowTemplateID),
+			},
+			draftTaskID: {
+				ID:              draftTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      12,
+				Title:           "Write feature spec replacement",
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(dbAgent.ID),
+				FlowTemplateID:  uuidPtr(flowTemplateID),
+			},
+			blockedTaskID: {
+				ID:              blockedTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      13,
+				Title:           "Architecture & tech stack section",
+				WorkStatus:      "blocked",
+				AssignedAgentID: uuidPtr(dbAgent.ID),
+				FlowTemplateID:  uuidPtr(flowTemplateID),
+				Metadata:        mustJSONRaw(map[string]any{"decomposition_parent_task_id": draftTaskID.String()}),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+
+	for _, task := range taskRepo.items {
+		metadata := task.Metadata
+		if len(metadata) == 0 {
+			metadata = mustJSONRaw(map[string]any{})
+		}
+		if _, err := fixture.engine.pool.Exec(context.Background(), `
+			INSERT INTO project_task (
+				id, organization_id, project_id, task_number, title, work_status,
+				requires_human_review, created_by_type, metadata, assigned_agent_id, flow_template_id, created_at, updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6,false,'system',$7,$8,$9,now(),now())
+		`, task.ID, fixture.session.OrganizationID, projectID, task.TaskNumber, task.Title, task.WorkStatus, metadata, dbAgent.ID, flowTemplateID); err != nil {
+			t.Fatalf("insert project_task %s: %v", task.ID, err)
+		}
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO project_task_event (task_id, project_id, event_type, actor_type, payload)
+		VALUES ($1, $2, 'flow.rejected', 'system', $3::jsonb)
+	`, blockedTaskID, projectID, mustJSONRaw(map[string]any{"blocked_reason": "flow rejection max visits exceeded"})); err != nil {
+		t.Fatalf("insert blocked flow rejection event: %v", err)
+	}
+
+	if err := fixture.engine.maybeContinueProjectExecutionAfterTaskCompletion(context.Background(), projectID, taskRepo.items[blockedTaskID]); err != nil {
+		t.Fatalf("maybeContinueProjectExecutionAfterTaskCompletion: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var sawContinuation bool
+	for _, msg := range messages {
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "user") {
+			continue
+		}
+		metadata := messageMetadataMap(msg.Metadata)
+		if !strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), projectExecutionContinuationSource) {
+			continue
+		}
+		if stringValue(metadata["completed_task_id"]) != completedTaskID.String() {
+			t.Fatalf("completed_task_id = %q, want %s", stringValue(metadata["completed_task_id"]), completedTaskID.String())
+		}
+		if !strings.Contains(strings.ToLower(msg.Content), "latest completed task was task 11") {
+			t.Fatalf("continuation content = %q, want latest completed task 11", msg.Content)
+		}
+		if strings.Contains(strings.ToLower(msg.Content), "latest completed task was task 13") {
+			t.Fatalf("continuation content = %q, unexpectedly anchored to blocked task 13", msg.Content)
+		}
+		sawContinuation = true
+		break
+	}
+	if !sawContinuation {
+		t.Fatal("expected continuation message after blocked tail")
+	}
+}
+
+func TestHandleTaskStatusChangedEventBlockedWakesProjectContinuation(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	blockedTaskID := uuid.New()
+	flowTemplateID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	sessionMetadata := mustJSONRaw(map[string]any{
+		"project_bootstrap": map[string]any{
+			"status": "completed",
+		},
+	})
+	fixture.session.Metadata = sessionMetadata
+	fixture.chat.session.Metadata = sessionMetadata
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO organization (id, slug, display_name, created_at, updated_at)
+		VALUES ($1, $2, $3, now(), now())
+	`, fixture.session.OrganizationID, "blocked-status-project-org", "Blocked Status Project Org"); err != nil {
+		t.Fatalf("insert organization: %v", err)
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO project (id, organization_id, slug, display_name, status, settings, created_by_type, created_by_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'active', '{}'::jsonb, 'system', $5, now(), now())
+	`, projectID, fixture.session.OrganizationID, "project-blocked-status-wake", "Project Blocked Status Wake", uuid.New()); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO flow_template (
+			id, organization_id, project_id, slug, display_name, description, is_current, version, is_system, created_by_type, created_by_id, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, '', true, 1, false, 'system', $6, now(), now())
+	`, flowTemplateID, fixture.session.OrganizationID, projectID, "blocked-status-flow", "Blocked Status Flow", uuid.New()); err != nil {
+		t.Fatalf("insert flow_template: %v", err)
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO chat_session (
+			id, organization_id, scope_type, scope_id, mode, status, title,
+			created_by_type, created_by_id, current_turn_id, last_message_at, turn_count, message_count, metadata, created_at, updated_at
+		) VALUES ($1, $2, 'project', $3, 'async', 'active', 'Blocked Status Project Session',
+			'system', $4, NULL, now(), 0, 0, $5, now(), now())
+	`, fixture.session.ID, fixture.session.OrganizationID, projectID, uuid.New(), sessionMetadata); err != nil {
+		t.Fatalf("insert chat_session: %v", err)
+	}
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				Status:         "active",
+			},
+		},
+	}
+	dbAgent, err := repo.NewAgentRepo(fixture.engine.pool).Create(context.Background(), repo.Agent{
+		OrganizationID:  fixture.session.OrganizationID,
+		DisplayName:     "Blocked Status Project Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Test agent",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:              completedTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      21,
+				Title:           "Finish UI/UX calibration",
+				WorkStatus:      "done",
+				AssignedAgentID: uuidPtr(dbAgent.ID),
+				FlowTemplateID:  uuidPtr(flowTemplateID),
+			},
+			draftTaskID: {
+				ID:              draftTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      22,
+				Title:           "Write replacement spec parent",
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(dbAgent.ID),
+				FlowTemplateID:  uuidPtr(flowTemplateID),
+			},
+			blockedTaskID: {
+				ID:              blockedTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      23,
+				Title:           "Architecture section replacement child",
+				WorkStatus:      "blocked",
+				AssignedAgentID: uuidPtr(dbAgent.ID),
+				FlowTemplateID:  uuidPtr(flowTemplateID),
+				Metadata:        mustJSONRaw(map[string]any{"decomposition_parent_task_id": draftTaskID.String()}),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+
+	for _, task := range taskRepo.items {
+		metadata := task.Metadata
+		if len(metadata) == 0 {
+			metadata = mustJSONRaw(map[string]any{})
+		}
+		if _, err := fixture.engine.pool.Exec(context.Background(), `
+			INSERT INTO project_task (
+				id, organization_id, project_id, task_number, title, work_status,
+				requires_human_review, created_by_type, metadata, assigned_agent_id, flow_template_id, created_at, updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6,false,'system',$7,$8,$9,now(),now())
+		`, task.ID, fixture.session.OrganizationID, projectID, task.TaskNumber, task.Title, task.WorkStatus, metadata, dbAgent.ID, flowTemplateID); err != nil {
+			t.Fatalf("insert project_task %s: %v", task.ID, err)
+		}
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO project_task_event (task_id, project_id, event_type, actor_type, payload)
+		VALUES ($1, $2, 'flow.rejected', 'system', $3::jsonb)
+	`, blockedTaskID, projectID, mustJSONRaw(map[string]any{"blocked_reason": "flow rejection max visits exceeded"})); err != nil {
+		t.Fatalf("insert blocked flow rejection event: %v", err)
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":    blockedTaskID.String(),
+		"project_id": projectID.String(),
+		"to_status":  "blocked",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	event := eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "task.status_changed",
+		ActorType:      "system",
+		Payload:        payload,
+	}
+
+	if err := fixture.engine.HandleTaskStatusChangedEvent(context.Background(), event); err != nil {
+		t.Fatalf("HandleTaskStatusChangedEvent: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+}
+
 func TestRecoverProjectTaskStaleInboundTurnWithoutRunKeepsLiveInvocation(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	fixture.engine.pool = testdb.New(t)
@@ -22703,6 +23025,72 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedProceduralChildren(
 	}
 	if count != 1 {
 		t.Fatalf("countProjectDraftTasks = %d, want 1 actionable parent after ignoring malformed procedural child artifact", count)
+	}
+}
+
+func TestProjectExecutionContinuationSnapshotIgnoresMalformedReferenceOnlyChildren(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	parentDescription := "Write a standalone architecture and tech stack recommendation document to planning/sambot-architecture.md."
+	childDescription := "Reference planning/sambot-feature-spec.md for feature requirements. Be specific and opinionated — recommend concrete tools/services, not just categories."
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:          parentDraftID,
+				ProjectID:   projectID,
+				TaskNumber:  146,
+				Title:       "SamBot Architecture & Tech Stack Document",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"applied":             true,
+						"mode":                "parallel_children",
+						"orchestration_only":  true,
+						"source_description":  parentDescription,
+						"primary_deliverable": "planning/sambot-architecture.md",
+					},
+				}),
+			},
+			uuid.New(): {
+				ID:          uuid.New(),
+				ProjectID:   projectID,
+				TaskNumber:  148,
+				Title:       "Reference planning/sambot-feature-spec.md for feature requirements. Be specific and opinionated — recommend concrete tools/services, not just categories.",
+				Description: &childDescription,
+				WorkStatus:  "in_progress",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.DraftTaskLine, "task 146 (SamBot Architecture & Tech Stack Document)") {
+		t.Fatalf("DraftTaskLine = %q, should not treat malformed reference-child parent as a plain runnable draft", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "task 146 (SamBot Architecture & Tech Stack Document)") {
+		t.Fatalf("ReplacementDraftLine = %q, want actionable parent task moved to replacement-child guidance", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=1") {
+		t.Fatalf("ReplacementDraftLine = %q, want malformed child count", snapshot.ReplacementDraftLine)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "Reference planning/sambot-feature-spec.md") {
+		t.Fatalf("ActiveTaskLine = %q, should omit malformed reference-child artifact", snapshot.ActiveTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "task 146 (SamBot Architecture & Tech Stack Document)") {
+		t.Fatalf("FocusTaskLine = %q, want parent task restored as focus", snapshot.FocusTaskLine)
+	}
+
+	count, err := fixture.engine.countProjectDraftTasks(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("countProjectDraftTasks: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("countProjectDraftTasks = %d, want 1 actionable parent after ignoring malformed reference child artifact", count)
 	}
 }
 

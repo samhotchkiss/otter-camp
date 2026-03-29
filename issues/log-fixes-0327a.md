@@ -3304,3 +3304,39 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterBlockedTaskExecution(InheritedSharedWrite|SiblingMutation)|ShouldBlockTaskExecutionInheritedSharedDeliverableWriteTool|HandleRecoveryFileWriteWithoutContentStopsForInheritedSharedParentDeliverable|DispatchToolsStopsAfterBlockedInheritedSharedWriteBatchAndBlocksRecovery)$' -count=1`
   - deploy / proof status:
     - ready to deploy next; live canary remains task `142` / session `5c403c27-3662-4843-a19f-d957258f9ec5`, where repeated `task_recovery_resume` messages should stop multiplying once the blocked-batch stop also cancels the recovery dispatch metadata
+- 2026-03-29 12:34 MDT - Fixed PM continuation wakeups for blocked child tails and replacement-parent states.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `maybeContinueProjectExecutionAfterTerminalTaskTurn(...)` now treats `blocked` as a PM-wake candidate alongside `done` / `cancelled`
+    - `HandleTaskStatusChangedEvent(...)` now routes `to_status=blocked` into the same continuation path
+    - blocked-tail PM wakes now resolve the latest actual completed task for the prompt anchor instead of falsely labeling the blocked task as “latest completed”
+    - added `projectContinuationSnapshotHasRemainingWork(...)` so replacement-draft / focused-parent snapshot states no longer get treated as settled merely because `remainingDraftTasks == 0`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `ensureProjectContinuationMessageDecision(...)` now uses the same replacement-parent-aware remaining-work predicate via `projectContinuationSnapshotHasRemainingWorkForWorker(...)`
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestMaybeContinueProjectExecutionAfterTaskCompletionUsesLatestCompletedTaskForBlockedTail`
+      - added `TestHandleTaskStatusChangedEventBlockedWakesProjectContinuation`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+      - added `TestJobWorkerEnsureProjectContinuationMessageKeepsReplacementDraftParentsActionable`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(MaybeContinueProjectExecutionAfterTaskCompletion(IgnoresBlockedTasksForWakeup|UsesLatestCompletedTaskForBlockedTail)|HandleTaskStatusChangedEventBlockedWakesProjectContinuation)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerEnsureProjectContinuationMessageKeepsReplacementDraftParentsActionable$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; live proof target is Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, which should now wake from the task-142 blocked tail and emit a fresh replacement-child continuation instead of staying idle
+- 2026-03-29 12:39 MDT - Hardened decomposition against malformed reference-only child tasks after the PM wake fix exposed task `148`.
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+    - `isInstructionOnlyDeliverable(...)` now treats `reference ... planning/...` and `refer to ...` file-path instructions as procedural artifacts instead of executable deliverables
+  - changed tests:
+    - [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go)
+      - added the `Reference planning/...` case to `TestTaskLooksProceduralInstructionArtifact`
+      - added `TestExtractDeliverablesIgnoresReferenceOnlyInstructionLines`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestProjectExecutionContinuationSnapshotIgnoresMalformedReferenceOnlyChildren`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+      - added `TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedReferenceOnlyChildren`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(TaskLooksProceduralInstructionArtifact|ExtractDeliverablesIgnoresReferenceOnlyInstructionLines)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshotIgnoresMalformed(Procedural|ReferenceOnly)Children$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformed(Procedural|ReferenceOnly)Children$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live effect is that malformed reference-only children like Sam.blog task `148` are ignored as malformed child artifacts, leaving parent task `146` as the actionable PM-visible architecture unit

@@ -19586,6 +19586,139 @@ func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedProcedural
 	}
 }
 
+func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedReferenceOnlyChildren(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "project-continuation-snapshot-ignores-malformed-reference-only-children",
+		DisplayName: "Project Continuation Snapshot Ignores Malformed Reference-Only Children",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "project-continuation-snapshot-ignores-malformed-reference-only-children-project",
+		DisplayName:    "Project Continuation Snapshot Ignores Malformed Reference-Only Children Project",
+		Description:    "Project for malformed reference-only child snapshot coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "project-continuation-snapshot-ignores-malformed-reference-only-children-template",
+		DisplayName:    "Project Continuation Snapshot Ignores Malformed Reference-Only Children Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	parentDescription := "Write a standalone architecture and tech stack recommendation document to planning/sambot-architecture.md."
+	parentMetadata, err := json.Marshal(map[string]any{
+		"decomposition": map[string]any{
+			"applied":             true,
+			"mode":                "parallel_children",
+			"orchestration_only":  true,
+			"source_description":  parentDescription,
+			"primary_deliverable": "planning/sambot-architecture.md",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal parent metadata: %v", err)
+	}
+	parentTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     146,
+		Title:          "SamBot Architecture & Tech Stack Document",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+		Metadata:       parentMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childDescription := "Reference planning/sambot-feature-spec.md for feature requirements. Be specific and opinionated — recommend concrete tools/services, not just categories."
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     148,
+		Title:          "Reference planning/sambot-feature-spec.md for feature requirements. Be specific and opinionated — recommend concrete tools/services, not just categories.",
+		Description:    &childDescription,
+		WorkStatus:     "in_progress",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+		Metadata:       childMetadata,
+	}); err != nil {
+		t.Fatalf("create malformed reference-only child task: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.DraftTaskLine, "SamBot Architecture & Tech Stack Document") {
+		t.Fatalf("DraftTaskLine = %q, should not treat malformed reference-child parent as a plain runnable draft", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "SamBot Architecture & Tech Stack Document") {
+		t.Fatalf("ReplacementDraftLine = %q, want actionable parent task moved to replacement-child guidance", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=1") {
+		t.Fatalf("ReplacementDraftLine = %q, want malformed child count", snapshot.ReplacementDraftLine)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "Reference planning/sambot-feature-spec.md") {
+		t.Fatalf("ActiveTaskLine = %q, should omit malformed reference-child artifact", snapshot.ActiveTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "SamBot Architecture & Tech Stack Document") {
+		t.Fatalf("FocusTaskLine = %q, want parent task restored as focus", snapshot.FocusTaskLine)
+	}
+
+	remainingDrafts, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	if remainingDrafts != 1 {
+		t.Fatalf("countActionableProjectDraftTasks = %d, want 1 actionable parent after ignoring malformed reference child artifact", remainingDrafts)
+	}
+}
+
 func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresCancelledChildren(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -21256,6 +21389,167 @@ func TestJobWorkerEnsureProjectContinuationMessageRequeuesAfterBlockedReviewChil
 	}
 	if pendingCount != 1 {
 		t.Fatalf("pending continuation messages = %d, want 1 fresh continuation", pendingCount)
+	}
+}
+
+func TestJobWorkerEnsureProjectContinuationMessageKeepsReplacementDraftParentsActionable(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "ensure-project-continuation-keeps-replacement-draft-parents-actionable",
+		DisplayName: "Ensure Project Continuation Keeps Replacement Draft Parents Actionable",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "ensure-project-continuation-keeps-replacement-draft-parents-actionable-project",
+		DisplayName:    "Ensure Project Continuation Keeps Replacement Draft Parents Actionable Project",
+		Description:    "Project for replacement-draft continuation coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "ensure-project-continuation-keeps-replacement-draft-parents-actionable-template",
+		DisplayName:    "Ensure Project Continuation Keeps Replacement Draft Parents Actionable Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	doneTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     145,
+		Title:          "Context Corpus",
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	parentDescription := `Write a comprehensive, actionable feature specification for the "Chat with SamBot" feature to planning/sambot-feature-spec.md.`
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      139,
+		Title:           "Write SamBot Chat Feature Specification (replacement for blocked OC-87/89/99/103)",
+		Description:     &parentDescription,
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		AssignedAgentID: &agent.ID,
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	blockedChild, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      142,
+		Title:           "Architecture & Tech Stack",
+		Description:     &parentDescription,
+		WorkStatus:      "blocked",
+		BlocksScope:     "task",
+		AssignedAgentID: &agent.ID,
+		FlowTemplateID:  &template.ID,
+		Metadata:        childMetadata,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create blocked child task: %v", err)
+	}
+	if _, err := repo.NewProjectTaskEventRepo(pool).Record(ctx, repo.ProjectTaskEvent{
+		TaskID:    blockedChild.ID,
+		ProjectID: project.ID,
+		EventType: "flow.rejected",
+		ActorType: "system",
+		ActorID:   &agent.ID,
+		Payload: func() json.RawMessage {
+			payload, marshalErr := json.Marshal(map[string]any{"blocked_reason": "flow rejection max visits exceeded"})
+			if marshalErr != nil {
+				t.Fatalf("marshal blocked child flow rejection payload: %v", marshalErr)
+			}
+			return payload
+		}(),
+	}); err != nil {
+		t.Fatalf("record blocked child flow rejection: %v", err)
+	}
+
+	messageID, suppressed, err := worker.ensureProjectContinuationMessageDecision(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ensureProjectContinuationMessageDecision: %v", err)
+	}
+	if suppressed {
+		t.Fatal("suppressed = true, want false")
+	}
+	if messageID == uuid.Nil {
+		t.Fatal("messageID = nil, want fresh project continuation message")
+	}
+
+	message, err := repo.NewChatMessageRepo(pool).GetByID(ctx, messageID)
+	if err != nil {
+		t.Fatalf("load continuation message: %v", err)
+	}
+	expectedCompletedAnchor := fmt.Sprintf("latest completed task was task %d", doneTask.TaskNumber)
+	if !strings.Contains(strings.ToLower(message.Content), expectedCompletedAnchor) {
+		t.Fatalf("continuation content = %q, want latest completed task anchor %q", message.Content, expectedCompletedAnchor)
+	}
+	if !strings.Contains(message.Content, "Draft parent tasks need fresh replacement child work:") {
+		t.Fatalf("continuation content = %q, want replacement-draft guidance", message.Content)
 	}
 }
 

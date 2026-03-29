@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -107,6 +108,42 @@ func TestTaskLooksProceduralInstructionArtifact(t *testing.T) {
 	boundedBrowserDescription := "Use browser tools to navigate technonymous.org, discover the site structure, identify all blog post URLs"
 	if TaskLooksProceduralInstructionArtifact("Use browser tools to navigate technonymous.org, discover the site structure, identify all blog post URLs", &boundedBrowserDescription) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = true, want false for bounded crawl deliverable")
+	}
+	referenceDescription := "Reference planning/sambot-feature-spec.md for feature requirements. Be specific and opinionated — recommend concrete tools/services, not just categories."
+	if !TaskLooksProceduralInstructionArtifact("Reference planning/sambot-feature-spec.md for feature requirements. Be specific and opinionated — recommend concrete tools/services, not just categories.", &referenceDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for reference-only instruction child task")
+	}
+}
+
+func TestExtractDeliverablesIgnoresReferenceOnlyInstructionLines(t *testing.T) {
+	description := strings.Join([]string{
+		"Write a standalone architecture and tech stack recommendation document for the \"Chat with SamBot\" feature.",
+		"",
+		"Deliverable: planning/sambot-architecture.md",
+		"",
+		"Cover the following sections:",
+		"1. **Embedding Strategy** — How to generate embeddings from scraped blog posts in content/posts/, chunk sizing, metadata tagging",
+		"2. **RAG Pipeline Design** — Retrieval-augmented generation flow: query → retrieval → context assembly → LLM prompt → response",
+		"",
+		"Reference the SamBot feature spec in planning/sambot-feature-spec.md for requirements context.",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	if len(items) < 2 {
+		t.Fatalf("extractDeliverables len = %d, want >= 2 section deliverables: %v", len(items), items)
+	}
+	for _, expected := range []string{
+		"Embedding Strategy — How to generate embeddings from scraped blog posts in content/posts/, chunk sizing, metadata tagging",
+		"RAG Pipeline Design — Retrieval-augmented generation flow: query → retrieval → context assembly → LLM prompt → response",
+	} {
+		if !slices.Contains(items, expected) {
+			t.Fatalf("extractDeliverables = %v, want numbered section deliverable %q", items, expected)
+		}
+	}
+	for _, item := range items {
+		if strings.HasPrefix(strings.ToLower(item), "reference planning/sambot-feature-spec.md") {
+			t.Fatalf("reference-only instruction leaked into deliverables: %q", item)
+		}
 	}
 }
 
