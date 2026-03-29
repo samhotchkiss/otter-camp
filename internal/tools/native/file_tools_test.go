@@ -202,6 +202,24 @@ func TestLatestRecoveryTargetPathForSessionPrefersMetadataBatchOutputOverDepende
 	}
 }
 
+func TestContentMigrationCheckpointPreferredOutputPathSkipsExplicitSingleFileDeliverable(t *testing.T) {
+	description := "Deliverable: Append these sections to the existing planning/sambot-feature-spec.md file. Do not overwrite existing content."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  109,
+		Title:       "Append sections to planning/sambot-feature-spec.md",
+		Description: &description,
+	}
+	checkpoint := taskcheckpoint.ContentMigrationCheckpoint{
+		Outputs: []taskcheckpoint.WorkspaceFile{
+			{Path: "content/posts/stop-preparing-your-kids-for-jobs.md"},
+		},
+	}
+
+	if got := contentMigrationCheckpointPreferredOutputPath(taskRecord, checkpoint); got != "" {
+		t.Fatalf("contentMigrationCheckpointPreferredOutputPath(...) = %q, want empty for explicit single-file deliverable", got)
+	}
+}
+
 func TestLatestRecoveryTargetPathForSessionPrefersFirstMissingMetadataBatchOutputOverCompletedOutput(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

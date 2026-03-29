@@ -20558,6 +20558,44 @@ func TestContinuationTurnUsesContentMigrationCheckpointSummaryForAsyncProjectTas
 	}
 }
 
+func TestTaskContentMigrationCheckpointSummarySkipsExplicitSingleFileDeliverable(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+
+	description := "Deliverable: Append these sections to the existing planning/sambot-feature-spec.md file. Do not overwrite existing content."
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      uuid.New(),
+				TaskNumber:     109,
+				Title:          "Append sections to planning/sambot-feature-spec.md",
+				Description:    &description,
+				Metadata: mustJSONRaw(map[string]any{
+					taskcheckpoint.ContentMigrationMetadataKey: map[string]any{
+						"version":         1,
+						"checkpoint_path": ".ottercamp/checkpoints/oc-109-content-migration.md",
+						"outputs": []map[string]any{
+							{"path": "content/posts/stop-preparing-your-kids-for-jobs.md"},
+						},
+					},
+				}),
+			},
+		},
+	}
+
+	if summary, ok := fixture.engine.taskContentMigrationCheckpointSummary(context.Background(), &turnRuntime{session: fixture.session}); ok {
+		t.Fatalf("taskContentMigrationCheckpointSummary(...) = %q, want no checkpoint summary for explicit single-file deliverable", summary)
+	}
+}
+
 func TestContinuationTurnUsesTaskFallbackSummaryForSupervisorContextQuestionnaire(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -37636,6 +37674,26 @@ func TestExplicitDeliverablePathDetectsAppendTargetPath(t *testing.T) {
 
 	if got := explicitDeliverablePath(taskRecord); got != "planning/sambot-feature-spec.md" {
 		t.Fatalf("explicitDeliverablePath(...) = %q, want %q", got, "planning/sambot-feature-spec.md")
+	}
+}
+
+func TestContentMigrationCheckpointPreferredOutputPathSkipsExplicitSingleFileDeliverable(t *testing.T) {
+	t.Parallel()
+
+	description := "Deliverable: Append these sections to the existing planning/sambot-feature-spec.md file. Do not overwrite existing content."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  109,
+		Title:       "Append sections to planning/sambot-feature-spec.md",
+		Description: &description,
+	}
+	checkpoint := taskcheckpoint.ContentMigrationCheckpoint{
+		Outputs: []taskcheckpoint.WorkspaceFile{
+			{Path: "content/posts/stop-preparing-your-kids-for-jobs.md"},
+		},
+	}
+
+	if got := contentMigrationCheckpointPreferredOutputPath(taskRecord, checkpoint); got != "" {
+		t.Fatalf("contentMigrationCheckpointPreferredOutputPath(...) = %q, want empty for explicit single-file deliverable", got)
 	}
 }
 

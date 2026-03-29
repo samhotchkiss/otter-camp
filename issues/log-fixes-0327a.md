@@ -2923,3 +2923,21 @@
     - fresh live proof:
       - old task-129 review session `cb25ec19-d20e-4250-8f47-1e49bd64cd08` had been self-blocking on `recovery_target_focus_required` while carrying backticked `deliverable_path`
       - successor session `3e72351c-6278-499f-b36c-de2b75646376` no longer returned a raw `recovery_target_focus_required` tool result for its first direct read of `planning/sambot-feature-spec.md`; it read file content instead, which proves the path-token self-block is gone
+- 2026-03-29 08:33 MDT - Suppressed stale content-migration checkpoint baggage on explicit single-file / non-markdown tasks.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - [`taskContentMigrationCheckpointSummary(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now returns no summary for explicit single-file or non-markdown tasks, even if stale checkpoint metadata exists
+    - [`contentMigrationCheckpointResumeContext(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now skips checkpoint-backed recovery notes for the same tasks
+    - [`contentMigrationCheckpointPreferredOutputPath(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now ignores stale checkpoint outputs for those tasks
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - native [`contentMigrationCheckpointPreferredOutputPath(...)`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go) now ignores stale checkpoint outputs for explicit single-file / non-markdown tasks
+  - changed tests:
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go)
+      - added `TestContentMigrationCheckpointPreferredOutputPathSkipsExplicitSingleFileDeliverable`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestTaskContentMigrationCheckpointSummarySkipsExplicitSingleFileDeliverable`
+      - added `TestContentMigrationCheckpointPreferredOutputPathSkipsExplicitSingleFileDeliverable`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(ContentMigrationCheckpointPreferredOutputPathSkipsExplicitSingleFileDeliverable|ParseRecentDeliverableTargetFromToolResult(PrefersDeliverablePath|StripsWrappedDeliverablePath)|LatestRecoveryTargetPathForSession(FallsBackToReviewPromptTarget|StripsBackticksFromReviewPromptTarget))$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(TaskContentMigrationCheckpointSummarySkipsExplicitSingleFileDeliverable|ContentMigrationCheckpointPreferredOutputPathSkipsExplicitSingleFileDeliverable)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live target is task `109` review session `4ba95ee9-123f-4b9d-9fcf-37a73b84fe00` or its successor, which should stop receiving stale `content/posts/...` checkpoint baggage in continuation/recovery state

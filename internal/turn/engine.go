@@ -11562,6 +11562,9 @@ func (e *TurnEngine) taskContentMigrationCheckpointSummary(ctx context.Context, 
 	if !ok {
 		return "", false
 	}
+	if strings.TrimSpace(explicitDeliverablePath(taskRecord)) != "" || !taskExpectsMarkdownDeliverables(taskRecord) {
+		return "", false
+	}
 	parts := []string{"Content migration checkpoint is active."}
 	if path := strings.TrimSpace(checkpoint.CheckpointPath); path != "" {
 		parts = append(parts, "Checkpoint: "+path+".")
@@ -18827,6 +18830,9 @@ func (e *TurnEngine) contentMigrationCheckpointResumeContext(ctx context.Context
 	if !ok || len(checkpoint.Outputs) == 0 {
 		return "", nil, false
 	}
+	if strings.TrimSpace(explicitDeliverablePath(taskRecord)) != "" || !taskExpectsMarkdownDeliverables(taskRecord) {
+		return "", nil, false
+	}
 	preferredRoot := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))
 	if preferredRoot == "" {
 		return "", nil, false
@@ -21587,6 +21593,9 @@ func metadataPreferredRecoveryTargetPathForTask(taskRecord repo.ProjectTask) str
 
 func contentMigrationCheckpointPreferredOutputPath(taskRecord repo.ProjectTask, checkpoint taskcheckpoint.ContentMigrationCheckpoint) string {
 	if len(checkpoint.Outputs) == 0 {
+		return ""
+	}
+	if strings.TrimSpace(explicitDeliverablePath(taskRecord)) != "" || !taskExpectsMarkdownDeliverables(taskRecord) {
 		return ""
 	}
 	root := strings.TrimSpace(preferredTaskDeliverableRoot(taskRecord))

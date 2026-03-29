@@ -807,6 +807,9 @@ func preferredRecoveryTargetForTask(taskRecord repo.ProjectTask) string {
 }
 
 func contentMigrationCheckpointPreferredOutputPath(taskRecord repo.ProjectTask, checkpoint taskcheckpoint.ContentMigrationCheckpoint) string {
+	if strings.TrimSpace(parseExplicitDeliverablePath(taskRecord)) != "" || !taskExpectsMarkdownDeliverables(taskRecord) {
+		return ""
+	}
 	root := preferredTaskDeliverableRoot(taskRecord)
 	for _, output := range checkpoint.Outputs {
 		target := normalizeWorkspacePath(output.Path)

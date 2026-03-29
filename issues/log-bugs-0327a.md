@@ -315,3 +315,7 @@
   - direct `file.read` still returned `recovery_target_focus_required`
   - the tool payload showed `deliverable_path=\"`planning/sambot-feature-spec.md`\"`, with wrapper backticks preserved in the stored target
   Root cause: shared path normalization preserved markdown/quote wrappers, so runtime comparisons treated `` `planning/sambot-feature-spec.md` `` and `planning/sambot-feature-spec.md` as different paths. Impact: review lanes could self-block on their own preferred deliverable target even when the contract was otherwise correct.
+- 2026-03-29 08:33 MDT - Task `109` exposed stale content-migration checkpoint bleed-through on a single-file planning/spec lane. Fresh live evidence on session `4ba95ee9-123f-4b9d-9fcf-37a73b84fe00`:
+  - the lane repeatedly reread large sections of `planning/sambot-feature-spec.md`, hit prompt-input overflow/compression, then reread again
+  - task `109` metadata still carried `content_migration_checkpoint` outputs under `content/posts/...`, even though its current contract is `planning/sambot-feature-spec.md`
+  Root cause: checkpoint summary / preferred-output helpers only checked for checkpoint presence, not whether the task was still a markdown-batch migration task. Impact: stale checkpoint metadata could inject the wrong continuation summary and wrong preferred-output hints into explicit single-file review/recovery lanes, increasing prompt size and steering them back toward irrelevant batch-output context.
