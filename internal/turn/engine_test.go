@@ -21707,10 +21707,10 @@ func TestBuildProjectContinuationActionPromptAddsCompletedCloseoutGuidance(t *te
 		FocusTaskLine: "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 44 (Produce content/technonymous-index.json by crawling technonymous.org) id=bbb title=\"Produce content/technonymous-index.json by crawling technonymous.org\" work_status=draft deliverable_path=content/technonymous-index.json assigned_agent_id=worker-1 flow_template_id=ft-1 malformed_child_tasks=3 completed_closeout_child_tasks=1",
 	})
 
-	if !strings.Contains(prompt, "use that completed child proof to advance or close the parent instead of creating another replacement child") {
+	if !strings.Contains(prompt, "treat that parent as closeout-ready and advance or close it instead of creating another replacement child") {
 		t.Fatalf("prompt = %q, want completed-closeout draft guidance", prompt)
 	}
-	if !strings.Contains(prompt, "already has completed closeout child proof, advance or close the parent directly instead of creating another replacement child") {
+	if !strings.Contains(prompt, "Because that focus parent is already closeout-ready, advance or close the parent directly instead of creating another replacement child") {
 		t.Fatalf("prompt = %q, want completed-closeout focus guidance", prompt)
 	}
 	if !strings.Contains(prompt, "do not re-verify broad artifact roots on disk before advancing the parent") {
@@ -21746,6 +21746,35 @@ func TestProjectContinuationDraftTaskReadyForParentClosureAllowsOnlyBlockedChild
 		completedCloseoutChildTaskCount:  1,
 	}) {
 		t.Fatal("did not expect closeout readiness when a non-blocked open child lane still remains")
+	}
+}
+
+func TestProjectContinuationDraftTaskReadyForParentClosureAllowsSatisfiedOutcomeWithOnlyBlockedChildren(t *testing.T) {
+	t.Parallel()
+
+	task := repo.ProjectTask{
+		Metadata: json.RawMessage(`{
+			"parent_orchestration": {
+				"outcome_assessment": {
+					"satisfied": true,
+					"summary": "The spec deliverable is already complete."
+				}
+			}
+		}`),
+	}
+	if !projectContinuationDraftTaskReadyForParentClosureForTask(task, projectContinuationChildActivity{
+		childTaskCount:                   2,
+		blockedChildTaskCount:            2,
+		replaceableBlockedChildTaskCount: 2,
+	}) {
+		t.Fatal("expected satisfied outcome to mark blocked-only parent as closeout-ready")
+	}
+	if projectContinuationDraftTaskNeedsFreshReplacementChildWorkForTask(task, projectContinuationChildActivity{
+		childTaskCount:                   2,
+		blockedChildTaskCount:            2,
+		replaceableBlockedChildTaskCount: 2,
+	}) {
+		t.Fatal("did not expect satisfied blocked-only parent to require fresh replacement child work")
 	}
 }
 
@@ -22909,8 +22938,29 @@ func TestShouldBlockProjectContinuationFocusedDraftTaskCreateForCloseoutReadyPar
 		}
 		t.Fatalf("expected project continuation to block duplicate replacement child creation beneath a closeout-ready parent; snapshot=%+v", snapshot)
 	}
-	if !strings.Contains(reason, "completed closeout child proof") || !strings.Contains(reason, "advance or close") {
+	if !strings.Contains(reason, "closeout-ready state") || !strings.Contains(reason, "advance or close") {
 		t.Fatalf("reason = %q, want closeout-ready guidance", reason)
+	}
+}
+
+func TestBuildProjectContinuationActionPromptAddsSatisfiedCloseoutGuidance(t *testing.T) {
+	prompt := buildProjectContinuationActionPrompt("Active project request: close out the satisfied spec parent", projectExecutionContinuationSnapshot{
+		ProjectLine:   "Active project id: 123",
+		DraftTaskLine: "Actionable draft tasks already in the tree: task 113 (Finalize Sambot feature spec) id=bbb title=\"Finalize Sambot feature spec\" work_status=draft deliverable_path=planning/sambot-feature-spec.md outcome_satisfied=true child_tasks=2 blocked_child_tasks=2 replaceable_blocked_child_tasks=2",
+		FocusTaskLine: "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 113 (Finalize Sambot feature spec) id=bbb title=\"Finalize Sambot feature spec\" work_status=draft deliverable_path=planning/sambot-feature-spec.md outcome_satisfied=true child_tasks=2 blocked_child_tasks=2 replaceable_blocked_child_tasks=2",
+	})
+
+	if !strings.Contains(prompt, "outcome_satisfied=true") {
+		t.Fatalf("prompt = %q, want satisfied outcome marker carried through", prompt)
+	}
+	if !strings.Contains(prompt, "treat that parent as closeout-ready and advance or close it") {
+		t.Fatalf("prompt = %q, want satisfied closeout-ready draft guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Because that focus parent is already closeout-ready") {
+		t.Fatalf("prompt = %q, want closeout-ready focus guidance", prompt)
+	}
+	if strings.Contains(prompt, "Because that focus parent only has terminally blocked child lanes") {
+		t.Fatalf("prompt = %q, should not append replacement-child guidance once satisfied closeout-ready state is present", prompt)
 	}
 }
 
@@ -22961,6 +23011,62 @@ func TestShouldBlockProjectContinuationFocusedDraftMutationForAncestorPromotion(
 	}
 	if !strings.Contains(reason, "focused draft task task 58") || !strings.Contains(reason, "ancestor draft task 55") {
 		t.Fatalf("reason = %q, want focused-child ancestor-promotion guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftMutationAllowsSatisfiedCloseoutReadyParent(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	focusTaskID := uuid.New()
+	childTaskID := uuid.New()
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	focusMetadata := json.RawMessage(`{
+		"parent_orchestration": {
+			"outcome_assessment": {
+				"satisfied": true,
+				"summary": "planning/sambot-feature-spec.md is already complete."
+			}
+		}
+	}`)
+	childMetadata := json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, focusTaskID.String()))
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			focusTaskID: {
+				ID:         focusTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 113,
+				Title:      "Finalize Sambot feature spec",
+				WorkStatus: "draft",
+				Metadata:   focusMetadata,
+			},
+			childTaskID: {
+				ID:         childTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 118,
+				Title:      "Old blocked spec refinement lane",
+				WorkStatus: "blocked",
+				Metadata:   childMetadata,
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: close out the satisfied spec parent", projectExecutionContinuationSnapshot{
+			ProjectLine:   "Active project id: " + projectID.String(),
+			FocusTaskLine: "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 113 (Finalize Sambot feature spec) id=" + focusTaskID.String() + " title=\"Finalize Sambot feature spec\" work_status=draft deliverable_path=planning/sambot-feature-spec.md outcome_satisfied=true child_tasks=1 blocked_child_tasks=1 replaceable_blocked_child_tasks=1",
+		}),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftMutationTool(context.Background(), rt, "task.update", map[string]any{
+		"task_id":     focusTaskID.String(),
+		"work_status": "done",
+	})
+	if blocked {
+		t.Fatalf("blocked = true, reason = %q; want closeout-ready satisfied focus parent to allow direct advance", reason)
 	}
 }
 

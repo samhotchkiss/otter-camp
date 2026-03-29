@@ -5358,7 +5358,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForReplacementChildWork(
 	}
 	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	focusActivity := childActivity[focusTask.ID]
-	if !projectContinuationDraftTaskNeedsFreshReplacementChildWork(focusActivity) {
+	if !projectContinuationDraftTaskNeedsFreshReplacementChildWorkForTask(focusTask, focusActivity) {
 		return false, nil
 	}
 	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
@@ -5601,7 +5601,12 @@ func buildProjectExecutionContinuationRediscoveryActionInstruction(
 		focusLabel := projectBootstrapTaskLabel(focusTask)
 		focusRef := projectExecutionContinuationTaskRef(focusTask, focusActivity, focusHints)
 		switch {
-		case projectContinuationDraftTaskNeedsFreshReplacementChildWork(focusActivity):
+		case projectContinuationDraftTaskReadyForParentClosureForTask(focusTask, focusActivity):
+			instruction := fmt.Sprintf(" Current focus task: %s.", focusRef)
+			instruction += fmt.Sprintf(" %s is already closeout-ready. Your next assistant action must advance or close %s directly instead of creating another replacement child.", focusLabel, focusLabel)
+			instruction += fmt.Sprintf(" If parent completion still needs verification metadata, record parent_orchestration.child_verifications, parent_orchestration.integration_check.status=passed, and parent_orchestration.outcome_assessment.satisfied=true on %s, then close it.", focusLabel)
+			return instruction
+		case projectContinuationDraftTaskNeedsFreshReplacementChildWorkForTask(focusTask, focusActivity):
 			instruction := fmt.Sprintf(" Current focus task: %s.", focusRef)
 			instruction += fmt.Sprintf(" Do not queue parent task %s again from the project lane.", focusLabel)
 			if dependsOnPath := strings.TrimSpace(focusHints.DependsOnPath); dependsOnPath != "" {
@@ -8218,9 +8223,9 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		lines = append(lines, draftLine)
 		lines = append(lines, "Do not begin with broad project.get, task.list, task.get, or flow.get_execution rediscovery when the actionable draft tasks above already identify the remaining bounded work.")
 		lines = append(lines, "If a named draft task above shows assigned_agent_id=missing, flow_template_id=missing, or requires_human_review=true, repair that exact prerequisite before trying to queue it.")
-		if strings.Contains(draftLine, "completed_closeout_child_tasks=") {
-			lines = append(lines, "If a named draft task above already shows completed_closeout_child_tasks=..., use that completed child proof to advance or close the parent instead of creating another replacement child.")
-			lines = append(lines, "When completed child proof and completed-task batch evidence are already present, do not re-verify broad artifact roots on disk before advancing the parent unless a concrete tool error says the artifact is missing.")
+		if strings.Contains(draftLine, "completed_closeout_child_tasks=") || strings.Contains(draftLine, "outcome_satisfied=true") {
+			lines = append(lines, "If a named draft task above already shows completed_closeout_child_tasks=... or outcome_satisfied=true, treat that parent as closeout-ready and advance or close it instead of creating another replacement child.")
+			lines = append(lines, "When closeout-ready parent evidence and completed-task batch evidence are already present, do not re-verify broad artifact roots on disk before advancing the parent unless a concrete tool error says the artifact is missing.")
 			lines = append(lines, "Before marking that closeout-ready parent done, record parent_orchestration.child_verifications for the completed child outputs, parent_orchestration.integration_check.status=passed, and parent_orchestration.outcome_assessment.satisfied=true on the parent task itself.")
 		}
 		if strings.Contains(draftLine, "deliverable_path=") {
@@ -8244,7 +8249,7 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 	}
 	if focusLine := strings.TrimSpace(snapshot.FocusTaskLine); focusLine != "" {
 		lines = append(lines, focusLine)
-		focusHasCompletedCloseout := strings.Contains(focusLine, "completed_closeout_child_tasks=")
+		focusHasCompletedCloseout := strings.Contains(focusLine, "completed_closeout_child_tasks=") || strings.Contains(focusLine, "outcome_satisfied=true")
 		if strings.Contains(focusLine, "child_tasks=") && strings.TrimSpace(snapshot.ActiveTaskLine) != "" {
 			lines = append(lines, "If that focus draft already has child tasks and the active-task snapshot above already names those child lanes, do not reread the parent or child task records first. Queue the draft only if it is still runnable as-is, split it directly into smaller reviewable work if bounded-size policy still blocks it, or report one concrete blocker sentence.")
 		}
@@ -8252,7 +8257,7 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 			lines = append(lines, "When the focus task already includes exact deliverable or dependency hints, use those paths directly before any broader workspace search.")
 		}
 		if focusHasCompletedCloseout {
-			lines = append(lines, "Because that focus parent already has completed closeout child proof, advance or close the parent directly instead of creating another replacement child.")
+			lines = append(lines, "Because that focus parent is already closeout-ready, advance or close the parent directly instead of creating another replacement child.")
 			lines = append(lines, "Do not relist `content/posts`, reread sibling batch outputs, or re-verify the same deliverable on disk unless a concrete tool error says the completed artifact is missing.")
 			lines = append(lines, "Do not cancel blocked stale child lanes first from the project session. If parent completion still requires child verification or integration, update the parent_orchestration metadata on the parent task and then close it.")
 		}
@@ -19627,7 +19632,7 @@ func buildProjectExecutionContinuationSnapshot(
 			continue
 		}
 		if isActionableProjectDraftTask(task) {
-			if projectContinuationDraftTaskReadyForParentClosure(activity) {
+			if projectContinuationDraftTaskReadyForParentClosureForTask(task, activity) {
 				if len(draftTasks) < 4 {
 					draftTasks = append(draftTasks, taskRef)
 				}
@@ -19637,7 +19642,7 @@ func buildProjectExecutionContinuationSnapshot(
 				continue
 			}
 			if activity.childTaskCount > 0 || activity.malformedChildTaskCount > 0 {
-				if projectContinuationDraftTaskNeedsFreshReplacementChildWork(activity) {
+				if projectContinuationDraftTaskNeedsFreshReplacementChildWorkForTask(task, activity) {
 					if len(replacementDraftTasks) < 4 {
 						replacementDraftTasks = append(replacementDraftTasks, taskRef)
 					}
@@ -20132,7 +20137,11 @@ func projectContinuationChildTaskActivity(tasks []repo.ProjectTask, hintsByTask 
 }
 
 func projectContinuationDraftTaskNeedsFreshReplacementChildWork(activity projectContinuationChildActivity) bool {
-	if projectContinuationDraftTaskReadyForParentClosure(activity) {
+	return projectContinuationDraftTaskNeedsFreshReplacementChildWorkForTask(repo.ProjectTask{}, activity)
+}
+
+func projectContinuationDraftTaskNeedsFreshReplacementChildWorkForTask(task repo.ProjectTask, activity projectContinuationChildActivity) bool {
+	if projectContinuationDraftTaskReadyForParentClosureForTask(task, activity) {
 		return false
 	}
 	if activity.activeChildTaskCount != 0 {
@@ -20147,10 +20156,22 @@ func projectContinuationDraftTaskNeedsFreshReplacementChildWork(activity project
 }
 
 func projectContinuationDraftTaskReadyForParentClosure(activity projectContinuationChildActivity) bool {
-	if activity.completedCloseoutChildTaskCount == 0 || activity.activeChildTaskCount != 0 {
+	return projectContinuationDraftTaskReadyForParentClosureForTask(repo.ProjectTask{}, activity)
+}
+
+func projectContinuationDraftTaskReadyForParentClosureForTask(task repo.ProjectTask, activity projectContinuationChildActivity) bool {
+	if activity.activeChildTaskCount != 0 {
+		return false
+	}
+	if activity.completedCloseoutChildTaskCount == 0 && !projectContinuationDraftTaskOutcomeSatisfied(task) {
 		return false
 	}
 	return activity.childTaskCount == 0 || activity.childTaskCount == activity.blockedChildTaskCount
+}
+
+func projectContinuationDraftTaskOutcomeSatisfied(task repo.ProjectTask) bool {
+	state, ok := taskorchestration.Parse(task.Metadata)
+	return ok && state.OutcomeAssessment != nil && state.OutcomeAssessment.Satisfied
 }
 
 func projectContinuationChildTaskClosesParent(
@@ -20250,11 +20271,11 @@ func projectContinuationFocusCandidateTask(task repo.ProjectTask, activity proje
 	if !isActionableProjectDraftTask(task) {
 		return false
 	}
-	if projectContinuationDraftTaskReadyForParentClosure(activity) {
+	if projectContinuationDraftTaskReadyForParentClosureForTask(task, activity) {
 		return true
 	}
 	if activity.childTaskCount > 0 || activity.malformedChildTaskCount > 0 {
-		return projectContinuationDraftTaskNeedsFreshReplacementChildWork(activity)
+		return projectContinuationDraftTaskNeedsFreshReplacementChildWorkForTask(task, activity)
 	}
 	return true
 }
@@ -20429,6 +20450,9 @@ func projectExecutionContinuationTaskRef(task repo.ProjectTask, activity project
 	}
 	if task.RequiresHumanReview {
 		parts = append(parts, "requires_human_review=true")
+	}
+	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") && projectContinuationDraftTaskOutcomeSatisfied(task) {
+		parts = append(parts, "outcome_satisfied=true")
 	}
 	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
 		if hints.ResumePolicy != "" {
@@ -31420,7 +31444,7 @@ func buildProjectContinuationFocusedDraftReplacementGuardError(focusTask repo.Pr
 
 func buildProjectContinuationFocusedDraftCloseoutTaskCreateGuardError(focusTask repo.ProjectTask) string {
 	label := projectBootstrapTaskLabel(focusTask)
-	return fmt.Sprintf("project continuation already has focused draft task %s with completed closeout child proof for the same deliverable. Do not create another replacement child beneath %s from the project lane; advance or close %s directly instead.", label, label, label)
+	return fmt.Sprintf("project continuation already has focused draft task %s in a closeout-ready state for the same deliverable. Do not create another replacement child beneath %s from the project lane; advance or close %s directly instead.", label, label, label)
 }
 
 func buildProjectContinuationFocusedDraftAncestorPromotionGuardError(targetTask, focusTask repo.ProjectTask) string {
@@ -31521,7 +31545,7 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 	focusTaskID = focusTask.ID
 	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	focusActivity := childActivity[focusTaskID]
-	if targetTaskID == focusTaskID && projectContinuationDraftTaskNeedsFreshReplacementChildWork(focusActivity) {
+	if targetTaskID == focusTaskID && projectContinuationDraftTaskNeedsFreshReplacementChildWorkForTask(focusTask, focusActivity) {
 		return true, buildProjectContinuationFocusedDraftReplacementGuardError(focusTask, focusActivity)
 	}
 	targetTask, ok := tasksByID[targetTaskID]
@@ -31567,7 +31591,7 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 	}
 	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	focusActivity := childActivity[focusTask.ID]
-	if !projectContinuationDraftTaskReadyForParentClosure(focusActivity) {
+	if !projectContinuationDraftTaskReadyForParentClosureForTask(focusTask, focusActivity) {
 		return false, ""
 	}
 	return true, buildProjectContinuationFocusedDraftCloseoutTaskCreateGuardError(focusTask)

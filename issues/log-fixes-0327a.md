@@ -3101,3 +3101,21 @@
     - `GOFLAGS='' go test ./internal/tools/native -run 'TestTaskUpdate(AutoCompletesSatisfiedDraftTaskWithoutPlanningContractWhenConcreteFileEvidenceExists|DoesNotAutoCompleteBroadSatisfiedDraftTask|RejectsSatisfiedDraftTaskWithIncompletePlanningContract)$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live canary is SamBot replacement drafts `82` and `90`, which should now settle out of `draft` on restart / next metadata-touch instead of remaining PM-visible stale draft work
+- 2026-03-29 10:17 MDT - Treated satisfied draft parents with no active child lanes as closeout-ready instead of replacement-child parents.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added [`projectContinuationDraftTaskOutcomeSatisfied(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - added [`projectContinuationDraftTaskReadyForParentClosureForTask(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - added [`projectContinuationDraftTaskNeedsFreshReplacementChildWorkForTask(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - project-continuation snapshot building, focus selection, focused-draft mutation/task-create guards, and rediscovery action instructions now evaluate task-level `parent_orchestration.outcome_assessment.satisfied=true`
+    - draft task refs now surface `outcome_satisfied=true`, and closeout guidance wording is generalized to “closeout-ready” so the prompt covers both dedicated closeout-child proof and satisfied-parent metadata
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestProjectContinuationDraftTaskReadyForParentClosureAllowsSatisfiedOutcomeWithOnlyBlockedChildren`
+      - added `TestBuildProjectContinuationActionPromptAddsSatisfiedCloseoutGuidance`
+      - added `TestShouldBlockProjectContinuationFocusedDraftMutationAllowsSatisfiedCloseoutReadyParent`
+      - refreshed completed-closeout prompt/guard assertions to the broader “closeout-ready” wording
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectContinuationDraftTaskReadyForParentClosureAllows(SatisfiedOutcomeWithOnlyBlockedChildren|OnlyBlockedChildren)|BuildProjectContinuationActionPromptAdds(SatisfiedCloseoutGuidance|CompletedCloseoutGuidance)|ShouldBlockProjectContinuationFocusedDraft(TaskCreateForCloseoutReadyParent|MutationAllowsSatisfiedCloseoutReadyParent|MutationForAncestorPromotion))$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshotSummarizesProjectState|BuildProjectContinuationActionPrompt|ShouldBlockProjectContinuationFocusedDraft(TaskCreateForCloseoutReadyParent|MutationAllowsSatisfiedCloseoutReadyParent|MutationForAncestorPromotion|MutationForMalformedChildren))$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary is PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where satisfied parents `113` / `106` / `94` should stop reopening replacement-child work and instead close directly once the post-restart continuation re-enters that branch
