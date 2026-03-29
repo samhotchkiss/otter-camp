@@ -19,7 +19,26 @@ const (
 	extendedMaxTaskMinutes                 = 60
 )
 
-var ErrBoundedTaskTooLarge = errors.New("task exceeds bounded size policy and must be split before queueing")
+var (
+	ErrBoundedTaskTooLarge            = errors.New("task exceeds bounded size policy and must be split before queueing")
+	ErrExecutableTaskContractRequired = errors.New("task requires a bounded executable contract before it can be queued")
+)
+
+type ExecutableTaskContractError struct {
+	Reason string
+}
+
+func (e ExecutableTaskContractError) Error() string {
+	reason := strings.TrimSpace(e.Reason)
+	if reason == "" {
+		return ErrExecutableTaskContractRequired.Error()
+	}
+	return ErrExecutableTaskContractRequired.Error() + ": " + reason
+}
+
+func (e ExecutableTaskContractError) Unwrap() error {
+	return ErrExecutableTaskContractRequired
+}
 
 var (
 	enumeratedBatchTitlePattern  = regexp.MustCompile(`\b(?:generate|create|draft|write|produce|compile|research|collect|design|build|fetch|scrape|crawl|import)\s+(?:all\s+)?\d+\b`)
@@ -831,6 +850,15 @@ func descriptionForbidsDecomposition(raw string) bool {
 
 func DescriptionForbidsDecomposition(raw string) bool {
 	return descriptionForbidsDecomposition(raw)
+}
+
+func ValidateExecutableTaskContract(title string, description *string) error {
+	if TaskLooksProceduralInstructionArtifact(title, description) {
+		return ExecutableTaskContractError{
+			Reason: "rewrite tool or procedure instructions as a deliverable-focused bounded task with a concrete output and acceptance expectation",
+		}
+	}
+	return nil
 }
 
 func TaskLooksProceduralInstructionArtifact(title string, description *string) bool {

@@ -110,6 +110,24 @@ func TestTaskLooksProceduralInstructionArtifact(t *testing.T) {
 	}
 }
 
+func TestValidateExecutableTaskContractRejectsProceduralInstructionArtifact(t *testing.T) {
+	description := "Use browser_extract_text to get the page content and identify post links."
+	err := ValidateExecutableTaskContract("Use browser tools to navigate to https://technonymous.org", &description)
+	if !errors.Is(err, ErrExecutableTaskContractRequired) {
+		t.Fatalf("ValidateExecutableTaskContract err = %v, want ErrExecutableTaskContractRequired", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "deliverable-focused bounded task") {
+		t.Fatalf("error = %v, want deliverable-focused rewrite guidance", err)
+	}
+}
+
+func TestValidateExecutableTaskContractAllowsBoundedDeliverableTask(t *testing.T) {
+	description := "Fetch posts 1-12 from content/technonymous-index.json and save each as markdown under content/posts/ with valid frontmatter."
+	if err := ValidateExecutableTaskContract("Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/", &description); err != nil {
+		t.Fatalf("ValidateExecutableTaskContract err = %v, want nil", err)
+	}
+}
+
 func TestAnalyzePrefersLabelledEnumeratedDeliverables(t *testing.T) {
 	description := "Create one persona per target reader segment."
 

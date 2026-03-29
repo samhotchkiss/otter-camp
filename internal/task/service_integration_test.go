@@ -2909,6 +2909,32 @@ func TestTaskServiceIntegrationQueueRejectsOversizedUnsplittableWork(t *testing.
 	}
 }
 
+func TestTaskServiceIntegrationQueueRejectsProceduralInstructionArtifact(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	description := "Use browser_extract_text to get the page content and identify post links."
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Use browser tools to navigate to https://technonymous.org",
+		Description:    &description,
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	_, err = svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"})
+	if !errors.Is(err, taskdecomp.ErrExecutableTaskContractRequired) {
+		t.Fatalf("TransitionStatus queued err = %v, want ErrExecutableTaskContractRequired", err)
+	}
+}
+
 func TestTaskServiceIntegrationQueueAllowsSingleConcreteTemplateWithRequirements(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

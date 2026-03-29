@@ -27,6 +27,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
@@ -2902,6 +2903,7 @@ func mapTaskError(err error) (int, string, string) {
 		errors.Is(err, flowsvc.ErrSelfReviewForbidden),
 		errors.Is(err, flowsvc.ErrInvalidSubtaskTransition),
 		errors.Is(err, flowsvc.ErrNoRejectionPath),
+		errors.Is(err, taskdecomp.ErrExecutableTaskContractRequired),
 		errors.Is(err, deliverysvc.ErrEnvironmentIDRequired):
 		return http.StatusUnprocessableEntity, api.ErrCodeValidation, err.Error()
 	case errors.Is(err, tasksvc.ErrInboxItemNotFound):

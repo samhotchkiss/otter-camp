@@ -793,6 +793,11 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 		}
 		return &updated, nil
 	}
+	if target == "queued" {
+		if err := taskdecomp.ValidateExecutableTaskContract(taskRecord.Title, taskRecord.Description); err != nil {
+			return nil, err
+		}
+	}
 	if target == "in_progress" && len(executableChildren) > 0 {
 		return nil, ErrTaskMustRemainOrchestrationOnly
 	}

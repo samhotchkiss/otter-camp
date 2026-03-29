@@ -3174,6 +3174,55 @@ func TestTaskCreateChildClearsParentProjectGate(t *testing.T) {
 	}
 }
 
+func TestTaskCreateChildRejectsProceduralInstructionArtifact(t *testing.T) {
+	parentTaskID := uuid.New()
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	description := "Coordinate the validation workstream and delegate executable child tasks."
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             parentTaskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      projectID,
+			Title:          "Validation execution parent",
+			Description:    &description,
+			WorkStatus:     "draft",
+			BlocksScope:    "all",
+			FlowTemplateID: &flowTemplateID,
+		},
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:             parentTaskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				Title:          "Validation execution parent",
+				Description:    &description,
+				WorkStatus:     "draft",
+				BlocksScope:    "all",
+				FlowTemplateID: &flowTemplateID,
+			},
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.create", map[string]any{
+		"project_id":     projectID.String(),
+		"parent_task_id": parentTaskID.String(),
+		"title":          "Use browser tools to navigate to https://technonymous.org",
+		"description":    "Use browser_extract_text to get the page content and identify post links.",
+	})
+	if err != nil {
+		t.Fatalf("task.create child: %v", err)
+	}
+	if got := fmt.Sprintf("%v", out["error"]); !strings.Contains(got, "bounded executable contract") {
+		t.Fatalf("error = %q, want bounded executable contract guidance", got)
+	}
+	if tasks.createCalls != 0 {
+		t.Fatalf("create calls = %d, want 0", tasks.createCalls)
+	}
+}
+
 func TestTaskCreateBoundedFollowOnChildAddsDependencyOnPreviousSibling(t *testing.T) {
 	parentTaskID := uuid.New()
 	projectID := uuid.New()
@@ -5152,6 +5201,56 @@ func TestTaskUpdateAllowsDraftToQueuedWithPMWhenProjectRequiresPM(t *testing.T) 
 	}
 	if tasks.updateCalls != 1 {
 		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)
+	}
+}
+
+func TestTaskUpdateReturnsBoundedTaskContractRewriteHint(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	description := "Use browser_extract_text to get the page content and identify post links."
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      projectID,
+			Title:          "Use browser tools to navigate to https://technonymous.org",
+			Description:    &description,
+			WorkStatus:     "draft",
+			FlowTemplateID: &flowTemplateID,
+		},
+	}
+	taskService := &mockTaskTransitionService{
+		transitionStatusErr: taskdecomp.ExecutableTaskContractError{
+			Reason: "rewrite tool or procedure instructions as a deliverable-focused bounded task with a concrete output and acceptance expectation",
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{
+		WorkspaceRoot: t.TempDir(),
+		TaskService:   taskService,
+	})
+	executor.tasks = tasks
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			flowTemplateID: validExecutableTemplateNodeList(flowTemplateID),
+		},
+	}
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if got := fmt.Sprintf("%v", out["error"]); !strings.Contains(got, "bounded executable contract") {
+		t.Fatalf("error = %q, want bounded executable contract guidance", got)
+	}
+	if got := fmt.Sprintf("%v", out["message"]); !strings.Contains(got, "deliverable-focused task") {
+		t.Fatalf("message = %q, want rewrite guidance", got)
+	}
+	if taskService.transitionCalls != 1 {
+		t.Fatalf("transition calls = %d, want 1", taskService.transitionCalls)
 	}
 }
 

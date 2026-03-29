@@ -260,6 +260,34 @@ func TestTaskHTTPQueueRequiresFlowTemplate(t *testing.T) {
 	}
 }
 
+func TestTaskHTTPQueueRejectsProceduralInstructionArtifact(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "task-queue-contract", false)
+	pmAgent := seedPMAssignment(t, testServer.Pool, org.ID, project.ID, adminUser.ID)
+	graph := seedTaskFlowGraph(t, testServer.Pool, org.ID, project.ID, pmAgent.ID, adminUser.ID, false)
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	created := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+project.ID.String()+"/tasks", map[string]any{
+		"title":            "Use browser tools to navigate to https://technonymous.org",
+		"description":      "Use browser_extract_text to get the page content and identify post links.",
+		"flow_template_id": graph.Template.ID.String(),
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if created.StatusCode != http.StatusCreated {
+		t.Fatalf("create task status = %d, want %d body=%s", created.StatusCode, http.StatusCreated, string(created.Body))
+	}
+	taskID := jsonPathString(t, created.Body, "data", "id")
+
+	queued := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+taskID+"/queue", map[string]any{}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if queued.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("queue task status = %d, want %d body=%s", queued.StatusCode, http.StatusUnprocessableEntity, string(queued.Body))
+	}
+	if got := jsonPathString(t, queued.Body, "error", "message"); !strings.Contains(got, "bounded executable contract") {
+		t.Fatalf("queue error message = %q, want bounded executable contract guidance body=%s", got, string(queued.Body))
+	}
+}
+
 func TestTaskHTTPResumeClearsValidationGuardAndQueuesTask(t *testing.T) {
 	testServer, org, adminUser, _ := newTaskTestServer(t)
 	defer testServer.Close()

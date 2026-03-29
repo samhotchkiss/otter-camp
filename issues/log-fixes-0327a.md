@@ -2534,3 +2534,30 @@
     - on `repo_version=3535`, worker startup still correctly logged `requeued active project sessions missing continuation on startup count=1` and created continuation message `50c6dc47-ae50-4a2e-97ea-fa9ae04c7ffe`
     - PM turn `e4ecee9b-b599-4d8c-947b-3990b248c0e8` completed, that new continuation message failed, and SQL showed `jobs|0` for session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`
     - unlike the pre-fix `3534` run, the worker log never emitted a follow-on `requeued active project sessions without turns count=1`, which proves the ghost repair-count path is gone
+- 2026-03-29 03:46:41 MDT - Finished and deployed: block pure procedural instruction artifacts from becoming executable tasks.
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+    - added `ErrExecutableTaskContractRequired`, `ExecutableTaskContractError`, and `ValidateExecutableTaskContract(...)`
+    - the first bounded-contract rule rejects tasks whose core definition is pure tool/procedure instruction artifact text
+  - changed [`internal/task/service.go`](/Users/sam/dev/otter-camp/internal/task/service.go):
+    - queue transitions now run the executable-contract validator after decomposition/orchestration checks and before a task becomes `queued`
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - `task.create` now returns a bounded-contract rewrite response for malformed parent-scoped / bootstrap executable children instead of creating the task
+    - `task.update` now turns `ErrExecutableTaskContractRequired` into a structured rewrite hint instead of a raw tool failure
+  - changed [`internal/server/task_handlers.go`](/Users/sam/dev/otter-camp/internal/server/task_handlers.go):
+    - HTTP task queue/update paths now treat `ErrExecutableTaskContractRequired` as a `422` validation error
+  - changed tests:
+    - [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go): added validator coverage for rejecting procedural artifacts and allowing bounded deliverable tasks
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go): added `task.create` and `task.update` rewrite-hint coverage
+    - [`internal/task/service_integration_test.go`](/Users/sam/dev/otter-camp/internal/task/service_integration_test.go): added queue rejection coverage for procedural tasks
+    - [`internal/server/task_integration_test.go`](/Users/sam/dev/otter-camp/internal/server/task_integration_test.go): added HTTP `422` coverage for the same family
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - runtime version is now `3536`
+  - verified with:
+    - `go test ./internal/taskdecomp -run 'Test(ValidateExecutableTaskContract(AllowsBoundedDeliverableTask|RejectsProceduralInstructionArtifact)|TaskLooksProceduralInstructionArtifact)$' -count=1`
+    - `go test ./internal/tools/native -run 'Test(TaskCreateChildRejectsProceduralInstructionArtifact|TaskUpdateReturnsBoundedTaskContractRewriteHint)$' -count=1`
+    - `go test -tags=integration ./internal/task -run 'TestTaskServiceIntegrationQueueRejectsProceduralInstructionArtifact$' -count=1`
+    - `go test -tags=integration ./internal/server -run 'TestTaskHTTPQueueRejectsProceduralInstructionArtifact$' -count=1`
+    - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, `./bin/ottercamp version` returned `repo_version=3536`, and `./bin/ottercamp health --output json` returned `status=ok`
+  - deploy / proof status:
+    - this slice is deployed and test-proven on the live `3536` runtime
+    - fresh natural production proof for the malformed-task family is still pending the next actual bad task creation or queue attempt

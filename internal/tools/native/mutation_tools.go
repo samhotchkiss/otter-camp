@@ -1267,6 +1267,14 @@ func boundedTaskNeedsDecompositionResponse(title string, description *string) ma
 	return appendSuggestedDecomposition(response, title, description)
 }
 
+func boundedTaskContractResponse(title string, description *string, err error) map[string]any {
+	response := map[string]any{
+		"error":   err.Error(),
+		"message": "Rewrite this as a bounded deliverable-focused task with a concrete output, clear scope boundary, and acceptance expectation. Do not describe the work primarily as tool or procedure steps.",
+	}
+	return appendSuggestedDecomposition(response, title, description)
+}
+
 func appendSuggestedDecomposition(response map[string]any, title string, description *string) map[string]any {
 	plan := taskdecomp.Analyze(title, description)
 	if !plan.RequiresDecomposition || len(plan.Deliverables) == 0 {
@@ -2616,6 +2624,9 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		if preparedChild.Applied {
 			return e.createDecomposedParentChildren(ctx, *parentTask, preparedChild, actor)
 		}
+		if err := taskdecomp.ValidateExecutableTaskContract(title, description); err != nil {
+			return boundedTaskContractResponse(title, description, err), nil
+		}
 		children, childErr := e.listDecompositionChildren(ctx, *parentTask)
 		if childErr != nil {
 			return nil, childErr
@@ -2675,6 +2686,9 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 			}
 			if prepared.Applied {
 				return boundedTaskNeedsDecompositionResponse(title, description), nil
+			}
+			if err := taskdecomp.ValidateExecutableTaskContract(title, description); err != nil {
+				return boundedTaskContractResponse(title, description, err), nil
 			}
 			if resolvedFlowTemplateID != nil && blocksScope == "all" && !taskMetadataMarksOrchestrationOnly(enrichedMetadata) {
 				blocksScope = "none"
@@ -3489,6 +3503,9 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		}
 		transitioned, transitionErr := e.taskService.TransitionStatusWithPayload(ctx, updated.ID, desiredStatus, transitionActor, extraStatusPayload)
 		if transitionErr != nil {
+			if errors.Is(transitionErr, taskdecomp.ErrExecutableTaskContractRequired) {
+				return boundedTaskContractResponse(updated.Title, updated.Description, transitionErr), nil
+			}
 			var invalidTransition tasksvc.ErrInvalidStatusTransition
 			if errors.As(transitionErr, &invalidTransition) &&
 				strings.EqualFold(strings.TrimSpace(previousStatus), "draft") &&
