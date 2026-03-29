@@ -196,6 +196,8 @@ func RecoveryFileWriteFailureIsMissingContent(reason string) bool {
 	return strings.Contains(lower, "file.write") &&
 		(strings.Contains(lower, "retried without `content`") ||
 			strings.Contains(lower, "retried without content") ||
+			strings.Contains(lower, "emitted without `content`") ||
+			strings.Contains(lower, "emitted without content") ||
 			strings.Contains(lower, "without content"))
 }
 

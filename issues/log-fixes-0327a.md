@@ -2690,3 +2690,21 @@
     - task `85` session `324f566b-751b-4d09-915f-f821abbfd37a` now has `59` stale synthetic recovery prompts failed with `superseded stale synthetic prompt after repo_version change`
     - the same session has `0` pending synthetic prompts from an older repo version without a live turn
     - one `3549` prompt remains in flight only because turn `60` currently owns it, which matches the intended keep-live-turn exception path
+- 2026-03-29 06:09:09 MDT - Finished locally and queued for deploy on `repo_version=3552`: make repeated-resume missing-content halts recognize the actual correction wording persisted on hot recovery tasks.
+  - changed [`internal/taskcheckpoint/recovery_file_write.go`](/Users/sam/dev/otter-camp/internal/taskcheckpoint/recovery_file_write.go):
+    - `RecoveryFileWriteFailureIsMissingContent(...)` now recognizes both `retried without content` and `emitted without content` recovery checkpoint wording
+  - changed [`internal/taskcheckpoint/recovery_file_write_test.go`](/Users/sam/dev/otter-camp/internal/taskcheckpoint/recovery_file_write_test.go):
+    - added `TestRecoveryFileWriteFailureIsMissingContentRecognizesCorrectionReason`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleRecoveryFileWriteWithoutContentStopsAfterRepeatedResumeCorrectionFailure`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - runtime version is now `3552`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskcheckpoint -run 'TestRecoveryFileWriteFailureIsMissingContentRecognizesCorrectionReason$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleRecoveryFileWriteWithoutContent(StopsAfterRepeatedResumeFailure|StopsAfterRepeatedResumeCorrectionFailure|EnablesDirectWriteOnlyState)$' -count=1`
+  - pre-deploy live proof:
+    - task `85` session `324f566b-751b-4d09-915f-f821abbfd37a` still repeats the same family on turns `55-60`
+    - each resumed turn begins with checkpoint failure reason `file.write ... was emitted without \`content\``
+    - the next empty `file.write` still gets one more bounded correction (`417`, `425`, `433`, `441`, `449`) before the direct-write-only stop ends the turn
+  - remaining live-proof gap:
+    - after restart on `3552`, the next resumed empty `file.write` on task `85` should halt immediately with the repeated-resume blocker instead of spending one more correction hop first

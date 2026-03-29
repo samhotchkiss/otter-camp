@@ -150,3 +150,10 @@ func TestRecoveryFileWriteFailureHistoryDeduplicatesCurrentFailure(t *testing.T)
 		t.Fatalf("failure history[1] = %q, want current failure", history[1])
 	}
 }
+
+func TestRecoveryFileWriteFailureIsMissingContentRecognizesCorrectionReason(t *testing.T) {
+	reason := "file.write for templates/template-08-replace.html was emitted without `content`; the next retry must provide the full file body instead of another empty file.write call"
+	if !RecoveryFileWriteFailureIsMissingContent(reason) {
+		t.Fatalf("RecoveryFileWriteFailureIsMissingContent(%q) = false, want true", reason)
+	}
+}
