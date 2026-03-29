@@ -12617,21 +12617,45 @@ func TestHandleCompletedProjectExecutionContinuationTurnConsumesBoundedSizeQueue
 		t.Fatalf("draft task work_status = %q, want draft after bounded-size queue failure", updatedDraft.WorkStatus)
 	}
 
+	jobs := fixture.enqueuer.jobs
+	if len(jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1 bounded-size retry job", len(jobs))
+	}
+	if jobs[0].payload.MessageID == userMessageID {
+		t.Fatal("bounded-size retry reused original continuation message, want fresh message id")
+	}
+	if jobs[0].payload.RetryCount != 1 {
+		t.Fatalf("retry_count = %d, want 1", jobs[0].payload.RetryCount)
+	}
+
 	var sawSystemMessage bool
+	var retryMessage *repo.ChatMessage
 	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
 	if err != nil {
 		t.Fatalf("ListBySession: %v", err)
 	}
-	for _, msg := range storedMessages {
+	for i := range storedMessages {
+		msg := &storedMessages[i]
+		if msg.ID == jobs[0].payload.MessageID {
+			retryMessage = msg
+		}
 		if strings.EqualFold(strings.TrimSpace(msg.Role), "system") &&
 			strings.Contains(msg.Content, "violates the bounded size policy") &&
 			strings.Contains(msg.Content, "task 19") {
 			sawSystemMessage = true
-			break
 		}
 	}
 	if !sawSystemMessage {
 		t.Fatal("expected system message recording bounded-size auto-queue failure")
+	}
+	if retryMessage == nil {
+		t.Fatal("missing appended bounded-size retry continuation message")
+	}
+	if !strings.Contains(retryMessage.Content, "still too broad to queue as-is") {
+		t.Fatalf("retry message = %q, want bounded-size retry coaching", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "split task 19") && !strings.Contains(retryMessage.Content, "split task 19 (") {
+		t.Fatalf("retry message = %q, want direct split instruction for task 19", retryMessage.Content)
 	}
 }
 

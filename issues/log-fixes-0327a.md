@@ -3072,3 +3072,14 @@
     - `GOFLAGS='' go test ./internal/turn -run 'TestShould(BlockProjectContinuationSnapshotRediscoveryToolBlocksCompanionPlanningArtifactRead|NotBlockProjectContinuationSnapshotRediscoveryToolForPrimaryPlanningDeliverableRead|BlockProjectContinuationSnapshotRediscoveryToolBlocks(BroadTaskList|NamedTaskGet))$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live canary is the PM continuation on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where a follow-on read of `planning/prd-spec/...` after `planning/sambot-feature-spec.md` should now be blocked with direct-action guidance instead of returning `not_found` and triggering another compression cycle
+- 2026-03-29 09:59 MDT - Converted PM post-turn bounded-size fallback into a fresh focused continuation instead of a dead-end warning.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - [`handleCompletedProjectExecutionContinuationTurn(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now calls [`retryProjectExecutionContinuationForBoundedSizeStop(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) when the engine’s own `nextRunnableDraftProjectTask(...)` auto-queue fallback hits `taskdecomp.ErrBoundedTaskTooLarge`
+    - result: the existing system warning about the broad draft still lands, but the engine now also appends a fresh continuation prompt that tells the PM lane to split that named parent into smaller reviewable child tasks immediately
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - widened `TestHandleCompletedProjectExecutionContinuationTurnConsumesBoundedSizeQueueFailure` to expect a fresh bounded-size retry message/job after the engine-owned auto-queue failure
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurn(ConsumesBoundedSizeQueueFailure|RetriesBoundedSizeStopWithFreshMessage)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary is PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where the old `task 90 ... violates the bounded size policy` stop should now be followed by a fresh bounded-size continuation prompt instead of ending the PM cycle on the warning alone

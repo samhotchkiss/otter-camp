@@ -4967,6 +4967,11 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 					strings.TrimSpace(err.Error()),
 				),
 			)
+			if retried, retryErr := e.retryProjectExecutionContinuationForBoundedSizeStop(ctx, session, completedTurn, latestUser, messages); retryErr != nil {
+				return false, retryErr
+			} else if retried {
+				return true, nil
+			}
 			return true, nil
 		}
 		return false, err
