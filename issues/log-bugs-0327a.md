@@ -1,5 +1,10 @@
 # 0327a Bug Log
 
+## 2026-03-29 14:08 MDT
+
+- Bug: shared-file child recovery lanes were still allowed to loop on `file.read not_found` when the inherited parent file did not exist yet.
+- Shape: the runtime already blocks those child lanes from replacing the whole shared file with `file.write`, but a missing inherited file still looked like a normal recovery discovery miss, so tasks `164-166` could keep reopening recovery turns on `planning/sambot-example-conversations.md`.
+- Correct behavior: once a shared parent deliverable is still missing, the child lane should stop and hand work back to the parent / write-owning replacement path instead of continuing bounded recovery in a file that is not there.
 ## 2026-03-29 13:45 MDT
 
 - Bug: malformed duplicate shared-file child tasks could still loop across turns after the runtime had already learned they were invalid.

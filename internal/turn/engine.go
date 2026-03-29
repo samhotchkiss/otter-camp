@@ -17482,6 +17482,14 @@ func buildRecoveryInheritedSharedDeliverableWriteFailureReason(targetPath string
 	return fmt.Sprintf("decomposed child recovery cannot replay a whole-file write into inherited shared parent deliverable %s; resume by editing the current shared file in place or by moving the bounded child output to its own artifact", path)
 }
 
+func buildRecoveryMissingInheritedSharedDeliverableFailureReason(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the shared parent deliverable"
+	}
+	return fmt.Sprintf("decomposed child recovery found inherited shared parent deliverable %s missing on disk; this child lane cannot bootstrap the whole shared file, so resume integration from the parent task or a write-owning replacement lane first", path)
+}
+
 func buildRecoveryInheritedSharedDeliverableWriteStopMessage(targetPath string) string {
 	path := strings.TrimSpace(targetPath)
 	if path == "" {
@@ -17490,12 +17498,28 @@ func buildRecoveryInheritedSharedDeliverableWriteStopMessage(targetPath string) 
 	return fmt.Sprintf("[Recovery shared-deliverable guard: this decomposed child task inherits `%s` from its parent. Do not replay a whole-file file.write from persisted draft here. Read the current shared file and use file.edit for the bounded section update instead, or resume integration from the parent task. Ending the turn early.]", path)
 }
 
+func buildRecoveryMissingInheritedSharedDeliverableStopMessage(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the shared parent deliverable"
+	}
+	return fmt.Sprintf("[Recovery shared-deliverable guard: inherited parent file `%s` is still missing. This decomposed child lane cannot create the whole shared document from recovery. End this lane and resume the parent task or a write-owning replacement lane before retrying bounded section edits.]", path)
+}
+
 func buildRecoveryInheritedSharedDeliverableBlockedTaskReason(targetPath string) string {
 	path := strings.TrimSpace(targetPath)
 	if path == "" {
 		path = "the shared parent deliverable"
 	}
 	return fmt.Sprintf("recovery halted because the decomposed child lane inherits shared parent deliverable %s; resume only with bounded file.edit updates on the current shared file or by moving integration back to the parent task", path)
+}
+
+func buildRecoveryMissingInheritedSharedDeliverableBlockedTaskReason(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the shared parent deliverable"
+	}
+	return fmt.Sprintf("recovery halted because inherited shared parent deliverable %s is still missing; this child lane cannot bootstrap the whole shared file, so resume integration from the parent task or a write-owning replacement lane first", path)
 }
 
 func buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, failureReason string) string {
@@ -17612,6 +17636,24 @@ func (e *TurnEngine) haltRecoveryInheritedSharedDeliverableWrite(ctx context.Con
 	rt.recoveryBlockReason = buildRecoveryInheritedSharedDeliverableBlockedTaskReason(targetPath)
 	_ = e.cancelRecoveryResumeDispatch(ctx, rt, rt.recoveryBlockReason)
 	return true, true, nil
+}
+
+func (e *TurnEngine) recoveryMissingInheritedSharedDeliverableTargetPath(ctx context.Context, rt *turnRuntime, taskRecord repo.ProjectTask, failure toolValidationFailure) string {
+	if e == nil || rt == nil || !rt.recoveryTurn {
+		return ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(failure.ToolName), "file.read") || !strings.EqualFold(strings.TrimSpace(failure.FailureCode), "not_found") {
+		return ""
+	}
+	sharedPath := normalizeWorkspaceRelativePath(e.inheritedSharedSingleFileDeliverablePath(ctx, taskRecord))
+	if sharedPath == "" {
+		return ""
+	}
+	failurePath := normalizeWorkspaceRelativePath(strings.TrimSpace(failure.DeliverablePath))
+	if failurePath == "" || !sameWorkspaceRelativePath(failurePath, sharedPath) {
+		return ""
+	}
+	return sharedPath
 }
 
 func recoveryToolCallsContainReviewDecision(toolCalls []ModelToolCall) bool {
@@ -25361,11 +25403,13 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 	blockedNow := false
 	repeatedRecoveryFocusStop := false
 	repeatedTurnStop := false
+	missingInheritedSharedDeliverableStop := false
 	checkpointOnlyDirtyTaskGitCommitStop := false
 	immediateTaskGitCommitStop := false
 	var blockedFailure *toolValidationFailure
 	var repeatedRecoveryFailure *toolValidationFailure
 	var repeatedFailure *toolValidationFailure
+	var missingInheritedSharedDeliverableFailure *toolValidationFailure
 	var checkpointOnlyDirtyTaskGitCommitFailure *toolValidationFailure
 	var immediateTaskGitCommitFailure *toolValidationFailure
 	for _, failure := range failures {
@@ -25395,6 +25439,13 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 			repeatedTurnStop = true
 			failureCopy := failure
 			repeatedFailure = &failureCopy
+			break
+		}
+		if targetPath := e.recoveryMissingInheritedSharedDeliverableTargetPath(ctx, rt, taskRecord, failure); targetPath != "" {
+			missingInheritedSharedDeliverableStop = true
+			failureCopy := failure
+			failureCopy.DeliverablePath = targetPath
+			missingInheritedSharedDeliverableFailure = &failureCopy
 			break
 		}
 		if shouldStopTurnAfterCheckpointOnlyDirtyTaskGitCommit(rt, taskRecord, failure) {
@@ -25477,6 +25528,29 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildValidationLoopTurnStopSystemMessage(next)); err != nil {
 				return false, err
 			}
+			return true, nil
+		}
+		if missingInheritedSharedDeliverableStop && missingInheritedSharedDeliverableFailure != nil {
+			rt.stopReason = stopReasonValidationBlocked
+			targetPath := normalizeWorkspaceRelativePath(strings.TrimSpace(missingInheritedSharedDeliverableFailure.DeliverablePath))
+			message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryMissingInheritedSharedDeliverableStopMessage(targetPath))
+			if err != nil {
+				return false, err
+			}
+			failureReason := buildRecoveryMissingInheritedSharedDeliverableFailureReason(targetPath)
+			if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, "", failureReason, message.ID); checkpointErr != nil {
+				return false, checkpointErr
+			}
+			rt.recoveryBlockReason = buildRecoveryMissingInheritedSharedDeliverableBlockedTaskReason(targetPath)
+			if e.taskTransitions != nil && !strings.EqualFold(strings.TrimSpace(updatedTask.WorkStatus), "blocked") {
+				if _, err := e.taskTransitions.MarkBlocked(ctx, updatedTask.ID, rt.recoveryBlockReason, tasksvc.Actor{Type: "system"}); err != nil {
+					var transitionErr tasksvc.ErrInvalidStatusTransition
+					if !errors.As(err, &transitionErr) {
+						return false, err
+					}
+				}
+			}
+			_ = e.cancelRecoveryResumeDispatch(ctx, rt, rt.recoveryBlockReason)
 			return true, nil
 		}
 		if checkpointOnlyDirtyTaskGitCommitStop {

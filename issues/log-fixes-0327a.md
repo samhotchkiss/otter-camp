@@ -20,6 +20,18 @@
   - `buildTaskReviewActionPrompt(...)` now includes those criteria explicitly and instructs review lanes to reject against named failing criteria instead of generic quality language
 - Focused verification:
   - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildTaskReviewActionPromptIncludesAcceptanceCriteria|EnqueueTaskValidationBlockedContinuationPromptBlocksMalformedDuplicateSharedFileChild|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren)$' -count=1`
+
+## 2026-03-29 14:08 MDT
+
+- Fix: recovery validation now treats `file.read not_found` on an inherited shared parent deliverable as terminal for the child lane.
+- `internal/turn/engine.go` now blocks the task, writes a checkpoint, and cancels the stale resume dispatch when a decomposed child recovery turn reads its shared parent file and finds it missing.
+- Focused verification:
+  - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleToolValidationResultsBlocksRecoveryMissingInheritedSharedDeliverable|BuildTaskReviewActionPromptIncludesAcceptanceCriteria|EnqueueTaskValidationBlockedContinuationPromptBlocksMalformedDuplicateSharedFileChild|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren)$' -count=1`
+- Live proof:
+  - SamBot task `164`
+  - turn `e77500da-a692-478d-ab79-bfc546698997`
+  - task now `blocked`
+  - terminal message says inherited parent file `planning/sambot-example-conversations.md` is still missing
 - 2026-03-29 13:11:45 MDT - `pending` `Parse markdown-emphasized deliverable labels for PM task hints`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `explicitDeliverablePathPatterns` now accept markdown-emphasized labels like `**Deliverable:**` and `**Output:**`
   - this prevents `explicitDeliverablePath(...)` from falling back to a leading title token like `SamBot` when the description already includes the real path under an emphasized label

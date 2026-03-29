@@ -34336,6 +34336,113 @@ func TestHandleRecoveryFileWriteWithoutContentStopsForInheritedSharedParentDeliv
 	}
 }
 
+func TestHandleToolValidationResultsBlocksRecoveryMissingInheritedSharedDeliverable(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentID := uuid.New()
+	taskID := uuid.New()
+	parentDescription := "Write the file planning/sambot-example-conversations.md containing 5-8 realistic example conversations between a site visitor and SamBot.\n\nDeliverable: planning/sambot-example-conversations.md"
+	childDescription := "Fellow parent who found Sam's parenting blog posts — SamBot warmly discusses the parenting content, connects it to Sam's broader worldview"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		parentID: {
+			ID:          parentID,
+			ProjectID:   projectID,
+			TaskNumber:  154,
+			Title:       "Write SamBot Example Conversations (replacement)",
+			Description: &parentDescription,
+			WorkStatus:  "draft",
+		},
+		taskID: {
+			ID:          taskID,
+			ProjectID:   projectID,
+			TaskNumber:  167,
+			Title:       childDescription,
+			Description: &childDescription,
+			WorkStatus:  "in_progress",
+			Metadata:    mustJSONRaw(map[string]any{"decomposition_parent_task_id": parentID.String()}),
+		},
+	}
+
+	turnID := uuid.New()
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:         turnID,
+			SessionID:  fixture.session.ID,
+			TurnNumber: 1,
+			Status:     "in_progress",
+		},
+		recoveryTurn: true,
+		startedAt:    time.Now(),
+	}
+	fixture.chat.turns[turnID] = rt.turn
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turnID)
+
+	blocked, err := fixture.engine.handleToolValidationResults(context.Background(), rt,
+		[]ToolCall{{
+			ID:        "read-shared-target",
+			Name:      "file.read",
+			Arguments: map[string]any{"path": "planning/sambot-example-conversations.md"},
+		}},
+		[]ToolResult{{
+			ToolCallID: "read-shared-target",
+			Name:       "file.read",
+			Output: map[string]any{
+				"path":  "planning/sambot-example-conversations.md",
+				"error": "not_found",
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !blocked {
+		t.Fatal("expected shared-file child recovery read miss to block the turn")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if !strings.Contains(rt.recoveryBlockReason, "shared parent deliverable planning/sambot-example-conversations.md is still missing") {
+		t.Fatalf("rt.recoveryBlockReason = %q, want missing inherited shared deliverable block reason", rt.recoveryBlockReason)
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if updated.WorkStatus != "blocked" {
+		t.Fatalf("updated.WorkStatus = %q, want blocked", updated.WorkStatus)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.TargetPath != "planning/sambot-example-conversations.md" {
+		t.Fatalf("checkpoint.TargetPath = %q, want shared deliverable path", checkpoint.TargetPath)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "shared parent deliverable planning/sambot-example-conversations.md missing on disk") {
+		t.Fatalf("checkpoint.FailureReason = %q, want missing inherited shared deliverable reason", checkpoint.FailureReason)
+	}
+	if !fixture.messages.containsContentSubstring("inherited parent file `planning/sambot-example-conversations.md` is still missing") {
+		t.Fatal("expected shared-deliverable missing-file recovery stop message")
+	}
+	updatedInitial, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID initial message: %v", err)
+	}
+	metadata := messageMetadataMap(updatedInitial.Metadata)
+	dispatchMeta, _ := metadata["agent_turn_dispatch"].(map[string]any)
+	if strings.TrimSpace(anyString(dispatchMeta["cancelled_at"])) == "" {
+		t.Fatal("expected cancelled_at metadata on initial recovery message")
+	}
+}
+
 func TestHandleRecoveryCLIExecuteWithoutCommandStopsAfterRepeatedResumeFailure(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
