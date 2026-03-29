@@ -5587,6 +5587,120 @@ func TestHandleTurnCompletedEventAdvancesFlowFromDurableRecoveryWrite(t *testing
 	}
 }
 
+func TestHandleTurnCompletedEventAdvancesFlowFromPriorDurableWriteWhenRetryTurnReturnsRuntimeSummaryPlaceholder(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	projectID := uuid.New()
+	projectSlug := "retry-summary-" + uuid.NewString()[:8]
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	description := "Complete the task deliverable. Output: deliverable.md"
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				TaskNumber:        21,
+				Title:             "Write Deliverable",
+				Description:       &description,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+				Metadata: mustRawJSON(t, map[string]any{
+					"planning": map[string]any{
+						"mode": "execution_first",
+					},
+				}),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.flowAdvancer.tasks = taskRepo
+	fixture.flowAdvancer.activeExecution = &repo.FlowNodeExecution{
+		TaskID:      taskID,
+		FlowNodeID:  nodeID,
+		VisitNumber: 1,
+		Status:      "active",
+	}
+	fixture.engine.flowAdvancer = fixture.flowAdvancer
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work", DisplayName: "Work"},
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				Slug:           projectSlug,
+			},
+		},
+	}
+
+	projectRoot := filepath.Join(dataDir, "workspaces", projectSlug)
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatalf("mkdir project root: %v", err)
+	}
+	initializeTurnTestGitRepo(t, projectRoot)
+	if err := os.WriteFile(filepath.Join(projectRoot, "deliverable.md"), []byte("deliverable body\n"), 0o644); err != nil {
+		t.Fatalf("write deliverable: %v", err)
+	}
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	message.Content = "Continue the active task now from the continuation summary above."
+	message.Metadata = taskContinuationResumeMessageMetadata(nil, 1)
+	fixture.messages.upsert(message)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	priorTurnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "Deliverable written.")
+	appendToolResultMessage(t, fixture, priorTurnID, map[string]any{
+		"tool_name": "file.write",
+		"output": map[string]any{
+			"path":      "deliverable.md",
+			"byte_size": 17,
+		},
+	})
+
+	retryTurnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "The deliverable is complete. The runtime will advance the flow.\n\nHere's a summary of what was delivered:\n## ✅ OC-21\n**File:** deliverable.md\n**Action:** Wrote the concrete deliverable body.\n")
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": retryTurnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if fixture.flowAdvancer.recordNodeCommitCalls != 1 {
+		t.Fatalf("record node commit calls = %d, want 1", fixture.flowAdvancer.recordNodeCommitCalls)
+	}
+	if strings.TrimSpace(fixture.flowAdvancer.lastCommitSHA) == "" {
+		t.Fatal("last commit sha = empty, want canonical runtime commit")
+	}
+	if fixture.flowAdvancer.advanceFlowCalls != 1 {
+		t.Fatalf("advance flow calls = %d, want 1", fixture.flowAdvancer.advanceFlowCalls)
+	}
+	updatedTask, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review after retry placeholder settles prior durable write", updatedTask.WorkStatus)
+	}
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+}
+
 func TestHandleTurnCompletedEventAdvancesFlowFromBlockedRecoveryWrite(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 

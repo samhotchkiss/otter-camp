@@ -3009,3 +3009,14 @@
     - `GOFLAGS='' go test ./internal/tools/native -run 'TestParseExplicitDeliverablePath(UsesTitleWhenDescriptionStartsWithInputRead|PrefersDescriptionAppendTargetOverSlashTitle)$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live canary is the next append-style SamBot task whose title contains slash terms like `UI/UX`, where the runtime should now keep targeting `planning/sambot-feature-spec.md` instead of the bogus `ui/ux` pseudo-path
+- 2026-03-29 09:21 MDT - Settled task-resume retries from earlier durable writes instead of requeueing runtime-owned completion summaries.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - [`handleCompletedTaskResumeWithoutUsableAssistant(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now advances flow when the current retry turn only contains runtime-owned completion-summary / commit-handoff prose and the latest earlier real tool turn in the same task session already produced the durable write
+    - added [`priorTaskResumeRetryTurnProducedDurableWrite(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) and [`orderedTurnIDsFromMessages(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) to walk back through placeholder-only retries and find the earlier write-bearing turn
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestHandleTurnCompletedEventAdvancesFlowFromPriorDurableWriteWhenRetryTurnReturnsRuntimeSummaryPlaceholder`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleTurnCompletedEventAdvancesFlowFromPriorDurableWriteWhenRetryTurnReturnsRuntimeSummaryPlaceholder|HandleTurnCompletedEventAdvancesFlowFromDurableRecoveryWrite|HandleTurnCompletedEventCreatesCanonicalCommitFromDeliverableWrite|HandleTurnCompletedEventAdvancesFlowFromBlockedRecoveryWrite|HandleTurnCompletedEventRetriesGenericTaskContinuationReply|HandleTurnCompletedEventBlocksRepeatedGenericTaskContinuationReply)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary is task `133`, where the current assistant-only `runtime will advance the flow` retry family should settle into canonical commit + flow advance instead of reopening more summary-only retries

@@ -1539,6 +1539,24 @@ func (e *TurnEngine) handleCompletedTaskResumeWithoutUsableAssistant(
 		}
 		return true, nil
 	}
+	if strings.TrimSpace(assistantContent) != "" &&
+		(looksLikeRuntimeAdvanceCompletionSummaryPlaceholder(assistantContent) || looksLikeRuntimeOwnedCommitHandoffPlaceholder(assistantContent)) &&
+		priorTaskResumeRetryTurnProducedDurableWrite(taskRecord, sessionMessages, latestCompleted.ID) {
+		if e.flowAdvancer != nil && latestCompleted.RespondingID != uuid.Nil {
+			if commitSHA, commitErr := e.ensureCanonicalTaskExecutionCommit(ctx, taskRecord); commitErr != nil {
+				return true, commitErr
+			} else if strings.TrimSpace(commitSHA) != "" {
+				if _, err := e.flowAdvancer.RecordNodeCommit(ctx, taskRecord.ID, commitSHA, ""); err != nil {
+					return true, err
+				}
+			}
+			if _, err := e.flowAdvancer.AdvanceFlow(ctx, taskRecord.ID, flowsvc.Actor{Type: "agent", ID: latestCompleted.RespondingID}); err != nil {
+				return true, err
+			}
+			return true, nil
+		}
+		return true, nil
+	}
 	if strings.TrimSpace(assistantContent) != "" && !looksLikeGenericTaskRecoveryReply(assistantContent) {
 		return false, nil
 	}
@@ -3465,6 +3483,61 @@ func recoveryTurnProducedDurableWrite(taskRecord repo.ProjectTask, messages []re
 		}
 	}
 	return false
+}
+
+func priorTaskResumeRetryTurnProducedDurableWrite(taskRecord repo.ProjectTask, messages []repo.ChatMessage, currentTurnID uuid.UUID) bool {
+	if currentTurnID == uuid.Nil || len(messages) == 0 {
+		return false
+	}
+	turnIDs := orderedTurnIDsFromMessages(messages)
+	currentIndex := -1
+	for idx, turnID := range turnIDs {
+		if turnID == currentTurnID {
+			currentIndex = idx
+			break
+		}
+	}
+	if currentIndex <= 0 {
+		return false
+	}
+	for idx := currentIndex - 1; idx >= 0; idx-- {
+		turnID := turnIDs[idx]
+		if turnHasSuccessfulToolResult(messages, turnID) {
+			return recoveryTurnProducedDurableWrite(taskRecord, messagesForTurn(messages, turnID))
+		}
+		assistant := latestAssistantFinalForTurn(messages, turnID)
+		if assistant == nil {
+			return false
+		}
+		content := strings.TrimSpace(assistant.Content)
+		if looksLikeRuntimeAdvanceCompletionSummaryPlaceholder(content) || looksLikeRuntimeOwnedCommitHandoffPlaceholder(content) {
+			continue
+		}
+		return false
+	}
+	return false
+}
+
+func orderedTurnIDsFromMessages(messages []repo.ChatMessage) []uuid.UUID {
+	if len(messages) == 0 {
+		return nil
+	}
+	ordered := make([]uuid.UUID, 0, len(messages))
+	seen := make(map[uuid.UUID]struct{}, len(messages))
+	for _, message := range messages {
+		if message.TurnID == nil || *message.TurnID == uuid.Nil {
+			continue
+		}
+		if _, ok := seen[*message.TurnID]; ok {
+			continue
+		}
+		seen[*message.TurnID] = struct{}{}
+		ordered = append(ordered, *message.TurnID)
+	}
+	if len(ordered) == 0 {
+		return nil
+	}
+	return ordered
 }
 
 func (e *TurnEngine) HandleTurnCancelledEvent(ctx context.Context, event eventbus.DomainEvent) error {
