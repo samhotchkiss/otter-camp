@@ -2596,6 +2596,79 @@ func (w *Worker) shouldSuppressProjectContinuationAfterSuccessfulHandoff(ctx con
 	return suppressed, nil
 }
 
+func (w *Worker) projectContinuationTurnShowsProgress(ctx context.Context, referenceMessageID uuid.UUID) (bool, error) {
+	if w == nil || w.pool == nil || referenceMessageID == uuid.Nil {
+		return false, nil
+	}
+
+	rows, err := w.pool.Query(ctx, `
+		WITH latest_turn AS (
+			SELECT ct.id
+			FROM chat_turn ct
+			WHERE ct.trigger_message_id = $1
+			  AND ct.status IN ('completed', 'failed', 'cancelled')
+			ORDER BY ct.retry_count DESC,
+			         COALESCE(ct.completed_at, ct.created_at) DESC,
+			         ct.id DESC
+			LIMIT 1
+		)
+		SELECT sm.content
+		FROM latest_turn lt
+		JOIN chat_message sm
+		  ON sm.turn_id = lt.id
+		 AND sm.role = 'tool_result'
+		ORDER BY sm.sequence_number ASC, sm.id ASC
+	`, referenceMessageID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	type toolEnvelope struct {
+		ToolName string         `json:"tool_name"`
+		Output   map[string]any `json:"output"`
+		Error    any            `json:"error"`
+	}
+
+	for rows.Next() {
+		var content string
+		if err := rows.Scan(&content); err != nil {
+			return false, err
+		}
+		var envelope toolEnvelope
+		if err := json.Unmarshal([]byte(content), &envelope); err != nil {
+			continue
+		}
+		switch strings.TrimSpace(envelope.ToolName) {
+		case "task.create", "task.update", "flow.review_decision":
+		default:
+			continue
+		}
+		if messageHasToolError(envelope.Error) {
+			continue
+		}
+		if messageHasToolError(envelope.Output["error"]) {
+			continue
+		}
+		return true, nil
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func messageHasToolError(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(typed) != ""
+	default:
+		return true
+	}
+}
+
 func (w *Worker) suppressRepeatedIdenticalPendingProjectContinuation(ctx context.Context, referenceMessageID, pendingMessageID uuid.UUID, allowSuccessfulHandoffSuppression bool) (bool, error) {
 	if w == nil || w.pool == nil || referenceMessageID == uuid.Nil || pendingMessageID == uuid.Nil {
 		return false, nil
@@ -2648,6 +2721,13 @@ func (w *Worker) suppressRepeatedIdenticalPendingProjectContinuation(ctx context
 		return false, err
 	}
 	if !blocked {
+		return false, nil
+	}
+	progressed, err := w.projectContinuationTurnShowsProgress(ctx, referenceMessageID)
+	if err != nil {
+		return false, err
+	}
+	if progressed {
 		return false, nil
 	}
 

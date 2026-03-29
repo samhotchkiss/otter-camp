@@ -3207,3 +3207,15 @@
     - `GOFLAGS='' go test ./internal/worker -run 'Test(DraftTaskAutoCompletes(WhenPlanningAndOutcomeAreSatisfied|RejectsBroadTask|WhenBroadSingleFileDeliverableIsSatisfied|RejectsIncompletePlanning)|StartupCleanupProjectDrafts(SkipsSatisfiedDraftWithoutFlowTemplate|CompletesSatisfiedSingleFilePlanningDraft))$' -count=1`
   - deploy / proof status:
     - ready to deploy next; the same live canary remains worker startup cleanup on `repo_version=3594+`, where drafts `82` and `90` should now settle to `done` after restart
+- 2026-03-29 11:12 MDT - Added the first proof-of-progress exemption to repeated PM continuation suppression.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - added [`projectContinuationTurnShowsProgress(...)`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go), which inspects the latest terminal continuation turn for successful `tool_result` payloads
+    - `suppressRepeatedIdenticalPendingProjectContinuation(...)` now refuses to suppress the retry when that latest blocked turn already produced a successful `task.create`, `task.update`, or `flow.review_decision`
+  - changed tests:
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+      - added `TestJobWorkerEnsureProjectContinuationMessageAllowsRetryAfterProgressWithinBlockedTurn`
+      - added `TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsAllowsRetryAfterProgressWithinBlockedTurn`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(EnsureProjectContinuationMessage(AllowsRetryAfterProgressWithinBlockedTurn|SuppressesRepeatedConsumedRediscoveryBlockedContinuation)|RequeueActiveProjectSessionsWithoutTurns(AllowsRetryAfterProgressWithinBlockedTurn|SuppressesRepeatedFailedRediscoveryBlockedContinuation))$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; live canary is the next PM continuation family that blocks after a successful `task.update`, `task.create`, or `flow.review_decision`

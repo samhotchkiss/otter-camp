@@ -39,3 +39,6 @@ Without explicit proof-of-progress rules, the system can spend long periods:
 - Likely touchpoints: turn-engine checkpoint metadata, tool-validation results in `internal/turn/engine.go`, and watchdog / recovery decisions in `internal/jobqueue/worker.go`.
 - Integration plan: define lane-specific progress signals (artifact mutation, acceptance result, blocker narrowing, flow transition) and let missing progress feed supervisor / replan decisions.
 - Status: active follow-on candidate after the bounded-contract and supervisory-stop slices.
+- 2026-03-29 11:12 MDT - Picked up the first narrow implementation slice in `internal/jobqueue/worker.go`: repeated PM continuation suppression now checks the latest blocked continuation turn for explicit progress-bearing tool results before classifying it as "repeat with no progress."
+- Initial progress signals for this slice are intentionally narrow and durable: successful `task.create`, successful `task.update`, and successful `flow.review_decision` tool results on the latest terminal continuation turn.
+- Integration coverage added in `internal/jobqueue/worker_integration_test.go` for both entry points that matter here: direct `ensureProjectContinuationMessageDecision(...)` retries and worker-side `RequeueActiveProjectSessionsWithoutTurns(...)` retries.
