@@ -857,7 +857,13 @@ func looksLikeRejectedDeliverablePlaceholder(content string) bool {
 		return false
 	}
 	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(trimmed, "---") {
+		return false
+	}
 	if looksLikeNarratedTaskFileWritePlaceholder(trimmed) {
+		return true
+	}
+	if looksLikeDeliverableReviewAssessmentPlaceholder(lower) {
 		return true
 	}
 	if strings.Contains(lower, "# ready to continue oc-") &&
@@ -888,6 +894,31 @@ func looksLikeRejectedDeliverablePlaceholder(content string) bool {
 		return true
 	}
 	return false
+}
+
+func looksLikeDeliverableReviewAssessmentPlaceholder(lower string) bool {
+	if lower == "" {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"now i have all 12 existing files read",
+		"all 35 files exist in content/posts/",
+		"i now have clear evidence for my review decision",
+		"critical findings are already clear",
+	) {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"looking at the file sizes and content",
+		"let me assess their quality",
+		"suspiciously small file sizes",
+		"let me check the ones",
+		"the file contains garbage content",
+		"the other files have proper frontmatter",
+	) {
+		return false
+	}
+	return strings.Contains(lower, ".md") || strings.Contains(lower, "content/posts/")
 }
 
 func (e *NativeToolExecutor) handleFileList(ctx context.Context, input map[string]any) (map[string]any, error) {

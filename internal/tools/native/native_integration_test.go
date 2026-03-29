@@ -1173,6 +1173,60 @@ func TestIntegrationFileReadRejectsPlaceholderSelfIdentifiedDeliverableWithoutSe
 	}
 }
 
+func TestIntegrationFileReadRejectsMarkdownReviewAssessmentPlaceholderAtPreferredTarget(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	description := "Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/."
+	plan := taskplan.Analyze("Final replacement: scrape technonymous posts 1-12 to markdown in content/posts/", &description)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Title:       "Final replacement: scrape technonymous posts 1-12 to markdown in content/posts/",
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+	})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	workspaceRoot := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:          pool,
+		WorkspaceRoot: workspaceRoot,
+	})
+	ctx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	if _, err := repo.NewChatMessageRepo(pool).Create(context.Background(), repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content: "Review only.\n" +
+			"Start with the preferred deliverable target `content/posts/stop-preparing-your-kids-for-jobs.md`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `content/posts/stop-preparing-your-kids-for-jobs.md` is missing.\n" +
+			"If reading `content/posts/stop-preparing-your-kids-for-jobs.md` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.",
+	}); err != nil {
+		t.Fatalf("create review prompt message: %v", err)
+	}
+
+	targetPath := "content/posts/stop-preparing-your-kids-for-jobs.md"
+	targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	placeholder := "Now I have all 12 existing files read. Let me assess their quality. Looking at the file sizes and content:\n\n- `jenny-can-i-have-my-privacy-back.md` (2339 bytes)\n- `stop-preparing-your-kids-for-jobs.md` contains garbage content\n"
+	if err := os.WriteFile(targetAbs, []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("write placeholder target: %v", err)
+	}
+
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("file.read: %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+	if got := out["deliverable_path"]; got != targetPath {
+		t.Fatalf("deliverable_path = %v, want %s", got, targetPath)
+	}
+}
+
 func TestIntegrationFileWriteSamBlogAlternatingRawPayloadsReturnContentRequired(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)

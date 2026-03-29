@@ -892,3 +892,61 @@ func TestFileReadRejectsPlaceholderReviewPromptTargetWithoutExplicitDeliverable(
 		t.Fatalf("deliverable_path = %v, want %s", got, targetPath)
 	}
 }
+
+func TestFileReadRejectsMarkdownReviewAssessmentPlaceholderAtPreferredTarget(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "content/posts/stop-preparing-your-kids-for-jobs.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(content/posts): %v", err)
+	}
+	placeholder := "Now I have all 12 existing files read. Let me assess their quality. Looking at the file sizes and content:\n\n- `jenny-can-i-have-my-privacy-back.md` (2339 bytes)\n- `stop-preparing-your-kids-for-jobs.md` contains garbage content\n"
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+
+	description := "Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Final replacement: scrape technonymous posts 1-12 to markdown in content/posts/",
+			Description:    &description,
+			Metadata:       json.RawMessage(`{"bootstrap_first_wave_selected":true}`),
+			WorkStatus:     "review",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "user",
+				Content: "Review only.\n" +
+					"Start with the preferred deliverable target `content/posts/stop-preparing-your-kids-for-jobs.md`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `content/posts/stop-preparing-your-kids-for-jobs.md` is missing.\n" +
+					"If reading `content/posts/stop-preparing-your-kids-for-jobs.md` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+	if got := out["deliverable_path"]; got != targetPath {
+		t.Fatalf("deliverable_path = %v, want %s", got, targetPath)
+	}
+}
