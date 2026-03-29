@@ -28643,6 +28643,67 @@ func TestMaybeSynthesizeTaskReviewDecisionToolCallsUsesPreferredDeliverableRejec
 	}
 }
 
+func TestMaybeSynthesizeTaskReviewDecisionToolCallsUsesBlockedReviewPrompt(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		TaskNumber: 109,
+		Title:      "Append technical architecture to planning/sambot-feature-spec.md",
+		WorkStatus: "blocked",
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		initialMessageText: "Review only.\n" +
+			"Inspect the current deliverables and use flow.review_decision to approve or reject this review step.\n" +
+			"Do not continue implementation, do not write deliverable files, and do not summarize what you plan to review.",
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskReviewDecisionToolCalls(
+		context.Background(),
+		rt,
+		"The file content is a clear mismatched deliverable. Instead of containing the SamBot feature spec with an appended technical architecture section, it contains a boilerplate placeholder and no existing substantive feature spec content.",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskReviewDecisionToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "flow.review_decision" {
+		t.Fatalf("toolCalls = %+v, want one flow.review_decision", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["decision"]); got != "reject" {
+		t.Fatalf("decision = %q, want reject", got)
+	}
+	if got := stringValue(toolCalls[0].Arguments["flow_node_execution_id"]); got != executionID.String() {
+		t.Fatalf("flow_node_execution_id = %q, want %s", got, executionID)
+	}
+}
+
 func TestMaybeSynthesizeTaskReviewDecisionToolCallsSkipsWhenDecisionToolAlreadyPresent(t *testing.T) {
 	t.Parallel()
 

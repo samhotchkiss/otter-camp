@@ -3363,6 +3363,7 @@ func inferredReviewRejectFromText(text string) bool {
 
 	strongRejectSignals := []string{
 		"**rejection**",
+		"mismatched deliverable",
 		"the work deliverable is incomplete",
 		"does not meet acceptance criteria",
 		"placeholder text",
@@ -17178,7 +17179,7 @@ func (e *TurnEngine) maybeSynthesizeTaskReviewDecisionToolCalls(ctx context.Cont
 	if err != nil {
 		return toolCalls, false, nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") && !taskReviewPromptActive(rt) {
 		return toolCalls, false, nil
 	}
 	for _, call := range toolCalls {

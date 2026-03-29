@@ -2983,3 +2983,14 @@
     - `GOFLAGS='' go test ./internal/tools/native -run 'Test(FileWriteRejectsMutationFor(BlockedReviewSession|ReviewTask)|FileEditRejectsMutationForReviewTask|CLIExecuteBlockedIn(BlockedReviewTaskSession|ReviewTaskSession))$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live canary is task `109` or its successor, which should stop writing `planning/sambot-feature-spec.md` after the review lane has already been halted/blocked
+- 2026-03-29 08:58 MDT - Kept engine-side review-decision synthesis active for blocked review resumes.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - [`maybeSynthesizeTaskReviewDecisionToolCalls(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now stays active when either the task status is `review` or the current turn prompt is still a live review prompt
+    - [`inferredReviewRejectFromText(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now treats `mismatched deliverable` as a strong reject signal
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestMaybeSynthesizeTaskReviewDecisionToolCallsUsesBlockedReviewPrompt`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestMaybeSynthesizeTaskReviewDecisionToolCalls(UsesPreferredDeliverableRejectEvidence|UsesBlockedReviewPrompt|InfersRejectFromStrongFindings|UsesSufficientEvidenceRejectPhrasing|UsesDirtyWorkspaceRejectOnlyRetry|SkipsWhenDecisionToolAlreadyPresent)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary is the next blocked-review resume like task `109`, which should now synthesize `flow.review_decision reject` instead of closing with prose-only mismatch findings
