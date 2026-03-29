@@ -3066,7 +3066,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 					}
 					continue
 				}
-				if activity.childTaskCount > 0 && len(childActiveDraftTasks) < 4 {
+				if activity.activeChildTaskCount > 0 && len(childActiveDraftTasks) < 4 {
 					childActiveDraftTasks = append(childActiveDraftTasks, taskRef)
 				}
 				continue

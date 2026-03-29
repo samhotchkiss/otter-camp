@@ -13864,7 +13864,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
-		if blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, name, arguments); blocked {
+		if blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, calls, id, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
 				Name:       name,
@@ -18534,7 +18534,7 @@ func buildProjectExecutionContinuationSnapshot(
 					}
 					continue
 				}
-				if activity.childTaskCount > 0 && len(childActiveDraftTasks) < 4 {
+				if activity.activeChildTaskCount > 0 && len(childActiveDraftTasks) < 4 {
 					childActiveDraftTasks = append(childActiveDraftTasks, taskRef)
 				}
 				continue
@@ -28197,7 +28197,7 @@ func recordTaskReviewPreferredDeliverableReadResult(rt *turnRuntime, result Tool
 	}
 	if targetPath == "" {
 		if rootPath != "" &&
-			rt.reviewPreferredDeliverableRootListed &&
+			(rt.reviewPreferredDeliverableRootListed || taskReviewPromptTreatsCheckpointOutputSetAsAuthoritative(rt, rootPath)) &&
 			workspacePathWithinRoot(path, rootPath) &&
 			intValue(result.Output["byte_size"]) > 0 {
 			rt.reviewCheckpointOutputSiblingReads++
@@ -28366,7 +28366,7 @@ func shouldBlockTaskReviewPreferredDeliverableFirstTool(rt *turnRuntime, toolNam
 	}
 }
 
-func shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+func shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt *turnRuntime, calls []ModelToolCall, toolCallID, toolName string, arguments map[string]any) (bool, string) {
 	if !taskReviewPreferredDeliverableRootFirstApplies(rt) {
 		return false, ""
 	}
@@ -28385,7 +28385,15 @@ func shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt *turnRuntime, too
 		}
 		if path != "" && workspacePathWithinRoot(path, rootPath) {
 			if (normalizedToolName == "file.read" || normalizedToolName == "file_read") &&
-				rt.reviewPreferredDeliverableRootListed &&
+				(rt.reviewPreferredDeliverableRootListed ||
+					taskReviewPromptTreatsCheckpointOutputSetAsAuthoritative(rt, rootPath)) {
+				if ordinal := taskReviewCheckpointOutputSiblingReadOrdinal(rt, calls, toolCallID, "", rootPath); ordinal > taskReviewCheckpointOutputSampleCap {
+					return true, buildTaskReviewCheckpointOutputSampleCapGuardError(rootPath, taskReviewCheckpointOutputSampleCap)
+				}
+			}
+			if (normalizedToolName == "file.read" || normalizedToolName == "file_read") &&
+				(rt.reviewPreferredDeliverableRootListed ||
+					taskReviewPromptTreatsCheckpointOutputSetAsAuthoritative(rt, rootPath)) &&
 				rt.reviewCheckpointOutputSiblingReads >= taskReviewCheckpointOutputSampleCap {
 				return true, buildTaskReviewCheckpointOutputSampleCapGuardError(rootPath, taskReviewCheckpointOutputSampleCap)
 			}

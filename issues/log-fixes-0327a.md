@@ -2130,3 +2130,40 @@
     - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and health is `ok` on `repo_version=3505` (`request_id=5f04c35d-8a43-4eb4-b1f0-a7e4a5315979`)
     - the targeted live query for the seven closed task-78 sessions now returns zero pending user messages
     - the broader sanity check `count(*)` over `chat_message` joined to `chat_session` for `session.status in ('closed','archived')` and `message.status in ('pending','streaming')` also returns `0`
+- 2026-03-28 23:08:38 MDT - Finished: stop treating blocked review children as active child work in PM continuation snapshots.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `buildProjectExecutionContinuationSnapshot(...)` now only places a draft parent into `ChildActiveDraftLine` when `activity.activeChildTaskCount > 0`
+    - blocked resumable review children still surface in `ActiveTaskLine` with `resume_policy=resume_review_decision`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - worker-side `projectExecutionContinuationSnapshot(...)` now mirrors the same `activeChildTaskCount > 0` gate for `ChildActiveDraftLine`
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - updated the blocked-review-child snapshot expectation so draft parent task `58` no longer appears in `ChildActiveDraftLine`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+      - updated the worker snapshot expectation the same way
+      - added `TestJobWorkerEnsureProjectContinuationMessageRequeuesAfterBlockedReviewChildStopsWaitingOnActiveWork`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3507`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(RecordTaskReviewPreferredDeliverableReadResultTracks(RootOnlyReviewSampling|AuthoritativeRootSamplingWithoutRootList)|ShouldBlockTaskReviewPreferredDeliverableRoot(ReadPastSampleCapAfterRootList|ReadPastSampleCapWithoutRootListWhenCheckpointOutputSetAuthoritative)|ProjectExecutionContinuationSnapshotSkipsBlockedReviewChildrenFromChildActiveDraftBucket)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(ProjectExecutionContinuationSnapshotSkipsBlockedReviewChildrenFromChildActiveDraftBucket|EnsureProjectContinuationMessage(SuppressesRepeatedConsumedReviewLaneResumeContinuation|RequeuesAfterBlockedReviewChildStopsWaitingOnActiveWork))$' -count=1`
+  - deploy / proof status:
+    - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and health was `ok`
+    - live proof landed immediately on Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`: fresh continuation `5848` was created on `repo_version=3507`, claimed, and completed into `5849-5850`
+    - task `78` re-entered `review` and got a new active task session `dd526b27-be5d-4759-ad3c-78064ff7bd7b`, which proves the PM lane was no longer frozen behind a false active-child wait state
+- 2026-03-28 23:13:35 MDT - Finished: make root-authoritative review sample caps batch-aware.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `shouldBlockTaskReviewPreferredDeliverableRootFirstTool(...)` now receives the current tool-call batch and tool-call id
+    - root-only authoritative review prompts now use `taskReviewCheckpointOutputSiblingReadOrdinal(...)` to count sibling reads already queued in the same assistant batch before dispatch
+    - this blocks the third same-batch sibling `file.read` once the authoritative root sample cap would be exceeded, instead of waiting for prior completed tool results only
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - updated all direct `shouldBlockTaskReviewPreferredDeliverableRootFirstTool(...)` calls for the new batch-aware signature
+      - added `TestShouldBlockTaskReviewPreferredDeliverableRootReadPastSampleCapWithinSameBatch`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3508`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(RecordTaskReviewPreferredDeliverableReadResultTracks(RootOnlyReviewSampling|AuthoritativeRootSamplingWithoutRootList)|ShouldBlockTaskReviewPreferredDeliverableRoot(ReadPastSampleCapAfterRootList|ReadPastSampleCapWithoutRootListWhenCheckpointOutputSetAuthoritative|ReadPastSampleCapWithinSameBatch|DependencyReadWithCheckpointOutputSet)|ProjectExecutionContinuationSnapshotSkipsBlockedReviewChildrenFromChildActiveDraftBucket)$' -count=1`
+  - deploy / proof status:
+    - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and health is `ok` on `repo_version=3508` (`request_id=fb3b03bb-7c3c-4a29-b744-9861acfd9864`)
+    - direct production proof for this exact same-batch overshoot guard is still pending the next natural task-78 review retry on the `3508` binary

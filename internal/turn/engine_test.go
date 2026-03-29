@@ -15769,6 +15769,34 @@ func TestRecordTaskReviewPreferredDeliverableReadResultTracksRootOnlyReviewSampl
 	}
 }
 
+func TestRecordTaskReviewPreferredDeliverableReadResultTracksAuthoritativeRootSamplingWithoutRootList(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable root `content/posts`. Inspect that output root directly before broad workspace discovery.\n" +
+			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/post-1.md`, `content/posts/post-2.md`, `content/posts/post-3.md`. Treat that output set as authoritative for this batch; read the named outputs directly and do not call `file.list` on `content/posts` just to rediscover which files belong to the batch.\n" +
+			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.\n",
+	}
+
+	recordTaskReviewPreferredDeliverableReadResult(rt, ToolResult{
+		Name: "file.read",
+		Output: map[string]any{
+			"path":       "content/posts/post-1.md",
+			"byte_size":  512,
+			"bytes_read": 512,
+		},
+	})
+	if rt.reviewPreferredDeliverableRootListed {
+		t.Fatal("reviewPreferredDeliverableRootListed = true, want false without a successful root list")
+	}
+	if rt.reviewCheckpointOutputSiblingReads != 1 {
+		t.Fatalf("reviewCheckpointOutputSiblingReads = %d, want 1", rt.reviewCheckpointOutputSiblingReads)
+	}
+}
+
 func TestShouldBlockTaskReviewPreferredDeliverableRootFirstTool(t *testing.T) {
 	rt := &turnRuntime{
 		session: &chat.ChatSession{
@@ -15781,10 +15809,10 @@ func TestShouldBlockTaskReviewPreferredDeliverableRootFirstTool(t *testing.T) {
 			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
 	}
 
-	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, "file.list", map[string]any{"path": "content/posts", "recursive": true}); blocked {
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, nil, "", "file.list", map[string]any{"path": "content/posts", "recursive": true}); blocked {
 		t.Fatalf("expected preferred deliverable root list to remain allowed, reason = %q", reason)
 	}
-	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, "file.read", map[string]any{"path": "content/posts/2025-07-29-hello-world.md"}); blocked {
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, nil, "", "file.read", map[string]any{"path": "content/posts/2025-07-29-hello-world.md"}); blocked {
 		t.Fatalf("expected deliverable read under root to remain allowed, reason = %q", reason)
 	}
 
@@ -15798,7 +15826,7 @@ func TestShouldBlockTaskReviewPreferredDeliverableRootFirstTool(t *testing.T) {
 		{name: "dependency read", toolName: "file.read", arguments: map[string]any{"path": "content/technonymous-index.json"}},
 		{name: "planning read", toolName: "file.read", arguments: map[string]any{"path": "planning/prd-spec/oc-34-prd.md"}},
 	} {
-		blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, tc.toolName, tc.arguments)
+		blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, nil, "", tc.toolName, tc.arguments)
 		if !blocked {
 			t.Fatalf("expected %s to be blocked before preferred deliverable root inspection", tc.name)
 		}
@@ -15823,9 +15851,66 @@ func TestShouldBlockTaskReviewPreferredDeliverableRootReadPastSampleCapAfterRoot
 		reviewCheckpointOutputSiblingReads:   taskReviewCheckpointOutputSampleCap,
 	}
 
-	blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, "file.read", map[string]any{"path": "content/posts/post-5.md"})
+	blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, nil, "", "file.read", map[string]any{"path": "content/posts/post-5.md"})
 	if !blocked {
 		t.Fatal("expected root-only batch review to block file reads past the sample cap after the root has already been listed")
+	}
+	if !strings.Contains(reason, "sample at most") {
+		t.Fatalf("guard reason = %q, want root sample-cap guidance", reason)
+	}
+}
+
+func TestShouldBlockTaskReviewPreferredDeliverableRootReadPastSampleCapWithoutRootListWhenCheckpointOutputSetAuthoritative(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable root `content/posts`. Inspect that output root directly before broad workspace discovery, and do not begin with task.get, git.log, or dependency-file reads outside `content/posts` unless `content/posts` itself is missing.\n" +
+			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/post-1.md`, `content/posts/post-2.md`, `content/posts/post-3.md`, `content/posts/post-4.md`. Treat that output set as authoritative for this batch; read the named outputs directly and do not call `file.list` on `content/posts` just to rediscover which files belong to the batch.\n" +
+			"If listing or reading under `content/posts` returns `not_found`, stop broad inspection and call flow.review_decision reject using that missing deliverable-root evidence.\n" +
+			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
+		reviewCheckpointOutputSiblingReads: taskReviewCheckpointOutputSampleCap,
+	}
+
+	blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, nil, "", "file.read", map[string]any{"path": "content/posts/post-5.md"})
+	if !blocked {
+		t.Fatal("expected authoritative root-only batch review to block file reads past the sample cap even without a successful root list")
+	}
+	if !strings.Contains(reason, "sample at most") {
+		t.Fatalf("guard reason = %q, want root sample-cap guidance", reason)
+	}
+}
+
+func TestShouldBlockTaskReviewPreferredDeliverableRootReadPastSampleCapWithinSameBatch(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable root `content/posts`. Inspect that output root directly before broad workspace discovery, and do not begin with task.get, git.log, or dependency-file reads outside `content/posts` unless `content/posts` itself is missing.\n" +
+			"The checkpoint already identifies the task-owned outputs under `content/posts`: `content/posts/post-1.md`, `content/posts/post-2.md`, `content/posts/post-3.md`, `content/posts/post-4.md`. Treat that output set as authoritative for this batch; read the named outputs directly and do not call `file.list` on `content/posts` just to rediscover which files belong to the batch.\n" +
+			"If listing or reading under `content/posts` returns `not_found`, stop broad inspection and call flow.review_decision reject using that missing deliverable-root evidence.\n" +
+			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
+		reviewCheckpointOutputSiblingReads: 2,
+	}
+	calls := []ModelToolCall{
+		{ID: "call-1", Name: "file.read", Arguments: map[string]any{"path": "content/posts/post-3.md"}},
+		{ID: "call-2", Name: "file.read", Arguments: map[string]any{"path": "content/posts/post-4.md"}},
+		{ID: "call-3", Name: "file.read", Arguments: map[string]any{"path": "content/posts/post-5.md"}},
+	}
+
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, calls, "call-1", "file.read", calls[0].Arguments); blocked {
+		t.Fatalf("expected first same-batch sibling read to remain allowed, reason = %q", reason)
+	}
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, calls, "call-2", "file.read", calls[1].Arguments); blocked {
+		t.Fatalf("expected second same-batch sibling read to remain allowed at the sample cap, reason = %q", reason)
+	}
+	blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, calls, "call-3", "file.read", calls[2].Arguments)
+	if !blocked {
+		t.Fatal("expected third same-batch sibling read to be blocked past the sample cap")
 	}
 	if !strings.Contains(reason, "sample at most") {
 		t.Fatalf("guard reason = %q, want root sample-cap guidance", reason)
@@ -15845,14 +15930,14 @@ func TestShouldBlockTaskReviewPreferredDeliverableRootListWhenCheckpointOutputSe
 			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
 	}
 
-	blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, "file.list", map[string]any{"path": "content/posts", "recursive": true})
+	blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, nil, "", "file.list", map[string]any{"path": "content/posts", "recursive": true})
 	if !blocked {
 		t.Fatal("expected preferred deliverable root file.list to be blocked once the checkpoint output set is authoritative")
 	}
 	if !strings.Contains(reason, "authoritative for the batch") {
 		t.Fatalf("guard reason = %q, want authoritative checkpoint output-set guidance", reason)
 	}
-	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, "file.read", map[string]any{"path": "content/posts/post-2.md"}); blocked {
+	if blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, nil, "", "file.read", map[string]any{"path": "content/posts/post-2.md"}); blocked {
 		t.Fatalf("expected named checkpoint output read to remain allowed, reason = %q", reason)
 	}
 }
@@ -15891,7 +15976,7 @@ func TestShouldBlockTaskReviewPreferredDeliverableRootDependencyReadWithCheckpoi
 			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
 	}
 
-	blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, "file.read", map[string]any{"path": "content/technonymous-index.json"})
+	blocked, reason := shouldBlockTaskReviewPreferredDeliverableRootFirstTool(rt, nil, "", "file.read", map[string]any{"path": "content/technonymous-index.json"})
 	if !blocked {
 		t.Fatal("expected dependency artifact read to be blocked when checkpoint output set is already named")
 	}
@@ -20492,8 +20577,8 @@ func TestProjectExecutionContinuationSnapshotKeepsReviewDecisionBlockedChildrenA
 	if strings.Contains(snapshot.ReplacementDraftLine, "task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/)") {
 		t.Fatalf("ReplacementDraftLine = %q, should not treat resumable review children as replacement work", snapshot.ReplacementDraftLine)
 	}
-	if !strings.Contains(snapshot.ChildActiveDraftLine, "task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/)") {
-		t.Fatalf("ChildActiveDraftLine = %q, want draft parent kept in existing-child bucket", snapshot.ChildActiveDraftLine)
+	if strings.Contains(snapshot.ChildActiveDraftLine, "task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/)") {
+		t.Fatalf("ChildActiveDraftLine = %q, should not treat blocked review children as active child work", snapshot.ChildActiveDraftLine)
 	}
 	if !strings.Contains(snapshot.ActiveTaskLine, "task 61 (Fetch posts 1-12)") || !strings.Contains(snapshot.ActiveTaskLine, "resume_policy=resume_review_decision") {
 		t.Fatalf("ActiveTaskLine = %q, want blocked review child lanes surfaced as resumable review work", snapshot.ActiveTaskLine)
