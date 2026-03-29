@@ -511,6 +511,11 @@ func (e *NativeToolExecutor) latestRecoveryTargetPathForSession(ctx context.Cont
 	if e != nil && e.tasks != nil && scope.taskID != nil && *scope.taskID != uuid.Nil {
 		taskRecord, err := e.tasks.GetByID(ctx, *scope.taskID)
 		if err == nil {
+			if checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata); ok {
+				if target := e.contentMigrationCheckpointPreferredOutputPathForSession(ctx, taskRecord, checkpoint); target != "" {
+					return target
+				}
+			}
 			if target := preferredRecoveryTargetForTask(taskRecord); target != "" {
 				return target
 			}
@@ -521,6 +526,41 @@ func (e *NativeToolExecutor) latestRecoveryTargetPathForSession(ctx context.Cont
 		}
 	}
 	return e.sessionRecoveryState(ctx, scope).targetPath
+}
+
+func (e *NativeToolExecutor) contentMigrationCheckpointPreferredOutputPathForSession(ctx context.Context, taskRecord repo.ProjectTask, checkpoint taskcheckpoint.ContentMigrationCheckpoint) string {
+	fallback := contentMigrationCheckpointPreferredOutputPath(taskRecord, checkpoint)
+	workspaceRoot := strings.TrimSpace(e.explicitRoot)
+	if workspaceRoot == "" && e != nil && e.projects != nil {
+		root, err := e.taskWorkspaceRoot(ctx, taskRecord)
+		if err == nil {
+			workspaceRoot = root
+		}
+	}
+	if workspaceRoot == "" {
+		return fallback
+	}
+
+	for _, output := range checkpoint.Outputs {
+		target := normalizeWorkspacePath(output.Path)
+		if target == "" {
+			continue
+		}
+		if !deliverableTargetMatchesTaskContract(taskRecord, target) {
+			continue
+		}
+		if fallback == "" {
+			fallback = target
+		}
+		exists, err := substantiveExplicitDeliverableExists(workspaceRoot, target)
+		if err != nil {
+			continue
+		}
+		if !exists {
+			return target
+		}
+	}
+	return fallback
 }
 
 func parsePromptDeliverableTarget(content string) string {

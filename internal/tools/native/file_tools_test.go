@@ -165,6 +165,60 @@ func TestLatestRecoveryTargetPathForSessionPrefersMetadataBatchOutputOverDepende
 	}
 }
 
+func TestLatestRecoveryTargetPathForSessionPrefersFirstMissingMetadataBatchOutputOverCompletedOutput(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+
+	description := "Read content/technonymous-index.json. For each of the first 12 URLs in the post_urls array, save the article text as clean markdown files under content/posts/."
+	metadata, err := json.Marshal(map[string]any{
+		"content_migration_checkpoint": taskcheckpoint.ContentMigrationCheckpoint{
+			Outputs: []taskcheckpoint.WorkspaceFile{
+				{Path: "content/posts/stop-preparing-your-kids-for-jobs.md"},
+				{Path: "content/posts/let-kids-be-kids.md"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(metadata): %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(content/posts): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "content", "posts", "stop-preparing-your-kids-for-jobs.md"), []byte("# Stop Preparing Your Kids for Jobs\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(completed output): %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Fetch posts 1-12 from technonymous index and save as markdown",
+			Description:    &description,
+			Metadata:       metadata,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "system",
+				Content:   "[Recovery resume state]\nTarget file: content/posts/stop-preparing-your-kids-for-jobs.md\n",
+			},
+		},
+	}
+
+	got := executor.latestRecoveryTargetPathForSession(context.Background(), workspaceScope{sessionID: &sessionID, taskID: &taskID})
+	if got != "content/posts/let-kids-be-kids.md" {
+		t.Fatalf("latestRecoveryTargetPathForSession(...) = %q, want %q", got, "content/posts/let-kids-be-kids.md")
+	}
+}
+
 func TestLatestRecoveryTargetPathForSessionIgnoresDependencyArtifactHistoryForMarkdownBatchWithoutMetadata(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

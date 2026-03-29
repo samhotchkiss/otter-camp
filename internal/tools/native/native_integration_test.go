@@ -780,6 +780,65 @@ func TestIntegrationFileListAllowsBlockedReviewNodeDeliverableRootInspectionWith
 	}
 }
 
+func TestIntegrationFileReadRejectsDependencyArtifactAgainstFirstMissingBatchOutput(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	description := "Read content/technonymous-index.json. For each of the next 12 URLs in the post_urls array, save the article text as clean markdown files under content/posts/."
+	metadata, err := taskcheckpoint.MergeContentMigrationCheckpoint(nil, taskcheckpoint.ContentMigrationCheckpoint{
+		Outputs: []taskcheckpoint.WorkspaceFile{
+			{Path: "content/posts/stop-preparing-your-kids-for-jobs.md"},
+			{Path: "content/posts/let-kids-be-kids.md"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("merge content migration checkpoint metadata: %v", err)
+	}
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Title:       "Fetch posts 1-12 from technonymous index and save as markdown",
+		Description: &description,
+		Metadata:    metadata,
+		WorkStatus:  "blocked",
+	})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	workspaceRoot := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: workspaceRoot})
+	execCtx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "system",
+		Status:    "final",
+		Content:   "[Recovery resume state]\nTarget file: content/posts/stop-preparing-your-kids-for-jobs.md\n",
+	}); err != nil {
+		t.Fatalf("create recovery system message: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("mkdir content/posts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "content", "posts", "stop-preparing-your-kids-for-jobs.md"), []byte("# Stop Preparing Your Kids for Jobs\n"), 0o644); err != nil {
+		t.Fatalf("write completed output: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "content", "technonymous-index.json"), []byte("{\"post_urls\":[]}"), 0o644); err != nil {
+		t.Fatalf("write dependency artifact: %v", err)
+	}
+
+	out, err := executor.Execute(execCtx, "file.read", map[string]any{"path": "content/technonymous-index.json"})
+	if err != nil {
+		t.Fatalf("file.read: %v", err)
+	}
+	if got := out["error"]; got != "recovery_target_focus_required" {
+		t.Fatalf("error = %v, want recovery_target_focus_required", got)
+	}
+	if got := out["deliverable_path"]; got != "content/posts/let-kids-be-kids.md" {
+		t.Fatalf("deliverable_path = %v, want %q", got, "content/posts/let-kids-be-kids.md")
+	}
+}
+
 func TestIntegrationFileSearchRejectsRecoveryWorkspaceRereadOutsideTarget(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)

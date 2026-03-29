@@ -1741,3 +1741,22 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildRecoveryResumeActionPrompt(HardensIntentOnlyCheckpointWithoutDraft|UsesAvailableDraftDirectly|UsesContinuationSummaryDraftDirectly|NoDraftContentPostTargetRequiresSourceBody)|RecoveryFileWriteDraftRejectReasonRejectsContentMigration(TaskScaffoldWithoutBody|CheckpointSummaryWithoutBody|RecoveryNoteWithoutBody)|LoadRecoveryResumeStateRejectsContentMigration(CheckpointSummaryDraft|RecoveryNoteDraft|TaskScaffoldSummaryDraft)|InferredTaskDeliverableDraftSkipsSourceBackedContentPostsTask|MaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsSourceBackedContentPostsTask)$' -count=1`
   - proof target after deploy:
     - the next task-70 no-draft recovery retry should stop saying there are durable drafts above and should move directly into source-backed fetch/write behavior instead of placeholder rewrites
+- 2026-03-28 18:33:41 MDT - Finished: rotate content-migration recovery focus to the first missing checkpoint output.
+  - live diagnosis:
+    - after task-70 had already written `content/posts/i-cant-picture-my-kids.md`, retries were still behaving as if that already-written file were the only recovery target
+    - the native guard was choosing the first `content_migration_checkpoint.outputs[]` entry every time, even when earlier batch outputs were already on disk
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `latestRecoveryTargetPathForSession(...)` now asks a new session-aware helper to resolve the task workspace and prefer the first checkpoint output that is still missing on disk
+    - when all tracked outputs already exist or the workspace cannot be resolved, the code falls back to the historic first-output behavior
+  - changed [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go):
+    - added `TestLatestRecoveryTargetPathForSessionPrefersFirstMissingMetadataBatchOutputOverCompletedOutput`
+  - changed [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go):
+    - added `TestIntegrationFileReadRejectsDependencyArtifactAgainstFirstMissingBatchOutput`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3467`
+  - verified with:
+    - `gofmt -w internal/tools/native/file_tools.go internal/tools/native/file_tools_test.go internal/tools/native/native_integration_test.go`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(LatestRecoveryTargetPathForSession(PrefersFirstMissingMetadataBatchOutputOverCompletedOutput|PrefersMetadataBatchOutputOverDependencyArtifactHistory|IgnoresDependencyArtifactHistoryForMarkdownBatchWithoutMetadata)|File(ListAllowsExecutionDeliverableRootInspectionWithinRecoveryTargetRootForBatchTask|ReadAllowsExecutionSiblingDeliverableInspectionWithinRecoveryTargetRootForBatchTask))$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/tools/native -run 'TestIntegration(FileListAllowsBlockedReviewNodeDeliverableRootInspectionWithinRecoveryTargetRoot|FileReadRejectsDependencyArtifactAgainstFirstMissingBatchOutput)$' -count=1`
+  - proof target after deploy:
+    - the next task-70-style content-migration recovery retry should report the next missing `content/posts/...` output as `deliverable_path` instead of pinning back to the already-written first post
