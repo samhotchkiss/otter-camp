@@ -1461,6 +1461,7 @@ func SatisfiedDraftAutoCompletable(taskRecord repo.ProjectTask) bool {
 	if !ok || state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied {
 		return false
 	}
+	singleFileDeliverable := satisfiedDraftSingleWorkspaceFilePath(taskRecord, state)
 	plan, ok := taskplan.Parse(taskRecord.Metadata)
 	prepared, err := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
 		ParentTaskID: taskRecord.ID,
@@ -1475,17 +1476,19 @@ func SatisfiedDraftAutoCompletable(taskRecord repo.ProjectTask) bool {
 		if _, err := taskplan.CompletionReport(taskRecord.Metadata); err != nil {
 			return false
 		}
-		return !prepared.Applied
+		if !prepared.Applied {
+			return true
+		}
+		return singleFileDeliverable != ""
 	}
 	if len(taskdecomp.ParseChildTaskIDs(taskRecord.Metadata)) != 0 {
 		return false
 	}
-	return satisfiedDraftHasConcreteDeliverableEvidence(taskRecord, state)
+	return singleFileDeliverable != "" || satisfiedDraftHasConcreteDeliverableEvidence(taskRecord, state)
 }
 
 func satisfiedDraftHasConcreteDeliverableEvidence(taskRecord repo.ProjectTask, state taskorchestration.ParentState) bool {
-	if primary := strings.TrimSpace(taskdecomp.ParsePrimaryDeliverable(taskRecord.Metadata)); primary != "" &&
-		satisfiedDraftWorkspaceFilePathPattern.MatchString(primary) {
+	if satisfiedDraftSingleWorkspaceFilePath(taskRecord, state) != "" {
 		return true
 	}
 	var text strings.Builder
@@ -1503,6 +1506,44 @@ func satisfiedDraftHasConcreteDeliverableEvidence(taskRecord repo.ProjectTask, s
 		text.WriteString(strings.TrimSpace(state.OutcomeAssessment.Summary))
 	}
 	return satisfiedDraftWorkspaceFilePathPattern.MatchString(text.String())
+}
+
+func satisfiedDraftSingleWorkspaceFilePath(taskRecord repo.ProjectTask, state taskorchestration.ParentState) string {
+	paths := map[string]struct{}{}
+	addPaths := func(text string) {
+		for _, match := range satisfiedDraftWorkspaceFilePathPattern.FindAllString(text, -1) {
+			match = strings.TrimSpace(match)
+			if match == "" {
+				continue
+			}
+			paths[match] = struct{}{}
+		}
+	}
+	if primary := strings.TrimSpace(taskdecomp.ParsePrimaryDeliverable(taskRecord.Metadata)); primary != "" {
+		addPaths(primary)
+	}
+	var text strings.Builder
+	text.WriteString(strings.TrimSpace(taskRecord.Title))
+	if taskRecord.Description != nil && strings.TrimSpace(*taskRecord.Description) != "" {
+		if text.Len() > 0 {
+			text.WriteByte('\n')
+		}
+		text.WriteString(strings.TrimSpace(*taskRecord.Description))
+	}
+	if state.OutcomeAssessment != nil && strings.TrimSpace(state.OutcomeAssessment.Summary) != "" {
+		if text.Len() > 0 {
+			text.WriteByte('\n')
+		}
+		text.WriteString(strings.TrimSpace(state.OutcomeAssessment.Summary))
+	}
+	addPaths(text.String())
+	if len(paths) != 1 {
+		return ""
+	}
+	for path := range paths {
+		return path
+	}
+	return ""
 }
 
 func allowsSatisfiedDraftAutoComplete(taskRecord repo.ProjectTask, from, target string, actor Actor) bool {

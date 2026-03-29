@@ -164,6 +164,44 @@ func TestDraftTaskAutoCompletesRejectsBroadTask(t *testing.T) {
 	}
 }
 
+func TestDraftTaskAutoCompletesWhenBroadSingleFileDeliverableIsSatisfied(t *testing.T) {
+	description := "Write `planning/sambot-feature-spec.md` as a complete SamBot feature specification covering mission, target users, personality, architecture, data sources, UI/UX, mobile responsiveness, accessibility, and implementation checklist."
+	plan := taskplan.Analyze("Write SamBot feature specification", &description)
+	metadata := taskplan.ApplyMetadata(json.RawMessage(`{}`), plan)
+	contracts := taskplan.ArtifactContractForPlan(plan)
+	artifacts := make([]taskplan.ArtifactEvidence, 0, len(contracts))
+	for _, contract := range contracts {
+		artifacts = append(artifacts, taskplan.ArtifactEvidence{
+			Slug:     contract.Slug,
+			Summary:  contract.Title + " complete.",
+			Sections: append([]string(nil), contract.RequiredSections...),
+		})
+	}
+	updated, _, _, err := taskplan.ApplyProcessUpdate(metadata, taskplan.ProcessUpdate{
+		HasArtifactChanges: true,
+		Artifacts:          artifacts,
+	})
+	if err != nil {
+		t.Fatalf("ApplyProcessUpdate: %v", err)
+	}
+	updated, err = taskorchestration.Apply(updated, taskorchestration.Update{
+		OutcomeAssessment: taskorchestration.NewOutcomeAssessment(true, "planning/sambot-feature-spec.md contains the full SamBot feature specification and the deliverable is complete.", mustTime(t)),
+	})
+	if err != nil {
+		t.Fatalf("taskorchestration.Apply: %v", err)
+	}
+
+	if !draftTaskAutoCompletes(repo.ProjectTask{
+		ID:          uuid.New(),
+		Title:       "Write SamBot feature specification",
+		Description: &description,
+		WorkStatus:  "draft",
+		Metadata:    updated,
+	}) {
+		t.Fatal("draftTaskAutoCompletes = false, want true for satisfied single-file planning deliverable")
+	}
+}
+
 func TestDraftTaskAutoCompletesRejectsIncompletePlanning(t *testing.T) {
 	description := "Document findings on sourcing channels, qualification criteria, and intake workflows."
 	plan := taskplan.Analyze("Document sourcing findings", &description)
@@ -266,6 +304,111 @@ func TestStartupCleanupProjectDraftsSkipsSatisfiedDraftWithoutFlowTemplate(t *te
 	}
 	if updated.WorkStatus != "draft" {
 		t.Fatalf("work status = %q, want draft", updated.WorkStatus)
+	}
+}
+
+func TestStartupCleanupProjectDraftsCompletesSatisfiedSingleFilePlanningDraft(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "startup-cleanup-single-file",
+		DisplayName: "Startup Cleanup Single File",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "startup-cleanup-single-file-project",
+		DisplayName:    "Startup Cleanup Single File Project",
+		Description:    "Project for startup cleanup single-file planning coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "startup-cleanup-single-file-template",
+		DisplayName:    "Startup Cleanup Single File Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	description := "Write `planning/sambot-feature-spec.md` as a complete SamBot feature specification covering mission, target users, personality, architecture, data sources, UI/UX, mobile responsiveness, accessibility, and implementation checklist."
+	plan := taskplan.Analyze("Write SamBot feature specification", &description)
+	metadata := taskplan.ApplyMetadata(json.RawMessage(`{}`), plan)
+	contracts := taskplan.ArtifactContractForPlan(plan)
+	artifacts := make([]taskplan.ArtifactEvidence, 0, len(contracts))
+	for _, contract := range contracts {
+		artifacts = append(artifacts, taskplan.ArtifactEvidence{
+			Slug:     contract.Slug,
+			Summary:  contract.Title + " complete.",
+			Sections: append([]string(nil), contract.RequiredSections...),
+		})
+	}
+	metadata, _, _, err = taskplan.ApplyProcessUpdate(metadata, taskplan.ProcessUpdate{
+		HasArtifactChanges: true,
+		Artifacts:          artifacts,
+	})
+	if err != nil {
+		t.Fatalf("ApplyProcessUpdate: %v", err)
+	}
+	metadata, err = taskorchestration.Apply(metadata, taskorchestration.Update{
+		OutcomeAssessment: taskorchestration.NewOutcomeAssessment(true, "planning/sambot-feature-spec.md contains the full SamBot feature specification and the deliverable is complete.", mustTime(t)),
+	})
+	if err != nil {
+		t.Fatalf("taskorchestration.Apply: %v", err)
+	}
+
+	createdByID := uuid.New()
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     1,
+		Title:          "Write SamBot feature specification",
+		Description:    &description,
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		CreatedByID:    &createdByID,
+		FlowTemplateID: &template.ID,
+		Metadata:       metadata,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	bus := eventbus.New(pool, nil, eventbus.Config{})
+	tasks, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     pool,
+		EventBus: bus,
+	})
+	if err != nil {
+		t.Fatalf("task service: %v", err)
+	}
+
+	parentRepaired, draftSettled, gatesCancelled, err := startupCleanupProjectDrafts(ctx, repo.NewProjectTaskRepo(pool), tasks, project.ID)
+	if err != nil {
+		t.Fatalf("startupCleanupProjectDrafts: %v", err)
+	}
+	if parentRepaired != 0 || draftSettled != 1 || gatesCancelled != 0 {
+		t.Fatalf("cleanup counts = (%d,%d,%d), want (0,1,0)", parentRepaired, draftSettled, gatesCancelled)
+	}
+
+	updated, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if updated.WorkStatus != "done" {
+		t.Fatalf("work status = %q, want done", updated.WorkStatus)
 	}
 }
 

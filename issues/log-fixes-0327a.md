@@ -3183,3 +3183,15 @@
     - `GOFLAGS='' go test -tags=integration ./internal/task -run 'TestTaskServiceIntegrationParentDone(RequiresVerificationAndIntegration|IgnoresBlockedProceduralChildrenAfterCloseoutProof|AllowsBlockedChildrenWhenOutcomeAlreadySatisfied)$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live canary remains PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where task `113` should now be able to close once the parent-completion metadata is supplied, without cancelling blocked stale children first
+- 2026-03-29 10:54 MDT - Allow satisfied single-file planning drafts to auto-complete even when their task text is broad enough to trigger decomposition heuristics.
+  - changed [`internal/task/service.go`](/Users/sam/dev/otter-camp/internal/task/service.go):
+    - [`SatisfiedDraftAutoCompletable(...)`](/Users/sam/dev/otter-camp/internal/task/service.go) now keeps the existing “reject broad planning tasks” rule for multi-artifact work, but allows the narrower case where the satisfied outcome points to exactly one concrete workspace file
+    - added [`satisfiedDraftSingleWorkspaceFilePath(...)`](/Users/sam/dev/otter-camp/internal/task/service.go) to dedupe deliverable-path evidence across title, description, outcome summary, and primary deliverable metadata and require exactly one concrete file target
+  - changed tests:
+    - [`internal/worker/worker_test.go`](/Users/sam/dev/otter-camp/internal/worker/worker_test.go)
+      - added `TestDraftTaskAutoCompletesWhenBroadSingleFileDeliverableIsSatisfied`
+      - added `TestStartupCleanupProjectDraftsCompletesSatisfiedSingleFilePlanningDraft`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/worker -run 'Test(DraftTaskAutoCompletes(WhenPlanningAndOutcomeAreSatisfied|RejectsBroadTask|WhenBroadSingleFileDeliverableIsSatisfied|RejectsIncompletePlanning)|StartupCleanupProjectDrafts(SkipsSatisfiedDraftWithoutFlowTemplate|CompletesSatisfiedSingleFilePlanningDraft))$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; the live canary is worker startup cleanup on `repo_version=3592+`, where satisfied drafts `82` and `90` should disappear from the SamBot project draft set after restart
