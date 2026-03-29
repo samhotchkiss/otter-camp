@@ -1786,6 +1786,112 @@ func TestFileEditRejectsMutationForReviewTask(t *testing.T) {
 	}
 }
 
+func TestFileWriteRejectsMutationForBlockedReviewSession(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+	description := "Create Python script to generate reports. Deliverable: src/generate_reports.py with report templates and example outputs."
+
+	taskRepo := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Build reporting and pipeline analytics script",
+			Description:    &description,
+			WorkStatus:     "blocked",
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = taskRepo
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "system",
+				Content:   "Review only. Inspect the current deliverables and use flow.review_decision to approve or reject this review step.",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+		ProjectID:      &projectID,
+	})
+
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "src/generate_reports.py",
+		"content":     "print('hello')\n",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "review_action_required" {
+		t.Fatalf("error = %v, want review_action_required", out["error"])
+	}
+	if _, err := os.Stat(filepath.Join(root, "src", "generate_reports.py")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("blocked review session deliverable should not be written, stat err = %v", err)
+	}
+}
+
+func TestCLIExecuteBlockedInBlockedReviewTaskSession(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+	cli := &fakeCLIExecutor{}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.cli = cli
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "blocked",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "user",
+				Content:   "Review only. Inspect the current deliverables and use flow.review_decision with decision=approve or decision=reject.",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "cli.execute", map[string]any{
+		"command": "find . -maxdepth 2 -type f",
+	})
+	if err != nil {
+		t.Fatalf("cli.execute: %v", err)
+	}
+	if out["error"] != "review_action_required" {
+		t.Fatalf("error = %v, want review_action_required", out["error"])
+	}
+	if cli.called {
+		t.Fatal("cli executor should not be invoked in blocked review lane")
+	}
+}
+
 func TestFileWriteAllowsReviewScopedMarkdownArtifact(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

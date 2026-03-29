@@ -1354,7 +1354,11 @@ func (e *NativeToolExecutor) rejectReviewTaskMutation(ctx context.Context, scope
 		}
 		return nil, false, err
 	}
-	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+	reviewLane, reviewErr := e.taskSessionRequiresReviewAction(ctx, scope, taskRecord)
+	if reviewErr != nil {
+		return nil, false, reviewErr
+	}
+	if !reviewLane {
 		return nil, false, nil
 	}
 	normalizedPath := normalizeWorkspacePath(relativePath)
@@ -1378,13 +1382,31 @@ func (e *NativeToolExecutor) rejectReviewTaskCLIExecute(ctx context.Context, sco
 		}
 		return nil, false, err
 	}
-	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+	reviewLane, reviewErr := e.taskSessionRequiresReviewAction(ctx, scope, taskRecord)
+	if reviewErr != nil {
+		return nil, false, reviewErr
+	}
+	if !reviewLane {
 		return nil, false, nil
 	}
 	return map[string]any{
 		"error":   "review_action_required",
 		"message": "This task is currently in review. Do not use cli.execute from the review lane. Inspect the existing deliverables with bounded file/git tools, then call `flow.review_decision` with the active `flow_node_execution_id` and `decision=approve` or `decision=reject`.",
 	}, true, nil
+}
+
+func (e *NativeToolExecutor) taskSessionRequiresReviewAction(ctx context.Context, scope workspaceScope, taskRecord repo.ProjectTask) (bool, error) {
+	if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		return true, nil
+	}
+	if e == nil || e.messages == nil || scope.sessionID == nil || *scope.sessionID == uuid.Nil {
+		return false, nil
+	}
+	messages, err := e.messages.ListBySession(ctx, *scope.sessionID)
+	if err != nil {
+		return false, err
+	}
+	return sessionMessagesContainReviewPrompt(messages), nil
 }
 
 func allowedReviewArtifactPath(path string) bool {

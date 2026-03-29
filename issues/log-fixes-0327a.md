@@ -2941,3 +2941,45 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(TaskContentMigrationCheckpointSummarySkipsExplicitSingleFileDeliverable|ContentMigrationCheckpointPreferredOutputPathSkipsExplicitSingleFileDeliverable)$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live target is task `109` review session `4ba95ee9-123f-4b9d-9fcf-37a73b84fe00` or its successor, which should stop receiving stale `content/posts/...` checkpoint baggage in continuation/recovery state
+- 2026-03-29 08:39 MDT - Bounded same-turn preferred-target review rereads after head/tail sampling.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `reviewPreferredDeliverableGapReadSeen` state on the turn runtime
+    - [`maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now rewrites a third same-target review read to a bounded middle-gap sample once bounded head and tail reads have already been seen
+    - [`rewriteTaskReviewPreferredDeliverableReadDispatchCall(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now does the same at dispatch time
+    - [`shouldBlockTaskReviewPreferredDeliverableFirstTool(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now blocks a fourth blind same-target reread after head, tail, and gap evidence are already present
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsUsesGapSampleAfterHeadAndTailRead`
+      - added `TestShouldBlockTaskReviewPreferredDeliverableFirstToolAfterGapReadSeen`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(MaybeRewriteTaskReviewPreferredDeliverableReadToolCalls(UsesGapSampleAfterHeadAndTailRead|DoesNotReuseTailAfterCurrentTurnTailRead)|ShouldBlockTaskReviewPreferredDeliverableFirstToolAfterGapReadSeen|RewriteTaskReviewPreferredDeliverableReadDispatchCallUsesCurrentTurnTailOffset)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary is task `109` or a similar explicit single-file review lane, where the third same-target read should shrink from another `8192`-byte block to a bounded middle-gap sample
+- 2026-03-29 08:42 MDT - Included task titles in explicit-deliverable path extraction so title-led append tasks are classified correctly.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - [`taskContractDescriptionCandidates(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now includes `taskRecord.Title` before description / decomposition-source candidates
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - native [`taskContractDescriptionCandidates(...)`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go) now does the same
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestExplicitDeliverablePathUsesTitleWhenDescriptionStartsWithInputRead`
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go)
+      - added `TestParseExplicitDeliverablePathUsesTitleWhenDescriptionStartsWithInputRead`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ExplicitDeliverablePath(UsesTitleWhenDescriptionStartsWithInputRead|DetectsAppendTargetPath)|TaskContentMigrationCheckpointSummarySkipsExplicitSingleFileDeliverable|ContentMigrationCheckpointPreferredOutputPathSkipsExplicitSingleFileDeliverable)$' -count=1`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(ParseExplicitDeliverablePath(UsesTitleWhenDescriptionStartsWithInputRead|DetectsAppendTargetPath)|ContentMigrationCheckpointPreferredOutputPathSkipsExplicitSingleFileDeliverable)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary is task `109`, where `[Content migration checkpoint] ...` should disappear again now that the title-led explicit deliverable is recognized end-to-end
+- 2026-03-29 08:50 MDT - Kept blocked review sessions inside the native review lane.
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - [`rejectReviewTaskMutation(...)`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go) now blocks mutations when the task is review-scoped by status or by the active session prompt
+    - [`rejectReviewTaskCLIExecute(...)`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go) now uses the same session-aware review-lane detection
+    - added [`taskSessionRequiresReviewAction(...)`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go) to reuse the existing `sessionMessagesContainReviewPrompt(...)` detector from native file tools
+  - changed tests:
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go)
+      - added `TestFileWriteRejectsMutationForBlockedReviewSession`
+      - added `TestCLIExecuteBlockedInBlockedReviewTaskSession`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(FileWriteRejectsMutationFor(BlockedReviewSession|ReviewTask)|FileEditRejectsMutationForReviewTask|CLIExecuteBlockedIn(BlockedReviewTaskSession|ReviewTaskSession))$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary is task `109` or its successor, which should stop writing `planning/sambot-feature-spec.md` after the review lane has already been halted/blocked
