@@ -2734,3 +2734,19 @@
       - directly to message `495` terminal halt
     - there is no new `[Recovery correction: file.write ... without \`content\`]` message in that turn
     - task `85` is now `blocked`, and its persisted checkpoint failure reason has advanced to `repeated recovery file.write without content ... latest retry again omitted the full file body`
+- 2026-03-29 06:46:02 MDT - Finished and deployed on `repo_version=3556`: reject foreign recovery checkpoints for decomposed child tasks by validating against the decomposition parent contract.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `recoveryCheckpointClearlyBelongsToDifferentTask(...)` now also checks `recoveryCheckpointViolatesDecompositionParentContract(...)`
+    - the new helper loads the `decomposition_parent_task_id` task, then rejects checkpoint targets/artifacts that fall outside the parent task’s explicit deliverable path or preferred deliverable root
+    - this prevents child tasks like SamBot planning/spec sections from resurfacing foreign `content/posts/...` checkpoints during recovery
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestRecoveryFileWriteCheckpointCandidateRejectsCheckpointOutsideDecompositionParentContract`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(RecoveryFileWriteCheckpointCandidate(RejectsCheckpointOutsideDecompositionParentContract|PrefersHistoricalSubstantivePathOverInitialMessageMetadata|RejectsCheckpointFromDifferentTaskContent)|HandleRecoveryFileWriteWithoutContent(StopsAfterRepeatedResumeFailure|StopsAfterRepeatedResumeCorrectionFailure|StopsAfterRepeatedResumeCorrectionFailureFromInitialMessageMetadata|EnablesDirectWriteOnlyState))$' -count=1`
+  - pre-deploy live proof:
+    - task `88` session `2df643c5-662a-435b-830d-d28060edca86` is closed, but its latest recovery prompt `58` still surfaced foreign target `content/posts/mister-rogers-and-the-forgotten-art.md`
+    - assistant message `60` explicitly noticed the mismatch (`this task is OC-88 about SamBot Personality & Tone specification, not about the Mister Rogers blog post`)
+    - the runtime still blocked on that foreign checkpoint again at message `62`
+  - remaining live-proof gap:
+    - after deploy, the next recovery resume for task `88` or any similar decomposed child should drop the foreign checkpoint entirely instead of resurfacing it in `[Recovery resume state]`
+    - immediate post-deploy check showed the known affected task-88 sessions were already closed, so this slice is currently a deployed forward guard rather than a fresh live repro

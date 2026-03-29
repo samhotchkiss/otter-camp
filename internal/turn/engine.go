@@ -17633,7 +17633,45 @@ func (e *TurnEngine) recoveryCheckpointClearlyBelongsToDifferentTask(ctx context
 			return true
 		}
 	}
+	if e.recoveryCheckpointViolatesDecompositionParentContract(ctx, taskRecord, checkpoint) {
+		return true
+	}
 	return false
+}
+
+func (e *TurnEngine) recoveryCheckpointViolatesDecompositionParentContract(ctx context.Context, taskRecord repo.ProjectTask, checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) bool {
+	if e == nil || e.tasks == nil {
+		return false
+	}
+	metadata := messageMetadataMap(taskRecord.Metadata)
+	parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+	if !ok || parentID == uuid.Nil {
+		return false
+	}
+	parentTask, err := e.tasks.GetByID(ctx, parentID)
+	if err != nil {
+		return false
+	}
+	targetPath := normalizeWorkspaceRelativePath(strings.TrimSpace(checkpoint.TargetPath))
+	if targetPath == "" {
+		if recoveredTarget, targetOK := recoveryTargetPathFromArtifact(strings.TrimSpace(checkpoint.ArtifactPath)); targetOK {
+			targetPath = normalizeWorkspaceRelativePath(recoveredTarget)
+		}
+	}
+	if targetPath == "" {
+		return false
+	}
+	if explicit := normalizeWorkspaceRelativePath(explicitDeliverablePath(parentTask)); explicit != "" {
+		return !sameWorkspaceRelativePath(explicit, targetPath)
+	}
+	root := strings.TrimSpace(preferredTaskDeliverableRoot(parentTask))
+	if root == "" {
+		return false
+	}
+	if taskAllowsWritesWithinPreferredDeliverableRoot(parentTask) {
+		return !workspacePathWithinRoot(targetPath, root)
+	}
+	return !sameWorkspaceRelativePath(normalizeWorkspaceRelativePath(root), targetPath)
 }
 
 func (e *TurnEngine) recoveryCheckpointDraftPreview(ctx context.Context, rt *turnRuntime, path string) string {

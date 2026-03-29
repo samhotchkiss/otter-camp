@@ -40324,6 +40324,69 @@ This report synthesizes the speaker pipeline validation findings and recommendat
 	}
 }
 
+func TestRecoveryFileWriteCheckpointCandidateRejectsCheckpointOutsideDecompositionParentContract(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	parentID := uuid.New()
+	childID := uuid.New()
+	initialMessageID := uuid.New()
+
+	parentDescription := "Write the SamBot chat feature specification to planning/sambot-feature-spec.md."
+	childDescription := "Personality & Tone: How SamBot should reflect Sam's voice — direct, thoughtful, technically deep but accessible."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = childID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:          parentID,
+				TaskNumber:  86,
+				Title:       "Write SamBot feature specification to planning/sambot-feature-spec.md",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+			},
+			childID: {
+				ID:          childID,
+				TaskNumber:  88,
+				Title:       "Personality & Tone: How SamBot should reflect Sam's voice",
+				Description: &childDescription,
+				WorkStatus:  "blocked",
+				Metadata:    mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentID.String()}),
+			},
+		},
+	}
+
+	fixture.messages.create(repo.ChatMessage{
+		ID:        initialMessageID,
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "final",
+		Content:   "supervisor recovery: resume task",
+		Metadata: mustRawJSON(t, map[string]any{
+			"source":                             "supervisor",
+			"recovery_action":                    recoveryActionValidationResume,
+			"recovery_checkpoint_target_path":    "content/posts/mister-rogers-and-the-forgotten-art.md",
+			"recovery_checkpoint_artifact_path":  ".ottercamp/recovery/content/posts/mister-rogers-and-the-forgotten-art.md",
+			"recovery_checkpoint_failure_reason": "placeholder",
+		}),
+	})
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: initialMessageID,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	if checkpoint, ok := fixture.engine.recoveryFileWriteCheckpointCandidate(context.Background(), rt, ""); ok {
+		t.Fatalf("unexpected recovery checkpoint candidate: %#v", checkpoint)
+	}
+}
+
 func TestRecoveryHistoricalSubstantiveOutputContextPrefersWriteTargetOverPlanningRead(t *testing.T) {
 	t.Parallel()
 
