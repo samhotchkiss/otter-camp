@@ -6369,6 +6369,23 @@ func (w *Worker) processAvailableJobs(ctx context.Context) error {
 				return nil
 			}
 		}
+		if repaired, err := w.FailStaleModelInvocations(ctx); err != nil {
+			if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+				w.logger.Error("job queue: inline stale model invocation cleanup failed at full capacity", "error", err)
+			}
+			return err
+		} else if repaired > 0 {
+			w.logger.Info("job queue: failed stale model invocations at full capacity", "count", repaired)
+			if recovered, recoverErr := w.RecoverClaimedAgentTurnsWithoutLiveOwnership(ctx); recoverErr != nil {
+				if ctx.Err() == nil && !errors.Is(recoverErr, context.Canceled) {
+					w.logger.Error("job queue: inline claimed agent_turn recovery failed after stale model cleanup", "error", recoverErr)
+				}
+				return recoverErr
+			} else if recovered > 0 {
+				w.logger.Info("job queue: recovered claimed agent_turn jobs after stale model cleanup", "count", recovered)
+			}
+			continue
+		}
 		w.logger.Debug("job queue: no execution slots available", "inflight", w.inflightJobs(), "capacity", cap(w.slots))
 		return nil
 	}

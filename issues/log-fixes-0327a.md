@@ -3453,3 +3453,17 @@
   - deploy / proof status:
     - deployed on the current local runtime after rebuild/restart
     - fresh live proof is still pending because the next PM canary turn `fa05f520-df52-4b32-bffa-c954b7b9bb60` is currently stalled in an in-flight model invocation before any tool calls on the new binary
+- 2026-03-29 14:29 MDT - Hardened full-capacity queue behavior so dead PM invocations can be released inline instead of waiting on background maintenance.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - when `processAvailableJobs(...)` finds zero execution slots, it now runs `FailStaleModelInvocations(...)` inline
+    - if that clears any stale invocations, it immediately follows with `RecoverClaimedAgentTurnsWithoutLiveOwnership(...)` and retries the claim loop instead of returning
+    - this gives the worker a direct path to free dead async PM slots during full-capacity saturation
+  - changed tests:
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+      - added `TestJobWorkerProcessAvailableJobsRecoversStaleInFlightProjectTurnAtFullCapacity`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(ProcessAvailableJobsRecoversStaleInFlightProjectTurnAtFullCapacity|FailStaleModelInvocations(RequeuesTriggeredProjectSession|RecoversInheritedAsyncProjectInvocationAfterWorkerRestart|KeepsSlowAsyncProjectSessionInvocation|FailsOvertakenLocalProjectInvocation)|RecoverClaimedAgentTurnsWithoutLiveOwnership(RecoversCurrentInProgressAttemptWithoutModelOrRun|KeepsCurrentInProgressAttemptWithRecentCompletedInvocation))$' -count=1`
+  - post-deploy live proof:
+    - stale PM turn `6e6009d0-6d74-4de8-ba0d-847ea5e607dd` was failed at `14:30:02 MDT`
+    - invocation `045e89f7-3ce4-43d8-a2e7-c7964f4e7d4e` was marked `failed/stale_model_invocation`
+    - the session advanced into fresh retry turn `266abfb0-cc4f-48da-8403-695bba1c2908` at `14:30:09 MDT`, proving the dead slot was released under full-capacity pressure

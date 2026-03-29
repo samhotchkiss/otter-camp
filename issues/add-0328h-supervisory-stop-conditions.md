@@ -191,3 +191,21 @@ They need sharper stopping rules than ordinary execution lanes.
   - deploy / proof status:
     - deployed on the current local runtime after rebuild/restart
     - direct live proof is still pending because the next PM canary turn `fa05f520-df52-4b32-bffa-c954b7b9bb60` is currently stuck in a long-running in-flight provider invocation before it has emitted any tool calls on the new binary
+- 2026-03-29 14:29 MDT - Picked up one more supervisory hardening seam from the same PM canary: a dead in-flight continuation could keep the queue at full capacity long enough that background cleanup never helped in practice.
+  - fresh live evidence:
+    - PM turn `fa05f520-df52-4b32-bffa-c954b7b9bb60` remained `in_progress`
+    - assistant message `b20bd1b1-c471-4502-ba21-d077db50fb9b` remained `streaming`
+    - invocation `48ae5ea6-689a-462f-baa4-d42aa0af530e` remained `in_flight` from `14:12 MDT`
+    - claimed job `a12e81bf-461f-4724-a1f9-bdd9ee2f31c2` remained claimed without heartbeat updates
+    - worker logs were repeatedly showing `job queue: no execution slots available`
+  - local fix:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now runs `FailStaleModelInvocations(...)` inline when `processAvailableJobs(...)` hits zero execution slots
+    - if any stale invocations are cleared, the worker immediately runs `RecoverClaimedAgentTurnsWithoutLiveOwnership(...)` and loops back into claim instead of returning early on full capacity
+    - added [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go) coverage with `TestJobWorkerProcessAvailableJobsRecoversStaleInFlightProjectTurnAtFullCapacity`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(ProcessAvailableJobsRecoversStaleInFlightProjectTurnAtFullCapacity|FailStaleModelInvocations(RequeuesTriggeredProjectSession|RecoversInheritedAsyncProjectInvocationAfterWorkerRestart|KeepsSlowAsyncProjectSessionInvocation|FailsOvertakenLocalProjectInvocation)|RecoverClaimedAgentTurnsWithoutLiveOwnership(RecoversCurrentInProgressAttemptWithoutModelOrRun|KeepsCurrentInProgressAttemptWithRecentCompletedInvocation))$' -count=1`
+  - post-deploy live proof:
+    - stale PM turn `6e6009d0-6d74-4de8-ba0d-847ea5e607dd` was failed at `14:30:02 MDT`
+    - its dead invocation `045e89f7-3ce4-43d8-a2e7-c7964f4e7d4e` was marked `failed/stale_model_invocation`
+    - the queue then advanced the PM session into fresh retry turn `266abfb0-cc4f-48da-8403-695bba1c2908` at `14:30:09 MDT`
+    - that confirms the full-capacity queue path now releases dead PM slots immediately instead of waiting on the separate stale-maintenance ticker

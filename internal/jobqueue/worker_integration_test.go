@@ -2713,6 +2713,200 @@ func TestJobWorkerProcessAvailableJobsRecoversStaleClaimsBeforeClaiming(t *testi
 	}
 }
 
+func TestJobWorkerProcessAvailableJobsRecoversStaleInFlightProjectTurnAtFullCapacity(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		WorkerID:             "recover-stale-inflight-project-turn-full-capacity",
+		BatchSize:            1,
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+	worker.startupAt = time.Now().UTC().Add(-time.Hour)
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "recover-stale-inflight-project-turn-full-capacity",
+		DisplayName: "Recover Stale Inflight Project Turn Full Capacity",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project turns.",
+		AgentType:       "pm",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "recover-stale-inflight-project-turn-full-capacity-project",
+		DisplayName:    "Recover Stale Inflight Project Turn Full Capacity Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "continue orchestrating the project",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","synthetic_user_message":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create trigger message: %v", err)
+	}
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "in_progress",
+		TriggerMessageID: &message.ID,
+	})
+	if err != nil {
+		t.Fatalf("create turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &turn.ID); err != nil {
+		t.Fatalf("set current turn: %v", err)
+	}
+
+	provider, err := repo.NewModelProviderRepo(pool).Create(ctx, repo.ModelProvider{
+		Slug:        "recover-stale-inflight-project-turn-full-capacity-provider",
+		DisplayName: "Recover Stale Inflight Project Turn Full Capacity Provider",
+		APIBaseURL:  "https://example.invalid",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create model provider: %v", err)
+	}
+	invocation, err := repo.NewModelInvocationRepo(pool).Create(ctx, repo.ModelInvocation{
+		OrganizationID:    org.ID,
+		ModelProviderID:   provider.ID,
+		InvocationPurpose: "agent_turn",
+		Status:            "in_flight",
+		ModelName:         "claude-opus-4-6",
+		AgentID:           &agent.ID,
+		ProjectID:         &project.ID,
+		SessionID:         &session.ID,
+		TurnID:            &turn.ID,
+	})
+	if err != nil {
+		t.Fatalf("create model invocation: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE model_invocation
+		SET created_at = now() - interval '20 minutes'
+		WHERE id = $1
+	`, invocation.ID); err != nil {
+		t.Fatalf("age model invocation: %v", err)
+	}
+	assistantMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &turn.ID,
+		Role:      "assistant",
+		Content:   "",
+		Status:    "streaming",
+	})
+	if err != nil {
+		t.Fatalf("create assistant message: %v", err)
+	}
+
+	var claimedJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, claimed_by, claimed_at, attempts, max_attempts, run_after, updated_at, payload)
+		VALUES ($1, 'claimed', 'dead-worker', now() - interval '12 minutes', 1, 3, now(), now() - interval '12 minutes',
+		        jsonb_build_object('session_id', $2::text, 'message_id', $3::text, 'retry_count', 0))
+		RETURNING id
+	`, agentTurnJobType, session.ID, message.ID).Scan(&claimedJobID); err != nil {
+		t.Fatalf("insert claimed agent_turn job: %v", err)
+	}
+
+	worker.acquireExecutionSlot(agentTurnJobType)
+	defer worker.releaseExecutionSlot(agentTurnJobType)
+
+	if err := worker.processAvailableJobs(ctx); err != nil {
+		t.Fatalf("processAvailableJobs: %v", err)
+	}
+
+	refreshedInvocation, err := repo.NewModelInvocationRepo(pool).GetByID(ctx, invocation.ID)
+	if err != nil {
+		t.Fatalf("reload invocation: %v", err)
+	}
+	if refreshedInvocation.Status != "failed" {
+		t.Fatalf("invocation status = %q, want failed", refreshedInvocation.Status)
+	}
+
+	refreshedTurn, err := repo.NewChatTurnRepo(pool).GetByID(ctx, turn.ID)
+	if err != nil {
+		t.Fatalf("reload turn: %v", err)
+	}
+	if refreshedTurn.Status != "failed" {
+		t.Fatalf("turn status = %q, want failed", refreshedTurn.Status)
+	}
+
+	refreshedSession, err := repo.NewChatSessionRepo(pool).GetByID(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	if refreshedSession.CurrentTurnID != nil {
+		t.Fatalf("current_turn_id = %v, want nil", refreshedSession.CurrentTurnID)
+	}
+
+	refreshedAssistant, err := repo.NewChatMessageRepo(pool).GetByID(ctx, assistantMessage.ID)
+	if err != nil {
+		t.Fatalf("reload assistant message: %v", err)
+	}
+	if refreshedAssistant.Status != "failed" {
+		t.Fatalf("assistant message status = %q, want failed", refreshedAssistant.Status)
+	}
+
+	var (
+		jobStatus string
+		claimedBy *string
+		claimedAt *time.Time
+		lastError *string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, claimed_by, claimed_at, last_error
+		FROM job_queue
+		WHERE id = $1
+	`, claimedJobID).Scan(&jobStatus, &claimedBy, &claimedAt, &lastError); err != nil {
+		t.Fatalf("reload claimed job: %v", err)
+	}
+	if jobStatus != "pending" {
+		t.Fatalf("claimed job status = %q, want pending", jobStatus)
+	}
+	if claimedBy != nil || claimedAt != nil {
+		t.Fatalf("claimed job fields should be cleared, got claimed_by=%v claimed_at=%v", claimedBy, claimedAt)
+	}
+	if lastError != nil && strings.TrimSpace(*lastError) == "" {
+		t.Fatalf("claimed job last_error should be nil or meaningful text, got empty string")
+	}
+}
+
 func TestJobWorkerPurgeStaleAgentTurnJobsClearsClaimedClosedSessions(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

@@ -513,3 +513,16 @@
   - impact:
     - PM turns can remain mixed rediscovery batches instead of collapsing into the earlier pure blocked-rediscovery stop
     - that wastes the remaining tool budget on planning-root listing after the real next step is already named
+- 2026-03-29 14:29 MDT - A stale PM provider invocation can still hold queue capacity indefinitely when the queue is already full.
+  - fresh live evidence:
+    - PM turn `fa05f520-df52-4b32-bffa-c954b7b9bb60` stayed `in_progress`
+    - assistant message `b20bd1b1-c471-4502-ba21-d077db50fb9b` stayed `streaming`
+    - model invocation `48ae5ea6-689a-462f-baa4-d42aa0af530e` stayed `in_flight` from `14:12 MDT`
+    - claimed job `a12e81bf-461f-4724-a1f9-bdd9ee2f31c2` also stayed claimed with no heartbeat updates
+    - worker log spam showed `job queue: no execution slots available`
+  - bug:
+    - the worker relied on background stale-maintenance to clean dead `in_flight` invocations, but `processAvailableJobs(...)` returned immediately on full capacity
+    - that meant a dead slot could keep blocking fresh work even though the same process already had the cleanup primitives needed to release it
+  - impact:
+    - one dead PM continuation can occupy execution capacity indefinitely
+    - queue saturation then masks the stale turn as simple “no slots” pressure instead of letting recovery happen promptly
