@@ -31009,11 +31009,19 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 		}
 		completedBatchRange := projectContinuationCompletedBatchRangeFromPrompt(initialMessage)
 		if completedBatchRange == "" {
+			planningTargets := projectContinuationPromptPlanningTargetPaths(initialMessage)
+			if shouldBlockProjectContinuationCompanionPlanningArtifactRead(path, planningTargets) {
+				return true, buildProjectContinuationCompanionPlanningArtifactGuardError(planningTargets, path)
+			}
 			return false, ""
 		}
 		dependencyPaths := projectContinuationDependencyPathsFromPrompt(initialMessage)
 		if _, ok := dependencyPaths[path]; ok {
 			return true, buildProjectContinuationCompletedBatchDependencyReadGuardError(path, completedBatchRange)
+		}
+		planningTargets := projectContinuationPromptPlanningTargetPaths(initialMessage)
+		if shouldBlockProjectContinuationCompanionPlanningArtifactRead(path, planningTargets) {
+			return true, buildProjectContinuationCompanionPlanningArtifactGuardError(planningTargets, path)
 		}
 		return false, ""
 	case "task.get":
@@ -31101,6 +31109,39 @@ func projectContinuationPromptLiveDeliverablePaths(initialMessage string) map[st
 	return paths
 }
 
+func projectContinuationPromptPlanningTargetPaths(initialMessage string) []string {
+	dependencyPaths := projectContinuationDependencyPathsFromPrompt(initialMessage)
+	if len(dependencyPaths) == 0 {
+		return nil
+	}
+	paths := make([]string, 0, len(dependencyPaths))
+	for path := range dependencyPaths {
+		normalized := normalizeWorkspaceRelativePath(path)
+		if normalized == "" || !strings.HasPrefix(normalized, "planning/") {
+			continue
+		}
+		paths = append(paths, normalized)
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func shouldBlockProjectContinuationCompanionPlanningArtifactRead(path string, planningTargets []string) bool {
+	normalized := normalizeWorkspaceRelativePath(path)
+	if normalized == "" || !strings.HasPrefix(normalized, "planning/") || len(planningTargets) == 0 {
+		return false
+	}
+	for _, target := range planningTargets {
+		if sameWorkspaceRelativePath(target, normalized) {
+			return false
+		}
+	}
+	return true
+}
+
 func buildProjectContinuationSnapshotRediscoveryGuardError(toolName string, taskID uuid.UUID) string {
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "project.get", "project.list":
@@ -31167,6 +31208,17 @@ func buildProjectContinuationCompletedBatchDependencyReadGuardError(path, batchR
 		normalized = strings.TrimSpace(path)
 	}
 	return fmt.Sprintf("project continuation already established that the latest completed task covers batch_range=%s. Do not reread prerequisite artifact `%s` just to verify that completed batch; act on the next unresolved batch or named blocker instead.", strings.TrimSpace(batchRange), normalized)
+}
+
+func buildProjectContinuationCompanionPlanningArtifactGuardError(targetPaths []string, path string) string {
+	normalized := normalizeWorkspaceRelativePath(path)
+	if normalized == "" {
+		normalized = strings.TrimSpace(path)
+	}
+	if len(targetPaths) == 0 {
+		return fmt.Sprintf("project continuation already has the primary planning deliverable in the continuation prompt. Do not inspect companion planning artifact `%s` now; use the current deliverable evidence to issue task.update or the smallest bounded replacement-task action instead.", normalized)
+	}
+	return fmt.Sprintf("project continuation already has planning deliverable path(s) %s in the continuation prompt. Do not inspect companion planning artifact `%s` now; use the current deliverable evidence to issue task.update or the smallest bounded replacement-task action instead.", strings.Join(targetPaths, ", "), normalized)
 }
 
 func buildProjectContinuationSnapshotFlowExecutionGuardError() string {

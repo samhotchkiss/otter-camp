@@ -360,3 +360,8 @@
   - the assistant then concluded the needed sections already existed
   - despite that, it fell back into blocked broad `task.list` and blocked named `task.get` rereads on the same draft parents
   Root cause: project-continuation rediscovery guard messages still said only “act on the named task directly,” which was too weak and generic after the PM lane already had concrete deliverable evidence. Impact: the PM lane could still waste turns bouncing off blocked named-task rereads instead of converting that evidence into the next direct `task.update` or replacement-child action.
+- 2026-03-29 09:52 MDT - After the stronger named-task rediscovery wording landed, the PM lane still drifted into sibling planning artifacts. Fresh `3584` evidence:
+  - turn `bd0f88eb-a9eb-4f89-8a9b-69d33962b752` showed the new stronger `task.list` guard text live
+  - the next continuation then reread `planning/sambot-feature-spec.md`, decided the needed sections were already present, and pivoted to a missing companion planning artifact (`file.read -> not_found` on the original PRD path)
+  - that branch then hit prompt compression again
+  Root cause: the project-continuation file-read guard had no notion of “companion planning artifact drift” once the prompt already named the primary planning deliverable path. Impact: the PM lane could still burn turns on off-target `planning/prd-spec/...` / companion artifact reads instead of turning the already-read deliverable evidence into the next direct task action.

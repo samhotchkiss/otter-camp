@@ -3058,3 +3058,17 @@
     - `GOFLAGS='' go test ./internal/turn -run 'TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocks(BroadTaskList|NamedTaskGet)$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live canary is project session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where a post-read blocked `task.list` / `task.get` bounce should now return a more prescriptive direct-action error instead of the older generic “act directly” wording
+- 2026-03-29 09:52 MDT - Blocked PM companion planning-artifact reads once the continuation prompt already named the primary planning deliverable.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - [`shouldBlockProjectContinuationSnapshotRediscoveryTool(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now rejects sibling `planning/...` `file.read` calls when the continuation prompt already names one or more planning deliverable paths for the active draft tasks
+    - added [`projectContinuationPromptPlanningTargetPaths(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - added [`shouldBlockProjectContinuationCompanionPlanningArtifactRead(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - added [`buildProjectContinuationCompanionPlanningArtifactGuardError(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksCompanionPlanningArtifactRead`
+      - added `TestShouldNotBlockProjectContinuationSnapshotRediscoveryToolForPrimaryPlanningDeliverableRead`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShould(BlockProjectContinuationSnapshotRediscoveryToolBlocksCompanionPlanningArtifactRead|NotBlockProjectContinuationSnapshotRediscoveryToolForPrimaryPlanningDeliverableRead|BlockProjectContinuationSnapshotRediscoveryToolBlocks(BroadTaskList|NamedTaskGet))$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary is the PM continuation on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where a follow-on read of `planning/prd-spec/...` after `planning/sambot-feature-spec.md` should now be blocked with direct-action guidance instead of returning `not_found` and triggering another compression cycle

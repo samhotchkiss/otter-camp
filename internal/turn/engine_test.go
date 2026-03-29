@@ -23316,6 +23316,61 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksActiveDelive
 	}
 }
 
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksCompanionPlanningArtifactRead(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	draftTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Continue the active project execution now.", projectExecutionContinuationSnapshot{
+			ProjectLine:   "Active project id: " + projectID.String(),
+			DraftTaskLine: `Actionable draft tasks already in the tree: task 90 (Write SamBot feature specification) id=` + draftTaskID.String() + ` title="Write SamBot feature specification" work_status=draft deliverable_path=planning/sambot-feature-spec.md`,
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "file.read", map[string]any{
+		"path": "planning/prd-spec/oc-90-prd.md",
+	})
+	if !blocked {
+		t.Fatal("expected companion planning artifact read to be blocked when the continuation prompt already names the planning deliverable path")
+	}
+	if !strings.Contains(reason, "planning/sambot-feature-spec.md") {
+		t.Fatalf("reason = %q, want primary planning deliverable path", reason)
+	}
+	if !strings.Contains(reason, "task.update") {
+		t.Fatalf("reason = %q, want direct action guidance", reason)
+	}
+}
+
+func TestShouldNotBlockProjectContinuationSnapshotRediscoveryToolForPrimaryPlanningDeliverableRead(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	draftTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Continue the active project execution now.", projectExecutionContinuationSnapshot{
+			ProjectLine:   "Active project id: " + projectID.String(),
+			DraftTaskLine: `Actionable draft tasks already in the tree: task 90 (Write SamBot feature specification) id=` + draftTaskID.String() + ` title="Write SamBot feature specification" work_status=draft deliverable_path=planning/sambot-feature-spec.md`,
+		}),
+	}
+
+	if blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "file.read", map[string]any{
+		"path": "planning/sambot-feature-spec.md",
+	}); blocked {
+		t.Fatalf("primary planning deliverable read blocked unexpectedly: %q", reason)
+	}
+}
+
 func TestAppendContinuationSummaryAndActionRootsProjectContinuationAtSyntheticUserPrompt(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()
