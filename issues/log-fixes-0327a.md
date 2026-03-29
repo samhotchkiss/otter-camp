@@ -1,5 +1,12 @@
 # 0327a Fix Log
 
+- 2026-03-29 13:11:45 MDT - `pending` `Parse markdown-emphasized deliverable labels for PM task hints`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `explicitDeliverablePathPatterns` now accept markdown-emphasized labels like `**Deliverable:**` and `**Output:**`
+  - this prevents `explicitDeliverablePath(...)` from falling back to a leading title token like `SamBot` when the description already includes the real path under an emphasized label
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) for the exact live task-154 shape: title `Write SamBot Example Conversations (replacement)` plus description `**Deliverable:** \`planning/sambot-example-conversations.md\``
+  - verified with `GOFLAGS='' go test ./internal/turn -run 'Test(ExplicitDeliverablePath(DetectsMarkdownEmphasizedDeliverableLabel|PrefersLongDescriptionPathOverBareTitleToken)|HandleCompletedProjectExecutionContinuationTurn(KeepsBoundedSizeContextWhenFocusedDeliverableIsMissing|RetriesBoundedSizeStopWithFreshMessage)|ProjectContinuationBoundedSizeSuggestedChildTitles)$' -count=1`
+  - pre-deploy live proof: task `154` appeared in the PM continuation snapshot with `deliverable_path=SamBot`, which caused the subsequent `file.read planning/sambot-example-conversations.md -> not_found` to route into the generic missing-artifact stop instead of the focused bounded-size missing-deliverable retry
+  - direct post-deploy proof is still pending the next fresh PM continuation on the rebuilt binary
 - 2026-03-29 13:00:36 MDT - `pending` `Carry bounded-size split hints into PM retry prompts`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `retryProjectExecutionContinuationForBoundedSizeStop(...)` now extracts `suggested_decomposition.child_titles` from the failing bounded-size `task.create` / `task.update` tool result on the just-completed turn
   - `buildProjectExecutionContinuationBoundedSizeRetryPrompt(...)` now includes those suggested child titles directly in the next PM continuation prompt and explicitly says not to create one replacement child that still owns the whole deliverable

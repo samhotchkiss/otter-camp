@@ -39430,6 +39430,22 @@ func TestExplicitDeliverablePathPrefersLongDescriptionPathOverBareTitleToken(t *
 	}
 }
 
+func TestExplicitDeliverablePathDetectsMarkdownEmphasizedDeliverableLabel(t *testing.T) {
+	t.Parallel()
+
+	title := "Write SamBot Example Conversations (replacement)"
+	description := "Replacement for OC-149 which is stuck in manual_recovery_repair.\n\n**Deliverable:** `planning/sambot-example-conversations.md`\n\nWrite 8-10 realistic example conversations."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  154,
+		Title:       title,
+		Description: &description,
+	}
+
+	if got := explicitDeliverablePath(taskRecord); got != "planning/sambot-example-conversations.md" {
+		t.Fatalf("explicitDeliverablePath(...) = %q, want %q", got, "planning/sambot-example-conversations.md")
+	}
+}
+
 func TestContentMigrationCheckpointPreferredOutputPathSkipsExplicitSingleFileDeliverable(t *testing.T) {
 	t.Parallel()
 
