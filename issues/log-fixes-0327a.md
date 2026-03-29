@@ -3626,3 +3626,18 @@
     - `GOFLAGS='' go test ./internal/turn -run 'TestRecoveryFileWriteDraftRejectReasonRejects(ReviewEvidenceSummaryPlaceholderAtExplicitDeliverable|PlaceholderEvidenceSummaryAtExplicitDeliverable)$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is rebuild/restart and confirm the next `sambot/widget.html` reread returns `placeholder_deliverable` instead of raw review prose
+- 2026-03-29 16:11 MDT - Widened the same explicit-deliverable reviewer-summary placeholder family one more step for the narration-style variant that still leaked in live review.
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - `looksLikeStrongDeliverableReviewerSummaryPlaceholder(...)` now also matches bodies that say the deliverable `is a placeholder`, `contains only narrative text`, and that a `placeholder_deliverable` result is `dispositive grounds for rejection`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - mirrored the same narration-style `placeholder_deliverable` evidence detection for recovery draft rejection
+  - changed tests:
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go)
+      - added `TestFileReadRejectsPlaceholderNarrationSummaryAtExplicitDeliverablePath`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestRecoveryFileWriteDraftRejectReasonRejectsPlaceholderNarrationSummaryAtExplicitDeliverable`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'TestFileReadRejects(ReviewEvidenceSummaryPlaceholderAtExplicitDeliverablePath|PlaceholderEvidenceSummaryAtExplicitDeliverablePath|PlaceholderNarrationSummaryAtExplicitDeliverablePath)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestRecoveryFileWriteDraftRejectReasonRejects(ReviewEvidenceSummaryPlaceholderAtExplicitDeliverable|PlaceholderEvidenceSummaryAtExplicitDeliverable|PlaceholderNarrationSummaryAtExplicitDeliverable)$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is rebuild/restart and confirm the next widget reread surfaces `placeholder_deliverable` directly

@@ -621,3 +621,13 @@
   - impact:
     - task execution can still treat review commentary as if it were real deliverable content
     - recovery draft reuse can keep amplifying the same placeholder body instead of stopping cleanly
+- 2026-03-29 16:11 MDT - The same live widget family still had one more phrasing gap even after the first `placeholder_deliverable` widening.
+  - fresh live evidence:
+    - newest review session `8e19b93b-74d7-4b5c-97cc-1530a32c7856` read `sambot/widget.html` first, exactly as intended
+    - tool result `5` still returned ordinary success with `The file at \`sambot/widget.html\` is a placeholder — it contains only narrative text ... a \`placeholder_deliverable\` result is dispositive grounds for rejection.`
+  - bug:
+    - the stronger reviewer-summary matcher still depended on `returned placeholder_deliverable` / `contains only placeholder narration` wording
+    - it did not catch the parallel `is a placeholder` / `contains only narrative text` / `dispositive grounds for rejection` phrasing
+  - impact:
+    - the runtime still leaks another close cousin of review commentary through `file.read`
+    - review can reject correctly, but task execution/recovery still sees the wrong content shape underneath

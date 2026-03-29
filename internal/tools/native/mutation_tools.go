@@ -672,6 +672,8 @@ func looksLikeStrongDeliverableReviewerSummaryPlaceholder(lower string) bool {
 		"returned mismatched_deliverable_context",
 		"returned `placeholder_deliverable`",
 		"returned placeholder_deliverable",
+		"placeholder_deliverable result is dispositive grounds for rejection",
+		"contains only narrative text",
 	) {
 		return false
 	}
@@ -688,6 +690,8 @@ func looksLikeStrongDeliverableReviewerSummaryPlaceholder(lower string) bool {
 		"per the review protocol",
 		"rejecting now with this evidence",
 		"contains only placeholder narration",
+		"is a placeholder",
+		"narrative text, not an actual",
 		"this is dispositive",
 	)
 }

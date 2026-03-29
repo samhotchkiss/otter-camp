@@ -1629,6 +1629,62 @@ func TestFileReadRejectsPlaceholderEvidenceSummaryAtExplicitDeliverablePath(t *t
 	}
 }
 
+func TestFileReadRejectsPlaceholderNarrationSummaryAtExplicitDeliverablePath(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "sambot/widget.html"
+
+	if err := os.MkdirAll(filepath.Join(root, "sambot"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(sambot): %v", err)
+	}
+	placeholder := "The file at `sambot/widget.html` is a placeholder — it contains only narrative text, not an actual frontend chat widget implementation. Per the review protocol, a `placeholder_deliverable` result is dispositive grounds for rejection.\n"
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+
+	description := "sambot/widget.html (or sambot/index.html) — the frontend chat widget"
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			TaskNumber:     175,
+			Title:          "sambot/widget.html (or sambot/index.html) — the frontend chat widget",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "user",
+				Content:   "Start work on task: sambot/widget.html (or sambot/index.html) — the frontend chat widget",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+	if got := out["deliverable_path"]; got != targetPath {
+		t.Fatalf("deliverable_path = %v, want %q", got, targetPath)
+	}
+}
+
 func TestFileReadRejectsTaskBriefEchoPlaceholderAtInProgressPlanningDeliverablePath(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

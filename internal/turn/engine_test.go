@@ -41532,6 +41532,16 @@ func TestRecoveryFileWriteDraftRejectReasonRejectsPlaceholderEvidenceSummaryAtEx
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReasonRejectsPlaceholderNarrationSummaryAtExplicitDeliverable(t *testing.T) {
+	t.Parallel()
+
+	content := "The file at `sambot/widget.html` is a placeholder — it contains only narrative text, not an actual frontend chat widget implementation. Per the review protocol, a `placeholder_deliverable` result is dispositive grounds for rejection.\n"
+	got := recoveryFileWriteDraftRejectReason(content, "sambot/widget.html")
+	if !strings.Contains(got, "reviewer assessment or rejection commentary") {
+		t.Fatalf("reason = %q, want reviewer-summary rejection", got)
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReasonRejectsTaskBriefEchoPlaceholder(t *testing.T) {
 	t.Parallel()
 
