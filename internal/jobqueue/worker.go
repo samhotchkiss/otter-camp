@@ -65,6 +65,8 @@ const (
 	projectContinuationRediscoveryGuardPrefix  = "[Project continuation rediscovery guard blocked only broad rereads."
 	projectContinuationActiveReplacementPrefix = "[Project continuation found that prerequisite artifact `"
 	projectContinuationActiveReplacementMarker = "already has active replacement work in the tree:"
+	projectContinuationSuccessfulHandoffPrefix = "[Project continuation successfully handed off the focused replacement child work."
+	projectContinuationReviewLaneResumePrefix  = "[Project continuation resumed blocked review lane "
 	projectContinuationTaskLaneBoundaryPrefix  = "[Project continuation found that task-owned active lane work must stay inside its project_task session."
 	projectContinuationBoundedSizePrefix       = "[Project continuation found that the remaining draft work still violates the bounded size policy."
 	projectContinuationDraftBoundedSizePrefix  = "[Project continuation found remaining draft "
@@ -2225,6 +2227,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 	}
 	expectedCompletedTaskID := ""
 	expectedSnapshotFingerprint := ""
+	allowSuccessfulHandoffSuppression := false
 	if activeBootstrap {
 		source = "project_bootstrap"
 		content = strings.Join([]string{
@@ -2267,6 +2270,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			if snapshotErr != nil {
 				return uuid.Nil, false, fmt.Errorf("build project continuation snapshot: %w", snapshotErr)
 			}
+			allowSuccessfulHandoffSuppression = projectContinuationSnapshotWaitsOnActiveChildWorkForWorker(remainingDrafts, snapshot)
 			expectedCompletedTaskID = completedTaskID.String()
 			expectedSnapshotFingerprint = projectExecutionContinuationFingerprintForWorker(completedTaskID, remainingDrafts, snapshot)
 			metadataMap["completed_task_id"] = expectedCompletedTaskID
@@ -2277,6 +2281,28 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 	}
 
 	var latestConsumedMatchingMessageID uuid.UUID
+	var latestConsumedSameCompletedTaskMessageID uuid.UUID
+	if source == "project_execution_continuation" && expectedCompletedTaskID != "" {
+		err := w.pool.QueryRow(ctx, `
+			SELECT cm.id
+			FROM chat_message cm
+			WHERE cm.session_id = $1
+			  AND cm.role = 'user'
+			  AND COALESCE(cm.metadata->>'source', '') = $2
+			  AND COALESCE(cm.metadata->>'completed_task_id', '') = $3
+			  AND EXISTS (
+			        SELECT 1
+			        FROM chat_turn ct
+			        WHERE ct.trigger_message_id = cm.id
+			          AND ct.status IN ('completed', 'failed', 'cancelled')
+			  )
+			ORDER BY cm.created_at DESC, cm.id DESC
+			LIMIT 1
+		`, sessionID, source, expectedCompletedTaskID).Scan(&latestConsumedSameCompletedTaskMessageID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, fmt.Errorf("query latest consumed same-completed-task project continuation message: %w", err)
+		}
+	}
 	if source == "project_execution_continuation" && expectedCompletedTaskID != "" && expectedSnapshotFingerprint != "" {
 		err := w.pool.QueryRow(ctx, `
 			SELECT cm.id
@@ -2339,7 +2365,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		sameSnapshot := expectedSnapshotFingerprint != "" && expectedSnapshotFingerprint == existingSnapshotFingerprintText
 		if !existingMessageConsumed && sameCompletedTask && (expectedSnapshotFingerprint == "" || sameSnapshot) {
 			if latestConsumedMatchingMessageID != uuid.Nil {
-				suppressed, suppressErr := w.suppressRepeatedIdenticalPendingProjectContinuation(ctx, latestConsumedMatchingMessageID, existingMessageID)
+				suppressed, suppressErr := w.suppressRepeatedIdenticalPendingProjectContinuation(ctx, latestConsumedMatchingMessageID, existingMessageID, allowSuccessfulHandoffSuppression)
 				if suppressErr != nil {
 					return uuid.Nil, false, fmt.Errorf("check stale pending project continuation suppression: %w", suppressErr)
 				}
@@ -2350,11 +2376,31 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			return existingMessageID, false, nil
 		}
 		if existingMessageConsumed && sameCompletedTask && sameSnapshot {
-			suppressed, suppressErr := w.suppressRepeatedIdenticalProjectContinuation(ctx, existingMessageID)
+			suppressed, suppressErr := w.suppressRepeatedIdenticalProjectContinuation(ctx, existingMessageID, allowSuccessfulHandoffSuppression)
 			if suppressErr != nil {
 				return uuid.Nil, false, fmt.Errorf("check repeated project continuation suppression: %w", suppressErr)
 			}
 			if suppressed {
+				return uuid.Nil, true, nil
+			}
+		}
+		if sameCompletedTask && allowSuccessfulHandoffSuppression &&
+			latestConsumedSameCompletedTaskMessageID != uuid.Nil &&
+			latestConsumedSameCompletedTaskMessageID != latestConsumedMatchingMessageID {
+			handoffSuppressed, suppressErr := w.shouldSuppressProjectContinuationAfterSuccessfulHandoff(ctx, latestConsumedSameCompletedTaskMessageID)
+			if suppressErr != nil {
+				return uuid.Nil, false, fmt.Errorf("check repeated project continuation successful-handoff suppression for pending message: %w", suppressErr)
+			}
+			if handoffSuppressed {
+				if _, execErr := w.pool.Exec(ctx, `
+					UPDATE chat_message
+					SET status = 'failed',
+					    error_message = $2
+					WHERE id = $1
+					  AND status = 'pending'
+				`, existingMessageID, projectContinuationSuppressedErrorMessage); execErr != nil {
+					return uuid.Nil, false, fmt.Errorf("suppress repeated successful-handoff continuation message: %w", execErr)
+				}
 				return uuid.Nil, true, nil
 			}
 		}
@@ -2377,11 +2423,22 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 	}
 
 	if source == "project_execution_continuation" && latestConsumedMatchingMessageID != uuid.Nil {
-		suppressed, suppressErr := w.suppressRepeatedIdenticalProjectContinuation(ctx, latestConsumedMatchingMessageID)
+		suppressed, suppressErr := w.suppressRepeatedIdenticalProjectContinuation(ctx, latestConsumedMatchingMessageID, allowSuccessfulHandoffSuppression)
 		if suppressErr != nil {
 			return uuid.Nil, false, fmt.Errorf("check repeated project continuation suppression: %w", suppressErr)
 		}
 		if suppressed {
+			return uuid.Nil, true, nil
+		}
+	}
+	if source == "project_execution_continuation" && allowSuccessfulHandoffSuppression &&
+		latestConsumedSameCompletedTaskMessageID != uuid.Nil &&
+		latestConsumedSameCompletedTaskMessageID != latestConsumedMatchingMessageID {
+		handoffSuppressed, suppressErr := w.shouldSuppressProjectContinuationAfterSuccessfulHandoff(ctx, latestConsumedSameCompletedTaskMessageID)
+		if suppressErr != nil {
+			return uuid.Nil, false, fmt.Errorf("check repeated project continuation successful-handoff suppression: %w", suppressErr)
+		}
+		if handoffSuppressed {
 			return uuid.Nil, true, nil
 		}
 	}
@@ -2403,11 +2460,43 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 	return message.ID, false, nil
 }
 
-func (w *Worker) suppressRepeatedIdenticalProjectContinuation(ctx context.Context, messageID uuid.UUID) (bool, error) {
-	return w.suppressRepeatedIdenticalPendingProjectContinuation(ctx, messageID, messageID)
+func (w *Worker) suppressRepeatedIdenticalProjectContinuation(ctx context.Context, messageID uuid.UUID, allowSuccessfulHandoffSuppression bool) (bool, error) {
+	return w.suppressRepeatedIdenticalPendingProjectContinuation(ctx, messageID, messageID, allowSuccessfulHandoffSuppression)
 }
 
-func (w *Worker) suppressRepeatedIdenticalPendingProjectContinuation(ctx context.Context, referenceMessageID, pendingMessageID uuid.UUID) (bool, error) {
+func (w *Worker) shouldSuppressProjectContinuationAfterSuccessfulHandoff(ctx context.Context, referenceMessageID uuid.UUID) (bool, error) {
+	if w == nil || w.pool == nil || referenceMessageID == uuid.Nil {
+		return false, nil
+	}
+
+	var suppressed bool
+	if err := w.pool.QueryRow(ctx, `
+		WITH latest_turn AS (
+			SELECT ct.id
+			FROM chat_turn ct
+			WHERE ct.trigger_message_id = $1
+			  AND ct.status IN ('completed', 'failed', 'cancelled')
+			ORDER BY ct.retry_count DESC,
+			         COALESCE(ct.completed_at, ct.created_at) DESC,
+			         ct.id DESC
+			LIMIT 1
+		)
+		SELECT EXISTS (
+			SELECT 1
+			FROM latest_turn lt
+			JOIN chat_message sm
+			  ON sm.turn_id = lt.id
+			 AND sm.role = 'system'
+			WHERE sm.content LIKE $2
+			   OR sm.content LIKE $3
+		)
+	`, referenceMessageID, projectContinuationSuccessfulHandoffPrefix+"%", projectContinuationReviewLaneResumePrefix+"%").Scan(&suppressed); err != nil {
+		return false, err
+	}
+	return suppressed, nil
+}
+
+func (w *Worker) suppressRepeatedIdenticalPendingProjectContinuation(ctx context.Context, referenceMessageID, pendingMessageID uuid.UUID, allowSuccessfulHandoffSuppression bool) (bool, error) {
 	if w == nil || w.pool == nil || referenceMessageID == uuid.Nil || pendingMessageID == uuid.Nil {
 		return false, nil
 	}
@@ -2431,14 +2520,20 @@ func (w *Worker) suppressRepeatedIdenticalPendingProjectContinuation(ctx context
 			JOIN chat_message sm
 			  ON sm.turn_id = lt.id
 			 AND sm.role = 'system'
-			WHERE lt.stop_reason = 'validation_loop_blocked'
-			  AND (
-			       sm.content LIKE $2
-			    OR sm.content LIKE $3
-			    OR sm.content LIKE $4
-			    OR (sm.content LIKE $5 AND sm.content LIKE $6)
-			    OR sm.content LIKE $7
+			WHERE (
+			       lt.stop_reason = 'validation_loop_blocked'
+			   AND (
+			            sm.content LIKE $2
+			         OR sm.content LIKE $3
+			         OR sm.content LIKE $4
+			         OR (sm.content LIKE $5 AND sm.content LIKE $6)
+			         OR sm.content LIKE $7
+			       )
 			  )
+			   OR (
+			        $8
+			    AND sm.content LIKE $9
+			   )
 		)
 	`, referenceMessageID,
 		projectContinuationRediscoveryGuardPrefix+"%",
@@ -2447,6 +2542,8 @@ func (w *Worker) suppressRepeatedIdenticalPendingProjectContinuation(ctx context
 		projectContinuationDraftBoundedSizePrefix+"%",
 		"%"+projectContinuationBoundedSizeMarker+"%",
 		projectContinuationTaskLaneBoundaryPrefix+"%",
+		allowSuccessfulHandoffSuppression,
+		projectContinuationSuccessfulHandoffPrefix+"%",
 	).Scan(&blocked); err != nil {
 		return false, err
 	}
@@ -2890,6 +2987,22 @@ func projectContinuationDraftTaskReadyForParentClosureForWorker(activity project
 	return activity.completedCloseoutChildTaskCount > 0 &&
 		activity.activeChildTaskCount == 0 &&
 		activity.childTaskCount == 0
+}
+
+func projectContinuationSnapshotWaitsOnActiveChildWorkForWorker(remainingDraftTasks int, snapshot projectExecutionContinuationSnapshotForWorker) bool {
+	if remainingDraftTasks != 0 {
+		return false
+	}
+	if strings.TrimSpace(snapshot.DraftTaskLine) != "" {
+		return false
+	}
+	if strings.TrimSpace(snapshot.ReplacementDraftLine) != "" {
+		return false
+	}
+	if strings.TrimSpace(snapshot.FocusTaskLine) != "" {
+		return false
+	}
+	return strings.TrimSpace(snapshot.ChildActiveDraftLine) != ""
 }
 
 func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, projectID uuid.UUID) (projectExecutionContinuationSnapshotForWorker, error) {

@@ -2027,3 +2027,29 @@
     - `go test -tags=integration ./internal/task -run 'TestTaskServiceIntegration(ParentDoneRequiresVerificationAndIntegration|ParentDoneIgnoresBlockedProceduralChildrenAfterCloseoutProof|OrchestrationOnlyParentAutoCompletesWhenChildrenDone|OrchestrationOnlyParentWithoutFlowTemplateAutoCompletes)$' -count=1`
   - deploy / proof status:
     - live proof landed immediately on `repo_version=3497`: task `44` is now `done` with `completed_at=2026-03-28 21:55:55 MDT`, and the next PM continuation prompt is already advancing from “latest completed task was task 44” instead of reopening the closeout loop
+- 2026-03-28 22:18:00 MDT - Finished: suppress worker-origin PM replays after child-lane wait states even when the snapshot fingerprint changes.
+  - live diagnosis:
+    - Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` kept reopening `project_execution_continuation` turns against completed task `76` after two runtime-owned wait states:
+      - successful replacement-child handoff: `5814 -> 5815`
+      - blocked review-lane resume: `5830 -> 5831`, `5841 -> 5842`
+    - the reopened prompts were not exact snapshot duplicates; each child-lane state change mutated the continuation fingerprint, so the older worker suppression keyed to `completed_task_id + continuation_snapshot_fingerprint` never fired
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - widened project-continuation suppression lookup to inspect the latest consumed continuation for the same completed task, not only the same snapshot fingerprint
+    - kept the existing validation-block suppression for exact snapshot repeats
+    - added wait-state suppression for both:
+      - `[Project continuation successfully handed off the focused replacement child work ...]`
+      - `[Project continuation resumed blocked review lane ... flow.review_decision ...]`
+    - when a stale pending continuation row is the one being suppressed, it is now failed directly with the repeated-continuation suppression reason instead of a generic `superseded after prior continuation turn completed`
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added exact changed-fingerprint regressions for successful handoff suppression on both:
+      - `ensureProjectContinuationMessageDecision(...)`
+      - `RequeueActiveProjectSessionsWithoutTurns(...)`
+    - added matching changed-fingerprint regressions for blocked review-lane resume suppression on both worker entry points
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3499`
+  - verified with:
+    - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(EnsureProjectContinuationMessageSuppressesRepeatedConsumed(SuccessfulHandoffContinuation|ReviewLaneResumeContinuation|RediscoveryBlockedContinuation|ActiveReplacementContinuation|TaskLaneBoundaryContinuation|BoundedSizeContinuation)|RequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailed(SuccessfulHandoffContinuation|ReviewLaneResumeContinuation|RediscoveryBlockedContinuation|BoundedSizeContinuation|ActiveReplacementContinuation|TaskLaneBoundaryContinuation))$' -count=1`
+  - deploy / proof status:
+    - runtime rebuilt/restarted cleanly on `repo_version=3499`; health is `ok`
+    - the hot PM session is now drained (`0` pending `project_execution_continuation`, `0` pending/claimed `agent_turn` jobs), but the clean same-family canary is mixed because several task-76 PM turns were already in motion while the slice was landing
+    - the next remaining seam is narrower and sits in the turn-engine action path itself: once the prompt already names `resume_policy=resume_review_decision`, the PM lane still spends a blocked tool hop rereading the named task instead of converting that snapshot directly into the correct review-lane action
