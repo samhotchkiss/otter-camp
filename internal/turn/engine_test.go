@@ -11122,6 +11122,9 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskLis
 	if !strings.Contains(reason, "Do not re-list the broader project task tree") {
 		t.Fatalf("reason = %q, want broader task-tree guidance", reason)
 	}
+	if !strings.Contains(reason, "task.update") {
+		t.Fatalf("reason = %q, want direct action guidance", reason)
+	}
 }
 
 func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksSessionListForActiveTasks(t *testing.T) {
@@ -11334,6 +11337,9 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksNamedTaskGet
 	}
 	if !strings.Contains(reason, draftTaskID.String()) {
 		t.Fatalf("reason = %q, want named task id", reason)
+	}
+	if !strings.Contains(reason, "task.update") {
+		t.Fatalf("reason = %q, want direct task.update guidance", reason)
 	}
 }
 

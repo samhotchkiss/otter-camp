@@ -355,3 +355,8 @@
   - then it directly edited that file from the project session
   - then it attempted `cli.execute` from the same PM lane
   Root cause: native project-session deliverable blocking exempted all `planning/` paths, and `cli.execute` had no equivalent project-session guard at all. Impact: the PM lane could still do task-owned spec mutations and shell work against live deliverables even after executable task lanes existed, bypassing the intended bounded project-management contract.
+- 2026-03-29 09:48 MDT - Once PM-lane direct writes were blocked, the next live continuation still spun on named-task rediscovery after already reading the explicit deliverable. Fresh `3583` evidence on turn `f5a846a4-f224-46a7-b840-359ff02e1bc0`:
+  - first tool action was a direct `file.read` of `planning/sambot-feature-spec.md`
+  - the assistant then concluded the needed sections already existed
+  - despite that, it fell back into blocked broad `task.list` and blocked named `task.get` rereads on the same draft parents
+  Root cause: project-continuation rediscovery guard messages still said only “act on the named task directly,” which was too weak and generic after the PM lane already had concrete deliverable evidence. Impact: the PM lane could still waste turns bouncing off blocked named-task rereads instead of converting that evidence into the next direct `task.update` or replacement-child action.

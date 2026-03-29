@@ -31106,12 +31106,12 @@ func buildProjectContinuationSnapshotRediscoveryGuardError(toolName string, task
 	case "project.get", "project.list":
 		return fmt.Sprintf("project continuation already has the active project id plus named active and draft tasks in the continuation prompt. Do not reread broad project state with %s; act on the named tasks directly.", toolName)
 	case "task.list":
-		return "project continuation already has named active or draft tasks in the continuation prompt. Do not re-list the broader project task tree; act on one of the named tasks directly or inspect only a named parent's direct children with parent_task_id if that narrower evidence is truly required."
+		return "project continuation already has named active or draft tasks in the continuation prompt. Do not re-list the broader project task tree. If the current deliverable evidence already shows what to do, issue the direct task.update or smallest bounded replacement task action now; otherwise inspect only a named parent's direct children with parent_task_id if that narrower evidence is truly required."
 	case "task.get":
 		if taskID != uuid.Nil {
-			return fmt.Sprintf("project continuation already named task id=%s in the continuation prompt. Do not reread that task record first; act on the named task directly or inspect only genuinely new narrower evidence.", taskID.String())
+			return fmt.Sprintf("project continuation already named task id=%s in the continuation prompt. Do not reread that task record first. If the current deliverable or blocker evidence already makes the next step clear, issue the direct task.update or smallest bounded replacement-task action now; otherwise inspect only genuinely new narrower evidence.", taskID.String())
 		}
-		return "project continuation already named the relevant task in the continuation prompt. Do not reread that task record first; act on the named task directly or inspect only genuinely new narrower evidence."
+		return "project continuation already named the relevant task in the continuation prompt. Do not reread that task record first. If the current deliverable or blocker evidence already makes the next step clear, issue the direct task.update or smallest bounded replacement-task action now; otherwise inspect only genuinely new narrower evidence."
 	default:
 		return "project continuation already has the necessary project snapshot in the continuation prompt. Do not reread the broader project task tree first."
 	}

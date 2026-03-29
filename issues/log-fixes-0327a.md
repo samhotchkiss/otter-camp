@@ -3047,3 +3047,14 @@
     - `GOFLAGS='' go test ./internal/tools/native -run 'Test(FileWriteRejectsProjectSessionExecutionDeliverableMutation|FileEditRejectsProjectSessionPlanningDeliverableMutation|CLIExecuteRejectsProjectSessionExecutionMutation)$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live canary is project session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where direct `planning/sambot-feature-spec.md` edits and follow-on `cli.execute` should now be rejected with `task_execution_required` instead of mutating the spec from the PM lane
+- 2026-03-29 09:48 MDT - Tightened project-continuation rediscovery guard wording after a direct deliverable read.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - [`buildProjectContinuationSnapshotRediscoveryGuardError(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now tells blocked `task.list` / `task.get` rereads to issue the direct `task.update` or smallest bounded replacement-task action immediately when the current deliverable or blocker evidence already makes the next step clear
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - strengthened `TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskList`
+      - strengthened `TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksNamedTaskGet`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocks(BroadTaskList|NamedTaskGet)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary is project session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where a post-read blocked `task.list` / `task.get` bounce should now return a more prescriptive direct-action error instead of the older generic “act directly” wording
