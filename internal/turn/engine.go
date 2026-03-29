@@ -23269,6 +23269,12 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 	}
 	failures = append(failures, churnFailures...)
 	fileMutationThisTurn := turnHasSuccessfulFileMutation(results)
+	if !fileMutationThisTurn {
+		fileMutationThisTurn, err = e.turnHasSuccessfulFileMutationEarlierInCurrentTurn(ctx, rt)
+		if err != nil {
+			return false, err
+		}
+	}
 	current, ok := parseTaskValidationGuard(taskRecord.Metadata)
 	recoveryCheckpoint, hasRecoveryCheckpoint := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
 	if len(failures) == 0 {
@@ -24467,6 +24473,30 @@ func turnHasSuccessfulFileMutation(results []ToolResult) bool {
 		}
 	}
 	return false
+}
+
+func (e *TurnEngine) turnHasSuccessfulFileMutationEarlierInCurrentTurn(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil || rt.turn.ID == uuid.Nil {
+		return false, nil
+	}
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return false, err
+	}
+	for _, message := range messagesForTurn(messages, rt.turn.ID) {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, _, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || strings.TrimSpace(errText) != "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "file.write", "file.edit":
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func shouldStopTurnAfterBlockedTaskGitCommitAfterMutation(rt *turnRuntime, failure toolValidationFailure, fileMutationThisTurn bool) bool {

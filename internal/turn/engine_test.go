@@ -28011,6 +28011,90 @@ func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitW
 	}
 }
 
+func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitWhenDeliverableMutatedEarlierInTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Write validation artifact",
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.edit",
+			"output": map[string]any{
+				"path":              "Work/report.md",
+				"replacements_made": 1,
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{
+		{
+			ID:        "commit-1",
+			Name:      "git.commit",
+			Arguments: map[string]any{"message": "checkpoint work"},
+		},
+	}
+	results := []ToolResult{
+		{
+			ToolCallID: "commit-1",
+			Name:       "git.commit",
+			Output: map[string]any{
+				"error": "task_git_commit_blocked",
+			},
+		},
+	}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	if !fixture.messages.containsContentSubstring("git.commit is runtime-owned for task sessions") {
+		t.Fatal("expected immediate git.commit-after-mutation stop message from earlier same-turn file mutation")
+	}
+}
+
 func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterCheckpointOnlyDirtyTaskGitCommit(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

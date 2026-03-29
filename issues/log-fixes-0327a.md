@@ -2216,4 +2216,20 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(NormalizeRecoveryCheckpointTargetForTaskRepointsMultiOutputContentMigrationTargetToOwnedOutput|ReconcileRecoveryCheckpointCandidateClearsStaleArtifactWhenMultiOutputCheckpointRepointsTarget|ReconcileRecoveryCheckpointCandidateNormalizesExecutionFirstReportTarget)$' -count=1`
     - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildTaskReviewActionPrompt(PrefersDeliverableRootForBatchContentMigrationOutputs|IncludesCheckpointOutputSetWhenPreferredTargetExists)|NormalizeRecoveryCheckpointTargetForTaskRepointsMultiOutputContentMigrationTargetToOwnedOutput|ReconcileRecoveryCheckpointCandidateClearsStaleArtifactWhenMultiOutputCheckpointRepointsTarget)$' -count=1`
   - deploy / proof status:
-    - pending rebuild/restart and fresh live proof on the next post-restart task-78 recovery turn or equivalent multi-output close-out recovery lane
+    - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and health is `ok`
+    - direct supporting live proof landed immediately on task `78`: new session `e87f1b21-d4b8-4b98-aa43-1bc9fdafba2f` now gets `deliverable_path=content/posts/README.md` from the recovery-focus guard and edits `content/posts/README.md` directly instead of drifting to `content/posts/happy-new-yeartechnonymous-isnt-dead.md`
+    - raw task metadata is still stale until a later checkpoint persistence write heals it, but the runtime now normalizes that checkpoint on read and behaves correctly on the new binary
+- 2026-03-28 23:53:32 MDT - Finished: stop same-turn task `git.commit` churn even when the write happened in an earlier tool batch.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `handleToolValidationResults(...)` now checks for successful `file.write` / `file.edit` tool results from earlier in the same turn, not just the current validation batch
+    - added `turnHasSuccessfulFileMutationEarlierInCurrentTurn(...)` so `task_git_commit_blocked` immediate-stop logic sees same-turn writes that happened in a prior assistant/tool cycle
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitWhenDeliverableMutatedEarlierInTurn`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - runtime version is now `3512`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitWhenDeliverable(AlreadyMutated|MutatedEarlierInTurn)|NormalizeRecoveryCheckpointTargetForTaskRepointsMultiOutputContentMigrationTargetToOwnedOutput|ReconcileRecoveryCheckpointCandidateClearsStaleArtifactWhenMultiOutputCheckpointRepointsTarget)$' -count=1`
+  - deploy / proof status:
+    - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and health is `ok`
+    - task `78` resumed immediately on fresh session `986e93e5-5ed5-47a7-b196-fccb3a7b62a3`, but the post-restart replay is already in the narrowed review-only lane, so the exact write-then-blocked-`git.commit` path has not re-fired yet on the new binary
+    - fresh direct live proof is still pending the next execution/recovery retry where `file.edit` / `file.write` and blocked `git.commit` are split across separate same-turn tool batches
