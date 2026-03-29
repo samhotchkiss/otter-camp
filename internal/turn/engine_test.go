@@ -39078,6 +39078,21 @@ func TestRecoveryFileWriteDraftRejectReasonRejectsRuntimeOwnedCommitHandoffPlace
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReasonRejectsRuntimeAdvanceCompletionSummaryPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	content := "The deliverable is complete. The runtime will advance the flow.\n\n" +
+		"Here's a summary of what was delivered:\n" +
+		"## ✅ OC-111\n" +
+		"**File:** planning/sambot-feature-spec.md\n" +
+		"**Action:** Appended the missing SamBot feature sections.\n"
+
+	reason := recoveryFileWriteDraftRejectReason(content, "planning/sambot-feature-spec.md")
+	if !strings.Contains(reason, "runtime-owned completion summary prose") {
+		t.Fatalf("reason = %q, want runtime-owned completion summary rejection", reason)
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReasonRejectsContentMigrationStatusPlaceholder(t *testing.T) {
 	t.Parallel()
 

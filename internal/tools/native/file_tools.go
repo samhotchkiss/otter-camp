@@ -982,6 +982,9 @@ func looksLikeRejectedDeliverablePlaceholder(content string) bool {
 	if looksLikeRuntimeOwnedCommitHandoffPlaceholder(trimmed) {
 		return true
 	}
+	if looksLikeRuntimeAdvanceCompletionSummaryPlaceholder(trimmed) {
+		return true
+	}
 	if looksLikeContentMigrationStatusPlaceholder(trimmed) {
 		return true
 	}

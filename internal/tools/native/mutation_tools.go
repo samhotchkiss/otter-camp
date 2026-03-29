@@ -805,6 +805,33 @@ func looksLikeRuntimeOwnedCommitHandoffPlaceholder(content string) bool {
 	)
 }
 
+func looksLikeRuntimeAdvanceCompletionSummaryPlaceholder(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || len(trimmed) > 4000 {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if !containsAnySubstring(lower,
+		"the deliverable is complete",
+		"deliverable is already complete",
+	) {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"runtime will advance the flow",
+		"runtime will handle flow advancement",
+		"runtime will handle the flow advancement",
+	) {
+		return false
+	}
+	return containsAnySubstring(lower,
+		"summary of what was delivered",
+		"## ✅ oc-",
+		"**file:**",
+		"**action:**",
+	)
+}
+
 func looksLikeContentMigrationStatusPlaceholder(content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
@@ -1950,6 +1977,12 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 		return map[string]any{
 			"error":   "non_substantive_content",
 			"message": "file.write content appears to be runtime-owned commit or flow handoff prose, not the concrete deliverable body itself. Write the real file contents directly.",
+		}, nil
+	}
+	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikeRuntimeAdvanceCompletionSummaryPlaceholder(content) {
+		return map[string]any{
+			"error":   "non_substantive_content",
+			"message": "file.write content appears to be runtime-owned completion summary prose, not the concrete deliverable body itself. Write the real file contents directly.",
 		}, nil
 	}
 	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikeContentMigrationStatusPlaceholder(content) {

@@ -1319,6 +1319,65 @@ func TestFileReadRejectsRuntimeOwnedCommitHandoffPlaceholderAtInProgressDelivera
 	}
 }
 
+func TestFileReadRejectsRuntimeAdvanceCompletionSummaryPlaceholderAtInProgressDeliverablePath(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "planning/sambot-feature-spec.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "planning"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(planning): %v", err)
+	}
+	placeholder := "The deliverable is complete. The runtime will advance the flow.\n\n" +
+		"Here's a summary of what was delivered:\n" +
+		"## ✅ OC-111\n" +
+		"**File:** planning/sambot-feature-spec.md\n" +
+		"**Action:** Appended the missing SamBot feature sections.\n"
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+
+	description := "Deliverable: Append these sections to the existing planning/sambot-feature-spec.md file. Do not overwrite existing content — read the file first, then append the new sections after the existing content."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Append missing SamBot sections to planning/sambot-feature-spec.md",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "user",
+				Content:   "Start work on task: Append missing SamBot sections to planning/sambot-feature-spec.md",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+	if got := out["deliverable_path"]; got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("deliverable_path = %v, want planning/sambot-feature-spec.md", got)
+	}
+}
+
 func TestFileReadRejectsContentMigrationStatusPlaceholderAtInProgressDeliverablePath(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

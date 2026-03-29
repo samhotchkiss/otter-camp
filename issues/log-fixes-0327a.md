@@ -2853,3 +2853,31 @@
     - task `109` session `b832a073-a30d-4e16-8b80-81698696c8d2` repeated the same family across retries after a successful append
   - expected live post-fix behavior:
     - the next explicit-target append task should stop immediately on the successful `file.edit`, letting runtime flow advancement own the commit/closeout instead of reopening commit/done churn
+- 2026-03-29 07:38 MDT - Fixed runtime-owned completion-summary placeholder detection across native deliverable guards and recovery draft selection.
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - added `looksLikeRuntimeAdvanceCompletionSummaryPlaceholder(...)`
+    - `file.write` now rejects that placeholder family as `non_substantive_content`
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `looksLikeRejectedDeliverablePlaceholder(...)` now treats the same completion-summary prose as `placeholder_deliverable`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - [`recoveryFileWriteDraftRejectReason(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now rejects the same content family as `runtime-owned completion summary prose instead of the file body`
+  - changed tests:
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go)
+      - added `TestFileWriteRejectsRuntimeAdvanceCompletionSummaryPlaceholderContent`
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go)
+      - added `TestFileReadRejectsRuntimeAdvanceCompletionSummaryPlaceholderAtInProgressDeliverablePath`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestRecoveryFileWriteDraftRejectReasonRejectsRuntimeAdvanceCompletionSummaryPlaceholder`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(FileWriteRejects(RuntimeOwnedCommitHandoffPlaceholderContent|RuntimeAdvanceCompletionSummaryPlaceholderContent)|FileReadRejects(RuntimeOwnedCommitHandoffPlaceholderAtInProgressDeliverablePath|RuntimeAdvanceCompletionSummaryPlaceholderAtInProgressDeliverablePath))$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestRecoveryFileWriteDraftRejectReasonRejects(RuntimeOwnedCommitHandoffPlaceholder|RuntimeAdvanceCompletionSummaryPlaceholder)$' -count=1`
+  - deploy / proof status:
+    - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+      - runtime version is now `3566`
+    - rebuilt [`./bin/ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp), respawned tmux panes `%847/%848`, and [`./bin/ottercamp health --output json`](/Users/sam/dev/otter-camp/bin/ottercamp) returned `status=ok`
+    - strongest live pre-fix proof:
+      - task `111` session `1a638004-6599-46ad-abe4-96acb1c6f76a` repeatedly reread `planning/sambot-feature-spec.md` containing raw `The deliverable is complete. The runtime will advance the flow ...` placeholder prose and later rewrote a `988`-byte completion-summary derivative
+    - current live caveat after deploy:
+      - the first fresh task `111` execution session on `3566` is `6cd4921c-0690-4054-aab6-e681db237511`
+      - it immediately exposed a different `988`-byte reviewer-summary placeholder (`The evidence is clear ...`) rather than the older runtime-owned completion-summary family
+      - so this slice is deployed and test-green, but the exact runtime-owned completion-summary branch still needs a new natural retry to re-fire post-fix; the active live blocker has already narrowed to the adjacent reviewer-summary placeholder family

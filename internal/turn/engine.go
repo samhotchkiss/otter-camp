@@ -22273,6 +22273,9 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	if looksLikeRuntimeOwnedCommitHandoffPlaceholder(trimmed) {
 		return fmt.Sprintf("assistant draft for %s repeated runtime-owned commit handoff prose instead of the file body", path)
 	}
+	if looksLikeRuntimeAdvanceCompletionSummaryPlaceholder(trimmed) {
+		return fmt.Sprintf("assistant draft for %s wrote runtime-owned completion summary prose instead of the file body", path)
+	}
 	if looksLikeDeliverableCompletionSummaryWithoutBody(path, trimmed) {
 		return fmt.Sprintf("assistant draft for %s wrote a completion summary about deliverables/review readiness instead of the actual file body", path)
 	}
@@ -23006,6 +23009,33 @@ func looksLikeRuntimeOwnedCommitHandoffPlaceholder(content string) bool {
 		"let me check git status and commit",
 		"let me update the task status",
 		"let me advance the flow",
+	)
+}
+
+func looksLikeRuntimeAdvanceCompletionSummaryPlaceholder(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || len(trimmed) > 4000 {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if !containsAny(lower,
+		"the deliverable is complete",
+		"deliverable is already complete",
+	) {
+		return false
+	}
+	if !containsAny(lower,
+		"runtime will advance the flow",
+		"runtime will handle flow advancement",
+		"runtime will handle the flow advancement",
+	) {
+		return false
+	}
+	return containsAny(lower,
+		"summary of what was delivered",
+		"## ✅ oc-",
+		"**file:**",
+		"**action:**",
 	)
 }
 
