@@ -2994,3 +2994,18 @@
     - `GOFLAGS='' go test ./internal/turn -run 'TestMaybeSynthesizeTaskReviewDecisionToolCalls(UsesPreferredDeliverableRejectEvidence|UsesBlockedReviewPrompt|InfersRejectFromStrongFindings|UsesSufficientEvidenceRejectPhrasing|UsesDirtyWorkspaceRejectOnlyRetry|SkipsWhenDecisionToolAlreadyPresent)$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live canary is the next blocked-review resume like task `109`, which should now synthesize `flow.review_decision reject` instead of closing with prose-only mismatch findings
+- 2026-03-29 09:12 MDT - Fixed explicit deliverable parsing so slash-heavy titles no longer mask the real append target.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - [`explicitDeliverablePath(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now checks all strong explicit-path patterns across all task-contract candidates before falling back to the looser leading-verb matcher
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - [`parseExplicitDeliverablePath(...)`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go) now uses the same two-pass ordering
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestExplicitDeliverablePathPrefersDescriptionAppendTargetOverSlashTitle`
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go)
+      - added `TestParseExplicitDeliverablePathPrefersDescriptionAppendTargetOverSlashTitle`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(Explicit(DeliverablePathPrefersDescriptionAppendTargetOverSlashTitle|ExecutionDeliverableWriteCompletedRecognizesExplicitFileEdit)|ShouldStopAfterExecutionDeliverableWriteStopsForExplicitFileEdit)$' -count=1`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'TestParseExplicitDeliverablePath(UsesTitleWhenDescriptionStartsWithInputRead|PrefersDescriptionAppendTargetOverSlashTitle)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary is the next append-style SamBot task whose title contains slash terms like `UI/UX`, where the runtime should now keep targeting `planning/sambot-feature-spec.md` instead of the bogus `ui/ux` pseudo-path

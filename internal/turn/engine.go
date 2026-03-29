@@ -33660,10 +33660,12 @@ func explicitDeliverablePath(taskRecord repo.ProjectTask) string {
 			}
 			return candidate
 		}
+	}
+	for _, description := range taskContractDescriptionCandidates(taskRecord) {
 		if match := leadingVerbDeliverablePathPattern.FindStringSubmatch(description); len(match) >= 2 {
 			rawCandidate := strings.TrimSpace(match[1])
 			candidate := normalizeExplicitDeliverablePathCandidate(rawCandidate)
-			if strings.Contains(candidate, "/") || strings.Contains(filepath.Base(candidate), ".") {
+			if looksLikeExplicitDeliverablePath(candidate, rawCandidate) {
 				return candidate
 			}
 		}

@@ -1614,6 +1614,20 @@ func TestParseExplicitDeliverablePathUsesTitleWhenDescriptionStartsWithInputRead
 	}
 }
 
+func TestParseExplicitDeliverablePathPrefersDescriptionAppendTargetOverSlashTitle(t *testing.T) {
+	t.Parallel()
+
+	description := "Append \"UI/UX Design\" section to planning/sambot-feature-spec.md — covering chat widget placement, conversation flow, mobile responsiveness, conversation starters, and error states. Read file first, append after existing content. Single-file deliverable only."
+	taskRecord := repo.ProjectTask{
+		Title:       "Append UI/UX Design section",
+		Description: &description,
+	}
+
+	if got := parseExplicitDeliverablePath(taskRecord); got != "planning/sambot-feature-spec.md" {
+		t.Fatalf("parseExplicitDeliverablePath() = %q, want planning/sambot-feature-spec.md", got)
+	}
+}
+
 func TestFileEditRejectsPlanningArtifactMutationForExecutionFirstTaskWithExplicitDeliverable(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()
