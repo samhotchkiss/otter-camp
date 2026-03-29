@@ -3651,3 +3651,16 @@
     - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurnRetries(GenericReplyWithFreshMessage|JordanGenericReplyWithFreshMessage)$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is rebuild/restart and confirm the next PM continuation retries instead of settling on Jordan-style filler
+- 2026-03-29 16:12 MDT - Landed the first `add-0328g` validation-artifact slice by extending review-decision metadata instead of adding a new schema.
+  - changed [`internal/repo/flow_execution_metadata.go`](/Users/sam/dev/otter-camp/internal/repo/flow_execution_metadata.go):
+    - `FlowExecutionReviewDecision` now carries `validation_summary`, `acceptance_criteria`, and `evidence_refs`
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - `flow.review_decision` now persists `validation_summary` from `findings`/`reason`
+    - accepts explicit `acceptance_criteria` and `evidence_refs`
+    - falls back to task-description acceptance-criteria extraction when explicit criteria are absent
+  - changed [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go):
+    - widened the review-decision integration coverage so reject metadata now asserts persisted `validation_summary`, `acceptance_criteria`, and `evidence_refs`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/tools/native -run 'TestIntegrationFlowReviewDecision(ApproveWithEmptyReviewCommit|RejectCreatesCanonicalRejectionCommit)$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is commit/push, rebuild/restart, then let the next real review decision write this richer metadata live

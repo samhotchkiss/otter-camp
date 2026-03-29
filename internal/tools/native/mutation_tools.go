@@ -1615,6 +1615,123 @@ func readStringSlice(input map[string]any, key string) []string {
 	}
 }
 
+var nativeAcceptanceCriteriaListItemPattern = regexp.MustCompile(`^\d+[.)]\s+(.+)$`)
+
+func compactStringList(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func nativeTaskAcceptanceCriteria(taskRecord repo.ProjectTask) []string {
+	if taskRecord.Description == nil {
+		return nil
+	}
+	lines := strings.Split(*taskRecord.Description, "\n")
+	criteria := make([]string, 0, 6)
+	collecting := false
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if !collecting {
+			if text, ok := nativeAcceptanceCriteriaHeadingText(line); ok {
+				collecting = true
+				if text != "" {
+					criteria = append(criteria, text)
+				}
+			}
+			continue
+		}
+		if line == "" {
+			if len(criteria) > 0 {
+				break
+			}
+			continue
+		}
+		if nativeLooksLikeMarkdownSectionHeading(line) {
+			break
+		}
+		if item, ok := nativeAcceptanceCriteriaListItem(line); ok {
+			criteria = append(criteria, item)
+			continue
+		}
+		if len(criteria) == 0 {
+			criteria = append(criteria, line)
+			continue
+		}
+		last := len(criteria) - 1
+		criteria[last] = strings.TrimSpace(criteria[last] + " " + line)
+	}
+	if len(criteria) == 0 {
+		return nil
+	}
+	if len(criteria) > 5 {
+		criteria = criteria[:5]
+	}
+	return criteria
+}
+
+func nativeAcceptanceCriteriaHeadingText(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return "", false
+	}
+	heading := strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+	normalized := strings.ToLower(heading)
+	switch {
+	case normalized == "acceptance criteria":
+		return "", true
+	case strings.HasPrefix(normalized, "acceptance criteria:"):
+		return strings.TrimSpace(heading[len("Acceptance criteria:"):]), true
+	default:
+		return "", false
+	}
+}
+
+func nativeLooksLikeMarkdownSectionHeading(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "#") {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(lower, "## ") || strings.HasPrefix(lower, "### ")
+}
+
+func nativeAcceptanceCriteriaListItem(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return "", false
+	}
+	for _, prefix := range []string{"- ", "* "} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, prefix)), true
+		}
+	}
+	if match := nativeAcceptanceCriteriaListItemPattern.FindStringSubmatch(trimmed); len(match) == 2 {
+		return strings.TrimSpace(match[1]), true
+	}
+	return "", false
+}
+
 func boundedTaskTooLargeResponse(title string, description *string, err error) map[string]any {
 	response := map[string]any{"error": err.Error()}
 	return appendSuggestedDecomposition(response, title, description)
@@ -6680,8 +6797,15 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 	if err != nil {
 		return nil, err
 	}
+	acceptanceCriteria := readStringSlice(input, "acceptance_criteria")
+	if len(acceptanceCriteria) == 0 && e.tasks != nil && execution.TaskID != uuid.Nil {
+		if taskRecord, taskErr := e.tasks.GetByID(ctx, execution.TaskID); taskErr == nil {
+			acceptanceCriteria = nativeTaskAcceptanceCriteria(taskRecord)
+		}
+	}
 	reason, _ := readString(input, "reason")
 	findings, _ := readString(input, "findings")
+	evidenceRefs := readStringSlice(input, "evidence_refs")
 	if decision == "approve" {
 		dirty, err := e.reviewExecutionWorkspaceDirty(ctx, execution.TaskID)
 		if err != nil {
@@ -6710,7 +6834,7 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 				"message": "Approval must close with an empty runtime-owned commit. The review workspace still has file changes. Either discard them or reject the review with findings.",
 			}, nil
 		}
-		if updatedExecution, err := e.recordReviewDecisionMetadata(ctx, execution, decision, reason, findings); err != nil {
+		if updatedExecution, err := e.recordReviewDecisionMetadata(ctx, execution, decision, reason, findings, acceptanceCriteria, evidenceRefs); err != nil {
 			return nil, err
 		} else {
 			execution = updatedExecution
@@ -6738,7 +6862,7 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 	if rejectionSummary == "" {
 		rejectionSummary = strings.TrimSpace(findings)
 	}
-	if updatedExecution, err := e.recordReviewDecisionMetadata(ctx, execution, decision, reason, findings); err != nil {
+	if updatedExecution, err := e.recordReviewDecisionMetadata(ctx, execution, decision, reason, findings, acceptanceCriteria, evidenceRefs); err != nil {
 		return nil, err
 	} else {
 		execution = updatedExecution
@@ -7338,16 +7462,23 @@ func taskBranchString(value *string) string {
 	return *value
 }
 
-func (e *NativeToolExecutor) recordReviewDecisionMetadata(ctx context.Context, execution repo.FlowNodeExecution, decision, reason, findings string) (repo.FlowNodeExecution, error) {
+func (e *NativeToolExecutor) recordReviewDecisionMetadata(ctx context.Context, execution repo.FlowNodeExecution, decision, reason, findings string, acceptanceCriteria, evidenceRefs []string) (repo.FlowNodeExecution, error) {
 	if e.flowExecs == nil || execution.ID == uuid.Nil {
 		return execution, nil
 	}
 	now := time.Now().UTC()
+	validationSummary := strings.TrimSpace(findings)
+	if validationSummary == "" {
+		validationSummary = strings.TrimSpace(reason)
+	}
 	metadata := repo.FlowExecutionMetadataWithReviewDecision(execution.Metadata, &repo.FlowExecutionReviewDecision{
-		Decision:  strings.TrimSpace(decision),
-		Reason:    strings.TrimSpace(reason),
-		Findings:  strings.TrimSpace(findings),
-		DecidedAt: &now,
+		Decision:           strings.TrimSpace(decision),
+		Reason:             strings.TrimSpace(reason),
+		Findings:           strings.TrimSpace(findings),
+		ValidationSummary:  validationSummary,
+		AcceptanceCriteria: compactStringList(acceptanceCriteria),
+		EvidenceRefs:       compactStringList(evidenceRefs),
+		DecidedAt:          &now,
 	})
 	return e.flowExecs.UpdateMetadata(ctx, execution.ID, metadata)
 }

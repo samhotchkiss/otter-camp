@@ -11251,6 +11251,9 @@ func TestIntegrationFlowReviewDecisionApproveCreatesEmptyCanonicalCommit(t *test
 	if !ok || decision == nil || decision.Decision != "approve" {
 		t.Fatalf("review decision metadata = %#v, want approve", decision)
 	}
+	if decision.ValidationSummary != "" {
+		t.Fatalf("approve validation summary = %q, want empty when no reason/findings provided", decision.ValidationSummary)
+	}
 
 	messageBytes, err := exec.Command("git", "-C", workspaceRoot, "log", "-1", "--pretty=%B").CombinedOutput()
 	if err != nil {
@@ -11779,6 +11782,9 @@ func TestIntegrationFlowReviewDecisionRejectCreatesCanonicalRejectionCommit(t *t
 		"flow_node_execution_id": reviewExecution.ID.String(),
 		"decision":               "reject",
 		"reason":                 "missing tests",
+		"findings":               "tests failed for the API contract",
+		"acceptance_criteria":    []any{"POST /api/sambot/chat exists", "Accepts message and session_id", "Returns response and session_id"},
+		"evidence_refs":          []any{"sambot/api.js", "test-results/api-contract.txt"},
 	})
 	if err != nil {
 		t.Fatalf("flow.review_decision reject: %v", err)
@@ -11797,6 +11803,18 @@ func TestIntegrationFlowReviewDecisionRejectCreatesCanonicalRejectionCommit(t *t
 	decision, ok := repo.FlowExecutionReviewDecisionFromMetadata(updatedExecution.Metadata)
 	if !ok || decision == nil || decision.Decision != "reject" || decision.Reason != "missing tests" {
 		t.Fatalf("review decision metadata = %#v, want reject with reason", decision)
+	}
+	if decision.ValidationSummary != "tests failed for the API contract" {
+		t.Fatalf("reject validation summary = %q, want findings", decision.ValidationSummary)
+	}
+	if len(decision.AcceptanceCriteria) != 3 {
+		t.Fatalf("acceptance criteria = %#v, want 3 extracted criteria", decision.AcceptanceCriteria)
+	}
+	if decision.AcceptanceCriteria[0] != "POST /api/sambot/chat exists" {
+		t.Fatalf("first acceptance criterion = %q, want API endpoint criterion", decision.AcceptanceCriteria[0])
+	}
+	if len(decision.EvidenceRefs) != 2 || decision.EvidenceRefs[0] != "sambot/api.js" || decision.EvidenceRefs[1] != "test-results/api-contract.txt" {
+		t.Fatalf("evidence refs = %#v, want persisted evidence refs", decision.EvidenceRefs)
 	}
 
 	messageBytes, err := exec.Command("git", "-C", workspaceRoot, "log", "-1", "--pretty=%B").CombinedOutput()

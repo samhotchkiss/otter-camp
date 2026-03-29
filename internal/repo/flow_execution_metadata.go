@@ -37,10 +37,13 @@ type FlowExecutionRecoveryCheckpoint struct {
 }
 
 type FlowExecutionReviewDecision struct {
-	Decision  string     `json:"decision,omitempty"`
-	Reason    string     `json:"reason,omitempty"`
-	Findings  string     `json:"findings,omitempty"`
-	DecidedAt *time.Time `json:"decided_at,omitempty"`
+	Decision           string     `json:"decision,omitempty"`
+	Reason             string     `json:"reason,omitempty"`
+	Findings           string     `json:"findings,omitempty"`
+	ValidationSummary  string     `json:"validation_summary,omitempty"`
+	AcceptanceCriteria []string   `json:"acceptance_criteria,omitempty"`
+	EvidenceRefs       []string   `json:"evidence_refs,omitempty"`
+	DecidedAt          *time.Time `json:"decided_at,omitempty"`
 }
 
 type FlowExecutionRecoveryDecision struct {
