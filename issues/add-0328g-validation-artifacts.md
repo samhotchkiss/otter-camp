@@ -43,3 +43,9 @@ If validation only lives in transcript text, it is harder to:
 - 2026-03-29 16:12 MDT - Focused native integration coverage is green in `internal/tools/native/native_integration_test.go`:
   - `GOFLAGS='' go test -tags=integration ./internal/tools/native -run 'TestIntegrationFlowReviewDecision(ApproveWithEmptyReviewCommit|RejectCreatesCanonicalRejectionCommit)$' -count=1`
 - 2026-03-29 16:12 MDT - This is intentionally the first persistence slice, not the full artifact model. The next likely widening is to feed the stored validation summary/evidence back into recovery and PM continuation prompts so later lanes stop re-deriving proof from transcript text.
+- 2026-03-29 16:53 MDT - Picked up that next prompt-layer widening in `internal/turn/engine.go` without adding new storage:
+  - recovery resume state now reads the current flow execution's persisted `review_decision` metadata and surfaces structured `validation_summary`, `acceptance_criteria`, and `evidence_refs` in the `[Recovery resume state]` block
+  - task review prompts now also reuse the same structured validation summary/evidence when the current flow execution already has review-decision metadata, so later review turns can start from bounded stored proof instead of rediscovering the whole workspace
+- 2026-03-29 16:53 MDT - Focused turn coverage is green:
+  - `GOFLAGS='' go test ./internal/turn -run 'Test(StructuredReviewDecisionPromptContextDedupesAndFallsBack|BuildRecoveryResumeStateMessageIncludesStructuredReviewDecisionContext|DeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask|SessionTaskDeliverablePathIgnoresHistoricalAuxiliaryTestArtifactForBackendTaskReferencingFeatureSpec)$' -count=1`
+- 2026-03-29 16:53 MDT - This is still intentionally narrow: it reuses the existing flow-execution metadata path instead of introducing a new validation-artifact repository. The next likely widening is PM continuation reuse of the same stored validation context.

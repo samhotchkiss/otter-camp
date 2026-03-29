@@ -3720,3 +3720,17 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(DeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask|SessionTaskDeliverablePathIgnoresHistoricalAuxiliaryTestArtifactForBackendTaskReferencingFeatureSpec|SessionTaskDeliverablePathIgnoresConflictingParentFrontendDeliverableForBackendChild|SessionTaskDeliverablePathPrefersChildLeadingPathTitleOverParentDeliverable)$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is rebuild/restart and confirm the next task-174 retry starts from `sambot/api.js`
+- 2026-03-29 16:53 MDT - Picked up the second `add-0328g` prompt-reuse slice on top of the earlier `review_decision` metadata persistence.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `flowExecutionReviewDecisionForSession(...)` so prompt assembly can read the persisted `review_decision` metadata for the current `flow_node_execution_id`
+    - recovery resume state now includes structured `validation_summary`, `acceptance_criteria`, and `evidence_refs`
+    - task review prompts now surface the same stored validation summary/evidence when available, so later turns can start from bounded persisted proof instead of re-deriving it from transcript text
+    - added `structuredReviewDecisionPromptContext(...)` to normalize/dedupe the stored prompt context before injection
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestStructuredReviewDecisionPromptContextDedupesAndFallsBack`
+      - added `TestBuildRecoveryResumeStateMessageIncludesStructuredReviewDecisionContext`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(StructuredReviewDecisionPromptContextDedupesAndFallsBack|BuildRecoveryResumeStateMessageIncludesStructuredReviewDecisionContext|DeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask|SessionTaskDeliverablePathIgnoresHistoricalAuxiliaryTestArtifactForBackendTaskReferencingFeatureSpec)$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is to ship it and confirm the next recovery/review retry includes the persisted structured validation context live

@@ -19512,6 +19512,9 @@ type recoveryResumeState struct {
 	checkpointArtifactPaths     []string
 	reviewRepairNote            string
 	reviewRepairSourcePath      string
+	reviewDecisionSummary       string
+	reviewDecisionCriteria      []string
+	reviewDecisionEvidenceRefs  []string
 	inferredSummaryDraft        bool
 }
 
@@ -19691,6 +19694,9 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 		priorFailureReasons: append([]string(nil), checkpoint.PriorFailureReasons...),
 	}
 	if haveTaskRecord {
+		if decision, ok := e.flowExecutionReviewDecisionForSession(ctx, rt.session); ok {
+			state.reviewDecisionSummary, state.reviewDecisionCriteria, state.reviewDecisionEvidenceRefs = structuredReviewDecisionPromptContext(decision)
+		}
 		if projectTasks, err := e.tasks.ListByProject(ctx, taskRecord.ProjectID); err == nil {
 			state.contextNotes = validationTaskContextNotes(taskRecord, projectTasks)
 		}
@@ -20143,6 +20149,18 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 
 	if reason := strings.TrimSpace(state.failureReason); reason != "" {
 		lines = append(lines, "Checkpoint failure reason: "+reason)
+	}
+	if summary := strings.TrimSpace(state.reviewDecisionSummary); summary != "" {
+		lines = append(lines, "Prior structured review summary: "+summary)
+	}
+	if len(state.reviewDecisionCriteria) != 0 {
+		lines = append(lines, "Prior structured acceptance criteria:")
+		for _, criterion := range state.reviewDecisionCriteria {
+			lines = append(lines, "- "+criterion)
+		}
+	}
+	if len(state.reviewDecisionEvidenceRefs) != 0 {
+		lines = append(lines, "Prior structured evidence refs: "+joinQuotedPaths(state.reviewDecisionEvidenceRefs))
 	}
 	if len(state.priorFailureReasons) != 0 {
 		lines = append(lines, "Prior recovery failure history: "+strings.Join(state.priorFailureReasons, " | "))
@@ -28113,11 +28131,86 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 				lines = append(lines, "- Acceptance criterion: "+criterion)
 			}
 		}
+		if decision, ok := e.flowExecutionReviewDecisionForSession(ctx, session); ok {
+			if summary, _, evidenceRefs := structuredReviewDecisionPromptContext(decision); summary != "" || len(evidenceRefs) > 0 {
+				lines = append(lines, "Prior structured validation for this flow execution is already available. Reuse that bounded evidence before broad rediscovery.")
+				if summary != "" {
+					lines = append(lines, "Prior structured validation summary: "+summary)
+				}
+				if len(evidenceRefs) > 0 {
+					lines = append(lines, "Prior structured evidence refs: "+joinQuotedPaths(evidenceRefs))
+				}
+			}
+		}
 	}
 	if executionID := flowNodeExecutionIDFromSessionMetadata(session); executionID != nil && *executionID != uuid.Nil {
 		lines = append(lines, "Use flow_node_execution_id "+executionID.String()+" in flow.review_decision.")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (e *TurnEngine) flowExecutionReviewDecisionForSession(ctx context.Context, session *chat.ChatSession) (*repo.FlowExecutionReviewDecision, bool) {
+	if e == nil || e.pool == nil || session == nil {
+		return nil, false
+	}
+	executionID := flowNodeExecutionIDFromSessionMetadata(session)
+	if executionID == nil || *executionID == uuid.Nil {
+		return nil, false
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(e.pool).GetByID(ctx, *executionID)
+	if err != nil {
+		return nil, false
+	}
+	return repo.FlowExecutionReviewDecisionFromMetadata(execution.Metadata)
+}
+
+func structuredReviewDecisionPromptContext(decision *repo.FlowExecutionReviewDecision) (string, []string, []string) {
+	if decision == nil {
+		return "", nil, nil
+	}
+	summary := strings.TrimSpace(decision.ValidationSummary)
+	if summary == "" {
+		summary = strings.TrimSpace(decision.Findings)
+	}
+	if summary == "" {
+		summary = strings.TrimSpace(decision.Reason)
+	}
+	criteria := make([]string, 0, len(decision.AcceptanceCriteria))
+	seenCriteria := make(map[string]struct{}, len(decision.AcceptanceCriteria))
+	for _, raw := range decision.AcceptanceCriteria {
+		item := strings.TrimSpace(raw)
+		if item == "" {
+			continue
+		}
+		if _, ok := seenCriteria[item]; ok {
+			continue
+		}
+		seenCriteria[item] = struct{}{}
+		criteria = append(criteria, item)
+		if len(criteria) >= 5 {
+			break
+		}
+	}
+	evidenceRefs := make([]string, 0, len(decision.EvidenceRefs))
+	seenEvidence := make(map[string]struct{}, len(decision.EvidenceRefs))
+	for _, raw := range decision.EvidenceRefs {
+		item := normalizeWorkspaceRelativePath(raw)
+		if item == "" {
+			item = strings.TrimSpace(raw)
+		}
+		if item == "" {
+			continue
+		}
+		if _, ok := seenEvidence[item]; ok {
+			continue
+		}
+		seenEvidence[item] = struct{}{}
+		evidenceRefs = append(evidenceRefs, item)
+		if len(evidenceRefs) >= 5 {
+			break
+		}
+	}
+	return summary, criteria, evidenceRefs
 }
 
 func reviewPromptAcceptanceCriteria(taskRecord repo.ProjectTask) []string {

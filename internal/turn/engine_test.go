@@ -40361,6 +40361,49 @@ func TestSessionTaskDeliverablePathIgnoresHistoricalAuxiliaryTestArtifactForBack
 	}
 }
 
+func TestStructuredReviewDecisionPromptContextDedupesAndFallsBack(t *testing.T) {
+	t.Parallel()
+
+	summary, criteria, evidenceRefs := structuredReviewDecisionPromptContext(&repo.FlowExecutionReviewDecision{
+		Decision:           "reject",
+		Findings:           "Missing acceptance coverage for the API response payload.",
+		AcceptanceCriteria: []string{"POST /api/sambot/chat exists", "POST /api/sambot/chat exists", "Returns response and session_id"},
+		EvidenceRefs:       []string{"sambot/api.js", " sambot/api.js ", "test-results/api-contract.txt"},
+	})
+
+	if summary != "Missing acceptance coverage for the API response payload." {
+		t.Fatalf("summary = %q, want findings fallback", summary)
+	}
+	if len(criteria) != 2 {
+		t.Fatalf("criteria len = %d, want 2 after dedupe", len(criteria))
+	}
+	if len(evidenceRefs) != 2 {
+		t.Fatalf("evidenceRefs len = %d, want 2 after dedupe", len(evidenceRefs))
+	}
+}
+
+func TestBuildRecoveryResumeStateMessageIncludesStructuredReviewDecisionContext(t *testing.T) {
+	t.Parallel()
+
+	message := buildRecoveryResumeStateMessage(recoveryResumeState{
+		targetPath:                 "sambot/api.js",
+		failureReason:              "review rejected the previous deliverable",
+		reviewDecisionSummary:      "The backend route exists but still drops session_id from the response body.",
+		reviewDecisionCriteria:     []string{"Returns response and session_id"},
+		reviewDecisionEvidenceRefs: []string{"sambot/api.js", "test-results/api-contract.txt"},
+	})
+
+	if !strings.Contains(message, "Prior structured review summary: The backend route exists but still drops session_id from the response body.") {
+		t.Fatalf("message = %q, want structured review summary", message)
+	}
+	if !strings.Contains(message, "Prior structured acceptance criteria:") {
+		t.Fatalf("message = %q, want structured acceptance criteria section", message)
+	}
+	if !strings.Contains(message, "`sambot/api.js`") || !strings.Contains(message, "`test-results/api-contract.txt`") {
+		t.Fatalf("message = %q, want structured evidence refs", message)
+	}
+}
+
 func TestRecoveryTargetPathForSessionPrefersParentExplicitDeliverableOverWrongCheckpoint(t *testing.T) {
 	t.Parallel()
 
