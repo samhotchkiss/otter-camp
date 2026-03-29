@@ -1,5 +1,24 @@
 # 0327a Fix Log
 
+## 2026-03-29 15:34 MDT
+
+- `add-0328h` follow-on:
+  - `internal/jobqueue/worker.go` now suppresses active `task_recovery_resume` replays when the latest completed recovery turn already ended `validation_loop_blocked` with the inherited shared-deliverable / sibling-responsibility terminal stop family
+  - the same worker path now purges stale pending `agent_turn` dispatches for that exact terminal blocked-stop family instead of leaving them eligible to run again
+- Focused verification:
+  - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RequeueActiveExecutionSessionsWithoutTurns(SkipsSuccessfulRecoveryResumeWrite|SkipsSuccessfulRecoveryResumeEdit|DoesNotSkipValidationLoopBlockedRecoveryResumeWrite|SuppressesInheritedSharedDeliverableGuard)|PurgeStaleAgentTurnJobs(DoesNotPurgeValidationLoopBlockedRecoveryResumeWrite|PurgesTerminalBlockedRecoveryResume|PurgesSuccessfulRecoveryResumeEdit|PurgesSuccessfulRecoveryResumeWrite))$' -count=1`
+- Pre-deploy live proof:
+  - SamBot task `180`
+  - turns `39eb8c70-1620-4fb7-b0a8-caaa6784ab69` and `4a9cb469-a7c5-41e1-96e0-a6f0a0e9cb36`
+  - both ended with `[Task shared-deliverable guard blocked a decomposed child lane from replacing the inherited parent file with file.write ...]`
+  - the worker still rearmed another identical active recovery resume for the same execution afterward
+- Live proof:
+  - SamBot task `180`
+  - turn `a1cd06cc-db75-4f06-ba27-89b6049f27b9` hit the same shared-deliverable guard on the rebuilt binary
+  - latest `task_recovery_resume` message `f329165e-a31f-4019-a571-ae0ab5df5fbc` settled `failed`
+  - newest session `a7ca3361-c853-4fe4-adc1-c42c0b708898` is `closed`
+  - `agent_turn` jobs for that session are only `dead_letter` / `done`, with no pending replay behind the terminal guard
+
 ## 2026-03-29 15:09 MDT
 
 - `add-0328c` follow-on:

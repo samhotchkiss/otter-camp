@@ -14773,6 +14773,68 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsDoesNotSkipValidatio
 	}
 }
 
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSuppressesInheritedSharedDeliverableGuard(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	stopReason := "validation_loop_blocked"
+	ctx, session, execution, message := createRecoveryResumeExecutionFixture(t, pool, "requeue-active-execution-suppress-inherited-shared-guard", &stopReason)
+	appendSystemMessageToRecoveryTurn(t, pool, session.ID, message.ID, "[Task shared-deliverable guard blocked a decomposed child lane from replacing the inherited parent file with file.write. Ending the turn early so the next continuation uses file.edit on the bounded section instead of overwriting the whole shared document.]")
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("repaired sessions = %d, want 1 when active recovery resume is suppressed", requeued)
+	}
+
+	var messageStatus, errorMessage string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, message.ID).Scan(&messageStatus, &errorMessage); err != nil {
+		t.Fatalf("query recovery resume message: %v", err)
+	}
+	if messageStatus != "failed" {
+		t.Fatalf("message status = %q, want failed", messageStatus)
+	}
+	if errorMessage != taskRecoveryResumeSuppressedErrorMessage {
+		t.Fatalf("message error = %q, want %q", errorMessage, taskRecoveryResumeSuppressedErrorMessage)
+	}
+
+	var queuedJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status IN ('pending', 'claimed')
+		  AND (payload->>'session_id')::uuid = $1
+	`, session.ID).Scan(&queuedJobs); err != nil {
+		t.Fatalf("count queued jobs: %v", err)
+	}
+	if queuedJobs != 0 {
+		t.Fatalf("queued jobs = %d, want 0 after suppressing active recovery resume", queuedJobs)
+	}
+
+	var executionStatus string
+	if err := pool.QueryRow(ctx, `
+		SELECT status
+		FROM flow_node_execution
+		WHERE id = $1
+	`, execution.ID).Scan(&executionStatus); err != nil {
+		t.Fatalf("query execution status: %v", err)
+	}
+	if executionStatus != "active" {
+		t.Fatalf("execution status = %q, want active", executionStatus)
+	}
+}
+
 func TestJobWorkerRequeueTerminalRecoveryResumeSessionsWithoutLiveExecutionRequeuesLatestPendingResume(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -15129,6 +15191,56 @@ func TestJobWorkerPurgeStaleAgentTurnJobsDoesNotPurgeValidationLoopBlockedRecove
 	}
 	if lastError != "" {
 		t.Fatalf("last_error = %q, want empty when validation_loop_blocked recovery write stays eligible", lastError)
+	}
+}
+
+func TestJobWorkerPurgeStaleAgentTurnJobsPurgesTerminalBlockedRecoveryResume(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	stopReason := "validation_loop_blocked"
+	ctx, session, execution, message := createRecoveryResumeExecutionFixture(t, pool, "purge-terminal-blocked-recovery-resume", &stopReason)
+	appendSystemMessageToRecoveryTurn(t, pool, session.ID, message.ID, "[Task shared-deliverable guard blocked a decomposed child lane from replacing the inherited parent file with file.write. Ending the turn early so the next continuation uses file.edit on the bounded section instead of overwriting the whole shared document.]")
+
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, $2, 70, $3, $4)
+		RETURNING id
+	`,
+		fmt.Sprintf(`{"session_id":"%s","message_id":"%s","flow_node_execution_id":"%s","retry_count":1}`, session.ID, message.ID, execution.ID),
+		time.Now().UTC(),
+		fmt.Sprintf("agent_turn:%s:%s:1", session.ID, message.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, message.ID, 1),
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert stale recovery resume job: %v", err)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 1 {
+		t.Fatalf("purged jobs = %d, want 1 after terminal blocked recovery stop", purged)
+	}
+
+	var status, lastError string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(last_error, '')
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status, &lastError); err != nil {
+		t.Fatalf("query job after purge pass: %v", err)
+	}
+	if status != "dead_letter" {
+		t.Fatalf("job status = %q, want dead_letter", status)
+	}
+	if lastError != "purged stale recovery resume after terminal blocked stop" {
+		t.Fatalf("last_error = %q, want terminal blocked recovery purge reason", lastError)
 	}
 }
 

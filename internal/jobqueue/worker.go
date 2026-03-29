@@ -949,6 +949,62 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("purge stale agent_turn jobs (successful recovery resumes): %w", err)
 	}
 
+	// Condition 5c: a consumed recovery-resume message that already ended in a
+	// terminal blocked-stop family should not keep a stale pending dispatch alive.
+	ct5c, err := w.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    last_error = 'purged stale recovery resume after terminal blocked stop',
+		    updated_at = now()
+		WHERE jq.status = 'pending'
+		  AND jq.job_type = 'agent_turn'
+		  AND EXISTS (
+		    SELECT 1
+		    FROM chat_message cm
+		    WHERE cm.id = (jq.payload->>'message_id')::uuid
+		      AND COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn live
+		    WHERE live.session_id = (jq.payload->>'session_id')::uuid
+		      AND live.trigger_message_id = (jq.payload->>'message_id')::uuid
+		      AND live.retry_count = COALESCE((jq.payload->>'retry_count')::int, 0)
+		      AND live.status IN ('pending', 'in_progress')
+		  )
+		  AND EXISTS (
+		    WITH latest_turn AS (
+		      SELECT ct.id
+		      FROM chat_turn ct
+		      JOIN chat_message cm
+		        ON cm.id = ct.trigger_message_id
+		      WHERE ct.session_id = (jq.payload->>'session_id')::uuid
+		        AND ct.trigger_message_id = (jq.payload->>'message_id')::uuid
+		        AND ct.status = 'completed'
+		        AND COALESCE(ct.stop_reason, '') = 'validation_loop_blocked'
+		        AND cm.session_id = (jq.payload->>'session_id')::uuid
+		        AND cm.role = 'user'
+		        AND COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
+		      ORDER BY ct.turn_number DESC,
+		               ct.retry_count DESC,
+		               COALESCE(ct.completed_at, ct.created_at) DESC,
+		               ct.id DESC
+		      LIMIT 1
+		    )
+		    SELECT 1
+		    FROM latest_turn lt
+		    JOIN chat_message sm
+		      ON sm.turn_id = lt.id
+		     AND sm.role = 'system'
+		    WHERE sm.content LIKE $1
+		       OR sm.content LIKE $2
+		       OR sm.content LIKE $3
+		  )
+	`, recoverySharedDeliverableGuardPrefix+"%", taskSiblingResponsibilityGuardPrefix+"%", taskInheritedSharedDeliverableGuardPrefix+"%")
+	if err != nil {
+		return 0, fmt.Errorf("purge stale agent_turn jobs (terminal blocked recovery resumes): %w", err)
+	}
+
 	// Condition 6: if the exact session/message/retry attempt already has a
 	// live pending/in-progress turn recorded, keep exactly one backing
 	// dispatch job for that live attempt and dead-letter only true duplicates.
@@ -1140,7 +1196,7 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("purge stale agent_turn jobs (legacy task dispatches): %w", err)
 	}
 
-	total := ct1.RowsAffected() + ct2.RowsAffected() + ct3.RowsAffected() + ct4.RowsAffected() + ct5.RowsAffected() + ct5b.RowsAffected() + ct6.RowsAffected() + ct7.RowsAffected() + ct7b.RowsAffected() + ct8.RowsAffected()
+	total := ct1.RowsAffected() + ct2.RowsAffected() + ct3.RowsAffected() + ct4.RowsAffected() + ct5.RowsAffected() + ct5b.RowsAffected() + ct5c.RowsAffected() + ct6.RowsAffected() + ct7.RowsAffected() + ct7b.RowsAffected() + ct8.RowsAffected()
 	return total, nil
 }
 
@@ -1656,12 +1712,29 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		if err := rows.Scan(&sessionID, &executionID, &messageID, &messageSource, &messageConsumed, &retryCount, &latestTurnError, &latestTurnCompletedAt); err != nil {
 			return repaired, fmt.Errorf("scan active execution session without turn: %w", err)
 		}
+		if strings.EqualFold(strings.TrimSpace(messageSource), "task_recovery_resume") {
+			suppressed, suppressErr := w.suppressPendingTerminalRecoveryResumeMessage(ctx, sessionID, executionID, messageID)
+			if suppressErr != nil {
+				return repaired, fmt.Errorf("suppress active recovery resume for session %s: %w", sessionID, suppressErr)
+			}
+			if suppressed {
+				repaired++
+				continue
+			}
+		}
 		if messageConsumed && strings.EqualFold(strings.TrimSpace(messageSource), "task_recovery_resume") {
 			successfulRecoveryMutation, recoveryErr := w.recoveryResumeMessageCompletedWithDurableArtifactMutation(ctx, sessionID, messageID)
 			if recoveryErr != nil {
 				return repaired, fmt.Errorf("check completed recovery resume for session %s: %w", sessionID, recoveryErr)
 			}
 			if successfulRecoveryMutation {
+				continue
+			}
+			terminalStop, terminalErr := w.latestRecoveryResumeTurnShowsTerminalBlockedStop(ctx, sessionID, executionID)
+			if terminalErr != nil {
+				return repaired, fmt.Errorf("check terminal blocked recovery resume for session %s: %w", sessionID, terminalErr)
+			}
+			if terminalStop {
 				continue
 			}
 		}
