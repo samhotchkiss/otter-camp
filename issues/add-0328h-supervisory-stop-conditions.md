@@ -222,3 +222,17 @@ They need sharper stopping rules than ordinary execution lanes.
     - first fresh PM turn `942` on the new binary cancelled stale blocked child `OC-159`
     - the same turn hit the existing task-lane-ownership guard on `OC-171` from the project session
     - the old `flow.recovery_decision` attempt did not recur in that fresh post-deploy turn family
+- 2026-03-29 15:26 MDT - Picked up the next supervisory seam from the fresh PM retry family after task `171` blocked. The continuation prompt correctly named blocked child tasks `160/161/171`, but the real next parent `157` vanished from the snapshot entirely, so PM kept spending turns on blocked child rereads and broad `task.list` attempts.
+  - fresh live evidence:
+    - prompt `9329` on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` listed only blocked tasks
+    - draft replacement parent `157` existed in the DB but did not appear in `ReplacementDraftLine` / `FocusTaskLine`
+    - the model then looped into `task.list` again because the supervisory snapshot offered no bounded parent action
+  - local fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) and [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now count blocked child lanes whose blocked reason contains `inherits shared parent deliverable` as `replaceable_blocked_child_tasks`
+    - that keeps the parent draft visible as replacement work without turning the blocked child lanes themselves into PM resume targets
+    - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) and [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshot(TreatsInheritedSharedDeliverableBlockedChildrenAsReplacementWork|SkipsDraftParentWithBlockedChildren)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(TreatsInheritedSharedDeliverableBlockedChildrenAsReplacementWork|PrefersParentCloseoutOverReplaceableBlockedChildren)$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is rebuild/restart and confirm the next PM continuation finally surfaces task `157` as the bounded replacement focus

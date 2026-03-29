@@ -547,3 +547,14 @@
   - impact:
     - a task can consume multiple work/review cycles while producing zero durable progress
     - PM sees the task family as “active but churning” instead of getting an early bounded stop on the first bad write/read/recovery reuse
+- 2026-03-29 15:26 MDT - PM continuation snapshots can hide the real replacement parent when all of its child lanes are blocked on inherited shared-parent deliverables.
+  - fresh live evidence:
+    - PM continuation prompt `9329` on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` listed only blocked tasks `171/161/160/140`
+    - draft parent `157` existed in the project but was missing from both `ReplacementDraftLine` and `FocusTaskLine`
+    - the model then fell into repeated blocked `task.list` rediscovery because the snapshot gave it no actionable replacement parent to act on
+  - bug:
+    - `projectContinuationChildTaskActivity(...)` only counted blocked children as `replaceable_blocked_child_tasks` when their resume policy was already `terminal_keep_blocked` or `needs_replacement_work`
+    - inherited shared-parent deliverable stops (`recovery halted because the decomposed child lane inherits shared parent deliverable ...`) did not map to either bucket, so the parent draft was neither shown as active child work nor promoted to replacement work
+  - impact:
+    - PM can loop on blocked child tasks even though the correct next action is to create or queue fresh replacement work under the hidden draft parent
+    - a real draft successor can vanish from the continuation snapshot entirely, making the supervisory layer look idle or confused when the project still has bounded next work

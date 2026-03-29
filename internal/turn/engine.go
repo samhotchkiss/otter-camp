@@ -20800,14 +20800,22 @@ func projectContinuationChildTaskActivity(tasks []repo.ProjectTask, hintsByTask 
 		}
 		if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
 			activity.blockedChildTaskCount++
-			switch strings.TrimSpace(hintsByTask[task.ID].ResumePolicy) {
-			case "terminal_keep_blocked", "needs_replacement_work":
+			if projectContinuationBlockedChildCountsAsReplacementWork(hintsByTask[task.ID]) {
 				activity.replaceableBlockedChildTaskCount++
 			}
 		}
 		activityByParentID[parentID] = activity
 	}
 	return activityByParentID
+}
+
+func projectContinuationBlockedChildCountsAsReplacementWork(hints projectContinuationTaskHints) bool {
+	switch strings.TrimSpace(hints.ResumePolicy) {
+	case "terminal_keep_blocked", "needs_replacement_work":
+		return true
+	}
+	blockedReason := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(hints.BlockedReason)), " "))
+	return strings.Contains(blockedReason, "inherits shared parent deliverable")
 }
 
 func projectContinuationDraftTaskNeedsFreshReplacementChildWork(activity projectContinuationChildActivity) bool {

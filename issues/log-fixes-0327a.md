@@ -3514,3 +3514,19 @@
     - `GOFLAGS='' go test ./internal/turn -run 'TestRecoveryFileWriteDraftRejectReasonRejects(TaskBriefEchoPlaceholder|ReviewerSummaryPlaceholderInPlanningDeliverable|RuntimeAdvanceCompletionSummaryPlaceholder)$' -count=1`
   - deploy / proof status:
     - local and test-green at this checkpoint; fresh live proof is the next step after rebuild/restart
+- 2026-03-29 15:26 MDT - Restored replacement-parent visibility for blocked child lanes that inherit a shared parent deliverable.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `projectContinuationChildTaskActivity(...)` now counts blocked child lanes with `blocked_reason` containing `inherits shared parent deliverable` as `replaceable_blocked_child_tasks`
+    - that promotes the draft parent into `ReplacementDraftLine` / `FocusTaskLine` instead of silently dropping it from the PM continuation snapshot
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - mirrored the same child-activity classification for worker-authored PM continuation prompts so worker and turn-engine snapshots stay aligned
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestProjectExecutionContinuationSnapshotTreatsInheritedSharedDeliverableBlockedChildrenAsReplacementWork`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+      - added `TestJobWorkerProjectExecutionContinuationSnapshotTreatsInheritedSharedDeliverableBlockedChildrenAsReplacementWork`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshot(TreatsInheritedSharedDeliverableBlockedChildrenAsReplacementWork|SkipsDraftParentWithBlockedChildren)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(TreatsInheritedSharedDeliverableBlockedChildrenAsReplacementWork|PrefersParentCloseoutOverReplaceableBlockedChildren)$' -count=1`
+  - deploy / proof status:
+    - local and test-green at this checkpoint; fresh live proof is the next step after rebuild/restart

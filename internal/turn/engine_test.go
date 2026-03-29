@@ -22763,6 +22763,56 @@ func TestProjectExecutionContinuationSnapshotSkipsDraftParentWithBlockedChildren
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotTreatsInheritedSharedDeliverableBlockedChildrenAsReplacementWork(t *testing.T) {
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	childOneID := uuid.New()
+	childTwoID := uuid.New()
+	projectTasks := []repo.ProjectTask{
+		{
+			ID:         parentDraftID,
+			ProjectID:  projectID,
+			TaskNumber: 157,
+			Title:      "Write planning/sambot-architecture.md — SamBot technical architecture spec (replaces blocked OC-152)",
+			WorkStatus: "draft",
+			Description: stringPtr(
+				"Write the file planning/sambot-architecture.md containing the complete SamBot Chat Feature technical architecture specification.",
+			),
+		},
+		{
+			ID:         childOneID,
+			ProjectID:  projectID,
+			TaskNumber: 160,
+			Title:      "This replaces blocked OC-152. The feature spec already exists at planning/sambot-feature-spec.md — read it first for context.",
+			WorkStatus: "blocked",
+			Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+		},
+		{
+			ID:         childTwoID,
+			ProjectID:  projectID,
+			TaskNumber: 161,
+			Title:      "POST /api/sambot/chat — accepts message, session_id; returns response",
+			WorkStatus: "blocked",
+			Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+		},
+	}
+	taskHintsByTask := buildProjectContinuationTaskHints(projectTasks, map[uuid.UUID]string{
+		childOneID: "recovery halted because the decomposed child lane inherits shared parent deliverable planning/sambot-architecture.md; resume only with bounded file.edit updates on the current shared file or by moving integration back to the parent task",
+		childTwoID: "recovery halted because the decomposed child lane inherits shared parent deliverable planning/sambot-architecture.md; resume only with bounded file.edit updates on the current shared file or by moving integration back to the parent task",
+	})
+
+	snapshot, _ := buildProjectExecutionContinuationSnapshot(projectTasks, taskHintsByTask, nil)
+	if !strings.Contains(snapshot.ReplacementDraftLine, "task 157 (Write planning/sambot-architecture.md — SamBot technical architecture spec (replaces blocked OC-152))") {
+		t.Fatalf("ReplacementDraftLine = %q, want inherited-shared-deliverable parent promoted to replacement work", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "replaceable_blocked_child_tasks=2") {
+		t.Fatalf("ReplacementDraftLine = %q, want inherited shared-deliverable child count", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "task 157 (Write planning/sambot-architecture.md — SamBot technical architecture spec (replaces blocked OC-152))") {
+		t.Fatalf("FocusTaskLine = %q, want inherited-shared-deliverable parent as replacement focus", snapshot.FocusTaskLine)
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotIgnoresCancelledChildrenAsExistingChildWork(t *testing.T) {
 	projectID := uuid.New()
 	parentDraftID := uuid.New()

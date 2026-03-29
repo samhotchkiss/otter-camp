@@ -20537,6 +20537,139 @@ func TestJobWorkerProjectExecutionContinuationSnapshotPromotesBlockedChildParent
 	}
 }
 
+func TestJobWorkerProjectExecutionContinuationSnapshotTreatsInheritedSharedDeliverableBlockedChildrenAsReplacementWork(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "project-continuation-snapshot-inherited-shared-deliverable",
+		DisplayName: "Project Continuation Snapshot Inherited Shared Deliverable",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "inherited-shared-deliverable-project",
+		DisplayName:    "Inherited Shared Deliverable Project",
+		Description:    "Project for inherited shared-deliverable PM snapshot coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "inherited-shared-deliverable-template",
+		DisplayName:    "Inherited Shared Deliverable Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	eventRepo := repo.NewProjectTaskEventRepo(pool)
+
+	parentDescription := "Write the file planning/sambot-architecture.md containing the complete SamBot Chat Feature technical architecture specification."
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     157,
+		Title:          "Write planning/sambot-architecture.md — SamBot technical architecture spec (replaces blocked OC-152)",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	for _, fixture := range []struct {
+		number int
+		title  string
+	}{
+		{160, "This replaces blocked OC-152. The feature spec already exists at planning/sambot-feature-spec.md — read it first for context."},
+		{161, "POST /api/sambot/chat — accepts message, session_id; returns response"},
+	} {
+		childTask, createErr := taskRepo.Create(ctx, repo.ProjectTask{
+			OrganizationID: org.ID,
+			ProjectID:      project.ID,
+			TaskNumber:     fixture.number,
+			Title:          fixture.title,
+			WorkStatus:     "blocked",
+			BlocksScope:    "task",
+			FlowTemplateID: &template.ID,
+			AssignedAgentID: func() *uuid.UUID {
+				id := agent.ID
+				return &id
+			}(),
+			CreatedByType: "system",
+			CreatedByID:   &agent.ID,
+			Metadata:      childMetadata,
+		})
+		if createErr != nil {
+			t.Fatalf("create child task %d: %v", fixture.number, createErr)
+		}
+		if _, recordErr := eventRepo.Record(ctx, repo.ProjectTaskEvent{
+			TaskID:    childTask.ID,
+			ProjectID: project.ID,
+			EventType: "flow.rejected",
+			ActorType: "system",
+			Payload:   json.RawMessage(`{"blocked_reason":"recovery halted because the decomposed child lane inherits shared parent deliverable planning/sambot-architecture.md; resume only with bounded file.edit updates on the current shared file or by moving integration back to the parent task"}`),
+		}); recordErr != nil {
+			t.Fatalf("record blocked reason for child task %d: %v", fixture.number, recordErr)
+		}
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "Write planning/sambot-architecture.md — SamBot technical architecture spec (replaces blocked OC-152)") {
+		t.Fatalf("ReplacementDraftLine = %q, want inherited-shared-deliverable parent promoted to replacement work", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "replaceable_blocked_child_tasks=2") {
+		t.Fatalf("ReplacementDraftLine = %q, want inherited shared-deliverable child count", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "Write planning/sambot-architecture.md — SamBot technical architecture spec (replaces blocked OC-152)") {
+		t.Fatalf("FocusTaskLine = %q, want inherited-shared-deliverable parent as replacement focus", snapshot.FocusTaskLine)
+	}
+}
+
 func TestJobWorkerProjectExecutionContinuationSnapshotPrefersParentCloseoutOverReplaceableBlockedChildren(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
