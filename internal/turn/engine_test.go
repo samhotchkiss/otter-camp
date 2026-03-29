@@ -32459,6 +32459,95 @@ func TestShouldBlockTaskRecoveryReadScopeTool(t *testing.T) {
 	}
 }
 
+func TestShouldBlockTaskRecoveryPostSourceFetchDiscoveryTool(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		recoveryTurn:             true,
+		recoveryTargetPath:       "content/posts/stop-preparing-your-kids-for-jobs.md",
+		recoverySourceFetchReady: true,
+		initialMessageText: "Continue the active task recovery now.\n" +
+			"No recovered draft body is available above. Do not reuse placeholder target-file text, checkpoint summaries, or task-brief scaffolds as the file body.\n" +
+			"For this content/posts target, any existing stub file is not authoritative. Fetch or source the real post body from same-task inputs before writing.",
+	}
+
+	cases := []struct {
+		name      string
+		toolName  string
+		arguments map[string]any
+		wantBlock bool
+	}{
+		{
+			name:      "blocks local reread after source fetch",
+			toolName:  "file.read",
+			arguments: map[string]any{"path": "content/technonymous-index.json"},
+			wantBlock: true,
+		},
+		{
+			name:      "blocks read only cli discovery after source fetch",
+			toolName:  "cli.execute",
+			arguments: map[string]any{"command": "ls content/posts/"},
+			wantBlock: true,
+		},
+		{
+			name:      "blocks repeated source fetch after source fetch",
+			toolName:  "web_fetch",
+			arguments: map[string]any{"url": "https://technonymous.org/stop-preparing-your-kids-for-jobs"},
+			wantBlock: true,
+		},
+		{
+			name:      "allows concrete file write after source fetch",
+			toolName:  "file.write",
+			arguments: map[string]any{"path": "content/posts/stop-preparing-your-kids-for-jobs.md", "content": "# post"},
+			wantBlock: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, reason := shouldBlockTaskRecoveryPostSourceFetchDiscoveryTool(rt, tc.toolName, tc.arguments)
+			if got != tc.wantBlock {
+				t.Fatalf("shouldBlockTaskRecoveryPostSourceFetchDiscoveryTool(%q, %#v) = %v, want %v", tc.toolName, tc.arguments, got, tc.wantBlock)
+			}
+			if tc.wantBlock && !strings.Contains(reason, "already fetched source content in this turn") {
+				t.Fatalf("reason = %q, want source-fetch guidance", reason)
+			}
+		})
+	}
+}
+
+func TestClassifyToolValidationFailureRecognizesRecoverySourceFetchWriteRequired(t *testing.T) {
+	t.Parallel()
+
+	call := ToolCall{
+		ID:   "call-1",
+		Name: "file.read",
+		Arguments: map[string]any{
+			"path": "content/technonymous-index.json",
+		},
+	}
+	result := ToolResult{
+		ToolCallID: "call-1",
+		Name:       "file.read",
+		Error:      "task recovery for `content/posts/stop-preparing-your-kids-for-jobs.md` already fetched source content in this turn. Do not inspect `content/technonymous-index.json` now; write `content/posts/stop-preparing-your-kids-for-jobs.md` from the fetched source content or report one concrete blocker sentence.",
+	}
+
+	failure, ok := classifyToolValidationFailure(call, result)
+	if !ok {
+		t.Fatal("classifyToolValidationFailure returned ok=false")
+	}
+	if failure.FailureCode != "recovery_source_fetch_write_required" {
+		t.Fatalf("failure code = %q, want recovery_source_fetch_write_required", failure.FailureCode)
+	}
+	if failure.DeliverablePath != "content/technonymous-index.json" {
+		t.Fatalf("deliverable path = %q, want content/technonymous-index.json", failure.DeliverablePath)
+	}
+}
+
 func TestLooksLikeRecoveryFileDraftRejectsLongConversationalLeadIn(t *testing.T) {
 	t.Parallel()
 

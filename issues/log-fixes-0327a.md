@@ -2440,3 +2440,30 @@
   - deploy / proof status:
     - pre-fix live evidence is task `81` session `2175bbde-f279-4b13-9c23-e418626de537` on `3527`, where assistant message `244` emitted `cli_execute(command="ls content/posts/")` and tool result `245` returned the directory listing under a prompt that already named checkpoint-owned context
     - direct post-`3528` proof target is the next task-81 retry: the same `ls content/posts/` / `content/technonymous-index.json` discovery path should now return a recovery-scope guard instead of reopening verification churn
+- 2026-03-29 02:18:40 MDT - Finished locally, pending commit/restart: force content-migration recovery to write after successful source fetch.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `recoverySourceFetchReady` to turn runtime state for recovery turns
+    - added `recordTaskRecoverySourceFetchResult(...)` so successful exact-source `web.fetch` / `web_fetch` calls for `content/posts/...` targets mark the recovery turn as source-ready
+    - added `shouldBlockTaskRecoveryPostSourceFetchDiscoveryTool(...)` plus `buildTaskRecoveryPostSourceFetchDiscoveryGuardError(...)` so once source content is already fetched, read-only rediscovery tools (`file.read`, `file.list`, `file.search`, `web.fetch`, `browser.navigate`, and read-only `cli.execute`) are blocked with explicit write-or-blocker guidance
+    - `classifyDeterministicToolResultFailure(...)` now maps that guard to `recovery_source_fetch_write_required`
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): added `TestShouldBlockTaskRecoveryPostSourceFetchDiscoveryTool`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): added `TestClassifyToolValidationFailureRecognizesRecoverySourceFetchWriteRequired`
+  - verified with:
+    - `go test ./internal/turn -run 'Test(ShouldBlockTaskRecovery(ReadScopeTool|PostSourceFetchDiscoveryTool)|ClassifyToolValidationFailureRecognizesRecoverySourceFetchWriteRequired)$' -count=1`
+  - deploy / proof status:
+    - pre-fix live evidence is task `81` session `2175bbde-f279-4b13-9c23-e418626de537`, where assistant `372` fetched the exact post body with `web_fetch https://technonymous.org/stop-preparing-your-kids-for-jobs`, tool result `373` succeeded, and assistant `374` still followed with an empty `file.write` / continued discovery instead of a bounded write step
+    - the slice is running locally on the unchanged `3528` binary right now; direct production proof for the new guard needs the next natural task-81 retry after this commit/restart
+- 2026-03-29 02:18:40 MDT - Finished locally, pending commit/restart: refresh rediscovery-blocked PM continuations across repo-version changes.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - added `sameProjectContinuationRepoVersion(...)`
+    - `ensureProjectContinuationMessageDecision(...)` now stores `repo_version` on worker-authored `project_execution_continuation` messages and compares repo version on both consumed and pending continuation candidates before suppressing them as identical
+    - when the binary repo version changes, same-completed-task rediscovery-blocked continuations now refresh instead of being suppressed behind the older message fingerprint
+  - changed tests:
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go): added `TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsRefreshesRediscoveryBlockedContinuationAcrossRepoVersion`
+    - kept [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go) `TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation` green to preserve same-version suppression
+  - verified with:
+    - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRequeueActiveProjectSessionsWithoutTurns(RefreshesRediscoveryBlockedContinuationAcrossRepoVersion|SuppressesRepeatedFailedRediscoveryBlockedContinuation)$' -count=1`
+  - deploy / proof status:
+    - live diagnosis is Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, which remained idle after restart even though worker logged `requeued active project sessions missing continuation on startup count=1`; the latest failed continuation already carried `repo_version=3528`, so same-version suppression was still correctly active
+    - the direct production proof target is the first restart after this slice is committed on the next repo version, where the same session should get a fresh pending `project_execution_continuation` and `agent_turn` dispatch instead of staying idle behind the old `3528` continuation

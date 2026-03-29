@@ -89,6 +89,15 @@ var preferredDeliverableRootPatternsForWorker = []*regexp.Regexp{
 
 var workspacePathInBackticksPatternForWorker = regexp.MustCompile("`([^`]+)`")
 
+func sameProjectContinuationRepoVersion(current, candidate string) bool {
+	current = strings.TrimSpace(current)
+	candidate = strings.TrimSpace(candidate)
+	if current == "" || candidate == "" {
+		return true
+	}
+	return current == candidate
+}
+
 func staleTriggeredTurnThreshold(scopeType string) time.Duration {
 	if strings.EqualFold(strings.TrimSpace(scopeType), "project_task") {
 		return defaultStaleThreshold
@@ -2215,6 +2224,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 	activeBootstrap := strings.EqualFold(strings.TrimSpace(bootstrapStatus), "active")
 
 	source := "project_execution_continuation"
+	currentRepoVersion := strings.TrimSpace(versionpkg.RepoVersion)
 	content := strings.Join([]string{
 		"Continue the active project execution now.",
 		"Bootstrap is complete and draft project work remains.",
@@ -2277,16 +2287,19 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			expectedSnapshotFingerprint = projectExecutionContinuationFingerprintForWorker(completedTaskID, remainingDrafts, snapshot)
 			metadataMap["completed_task_id"] = expectedCompletedTaskID
 			metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
-			metadataMap["repo_version"] = strings.TrimSpace(versionpkg.RepoVersion)
+			metadataMap["repo_version"] = currentRepoVersion
 			content = buildProjectExecutionContinuationPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot)
 		}
 	}
 
 	var latestConsumedMatchingMessageID uuid.UUID
+	var latestConsumedMatchingRepoVersion string
 	var latestConsumedSameCompletedTaskMessageID uuid.UUID
+	var latestConsumedSameCompletedTaskRepoVersion string
 	if source == "project_execution_continuation" && expectedCompletedTaskID != "" {
 		err := w.pool.QueryRow(ctx, `
-			SELECT cm.id
+			SELECT cm.id,
+			       COALESCE(cm.metadata->>'repo_version', '')
 			FROM chat_message cm
 			WHERE cm.session_id = $1
 			  AND cm.role = 'user'
@@ -2300,14 +2313,15 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			  )
 			ORDER BY cm.created_at DESC, cm.id DESC
 			LIMIT 1
-		`, sessionID, source, expectedCompletedTaskID).Scan(&latestConsumedSameCompletedTaskMessageID)
+		`, sessionID, source, expectedCompletedTaskID).Scan(&latestConsumedSameCompletedTaskMessageID, &latestConsumedSameCompletedTaskRepoVersion)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, false, fmt.Errorf("query latest consumed same-completed-task project continuation message: %w", err)
 		}
 	}
 	if source == "project_execution_continuation" && expectedCompletedTaskID != "" && expectedSnapshotFingerprint != "" {
 		err := w.pool.QueryRow(ctx, `
-			SELECT cm.id
+			SELECT cm.id,
+			       COALESCE(cm.metadata->>'repo_version', '')
 			FROM chat_message cm
 			WHERE cm.session_id = $1
 			  AND cm.role = 'user'
@@ -2322,7 +2336,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			  )
 			ORDER BY cm.created_at DESC, cm.id DESC
 			LIMIT 1
-		`, sessionID, source, expectedCompletedTaskID, projectContinuationSnapshotFingerprintKey, expectedSnapshotFingerprint).Scan(&latestConsumedMatchingMessageID)
+		`, sessionID, source, expectedCompletedTaskID, projectContinuationSnapshotFingerprintKey, expectedSnapshotFingerprint).Scan(&latestConsumedMatchingMessageID, &latestConsumedMatchingRepoVersion)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, false, fmt.Errorf("query latest consumed matching project continuation message: %w", err)
 		}
@@ -2332,12 +2346,14 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		existingMessageID               uuid.UUID
 		existingCompletedTaskIDText     string
 		existingSnapshotFingerprintText string
+		existingRepoVersionText         string
 		existingMessageConsumed         bool
 	)
 	err := w.pool.QueryRow(ctx, `
 		SELECT id,
 		       COALESCE(metadata->>'completed_task_id', ''),
 		       COALESCE(metadata->>$3, ''),
+		       COALESCE(metadata->>'repo_version', ''),
 		       EXISTS (
 		         SELECT 1
 		         FROM chat_turn ct
@@ -2355,6 +2371,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		&existingMessageID,
 		&existingCompletedTaskIDText,
 		&existingSnapshotFingerprintText,
+		&existingRepoVersionText,
 		&existingMessageConsumed,
 	)
 	if err == nil {
@@ -2365,7 +2382,8 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		existingSnapshotFingerprintText = strings.TrimSpace(existingSnapshotFingerprintText)
 		sameCompletedTask := expectedCompletedTaskID != "" && expectedCompletedTaskID == existingCompletedTaskIDText
 		sameSnapshot := expectedSnapshotFingerprint != "" && expectedSnapshotFingerprint == existingSnapshotFingerprintText
-		if !existingMessageConsumed && sameCompletedTask && (expectedSnapshotFingerprint == "" || sameSnapshot) {
+		sameRepoVersion := sameProjectContinuationRepoVersion(currentRepoVersion, existingRepoVersionText)
+		if !existingMessageConsumed && sameCompletedTask && (expectedSnapshotFingerprint == "" || sameSnapshot) && sameRepoVersion {
 			if latestConsumedMatchingMessageID != uuid.Nil {
 				suppressed, suppressErr := w.suppressRepeatedIdenticalPendingProjectContinuation(ctx, latestConsumedMatchingMessageID, existingMessageID, allowSuccessfulHandoffSuppression)
 				if suppressErr != nil {
@@ -2377,7 +2395,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			}
 			return existingMessageID, false, nil
 		}
-		if existingMessageConsumed && sameCompletedTask && sameSnapshot {
+		if existingMessageConsumed && sameCompletedTask && sameSnapshot && sameRepoVersion {
 			suppressed, suppressErr := w.suppressRepeatedIdenticalProjectContinuation(ctx, existingMessageID, allowSuccessfulHandoffSuppression)
 			if suppressErr != nil {
 				return uuid.Nil, false, fmt.Errorf("check repeated project continuation suppression: %w", suppressErr)
@@ -2422,6 +2440,13 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		}
 	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, false, fmt.Errorf("query existing project continuation message: %w", err)
+	}
+
+	if !sameProjectContinuationRepoVersion(currentRepoVersion, latestConsumedMatchingRepoVersion) {
+		latestConsumedMatchingMessageID = uuid.Nil
+	}
+	if !sameProjectContinuationRepoVersion(currentRepoVersion, latestConsumedSameCompletedTaskRepoVersion) {
+		latestConsumedSameCompletedTaskMessageID = uuid.Nil
 	}
 
 	if source == "project_execution_continuation" && latestConsumedMatchingMessageID != uuid.Nil {

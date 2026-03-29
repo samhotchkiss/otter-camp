@@ -592,6 +592,7 @@ type turnRuntime struct {
 	recoveryBlockReason                     string
 	recoveryQueuedTurn                      bool
 	recoveryTargetPath                      string
+	recoverySourceFetchReady                bool
 	placeholderTargetSeen                   bool
 	reviewPreferredDeliverablePath          string
 	reviewPreferredDeliverableRootListed    bool
@@ -13907,6 +13908,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := shouldBlockTaskRecoveryPostSourceFetchDiscoveryTool(rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if blocked, reason := shouldBlockTaskReviewDirtyWorkspaceRetryTool(rt, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -23433,6 +23442,7 @@ func (e *TurnEngine) appendToolResults(ctx context.Context, rt *turnRuntime, res
 		if strings.EqualFold(strings.TrimSpace(result.Name), "file.read") && strings.EqualFold(strings.TrimSpace(anyString(result.Output["error"])), "placeholder_deliverable") {
 			rt.placeholderTargetSeen = true
 		}
+		recordTaskRecoverySourceFetchResult(rt, result)
 		recordTaskReviewPreferredDeliverableReadResult(rt, result)
 		raw, _ := json.Marshal(payload)
 		toolCallID := result.ToolCallID
@@ -25042,6 +25052,20 @@ func classifyDeterministicToolResultFailure(toolName, normalizedErrorCode, rawEr
 			reason = "task_execution_broad_context_blocked"
 		}
 		return "task_execution_broad_context_blocked", reason, true
+	}
+	if containsAny(normalizedReason,
+		"already fetched source content in this turn",
+		"write the target deliverable from the fetched source content",
+		"write `content/posts/",
+	) {
+		reason := strings.TrimSpace(rawReason)
+		if reason == "" {
+			reason = strings.TrimSpace(rawErrorCode)
+		}
+		if reason == "" {
+			reason = "recovery_source_fetch_write_required"
+		}
+		return "recovery_source_fetch_write_required", reason, true
 	}
 	return "", "", false
 }
@@ -28320,6 +28344,64 @@ func shouldBlockTaskRecoveryReadScopeTool(rt *turnRuntime, toolName string, argu
 	return true
 }
 
+func recoveryTargetNeedsSourceFetchWriteFocus(rt *turnRuntime) bool {
+	if rt == nil || !rt.recoveryTurn {
+		return false
+	}
+	target := strings.ToLower(normalizeWorkspaceRelativePath(strings.TrimSpace(rt.recoveryTargetPath)))
+	if !strings.HasPrefix(target, "content/posts/") {
+		return false
+	}
+	initial := strings.ToLower(strings.TrimSpace(rt.initialMessageText))
+	return containsAny(initial,
+		"fetch or source the real post body",
+		"multi-output content/posts batch",
+		"checkpoint-owned output root/artifact context",
+		"technonymous-index.json",
+		"use web_fetch",
+		"via web_fetch",
+		"retrieve the page content",
+		"save the article text",
+	)
+}
+
+func recordTaskRecoverySourceFetchResult(rt *turnRuntime, result ToolResult) {
+	if rt == nil || !recoveryTargetNeedsSourceFetchWriteFocus(rt) {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(result.Name)) {
+	case "web.fetch", "web_fetch":
+	default:
+		return
+	}
+	if strings.TrimSpace(result.Error) != "" || strings.TrimSpace(anyString(result.Output["error"])) != "" {
+		return
+	}
+	if strings.TrimSpace(anyString(result.Output["content"])) == "" {
+		return
+	}
+	rt.recoverySourceFetchReady = true
+}
+
+func shouldBlockTaskRecoveryPostSourceFetchDiscoveryTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if rt == nil || rt.session == nil || !rt.recoverySourceFetchReady || !recoveryTargetNeedsSourceFetchWriteFocus(rt) {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, ""
+	}
+	normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
+	switch normalizedToolName {
+	case "file.read", "file.list", "file.search", "web.fetch", "web_fetch", "browser.navigate", "browser_navigate":
+		return true, buildTaskRecoveryPostSourceFetchDiscoveryGuardError(rt, normalizedToolName, arguments)
+	case "cli.execute":
+		if isReadOnlyDiscoveryCLIExecuteCall(arguments) {
+			return true, buildTaskRecoveryPostSourceFetchDiscoveryGuardError(rt, normalizedToolName, arguments)
+		}
+	}
+	return false, ""
+}
+
 func recoveryReadScopePathFromToolArguments(toolName string, arguments map[string]any) string {
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "file.read":
@@ -30109,6 +30191,30 @@ func buildTaskRecoveryReadScopeToolGuardError(rt *turnRuntime, toolName string, 
 		return fmt.Sprintf("task recovery for `%s` should not use read-only cli.execute discovery against `%s`. Continue from `%s`, the matching recovery artifact path, or same-task planning artifacts only.", target, path, target)
 	}
 	return fmt.Sprintf("task recovery for `%s` should not read unrelated workspace artifact `%s`. Continue from `%s`, the matching recovery artifact path, or same-task planning artifacts only.", target, path, target)
+}
+
+func buildTaskRecoveryPostSourceFetchDiscoveryGuardError(rt *turnRuntime, toolName string, arguments map[string]any) string {
+	target := ""
+	if rt != nil {
+		target = strings.TrimSpace(rt.recoveryTargetPath)
+	}
+	if target == "" {
+		target = "the target deliverable"
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "file.read", "file.list", "file.search":
+		path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+		if path == "" {
+			return fmt.Sprintf("task recovery for `%s` already fetched source content in this turn. Do not reopen read-only workspace discovery now; write `%s` from the fetched source content or report one concrete blocker sentence.", target, target)
+		}
+		return fmt.Sprintf("task recovery for `%s` already fetched source content in this turn. Do not inspect `%s` now; write `%s` from the fetched source content or report one concrete blocker sentence.", target, path, target)
+	case "cli.execute":
+		return fmt.Sprintf("task recovery for `%s` already fetched source content in this turn. Do not use read-only cli.execute discovery now; write `%s` from the fetched source content or report one concrete blocker sentence.", target, target)
+	case "web.fetch", "web_fetch", "browser.navigate", "browser_navigate":
+		return fmt.Sprintf("task recovery for `%s` already fetched source content in this turn. Do not reopen external discovery with %s now; write `%s` from the fetched source content or report one concrete blocker sentence.", target, toolName, target)
+	default:
+		return fmt.Sprintf("task recovery for `%s` already fetched source content in this turn. Do not reopen discovery now; write `%s` from the fetched source content or report one concrete blocker sentence.", target, target)
+	}
 }
 
 func buildTaskStatusMessageToolGuardError() string {
