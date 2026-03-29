@@ -601,3 +601,13 @@
   - impact:
     - recovery turns that are already narrowed to “write the file body directly or report one blocker sentence” can still waste more tools before settling
     - the lane gets another chance to drift into `cli.execute` instead of terminating immediately
+- 2026-03-29 15:58 MDT - Fresh explicit-output work turns can still spend their very first tool batch on self-rediscovery even when the prompt already names the exact task, deliverable, and execution.
+  - fresh live evidence:
+    - task `175` reopened on session `3e6d9e9b-f5b4-436a-94cd-312e7640babe`
+    - the prompt already named explicit output `sambot/widget.html` and `Flow node execution: 75acfd42-e287-4d26-9f55-3cdd89a3eb97`
+    - the first assistant batch still emitted `task.get` for task `175` and `flow.get_execution` for that same execution before touching the deliverable
+  - bug:
+    - the broad-context guard intentionally left `task.get` / `flow.get_execution` available, but there was no narrower first-batch rule for redundant self-rediscovery on explicit-output tasks
+  - impact:
+    - fresh work turns burn their first tools reloading context the prompt already provided
+    - explicit deliverable work gets delayed before the lane ever reads or writes the owned artifact

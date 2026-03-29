@@ -9996,6 +9996,65 @@ func TestShouldBlockTaskExecutionBroadContextTool(t *testing.T) {
 	}
 }
 
+func TestShouldBlockTaskExecutionCurrentTaskRediscoveryTool(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+	description := "sambot/widget.html (or sambot/index.html) — the frontend chat widget"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				Title:          "sambot/widget.html (or sambot/index.html) — the frontend chat widget",
+				Description:    &description,
+				WorkStatus:     "in_progress",
+				Metadata:       taskplan.ApplyMetadata(nil, taskplan.Analyze("sambot/widget.html (or sambot/index.html) — the frontend chat widget", &description)),
+			},
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: "Start work on task: sambot/widget.html (or sambot/index.html) — the frontend chat widget\n\n" +
+			"Task description: sambot/widget.html (or sambot/index.html) — the frontend chat widget\n\n" +
+			"Flow node execution: " + executionID.String(),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockTaskExecutionCurrentTaskRediscoveryTool(context.Background(), rt, "task.get", map[string]any{
+		"task_id": taskID.String(),
+	})
+	if !blocked {
+		t.Fatal("expected task.get for current explicit-output task to be blocked")
+	}
+	if !strings.Contains(reason, "explicit deliverable `sambot/widget.html`") {
+		t.Fatalf("reason = %q, want explicit deliverable guidance", reason)
+	}
+
+	blocked, reason = fixture.engine.shouldBlockTaskExecutionCurrentTaskRediscoveryTool(context.Background(), rt, "flow.get_execution", map[string]any{
+		"execution_id": executionID.String(),
+	})
+	if !blocked {
+		t.Fatal("expected flow.get_execution for current explicit-output task execution to be blocked")
+	}
+	if !strings.Contains(reason, "active flow node execution") {
+		t.Fatalf("reason = %q, want flow execution guidance", reason)
+	}
+
+	blocked, _ = fixture.engine.shouldBlockTaskExecutionCurrentTaskRediscoveryTool(context.Background(), rt, "task.get", map[string]any{
+		"task_id": uuid.New().String(),
+	})
+	if blocked {
+		t.Fatal("did not expect unrelated task.get to be blocked by current-task rediscovery guard")
+	}
+}
+
 func TestShouldBlockTaskExecutionBroadContextToolAllowsOrchestrationValidationContextReads(t *testing.T) {
 	t.Parallel()
 

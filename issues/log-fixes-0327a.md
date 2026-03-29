@@ -3600,3 +3600,14 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterBlockedTaskRecoveryDirectWriteOnly(Batch)?|DispatchToolsStopsAfter(PureBlockedDirectWriteOnlyRecoveryBatch|BlockedDirectWriteOnlyRecoveryBatchWithReadOnlyTail))$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is rebuild/restart and verify task `173` no longer drifts from blocked rereads into `flow.get_execution` / `cli.execute`
+- 2026-03-29 15:58 MDT - Added a first-batch self-rediscovery guard for explicit-output task execution turns.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `promptFlowNodeExecutionID(...)` and `shouldBlockTaskExecutionCurrentTaskRediscoveryTool(...)`
+    - the first tool batch of an async explicit-output task turn now blocks `task.get` of the current task id and `flow.get_execution` of the exact execution already named in the prompt
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestShouldBlockTaskExecutionCurrentTaskRediscoveryTool`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockTaskExecution(BroadContextTool|CurrentTaskRediscoveryTool)|ShouldStopAfterBlockedTaskRecoveryDirectWriteOnly(Batch)?|DispatchToolsStopsAfter(PureBlockedDirectWriteOnlyRecoveryBatch|BlockedDirectWriteOnlyRecoveryBatchWithReadOnlyTail))$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is rebuild/restart and verify the next task `175` work turn starts with `sambot/widget.html` directly

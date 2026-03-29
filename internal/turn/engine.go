@@ -182,6 +182,7 @@ var projectContinuationBatchRangePattern = regexp.MustCompile(`(?i)\bposts?\s+(\
 var projectContinuationCompletedBatchRangePattern = regexp.MustCompile(`\bThat completed task covers batch_range=([0-9]{1,3}-[0-9]{1,3})\b`)
 var projectContinuationWorkspacePathPattern = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\b`)
 var projectContinuationParentCompletionTaskLabelPattern = regexp.MustCompile(`(?i)\bOC-\d+\b`)
+var promptFlowNodeExecutionPattern = regexp.MustCompile(`(?i)flow node execution:\s*([0-9a-fA-F-]{36})`)
 var workspacePathInBackticksPattern = regexp.MustCompile("`([^`]+)`")
 var acceptanceCriteriaListItemPattern = regexp.MustCompile(`^\d+[.)]\s+(.+)$`)
 var explicitDeliverablePathPatterns = []*regexp.Regexp{
@@ -15094,6 +15095,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := e.shouldBlockTaskExecutionCurrentTaskRediscoveryTool(ctx, rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if e.shouldBlockTaskExecutionBroadContextTool(ctx, rt, name) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -29846,6 +29855,79 @@ func shouldBlockTaskExecutionBroadContextTool(rt *turnRuntime, toolName string) 
 	default:
 		return false
 	}
+}
+
+func promptFlowNodeExecutionID(text string) uuid.UUID {
+	matches := promptFlowNodeExecutionPattern.FindStringSubmatch(strings.TrimSpace(text))
+	if len(matches) < 2 {
+		return uuid.Nil
+	}
+	parsed, err := uuid.Parse(strings.TrimSpace(matches[1]))
+	if err != nil {
+		return uuid.Nil
+	}
+	return parsed
+}
+
+func buildTaskExecutionCurrentTaskRediscoveryGuardError(toolName, targetPath string) string {
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	if targetPath == "" {
+		targetPath = "the current deliverable"
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "task.get", "task_get":
+		return fmt.Sprintf("the task execution prompt already includes the current task title, description, and explicit deliverable `%s`. Do not reread task.get for this same task as the first step; inspect or write `%s` directly instead.", targetPath, targetPath)
+	case "flow.get_execution", "flow_get_execution":
+		return fmt.Sprintf("the task execution prompt already includes the active flow node execution and explicit deliverable `%s`. Do not probe flow.get_execution for that same execution as the first step; inspect or write `%s` directly instead.", targetPath, targetPath)
+	default:
+		return fmt.Sprintf("the task execution prompt already includes the current task context and explicit deliverable `%s`. Start with `%s` directly instead of self-rediscovery.", targetPath, targetPath)
+	}
+}
+
+func (e *TurnEngine) shouldBlockTaskExecutionCurrentTaskRediscoveryTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil || rt.toolCallsUsed != 0 || rt.recoveryTurn {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, ""
+	}
+	currentTaskID := resolveTaskID(rt.session)
+	if currentTaskID == nil || *currentTaskID == uuid.Nil {
+		return false, ""
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *currentTaskID)
+	if err != nil {
+		return false, ""
+	}
+	if taskLooksLikeOrchestrationOnlyParent(taskRecord) ||
+		strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		return false, ""
+	}
+	targetPath := normalizeWorkspaceRelativePath(e.taskExplicitDeliverablePath(ctx, taskRecord))
+	if targetPath == "" {
+		return false, ""
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "task.get", "task_get":
+		requestedTaskID, ok := parseUUIDAny(arguments["task_id"])
+		if !ok || requestedTaskID != *currentTaskID {
+			return false, ""
+		}
+		return true, buildTaskExecutionCurrentTaskRediscoveryGuardError(toolName, targetPath)
+	case "flow.get_execution", "flow_get_execution":
+		requestedExecutionID, ok := parseUUIDAny(arguments["execution_id"])
+		if !ok || requestedExecutionID == uuid.Nil {
+			requestedExecutionID, ok = parseUUIDAny(arguments["flow_node_execution_id"])
+			if !ok || requestedExecutionID == uuid.Nil {
+				return false, ""
+			}
+		}
+		if promptExecutionID := promptFlowNodeExecutionID(rt.initialMessageText); promptExecutionID != uuid.Nil && requestedExecutionID == promptExecutionID {
+			return true, buildTaskExecutionCurrentTaskRediscoveryGuardError(toolName, targetPath)
+		}
+	}
+	return false, ""
 }
 
 func (e *TurnEngine) shouldBlockOrchestrationParentReviewTaskListTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {

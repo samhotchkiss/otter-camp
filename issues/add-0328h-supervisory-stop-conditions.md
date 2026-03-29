@@ -242,3 +242,11 @@ They need sharper stopping rules than ordinary execution lanes.
   - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterBlockedTaskRecoveryDirectWriteOnly(Batch)?|DispatchToolsStopsAfter(PureBlockedDirectWriteOnlyRecoveryBatch|BlockedDirectWriteOnlyRecoveryBatchWithReadOnlyTail))$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is rebuild/restart and see whether active task `173` stops immediately on the next mixed read-only recovery batch instead of wandering into `flow.get_execution` / `cli.execute`
+- 2026-03-29 15:58 MDT - The next supervisory seam is the first batch on fresh explicit-output work turns. Task `175` reopened on a clean work session with prompt text that already named the task, the exact deliverable (`sambot/widget.html`), and the active flow-node execution id, yet its first assistant batch still spent tools on `task.get` and `flow.get_execution` before touching the deliverable.
+- 2026-03-29 15:58 MDT - I added a narrow first-batch guard in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) for that shape:
+  - on async task execution turns with an explicit deliverable path, `task.get` of the current task and `flow.get_execution` of the exact execution already named in the prompt are now blocked on the first tool batch
+  - orchestration/review flows are left alone, and later-batch flow/task reads are still allowed if the turn has already made concrete progress
+- 2026-03-29 15:58 MDT - Verified with focused turn coverage:
+  - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockTaskExecution(BroadContextTool|CurrentTaskRediscoveryTool)|ShouldStopAfterBlockedTaskRecoveryDirectWriteOnly(Batch)?|DispatchToolsStopsAfter(PureBlockedDirectWriteOnlyRecoveryBatch|BlockedDirectWriteOnlyRecoveryBatchWithReadOnlyTail))$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is rebuild/restart and confirm the next task `175` work turn starts with `sambot/widget.html` directly instead of self-rediscovery
