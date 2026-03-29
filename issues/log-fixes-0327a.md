@@ -1,5 +1,12 @@
 # 0327a Fix Log
 
+- 2026-03-29 12:55:14 MDT - `pending` `Stop PM turns after repeated single-call rediscovery blocks`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so async project continuations now stop after the second cumulative blocked rediscovery tool result in the same PM turn, not just when two blocked rereads happen inside a single batch
+  - added a shared blocked-rediscovery classifier plus turn-message counting, then used it to end turns that keep serially replaying blocked `file.read` / `task.list` / similar rediscovery attempts across successive model retries
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) for the helper and the exact live shape: first blocked broad `task.list` keeps the turn alive, second single blocked rediscovery call in the same turn ends it with the existing PM rediscovery stop message
+  - verified with `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterBlockedProjectContinuationRediscovery|BlockedProjectContinuationRediscoveryResultCount|DispatchToolsStopsAfterSecondSingleBlockedProjectContinuationRediscoveryInSameTurn|DispatchToolsStopsAfterPureBlockedProjectContinuationRediscoveryBatch|DispatchToolsTrimsPureBlockedProjectContinuationRediscoveryBatch)$' -count=1`
+  - pre-deploy live proof: Sam.blog PM turn `bd90604f-7b72-48d5-bef4-5f2977176245` spent one turn on blocked `file.read(planning/sambot-feature-spec.md)`, blocked `task.list(parent_task_id=140)`, and blocked broad `task.list(project_id=...)` instead of stopping after the second blocked rediscovery signal
+  - direct post-deploy proof is still pending the next fresh PM continuation on the rebuilt binary
 - 2026-03-29 05:09:00 MDT - `pending` `Preserve bounded-size PM retries across missing deliverables`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so the project-continuation missing-dependency retry path now detects when a bounded-size PM retry reads the exact deliverable path for the same broad draft parent and gets `not_found`
   - in that specific case the engine now preserves the bounded-size split/decompose prompt instead of routing through the generic “queue the smallest replacement task for this missing artifact” path, which was causing the PM lane to try queueing the same broad parent again

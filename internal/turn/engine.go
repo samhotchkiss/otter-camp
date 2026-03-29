@@ -15043,10 +15043,16 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskRecoveryDirectWriteOnlyTurnStopMessage(rt))
 			return true, nil
 		}
-		if len(toolCalls) == 0 && shouldStopAfterBlockedProjectContinuationRediscovery(rt, blockedCalls) {
-			rt.stopReason = stopReasonValidationBlocked
-			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Project continuation rediscovery guard blocked only broad rereads. Ending this turn early so the next continuation can act directly on the named tasks instead of repeating blocked PM discovery.]")
-			return true, nil
+		if len(toolCalls) == 0 {
+			stopRediscovery, stopErr := e.shouldStopAfterRepeatedBlockedProjectContinuationRediscovery(ctx, rt, blockedCalls)
+			if stopErr != nil {
+				return false, stopErr
+			}
+			if stopRediscovery {
+				rt.stopReason = stopReasonValidationBlocked
+				_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Project continuation rediscovery guard blocked only broad rereads. Ending this turn early so the next continuation can act directly on the named tasks instead of repeating blocked PM discovery.]")
+				return true, nil
+			}
 		}
 	}
 	if rt.toolCallsUsed >= toolBudget {
@@ -28720,6 +28726,17 @@ func shouldStopAfterBlockedTaskExecutionInheritedSharedWrite(rt *turnRuntime, re
 	return true
 }
 
+func isBlockedProjectContinuationRediscoveryResult(result ToolResult) bool {
+	errText := strings.ToLower(strings.TrimSpace(result.Error))
+	if strings.HasPrefix(errText, "project continuation already ") {
+		return true
+	}
+	if strings.HasPrefix(errText, "project continuation called flow.get_execution ") {
+		return true
+	}
+	return false
+}
+
 func shouldStopAfterBlockedProjectContinuationRediscovery(rt *turnRuntime, results []ToolResult) bool {
 	if rt == nil || rt.session == nil {
 		return false
@@ -28732,16 +28749,56 @@ func shouldStopAfterBlockedProjectContinuationRediscovery(rt *turnRuntime, resul
 		return false
 	}
 	for _, result := range results {
-		errText := strings.ToLower(strings.TrimSpace(result.Error))
-		if strings.HasPrefix(errText, "project continuation already ") {
-			continue
-		}
-		if strings.HasPrefix(errText, "project continuation called flow.get_execution ") {
+		if isBlockedProjectContinuationRediscoveryResult(result) {
 			continue
 		}
 		return false
 	}
 	return true
+}
+
+func blockedProjectContinuationRediscoveryResultCount(turnMessages []repo.ChatMessage) int {
+	count := 0
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		_, _, errText, ok := parseToolResultMessage(message.Content)
+		if !ok {
+			continue
+		}
+		if isBlockedProjectContinuationRediscoveryResult(ToolResult{Error: errText}) {
+			count++
+		}
+	}
+	return count
+}
+
+func (e *TurnEngine) shouldStopAfterRepeatedBlockedProjectContinuationRediscovery(ctx context.Context, rt *turnRuntime, results []ToolResult) (bool, error) {
+	if shouldStopAfterBlockedProjectContinuationRediscovery(rt, results) {
+		return true, nil
+	}
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") ||
+		len(results) == 0 {
+		return false, nil
+	}
+	for _, result := range results {
+		if !isBlockedProjectContinuationRediscoveryResult(result) {
+			return false, nil
+		}
+	}
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return false, err
+	}
+	if blockedProjectContinuationRediscoveryResultCount(messagesForTurn(messages, rt.turn.ID)) < 2 {
+		return false, nil
+	}
+	return true, nil
 }
 
 func trimBlockedProjectContinuationRediscoveryResults(rt *turnRuntime, results []ToolResult) []ToolResult {
