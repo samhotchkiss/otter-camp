@@ -17840,13 +17840,21 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 }
 
 func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
+	hasDurableDraft := strings.TrimSpace(state.targetDraft) != "" ||
+		strings.TrimSpace(state.artifactDraft) != "" ||
+		strings.TrimSpace(state.summaryDraft) != ""
+
 	lines := []string{
 		"Continue the active task recovery now.",
-		"Your next response must take direct recovery action from the durable drafts above.",
 		"Do not answer with generic chat, acknowledgements, or a question to the user.",
 		"Do not say that you are ready, ask what to do next, or summarize the state instead of acting.",
 		"Your entire next assistant message must be either the concrete file body for the target deliverable or one concrete blocker sentence.",
 		"Do not ask 'What do you need?', 'What would you like me to do?', or any equivalent recovery question.",
+	}
+	if hasDurableDraft {
+		lines = append(lines, "Your next response must take direct recovery action from the durable drafts above.")
+	} else {
+		lines = append(lines, "Your next response must take direct recovery action from the validated checkpoint context above.")
 	}
 	if target := strings.TrimSpace(state.targetPath); target != "" {
 		lines = append(lines, "Treat "+target+" as the target file for this recovery turn.")
@@ -17856,7 +17864,13 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 		"If you need grounding, limit reads to the target file, the named recovery artifact for this task, and same-task planning artifacts only.",
 		"Ignore unrelated OC-* artifacts even if a broad search returns them; they are not valid recovery context for this task.",
 	)
-	if strings.TrimSpace(state.targetDraft) != "" || strings.TrimSpace(state.artifactDraft) != "" || strings.TrimSpace(state.summaryDraft) != "" {
+	if !hasDurableDraft {
+		lines = append(lines, "No recovered draft body is available above. Do not reuse placeholder target-file text, checkpoint summaries, or task-brief scaffolds as the file body.")
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(state.targetPath)), "content/posts/") {
+			lines = append(lines, "For this content/posts target, any existing stub file is not authoritative. Fetch or source the real post body from same-task inputs before writing.")
+		}
+	}
+	if hasDurableDraft {
 		lines = append(lines,
 			"A substantive durable draft is already available above. Reuse that draft body directly instead of introducing yourself, summarizing the task, or describing what you are about to do.",
 			"If you need to repair the target file, your next assistant message should begin with the first line of the best available draft rather than a sentence about context or readiness.",
@@ -17885,9 +17899,17 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 	switch strings.TrimSpace(state.blockerClass) {
 	case taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint,
 		taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint:
-		lines = append(lines, "Use the recovered target draft, artifact draft, or continuation summary draft above to write the real file body now. Do not emit placeholder text about intending to write the file.")
+		if hasDurableDraft {
+			lines = append(lines, "Use the recovered target draft, artifact draft, or continuation summary draft above to write the real file body now. Do not emit placeholder text about intending to write the file.")
+		} else {
+			lines = append(lines, "No recovered draft body is available above. Use only same-task source material and the validated checkpoint context to produce the real file body now; do not restate the plan or reuse placeholder text.")
+		}
 	default:
-		lines = append(lines, "Act directly from the durable drafts above. Prefer the concrete repair tool call or file output needed to resume execution.")
+		if hasDurableDraft {
+			lines = append(lines, "Act directly from the durable drafts above. Prefer the concrete repair tool call or file output needed to resume execution.")
+		} else {
+			lines = append(lines, "Act directly from the validated checkpoint context above. Prefer the concrete source read or file output needed to resume execution.")
+		}
 	}
 	lines = append(lines, "If a draft is already substantive enough, use it directly instead of re-reading workspace artifacts first.")
 	lines = append(lines, "If you truly cannot continue, report the concrete blocker in one sentence instead of switching into generic conversation.")

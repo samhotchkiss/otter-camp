@@ -1722,3 +1722,22 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(RecoveryFileWriteDraftRejectReasonRejectsContentMigration(TaskScaffoldWithoutBody|CheckpointSummaryWithoutBody|RecoveryNoteWithoutBody)|LoadRecoveryResumeStateRejectsContentMigration(CheckpointSummaryDraft|RecoveryNoteDraft|TaskScaffoldSummaryDraft)|InferredTaskDeliverableDraftSkipsSourceBackedContentPostsTask|MaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsSourceBackedContentPostsTask)$' -count=1`
   - proof target after deploy:
     - the next task-70 recovery-resume state should have no `Continuation summary draft` block containing the source-backed scaffold, and the following retry should stop writing fake article-body markdown into `content/posts/...`
+- 2026-03-28 18:23:08 MDT - Finished: make no-draft recovery prompts stop pretending a reusable draft exists.
+  - live diagnosis:
+    - post-`3464` task-70 recovery-resume messages already omitted the bad continuation scaffold and the lane fetched/wrote a real `5444`-byte article body
+    - but the paired user prompt still said `take direct recovery action from the durable drafts above`, even though there were no remaining drafts, and the assistant slid back into `Let me check...` plus `282`-byte placeholder rewrites
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `buildRecoveryResumeActionPrompt(...)` now branches on whether any target/artifact/summary draft actually exists
+    - no-draft recovery prompts now say to act from the validated checkpoint context above instead of the durable drafts above
+    - no-draft prompts now explicitly forbid reusing placeholder target-file text, checkpoint summaries, or task-brief scaffolds as the file body
+    - for `content/posts/...` targets, no-draft prompts now say stub files are not authoritative and the model must fetch or source the real post body before writing
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestBuildRecoveryResumeActionPromptNoDraftContentPostTargetRequiresSourceBody`
+    - strengthened `TestBuildRecoveryResumeActionPromptHardensIntentOnlyCheckpointWithoutDraft`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3465`
+  - verified with:
+    - `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildRecoveryResumeActionPrompt(HardensIntentOnlyCheckpointWithoutDraft|UsesAvailableDraftDirectly|UsesContinuationSummaryDraftDirectly|NoDraftContentPostTargetRequiresSourceBody)|RecoveryFileWriteDraftRejectReasonRejectsContentMigration(TaskScaffoldWithoutBody|CheckpointSummaryWithoutBody|RecoveryNoteWithoutBody)|LoadRecoveryResumeStateRejectsContentMigration(CheckpointSummaryDraft|RecoveryNoteDraft|TaskScaffoldSummaryDraft)|InferredTaskDeliverableDraftSkipsSourceBackedContentPostsTask|MaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsSourceBackedContentPostsTask)$' -count=1`
+  - proof target after deploy:
+    - the next task-70 no-draft recovery retry should stop saying there are durable drafts above and should move directly into source-backed fetch/write behavior instead of placeholder rewrites

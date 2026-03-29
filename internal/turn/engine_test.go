@@ -20690,11 +20690,43 @@ func TestBuildRecoveryResumeActionPromptHardensIntentOnlyCheckpointWithoutDraft(
 	if !strings.Contains(prompt, "No substantive durable draft is available.") {
 		t.Fatalf("prompt = %q, want no-draft guidance", prompt)
 	}
+	if strings.Contains(prompt, "A substantive durable draft is already available above.") {
+		t.Fatalf("prompt = %q, did not want draft-available guidance", prompt)
+	}
+	if !strings.Contains(prompt, "validated checkpoint context above") {
+		t.Fatalf("prompt = %q, want no-draft checkpoint-context guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not reuse placeholder target-file text, checkpoint summaries, or task-brief scaffolds as the file body.") {
+		t.Fatalf("prompt = %q, want anti-placeholder guidance", prompt)
+	}
 	if !strings.Contains(prompt, "If the target is Markdown, start immediately with a heading and real section content.") {
 		t.Fatalf("prompt = %q, want markdown-start guidance", prompt)
 	}
 	if !strings.Contains(prompt, "already hardened after repeated non-substantive drafts") {
 		t.Fatalf("prompt = %q, want repeated-draft hardening guidance", prompt)
+	}
+}
+
+func TestBuildRecoveryResumeActionPromptNoDraftContentPostTargetRequiresSourceBody(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildRecoveryResumeActionPrompt(recoveryResumeState{
+		targetPath:    "content/posts/i-cant-picture-my-kids.md",
+		blockerClass:  taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint,
+		failureReason: "repeated read-only recovery discovery for content/technonymous-index.json within the same recovery turn; write the deliverable or resume from the durable artifact instead of rereading context again",
+	})
+
+	if strings.Contains(prompt, "A substantive durable draft is already available above.") {
+		t.Fatalf("prompt = %q, did not want draft-available guidance", prompt)
+	}
+	if !strings.Contains(prompt, "validated checkpoint context above") {
+		t.Fatalf("prompt = %q, want checkpoint-context guidance", prompt)
+	}
+	if !strings.Contains(prompt, "For this content/posts target, any existing stub file is not authoritative. Fetch or source the real post body from same-task inputs before writing.") {
+		t.Fatalf("prompt = %q, want content-post source-body guidance", prompt)
+	}
+	if !strings.Contains(prompt, "No recovered draft body is available above.") {
+		t.Fatalf("prompt = %q, want no-recovered-draft guidance", prompt)
 	}
 }
 
