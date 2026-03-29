@@ -65,6 +65,7 @@ const (
 	projectContinuationRediscoveryGuardPrefix  = "[Project continuation rediscovery guard blocked only broad rereads."
 	projectContinuationActiveReplacementPrefix = "[Project continuation found that prerequisite artifact `"
 	projectContinuationActiveReplacementMarker = "already has active replacement work in the tree:"
+	projectContinuationTaskLaneBoundaryPrefix  = "[Project continuation found that task-owned active lane work must stay inside its project_task session."
 	projectContinuationBoundedSizePrefix       = "[Project continuation found that the remaining draft work still violates the bounded size policy."
 	projectContinuationDraftBoundedSizePrefix  = "[Project continuation found remaining draft "
 	projectContinuationBoundedSizeMarker       = "violates the bounded size policy:"
@@ -2433,6 +2434,7 @@ func (w *Worker) suppressRepeatedIdenticalPendingProjectContinuation(ctx context
 			    OR sm.content LIKE $3
 			    OR sm.content LIKE $4
 			    OR (sm.content LIKE $5 AND sm.content LIKE $6)
+			    OR sm.content LIKE $7
 			  )
 		)
 	`, referenceMessageID,
@@ -2441,6 +2443,7 @@ func (w *Worker) suppressRepeatedIdenticalPendingProjectContinuation(ctx context
 		projectContinuationBoundedSizePrefix+"%",
 		projectContinuationDraftBoundedSizePrefix+"%",
 		"%"+projectContinuationBoundedSizeMarker+"%",
+		projectContinuationTaskLaneBoundaryPrefix+"%",
 	).Scan(&blocked); err != nil {
 		return false, err
 	}

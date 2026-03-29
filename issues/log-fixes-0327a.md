@@ -1,5 +1,20 @@
 # 0327a Fix Log
 
+- 2026-03-28 21:23:50 MDT - `pending` `Suppress repeated PM continuations after task-lane boundary stops`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) so worker-side repeated project-continuation suppression now treats the PM/task-lane ownership stop family (`[Project continuation found that task-owned active lane work must stay inside its project_task session ...]`) as equivalent to the existing rediscovery / active-replacement / bounded-size validation stops
+  - this closes the fresh live reopen path where Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` emitted boundary-stop system messages at `5451` / `5454` on the new engine binary, but worker recovery still created continuation message `5455` immediately afterward from the same continuation family
+  - added focused integration coverage in [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go) for both `ensureProjectContinuationMessageDecision(...)` and `RequeueActiveProjectSessionsWithoutTurns(...)`
+  - bumped [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt) to `3494`
+  - live status: pending focused worker tests, rebuild/restart, and the next Sam.blog PM wakeup on the fresh binary
+
+- 2026-03-28 21:18:17 MDT - `pending` `Treat PM task-lane ownership stops as terminal for that continuation`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so project-execution blocked-mutation handling now emits a concrete PM/task-lane ownership stop message for `task_lane_owned_by_project_task_session` and related flow-owned task-status boundary errors
+  - `handleCompletedProjectExecutionContinuationTurn(...)` now treats that stop family as fully handled when there is no other runnable draft task, which prevents later project auto-continuation logic from rearming another PM turn just to hit the same active-lane boundary again
+  - extended repeated-continuation suppression in the same file so identical post-stop continuations rooted on that new system message family are recognized as already consumed validation stops
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) for both the stop-message content and the “handled without retry” completion path
+  - bumped [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt) to `3493`
+  - live status: pending focused test, rebuild/restart, and the next Sam.blog PM wakeup on the fresh binary
+
 - 2026-03-28 20:13:29 MDT - `pending` `Preserve target-aware guidance for non-substantive file writes`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `classifyToolValidationFailure(...)` now carries the concrete target path from native `file.write` / `file.edit` validation failures even when the tool result only exposed `output.path` or the original call arguments
   - `non_substantive_content` failures now keep the native tool message and strengthen it with `Target deliverable: ...` plus `Do not switch to cli.execute or shell wrappers`, which makes the repeated-turn validation stop much more specific for the next continuation

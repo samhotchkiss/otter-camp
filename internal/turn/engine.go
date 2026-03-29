@@ -191,6 +191,7 @@ var reviewPromptDescriptionOutputPathPattern = regexp.MustCompile(`(?i)\b(conten
 const reviewRepeatedFileReadNotFoundTurnStopSubstring = "[Repeated identical file.read validation failure in this turn (2/3): not_found."
 const projectContinuationRediscoveryGuardPrefix = "[Project continuation rediscovery guard blocked only broad rereads."
 const projectContinuationMissingDependencyGuardPrefix = "[Project continuation found that prerequisite artifact `"
+const projectContinuationTaskLaneBoundaryGuardPrefix = "[Project continuation found that task-owned active lane work must stay inside its project_task session."
 
 var errTurnBranchAttachedToMainWorktree = errors.New("branch attached to main worktree")
 
@@ -4821,6 +4822,9 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 		return false, err
 	}
 	if !ok {
+		if projectContinuationTurnEndedWithTaskLaneBoundaryStop(messages, completedTurn.ID) {
+			return true, nil
+		}
 		if projectContinuationTurnEndedWithRediscoveryOnlyStop(messages, completedTurn.ID) {
 			if retried, retryErr := e.retryProjectExecutionContinuationForReplacementChildWork(ctx, session, completedTurn, latestUser); retryErr != nil {
 				return false, retryErr
@@ -7437,6 +7441,10 @@ func projectContinuationTurnEndedWithRediscoveryOnlyStop(messages []repo.ChatMes
 	return turnHasSystemMessageContaining(messages, turnID, projectContinuationRediscoveryGuardPrefix)
 }
 
+func projectContinuationTurnEndedWithTaskLaneBoundaryStop(messages []repo.ChatMessage, turnID uuid.UUID) bool {
+	return turnHasSystemMessageContaining(messages, turnID, projectContinuationTaskLaneBoundaryGuardPrefix)
+}
+
 func projectContinuationMissingDependencyStopPath(messages []repo.ChatMessage, turnID uuid.UUID) (string, bool) {
 	if turnID == uuid.Nil {
 		return "", false
@@ -7509,6 +7517,9 @@ func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx cont
 			}
 			trimmed := strings.TrimSpace(turnMessage.Content)
 			if strings.HasPrefix(trimmed, projectContinuationRediscoveryGuardPrefix) {
+				return true, nil
+			}
+			if strings.HasPrefix(trimmed, projectContinuationTaskLaneBoundaryGuardPrefix) {
 				return true, nil
 			}
 			if _, ok := projectContinuationMissingDependencyStopPathFromSystemMessage(trimmed); ok {
@@ -26493,6 +26504,19 @@ func projectExecutionBlockedMutationStopMessage(results []ToolResult) string {
 				return "[Project continuation found that executable task work already owns the deliverable write. Queue or advance the specific task instead of writing the file from the project session.]"
 			}
 			return fmt.Sprintf("[Project continuation write blocked: %s]", detail)
+		}
+		if containsAny(errText,
+			"task_lane_owned_by_project_task_session",
+			"flow_owned_status_blocked",
+			"flow_owned_done_blocked",
+			"flow_owned_review_status_blocked",
+			"review_action_required",
+		) {
+			detail := strings.TrimSpace(anyString(result.Output["message"]))
+			if detail != "" {
+				return fmt.Sprintf("%s %s Leave that task lane alone from the project session. Do not retry task.update on it from the PM lane; let the bound task lane continue or let its own review lane issue flow.review_decision if that review lane becomes active.]", projectContinuationTaskLaneBoundaryGuardPrefix, detail)
+			}
+			return projectContinuationTaskLaneBoundaryGuardPrefix + " Leave that task lane alone from the project session. Do not retry task.update on it from the PM lane; let the bound task lane continue or let its own review lane issue flow.review_decision if that review lane becomes active.]"
 		}
 	}
 	return ""

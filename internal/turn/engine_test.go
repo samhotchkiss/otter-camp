@@ -12649,6 +12649,92 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesReplacementChildW
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnHandlesTaskLaneBoundaryStopWithoutRetry(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	turnID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 44,
+				Title:      "Close the recovered Technonymous index workstream",
+				WorkStatus: "done",
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	latestUser := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "The workstream looks complete, so I will close the active task from the project lane.",
+		SequenceNumber: 11,
+	}
+	toolResult := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "tool_result",
+		Status:         "final",
+		Content:        `{"tool_name":"task.update","output":{"message":"This task already has an active execution lane. Do not mutate it from the project session."},"error":"task_lane_owned_by_project_task_session"}`,
+		SequenceNumber: 12,
+	}
+	systemMessage := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "system",
+		Status:         "final",
+		Content:        projectContinuationTaskLaneBoundaryGuardPrefix + " This task already has an active execution lane. Leave that task lane alone from the project session. Do not retry task.update on it from the PM lane; let the bound task lane continue or let its own review lane issue flow.review_decision if that review lane becomes active.]",
+		SequenceNumber: 13,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant, *toolResult, *systemMessage}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected task-lane boundary stop to be treated as handled")
+	}
+	if len(fixture.enqueuer.jobs) != 0 {
+		t.Fatalf("enqueued jobs = %d, want 0 for task-lane boundary stop", len(fixture.enqueuer.jobs))
+	}
+}
+
 func TestProjectExecutionContinuationPromptFingerprintIncludesRepoVersion(t *testing.T) {
 	originalVersion := versionpkg.RepoVersion
 	defer func() {
@@ -13614,6 +13700,25 @@ func TestProjectExecutionBlockedMutationStopMessageOnTaskExecutionRequired(t *te
 	}
 	if !strings.Contains(message, "Queue or advance the specific task") {
 		t.Fatalf("message = %q, want queue-or-advance guidance", message)
+	}
+}
+
+func TestProjectExecutionBlockedMutationStopMessageOnTaskLaneBoundary(t *testing.T) {
+	t.Parallel()
+
+	message := projectExecutionBlockedMutationStopMessage([]ToolResult{{
+		Name:  "task.update",
+		Error: "task_lane_owned_by_project_task_session: active execution lane exists",
+		Output: map[string]any{
+			"message": "This task already has an active execution lane. Do not mutate it from the project session.",
+		},
+	}})
+
+	if !strings.Contains(message, "task-owned active lane work must stay inside its project_task session") {
+		t.Fatalf("message = %q, want task-lane boundary prefix", message)
+	}
+	if !strings.Contains(message, "Do not retry task.update on it from the PM lane") {
+		t.Fatalf("message = %q, want PM-lane retry guard", message)
 	}
 }
 
