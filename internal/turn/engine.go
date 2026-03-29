@@ -17404,6 +17404,17 @@ func (e *TurnEngine) currentRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 	return &checkpoint, true
 }
 
+func (e *TurnEngine) effectiveRecoveryFileWriteCheckpoint(ctx context.Context, rt *turnRuntime) (*taskcheckpoint.RecoveryFileWriteCheckpoint, bool) {
+	if e == nil || rt == nil {
+		return nil, false
+	}
+	checkpoint, ok := e.recoveryFileWriteCheckpointCandidate(ctx, rt, "")
+	if !ok {
+		return nil, false
+	}
+	return checkpoint, true
+}
+
 func hasRecoveryFileWriteCheckpointState(checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) bool {
 	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
 	return taskcheckpoint.RecoveryFileWriteBlockerClass(&checkpoint) != "" ||
@@ -23326,7 +23337,7 @@ func (e *TurnEngine) strengthenRecoveryMissingContentFailureReason(ctx context.C
 		return current
 	}
 	priorReason := ""
-	if checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt); ok {
+	if checkpoint, ok := e.effectiveRecoveryFileWriteCheckpoint(ctx, rt); ok {
 		priorReason = strings.TrimSpace(checkpoint.FailureReason)
 	}
 	if !taskcheckpoint.RecoveryFileWriteFailureIsMissingContent(priorReason) {
@@ -23345,7 +23356,7 @@ func (e *TurnEngine) strengthenRecoveryMissingCommandFailureReason(ctx context.C
 		return current
 	}
 	priorReason := ""
-	if checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt); ok {
+	if checkpoint, ok := e.effectiveRecoveryFileWriteCheckpoint(ctx, rt); ok {
 		priorReason = strings.TrimSpace(checkpoint.FailureReason)
 	}
 	if !taskcheckpoint.RecoveryFileWriteFailureIsMissingCommand(priorReason) {
@@ -23362,7 +23373,7 @@ func (e *TurnEngine) recoveryCheckpointShowsMissingContent(ctx context.Context, 
 	if e == nil || rt == nil {
 		return false
 	}
-	checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt)
+	checkpoint, ok := e.effectiveRecoveryFileWriteCheckpoint(ctx, rt)
 	if !ok {
 		return false
 	}
@@ -23379,7 +23390,7 @@ func (e *TurnEngine) recoveryCheckpointShowsMissingCommand(ctx context.Context, 
 	if e == nil || rt == nil {
 		return false
 	}
-	checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt)
+	checkpoint, ok := e.effectiveRecoveryFileWriteCheckpoint(ctx, rt)
 	if !ok {
 		return false
 	}
@@ -23390,7 +23401,7 @@ func (e *TurnEngine) recoveryCheckpointShowsRepeatedSuccessfulFileWriteChurn(ctx
 	if e == nil || rt == nil {
 		return false
 	}
-	checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt)
+	checkpoint, ok := e.effectiveRecoveryFileWriteCheckpoint(ctx, rt)
 	if !ok {
 		return false
 	}
@@ -23409,7 +23420,7 @@ func (e *TurnEngine) recoveryCheckpointPriorFailureReasons(ctx context.Context, 
 	if e == nil || rt == nil {
 		return nil
 	}
-	checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt)
+	checkpoint, ok := e.effectiveRecoveryFileWriteCheckpoint(ctx, rt)
 	if !ok {
 		return nil
 	}

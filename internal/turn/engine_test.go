@@ -32396,6 +32396,78 @@ func TestHandleRecoveryFileWriteWithoutContentStopsAfterRepeatedResumeCorrection
 	}
 }
 
+func TestHandleRecoveryFileWriteWithoutContentStopsAfterRepeatedResumeCorrectionFailureFromInitialMessageMetadata(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	targetPath := "templates/template-08-replace.html"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Write templates/template-08-replace.html",
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+
+	if _, err := fixture.messages.UpdateMetadata(context.Background(), fixture.userMessageID, mustRawJSON(t, map[string]any{
+		"source":                             "supervisor",
+		"recovery_action":                    recoveryActionValidationResume,
+		"recovery_checkpoint_target_path":    targetPath,
+		"recovery_checkpoint_failure_reason": buildRecoveryFileWriteCorrectionFailureReason(targetPath),
+	})); err != nil {
+		t.Fatalf("UpdateMetadata: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		recoveryTurn:     true,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{ID: "write-1", Name: "file.write", Arguments: map[string]any{"path": targetPath}}
+
+	handled, abort, err := fixture.engine.handleRecoveryFileWriteWithoutContent(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleRecoveryFileWriteWithoutContent: %v", err)
+	}
+	if !handled || !abort {
+		t.Fatalf("handled=%v abort=%v, want true/true", handled, abort)
+	}
+	if rt.stopReason != stopReasonRecoveryFileRejected {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonRecoveryFileRejected)
+	}
+	if fixture.messages.containsContentSubstring("[Recovery correction: file.write") {
+		t.Fatal("unexpected correction retry message when initial resume metadata already proves a prior empty file.write")
+	}
+
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if !strings.Contains(checkpoint.FailureReason, "repeated recovery file.write without content") {
+		t.Fatalf("checkpoint.FailureReason = %q, want repeated empty file.write failure", checkpoint.FailureReason)
+	}
+}
+
 func TestHandleRecoveryFileWriteWithoutContentEnablesDirectWriteOnlyState(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

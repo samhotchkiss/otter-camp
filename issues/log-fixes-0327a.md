@@ -2708,3 +2708,29 @@
     - the next empty `file.write` still gets one more bounded correction (`417`, `425`, `433`, `441`, `449`) before the direct-write-only stop ends the turn
   - remaining live-proof gap:
     - after restart on `3552`, the next resumed empty `file.write` on task `85` should halt immediately with the repeated-resume blocker instead of spending one more correction hop first
+- 2026-03-29 06:24:31 MDT - Finished and deployed on `repo_version=3554`: make recovery halt helpers obey the same checkpoint source that synthetic resume prompts already use.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `effectiveRecoveryFileWriteCheckpoint(...)`, backed by `recoveryFileWriteCheckpointCandidate(...)`
+    - switched the missing-content / missing-command / repeated-successful-write halt helpers and failure-reason strengthening helpers over from `currentRecoveryFileWriteCheckpoint(...)` to the new effective helper
+    - this aligns the stop path with the prompt path, so synthetic resume message metadata can trigger immediate repeated-resume halts instead of one more bounded correction hop
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleRecoveryFileWriteWithoutContentStopsAfterRepeatedResumeCorrectionFailureFromInitialMessageMetadata`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleRecoveryFileWriteWithoutContent(StopsAfterRepeatedResumeFailure|StopsAfterRepeatedResumeCorrectionFailure|StopsAfterRepeatedResumeCorrectionFailureFromInitialMessageMetadata|EnablesDirectWriteOnlyState)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleRecoveryFileWriteWithoutContent(StopsAfterRepeatedResumeFailure|StopsAfterRepeatedResumeCorrectionFailure|StopsAfterRepeatedResumeCorrectionFailureFromInitialMessageMetadata|EnablesDirectWriteOnlyState)|HandleRecoveryCLIExecuteWithoutCommand(StopsAfterRepeatedResumeFailure|StopsAfterRepeatedSuccessfulFileWriteChurn|PersistsCheckpointOnFirstCorrection)|MaybeClearRecoveryFileWriteCheckpointClearsOnCLIExecuteWrite)$' -count=1`
+  - pre-deploy live proof:
+    - task `85` session `324f566b-751b-4d09-915f-f821abbfd37a`
+    - message `457` already surfaced the missing-content checkpoint inside `[Recovery resume state]`
+    - message `460` in that same resumed family still appended another bounded `[Recovery correction: file.write ... was emitted without \`content\`]`
+    - that mismatch proved the stop path was not consulting the same checkpoint source the prompt used
+  - deploy / proof status:
+    - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+      - runtime version is now `3554`
+    - rebuilt [`./bin/ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp), respawned tmux panes `%847/%848`, and [`./bin/ottercamp health --output json`](/Users/sam/dev/otter-camp/bin/ottercamp) returned `status=ok`
+    - live binary reports `repo_version=3554`
+    - fresh post-restart task `85` turn `66` on session `324f566b-751b-4d09-915f-f821abbfd37a` went from:
+      - message `492` `[Recovery resume state]` with the prior missing-content checkpoint
+      - message `493` synthetic resume prompt
+      - directly to message `495` terminal halt
+    - there is no new `[Recovery correction: file.write ... without \`content\`]` message in that turn
+    - task `85` is now `blocked`, and its persisted checkpoint failure reason has advanced to `repeated recovery file.write without content ... latest retry again omitted the full file body`
