@@ -11316,6 +11316,9 @@ func continuationSummaryLooksUnavailable(summary string) bool {
 	if normalized == "" {
 		return true
 	}
+	if continuationSummaryLooksLikeRuntimeOwnedPlan(normalized) {
+		return true
+	}
 	if strings.Contains(normalized, "```") {
 		if continuationSummaryLooksLikePseudoToolCLI(normalized) {
 			return true
@@ -11370,6 +11373,26 @@ func continuationSummaryLooksUnavailable(summary string) bool {
 		"tool\": \"project.get\"",
 		"type\": \"task.update\"",
 		"type\": \"project.get\"",
+	}
+	for _, pattern := range patterns {
+		if strings.Contains(normalized, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func continuationSummaryLooksLikeRuntimeOwnedPlan(normalized string) bool {
+	if !strings.Contains(normalized, "let me ") {
+		return false
+	}
+	patterns := []string{
+		"let me clean up by staging",
+		"let me commit the current state",
+		"let me commit everything cleanly",
+		"let me check git status and commit",
+		"let me update the task status",
+		"let me advance the flow",
 	}
 	for _, pattern := range patterns {
 		if strings.Contains(normalized, pattern) {
@@ -23411,9 +23434,9 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 		return false, err
 	}
 	failures = append(failures, churnFailures...)
-	fileMutationThisTurn := turnHasSuccessfulFileMutation(results)
-	if !fileMutationThisTurn {
-		fileMutationThisTurn, err = e.turnHasSuccessfulFileMutationEarlierInCurrentTurn(ctx, rt)
+	taskMutationThisTurn := turnHasSuccessfulTaskMutation(results)
+	if !taskMutationThisTurn {
+		taskMutationThisTurn, err = e.turnHasSuccessfulTaskMutationEarlierInCurrentTurn(ctx, rt)
 		if err != nil {
 			return false, err
 		}
@@ -23487,7 +23510,7 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 			checkpointOnlyDirtyTaskGitCommitFailure = &failureCopy
 			break
 		}
-		if shouldStopTurnAfterBlockedTaskGitCommitAfterMutation(rt, failure, fileMutationThisTurn) {
+		if shouldStopTurnAfterBlockedTaskGitCommitAfterMutation(rt, failure, taskMutationThisTurn) {
 			immediateTaskGitCommitStop = true
 			failureCopy := failure
 			immediateTaskGitCommitFailure = &failureCopy
@@ -24605,6 +24628,14 @@ func packageInstallSpecFromCLICommand(command string) (string, bool) {
 	return strings.Join(packages, ","), true
 }
 
+func toolResultLooksLikeCheckpointUpdate(toolName string, output map[string]any) bool {
+	if !strings.EqualFold(strings.TrimSpace(toolName), "cli.execute") {
+		return false
+	}
+	stdout := strings.ToLower(strings.TrimSpace(anyString(output["stdout_inline"])))
+	return strings.Contains(stdout, "checkpoint updated") || strings.Contains(stdout, "wrote checkpoint")
+}
+
 func turnHasSuccessfulFileMutation(results []ToolResult) bool {
 	for _, result := range results {
 		if strings.TrimSpace(result.Error) != "" {
@@ -24618,7 +24649,24 @@ func turnHasSuccessfulFileMutation(results []ToolResult) bool {
 	return false
 }
 
-func (e *TurnEngine) turnHasSuccessfulFileMutationEarlierInCurrentTurn(ctx context.Context, rt *turnRuntime) (bool, error) {
+func turnHasSuccessfulTaskMutation(results []ToolResult) bool {
+	for _, result := range results {
+		if strings.TrimSpace(result.Error) != "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(result.Name)) {
+		case "file.write", "file.edit":
+			return true
+		case "cli.execute":
+			if toolResultLooksLikeCheckpointUpdate(result.Name, result.Output) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (e *TurnEngine) turnHasSuccessfulTaskMutationEarlierInCurrentTurn(ctx context.Context, rt *turnRuntime) (bool, error) {
 	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil || rt.turn.ID == uuid.Nil {
 		return false, nil
 	}
@@ -24630,13 +24678,17 @@ func (e *TurnEngine) turnHasSuccessfulFileMutationEarlierInCurrentTurn(ctx conte
 		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
 			continue
 		}
-		toolName, _, errText, ok := parseToolResultMessage(message.Content)
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
 		if !ok || strings.TrimSpace(errText) != "" {
 			continue
 		}
 		switch strings.ToLower(strings.TrimSpace(toolName)) {
 		case "file.write", "file.edit":
 			return true, nil
+		case "cli.execute":
+			if toolResultLooksLikeCheckpointUpdate(toolName, output) {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
@@ -24670,7 +24722,7 @@ func shouldStopTurnAfterCheckpointOnlyDirtyTaskGitCommit(rt *turnRuntime, taskRe
 }
 
 func buildTaskGitCommitAfterMutationTurnStopSystemMessage() string {
-	return "[Task deliverable was already mutated this turn. git.commit is runtime-owned for task sessions, so ending the turn now instead of spending more tool calls on commit handoff.]"
+	return "[Task deliverable or runtime-owned checkpoint state was already mutated this turn. git.commit is runtime-owned for task sessions, so ending the turn now instead of spending more tool calls on commit handoff.]"
 }
 
 func buildTaskCheckpointOnlyDirtyGitCommitTurnStopSystemMessage(taskRecord repo.ProjectTask) string {

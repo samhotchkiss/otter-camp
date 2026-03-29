@@ -19673,6 +19673,19 @@ func TestContinuationSummaryLooksUnavailableRejectsPseudoToolCLITranscript(t *te
 	}
 }
 
+func TestContinuationSummaryLooksUnavailableRejectsRuntimeOwnedCommitPlan(t *testing.T) {
+	t.Parallel()
+
+	summary := "The posts are all committed. The only uncommitted changes are:\n" +
+		"1. A modified checkpoint file\n" +
+		"2. A deleted `{slug}.md` placeholder (which should be removed)\n\n" +
+		"Let me clean up by staging the deletion of the placeholder and committing:"
+
+	if !continuationSummaryLooksUnavailable(summary) {
+		t.Fatalf("continuationSummaryLooksUnavailable(%q) = false, want true", summary)
+	}
+}
+
 func TestContinuationTurnAppendsDirectActionPromptForAsyncProjectTask(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -28207,6 +28220,88 @@ func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitW
 	}
 	if !fixture.messages.containsContentSubstring("git.commit is runtime-owned for task sessions") {
 		t.Fatal("expected immediate git.commit-after-mutation stop message")
+	}
+}
+
+func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitWhenCheckpointUpdatedEarlierInTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Write validation artifact",
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{
+		{
+			ID:        "checkpoint-1",
+			Name:      "cli.execute",
+			Arguments: map[string]any{"command": "update checkpoint"},
+		},
+		{
+			ID:        "commit-1",
+			Name:      "git.commit",
+			Arguments: map[string]any{"message": "checkpoint work"},
+		},
+	}
+	results := []ToolResult{
+		{
+			ToolCallID: "checkpoint-1",
+			Name:       "cli.execute",
+			Output: map[string]any{
+				"stdout_inline": "wrote checkpoint\n",
+			},
+		},
+		{
+			ToolCallID: "commit-1",
+			Name:       "git.commit",
+			Output: map[string]any{
+				"error": "task_git_commit_blocked",
+			},
+		},
+	}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	if !fixture.messages.containsContentSubstring("git.commit is runtime-owned for task sessions") {
+		t.Fatal("expected immediate git.commit-after-checkpoint-update stop message")
 	}
 }
 

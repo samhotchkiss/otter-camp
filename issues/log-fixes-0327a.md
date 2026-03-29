@@ -2340,3 +2340,22 @@
   - deploy / proof status:
     - pre-fix live evidence is task `81` session `903bdd67-5384-430e-8fa0-a992cc7c5648`, where retry prompts `305/306` forced literal `content/posts/{slug}.md`
     - direct post-`3520` proof landed immediately after restart: prompt `333` now starts with preferred deliverable target `content/posts/stop-preparing-your-kids-for-jobs.md`, and tool result `335` successfully reads that concrete file
+- 2026-03-29 01:15:27 MDT - Finished locally, queued for deploy: stop task-81 commit-handoff continuation churn.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `continuationSummaryLooksUnavailable(...)` now rejects first-person runtime-owned continuation plans like `let me clean up by staging`, `let me commit the current state`, `let me update the task status`, and `let me advance the flow`
+    - added `continuationSummaryLooksLikeRuntimeOwnedPlan(...)` for those handoff-plan summaries
+    - added `toolResultLooksLikeCheckpointUpdate(...)` so successful checkpoint writes surfaced through `cli.execute` count as task mutations
+    - `handleToolValidationResults(...)` now uses same-turn task mutations, not only file mutations, when deciding whether `task_git_commit_blocked` should stop immediately
+    - `turnHasSuccessfulTaskMutation(...)` and `turnHasSuccessfulTaskMutationEarlierInCurrentTurn(...)` now treat `cli.execute(stdout_inline=wrote checkpoint|checkpoint updated)` the same way the guard already treated `file.write` / `file.edit`
+    - updated the runtime stop message to say `Task deliverable or runtime-owned checkpoint state was already mutated this turn`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestContinuationSummaryLooksUnavailableRejectsRuntimeOwnedCommitPlan`
+    - added `TestHandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitWhenCheckpointUpdatedEarlierInTurn`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped runtime version to `3522`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ContinuationSummaryLooksUnavailableRejects(RuntimeOwnedCommitPlan|PseudoToolCLITranscript)|HandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitWhenCheckpointUpdatedEarlierInTurn|HandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitWhenDeliverableAlreadyMutated|HandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitWhenDeliverableMutatedEarlierInTurn|HandleToolValidationResultsStopsAsyncTaskTurnAfterCheckpointOnlyDirtyTaskGitCommit)$' -count=1`
+  - deploy / proof status:
+    - pre-fix live evidence is task `81` session `92a98bde-c9b3-4f32-b9ce-f71e75b3bff7` message `130`, which preserved `Let me clean up by staging ... and committing:` in the continuation summary and replayed `git.status` / `git.commit` / `flow_owned_done_blocked`
+    - secondary pre-fix live evidence is task `81` session `eb7c666e-00f3-4b53-862d-3eba852cecfd`, where `cli.execute(stdout_inline=wrote checkpoint)` followed by `git.commit -> task_git_commit_blocked` still reopened `task.update` / `flow_owned_done_blocked`
+    - direct post-`3522` proof target is the next task-81 or similar async execution retry on the new binary
