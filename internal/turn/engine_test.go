@@ -22958,6 +22958,37 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksCompletedBat
 	}
 }
 
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksActiveDeliverableRead(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Continue the active project execution now.", projectExecutionContinuationSnapshot{
+			ProjectLine: "Active project id: " + projectID.String(),
+			ActiveTaskLine: strings.Join([]string{
+				"Already-active non-terminal tasks in the tree:",
+				`task 85 (Write templates/template-08-replace.html) id=` + uuid.NewString() + ` title="Write templates/template-08-replace.html" work_status=in_progress deliverable_path=templates/template-08-replace.html assigned_agent_id=worker-1`,
+				`; task 89 (Deliverable: planning/sambot-feature-spec.md) id=` + uuid.NewString() + ` title="Deliverable: planning/sambot-feature-spec.md" work_status=review deliverable_path=planning/sambot-feature-spec.md assigned_agent_id=worker-2`,
+			}, " "),
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "file.read", map[string]any{
+		"path": "templates/template-08-replace.html",
+	})
+	if !blocked {
+		t.Fatal("expected PM file.read on active deliverable path to be blocked")
+	}
+	if !strings.Contains(reason, "task-owned active lane work must stay inside its project_task session") || !strings.Contains(reason, "templates/template-08-replace.html") {
+		t.Fatalf("reason = %q, want active deliverable ownership guidance", reason)
+	}
+}
+
 func TestAppendContinuationSummaryAndActionRootsProjectContinuationAtSyntheticUserPrompt(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

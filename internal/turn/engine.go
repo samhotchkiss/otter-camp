@@ -174,6 +174,7 @@ var recoveryResumeBacktickedFragmentPattern = regexp.MustCompile("`([^`]+)`")
 var projectContinuationPromptTaskIDPattern = regexp.MustCompile(`id=([0-9a-fA-F-]{36})`)
 var projectContinuationPromptLeafTaskIDPattern = regexp.MustCompile(`leaf_task_id=([0-9a-fA-F-]{36})`)
 var projectContinuationPromptDependencyPathPattern = regexp.MustCompile(`(?:depends_on_path|deliverable_path)=([^\s]+)`)
+var projectContinuationPromptLiveDeliverablePathPattern = regexp.MustCompile(`(?s)work_status=(?:in_progress|review).*?deliverable_path=([^\s]+)`)
 var projectContinuationBatchRangePattern = regexp.MustCompile(`(?i)\bposts?\s+(\d{1,3})\s*[–-]\s*(\d{1,3})\b`)
 var projectContinuationCompletedBatchRangePattern = regexp.MustCompile(`\bThat completed task covers batch_range=([0-9]{1,3}-[0-9]{1,3})\b`)
 var projectContinuationWorkspacePathPattern = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\b`)
@@ -5476,6 +5477,17 @@ func buildProjectExecutionContinuationRediscoveryRetryPrompt(
 func buildProjectExecutionContinuationActiveTaskLaneStopMessage(task repo.ProjectTask) string {
 	label := projectBootstrapTaskLabel(task)
 	return fmt.Sprintf("%s %s already has a live project_task execution lane. Leave that task lane alone from the project session. Do not create, queue, update, or inspect deliverables for %s from the PM lane; let the bound task lane continue or let its own review lane issue flow.review_decision if that review lane becomes active.]", projectContinuationTaskLaneBoundaryGuardPrefix, label, label)
+}
+
+func buildProjectExecutionContinuationActiveDeliverableReadStopMessage(path string) string {
+	normalized := normalizeWorkspaceRelativePath(path)
+	if normalized == "" {
+		normalized = strings.TrimSpace(path)
+	}
+	if normalized == "" {
+		return projectContinuationTaskLaneBoundaryGuardPrefix + " An active task lane already owns the current deliverable. Leave that task lane alone from the project session. Do not inspect active in-progress or review deliverables from the PM lane; let the bound task lane continue.]"
+	}
+	return fmt.Sprintf("%s Active task lanes already own deliverable `%s`. Leave those task lanes alone from the project session. Do not inspect or reread that active deliverable from the PM lane; let the bound task lane continue or let its own review lane issue flow.review_decision if that review lane becomes active.]", projectContinuationTaskLaneBoundaryGuardPrefix, normalized)
 }
 
 func buildProjectExecutionContinuationRediscoveryActionInstruction(
@@ -30461,6 +30473,11 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 		if path == "" {
 			return false, ""
 		}
+		if activeDeliverables := projectContinuationPromptLiveDeliverablePaths(initialMessage); len(activeDeliverables) > 0 {
+			if _, ok := activeDeliverables[path]; ok {
+				return true, buildProjectExecutionContinuationActiveDeliverableReadStopMessage(path)
+			}
+		}
 		completedBatchRange := projectContinuationCompletedBatchRangeFromPrompt(initialMessage)
 		if completedBatchRange == "" {
 			return false, ""
@@ -30531,6 +30548,28 @@ func projectContinuationPromptLeafTaskIDs(initialMessage string) map[uuid.UUID]s
 		ids[taskID] = struct{}{}
 	}
 	return ids
+}
+
+func projectContinuationPromptLiveDeliverablePaths(initialMessage string) map[string]struct{} {
+	matches := projectContinuationPromptLiveDeliverablePathPattern.FindAllStringSubmatch(initialMessage, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	paths := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		if len(match) != 2 {
+			continue
+		}
+		path := normalizeWorkspaceRelativePath(strings.TrimSpace(match[1]))
+		if path == "" {
+			continue
+		}
+		paths[path] = struct{}{}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	return paths
 }
 
 func buildProjectContinuationSnapshotRediscoveryGuardError(toolName string, taskID uuid.UUID) string {

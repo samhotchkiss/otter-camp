@@ -2592,6 +2592,22 @@
     - on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, the first post-restart PM continuation message `ecc1beb5-611a-4b1b-8115-b0ce755c0ef6` still ended on the old rediscovery-only stop in turn `73f6578c-f412-41f0-b4e0-e2c73d8262e0`
     - the new runtime immediately appended focused retry message `e61befed-bd69-4dd8-a2e5-c74ef5a8f7b1`, which explicitly named blocked task `71` and told the PM lane to `create, queue, or update the smallest bounded recovery step`
     - that follow-on turn `3877ecfa-9b43-44c7-866a-5eb50fd80895` no longer drained the session idle; it progressed to the narrower `task_lane_owned_by_project_task_session` stop after one blocked root probe and one exact deliverable read
+- 2026-03-29 05:18:16 MDT - Finished locally, deployed on `repo_version=3547`, and waiting on the next natural PM continuation for direct live proof: block PM rereads of exact active deliverables already owned by task lanes.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `projectContinuationPromptLiveDeliverablePathPattern`
+    - added `projectContinuationPromptLiveDeliverablePaths(...)`
+    - `shouldBlockProjectContinuationSnapshotRediscoveryTool(...)` now treats `file.read` of any prompt-listed `work_status=in_progress|review deliverable_path=...` as the existing task-lane-boundary stop family and returns `buildProjectExecutionContinuationActiveDeliverableReadStopMessage(...)`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksActiveDeliverableRead`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationSnapshotRediscoveryTool(BlocksActiveDeliverableRead|BlocksProjectIDTaskGet|BlocksCompletedBatchDependencyRead|BlocksBroadTaskList|BlocksSessionListForActiveTasks|BlocksGitLogForActiveTasks|BlocksFlowGetExecution|BlocksRootFileListForActiveTasks|BlocksNamedTaskGet|BlocksNamedActiveTaskGet|NotBlockProjectContinuationSnapshotRediscoveryToolForParentScopedTaskList)|HandleCompletedProjectExecutionContinuationTurn(KeepsBoundedSizeContextWhenFocusedDeliverableIsMissing|RetriesBoundedSizeStopWithFreshMessage))$' -count=1`
+    - rebuilt [`./bin/ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp), respawned tmux panes `%847/%848`, [`./bin/ottercamp version`](/Users/sam/dev/otter-camp/bin/ottercamp) returned `repo_version=3547`, and [`./bin/ottercamp health --output json`](/Users/sam/dev/otter-camp/bin/ottercamp) returned `status=ok`
+  - pre-fix live proof:
+    - session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, continuation prompt `6605`
+    - prompt already named live deliverables `planning/sambot-feature-spec.md` (task `88`) and `templates/template-08-replace.html` (task `85`) with `work_status=in_progress`
+    - PM turns `617-619` still spent tool results `6608-6609` on `file.read not_found` for those exact task-owned paths before falling back into the older missing-dependency / active-replacement stop pair
+  - remaining live-proof gap:
+    - after the pre-fix stop chain, the PM session is idle (`current_turn_id=<nil>`, last message `6611`, no pending `agent_turn` rows), so the new guard is deployed as a forward stop and has not naturally re-fired on the new binary yet
 - 2026-03-29 04:25:47 MDT - Finished and live-proven: short-circuit focused PM retries when the blocked task already owns execution.
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
     - [`retryProjectExecutionContinuationForRediscoveryStop(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now calls `projectTaskAlreadyOwnsExecutionLane(...)` before enqueuing the focused supervisory retry
