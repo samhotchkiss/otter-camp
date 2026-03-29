@@ -1776,3 +1776,22 @@
     - `GOFLAGS='' go test ./internal/tools/native -run 'Test(TaskExpectsMarkdownDeliverablesRecognizesSeparateMDFileWording|LatestRecoveryTargetPathForSession(PrefersFirstMissingMetadataBatchOutputOverCompletedOutput|PrefersMetadataBatchOutputOverDependencyArtifactHistory|IgnoresDependencyArtifactHistoryForMarkdownBatchWithoutMetadata)|File(ListAllowsExecutionDeliverableRootInspectionWithinRecoveryTargetRootForBatchTask|ReadAllowsExecutionSiblingDeliverableInspectionWithinRecoveryTargetRootForBatchTask))$' -count=1`
   - proof target after deploy:
     - the next task-70 recovery retry should stop blocking bounded `content/posts` inspection just because the task brief says `.md file` instead of `markdown files`
+- 2026-03-28 18:45:15 MDT - Finished: allow bounded checkpoint artifact/root inspection once tracked batch outputs are already complete.
+  - live diagnosis:
+    - task-70 still had `recovery_target_focus_required` on both `content/posts` and `content/technonymous-index.json` even though the checkpoint already tracked multiple substantive outputs and owned the source artifact path
+    - at that point, recovery needed a narrow way to inspect the preferred output root and checkpoint-owned index artifact without reopening broad workspace discovery
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `allowRecoveryDeliverableRootInspection(...)` now consults content-migration checkpoint metadata before falling back to the older review/batch allowances
+    - added `allowRecoveryCheckpointArtifactInspectionWhenTrackedOutputsComplete(...)`
+    - added `contentMigrationCheckpointOutputsCompleteOnDisk(...)`
+    - added `contentMigrationCheckpointArtifactPathMatches(...)`
+    - when all tracked checkpoint outputs already exist on disk, recovery now allows reads inside the preferred deliverable root and exact checkpoint-owned artifact paths like `content/technonymous-index.json`
+  - changed [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go):
+    - added `TestFileReadAllowsCheckpointArtifactInspectionWhenTrackedBatchOutputsComplete`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped repo version to `3470`
+  - verified with:
+    - `gofmt -w internal/tools/native/file_tools.go internal/tools/native/file_tools_test.go`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(TaskExpectsMarkdownDeliverablesRecognizesSeparateMDFileWording|LatestRecoveryTargetPathForSession(PrefersFirstMissingMetadataBatchOutputOverCompletedOutput|PrefersMetadataBatchOutputOverDependencyArtifactHistory|IgnoresDependencyArtifactHistoryForMarkdownBatchWithoutMetadata)|File(ListAllowsExecutionDeliverableRootInspectionWithinRecoveryTargetRootForBatchTask|ReadAllowsExecutionSiblingDeliverableInspectionWithinRecoveryTargetRootForBatchTask|ReadAllowsCheckpointArtifactInspectionWhenTrackedBatchOutputsComplete))$' -count=1`
+  - proof target after deploy:
+    - the next task-70 retry should be able to inspect `content/posts` and `content/technonymous-index.json` from checkpoint-owned state instead of bouncing immediately back to `content/posts/i-cant-picture-my-kids.md`

@@ -323,6 +323,13 @@ func (e *NativeToolExecutor) allowRecoveryDeliverableRootInspection(ctx context.
 	if rootPath == "" || !workspacePathWithinRoot(targetPath, rootPath) {
 		return false, nil
 	}
+	if checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata); ok {
+		if allow, allowErr := e.allowRecoveryCheckpointArtifactInspectionWhenTrackedOutputsComplete(ctx, taskRecord, checkpoint, normalizedPath, rootPath); allowErr != nil {
+			return false, allowErr
+		} else if allow {
+			return true, nil
+		}
+	}
 	if taskAllowsPerItemDeliverableInspection(taskRecord, normalizedPath) ||
 		taskAllowsBatchRecoveryRootInspection(taskRecord, normalizedPath, targetPath) {
 		return true, nil
@@ -344,6 +351,28 @@ func (e *NativeToolExecutor) allowRecoveryDeliverableRootInspection(ctx context.
 		return false, nil
 	}
 	return workspacePathWithinRoot(normalizedPath, rootPath), nil
+}
+
+func (e *NativeToolExecutor) allowRecoveryCheckpointArtifactInspectionWhenTrackedOutputsComplete(ctx context.Context, taskRecord repo.ProjectTask, checkpoint taskcheckpoint.ContentMigrationCheckpoint, candidatePath, rootPath string) (bool, error) {
+	workspaceRoot := strings.TrimSpace(e.explicitRoot)
+	if workspaceRoot == "" && e != nil && e.projects != nil {
+		root, err := e.taskWorkspaceRoot(ctx, taskRecord)
+		if err != nil {
+			return false, nil
+		}
+		workspaceRoot = root
+	}
+	if workspaceRoot == "" || !contentMigrationCheckpointOutputsCompleteOnDisk(workspaceRoot, taskRecord, checkpoint, rootPath) {
+		return false, nil
+	}
+	candidatePath = normalizeWorkspacePath(candidatePath)
+	if candidatePath == "" {
+		return false, nil
+	}
+	if workspacePathWithinRoot(candidatePath, rootPath) {
+		return true, nil
+	}
+	return contentMigrationCheckpointArtifactPathMatches(checkpoint, candidatePath), nil
 }
 
 func preferredTaskDeliverableRoot(taskRecord repo.ProjectTask) string {
@@ -784,6 +813,42 @@ func taskAllowsBatchRecoveryRootInspection(taskRecord repo.ProjectTask, candidat
 		"save as markdown",
 		"markdown files",
 	)
+}
+
+func contentMigrationCheckpointOutputsCompleteOnDisk(workspaceRoot string, taskRecord repo.ProjectTask, checkpoint taskcheckpoint.ContentMigrationCheckpoint, rootPath string) bool {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if workspaceRoot == "" {
+		return false
+	}
+	count := 0
+	for _, output := range checkpoint.Outputs {
+		target := normalizeWorkspacePath(output.Path)
+		if target == "" || !deliverableTargetMatchesTaskContract(taskRecord, target) {
+			continue
+		}
+		if rootPath != "" && !workspacePathWithinRoot(target, rootPath) {
+			continue
+		}
+		exists, err := substantiveExplicitDeliverableExists(workspaceRoot, target)
+		if err != nil || !exists {
+			return false
+		}
+		count++
+	}
+	return count > 0
+}
+
+func contentMigrationCheckpointArtifactPathMatches(checkpoint taskcheckpoint.ContentMigrationCheckpoint, candidatePath string) bool {
+	candidatePath = normalizeWorkspacePath(candidatePath)
+	if candidatePath == "" {
+		return false
+	}
+	for _, artifact := range checkpoint.Artifacts {
+		if normalizeWorkspacePath(artifact.Path) == candidatePath {
+			return true
+		}
+	}
+	return false
 }
 
 func looksLikeRejectedDeliverablePlaceholder(content string) bool {

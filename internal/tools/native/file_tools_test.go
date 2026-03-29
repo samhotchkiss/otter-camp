@@ -505,6 +505,83 @@ func TestFileReadAllowsExecutionSiblingDeliverableInspectionWithinRecoveryTarget
 	}
 }
 
+func TestFileReadAllowsCheckpointArtifactInspectionWhenTrackedBatchOutputsComplete(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "content/posts/i-cant-picture-my-kids.md"
+	artifactPath := "content/technonymous-index.json"
+
+	if err := os.MkdirAll(filepath.Join(root, "content", "posts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(content/posts): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte("# I Can't Picture My Kids\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "content", "posts", "the-year-the-phone-started-talking.md"), []byte("# The Year the Phone Started Talking\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(tracked sibling): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(artifactPath)), []byte("{\"post_urls\":[]}"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(artifact): %v", err)
+	}
+
+	description := "Read the first 12 entries (indices 0-11) from content/technonymous-index.json. For each entry, use web_fetch to retrieve the full post HTML from its URL, convert the post body to clean markdown, and write each post as a separate .md file under content/posts/. Use the URL slug as the filename."
+	metadata, err := json.Marshal(map[string]any{
+		"content_migration_checkpoint": taskcheckpoint.ContentMigrationCheckpoint{
+			Artifacts: []taskcheckpoint.WorkspaceFile{
+				{Path: artifactPath},
+			},
+			Outputs: []taskcheckpoint.WorkspaceFile{
+				{Path: targetPath},
+				{Path: "content/posts/the-year-the-phone-started-talking.md"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(metadata): %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Fetch posts 1-12 from content/technonymous-index.json and save as markdown in content/posts/",
+			Description:    &description,
+			Metadata:       metadata,
+			WorkStatus:     "blocked",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "system",
+				Content:   "[Recovery resume state]\nTarget file: content/posts/i-cant-picture-my-kids.md\n",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": artifactPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != nil {
+		t.Fatalf("error = %v, out=%v, want nil", got, out)
+	}
+	if got := out["path"]; got != artifactPath {
+		t.Fatalf("path = %v, want %q", got, artifactPath)
+	}
+}
+
 func TestFileListAllowsBlockedReviewNodeDeliverableRootInspectionWithinRecoveryTargetRoot(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()
