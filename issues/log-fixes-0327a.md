@@ -3152,3 +3152,20 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurn(RetriesParentCompletionRequirementsWithFreshMessage|RetriesBoundedSizeStopWithFreshMessage|RetriesReplacementChildWorkWithFreshMessage|RetriesMissingDependencyStopWithFreshMessage)|ProjectContinuation(ParentCompletionTaskLabelsDedupesTaskRefs|CompletedChildTaskLabelsUsesDoneDirectChildren)|BuildProjectContinuationActionPromptAdds(SatisfiedCloseoutGuidance|CompletedCloseoutGuidance)|ProjectContinuationDraftTaskReadyForParentClosureAllows(SatisfiedOutcomeWithOnlyBlockedChildren|OnlyBlockedChildren))$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live canary is still PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, but now even a short `parent task requires child verification...` error at retry depth `2` should still append the sharper retry prompt with inferred `OC-*` labels
+- 2026-03-29 10:39 MDT - Added a preflight PM guard for closeout-ready parent updates that omit required parent-orchestration evidence.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - [`shouldBlockProjectContinuationFocusedDraftMutationTool(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now blocks `task.update ... work_status=done` on a closeout-ready focus parent unless the same tool call includes:
+      - `child_output_verifications`
+      - `integration_check.status=passed`
+      - `outcome_assessment.satisfied=true`
+    - added [`buildProjectContinuationFocusedDraftCloseoutMetadataGuardError(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - added [`projectContinuationDoneUpdateIncludesParentCompletionEvidence(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - the blocked error carries the inferred completed child labels (`OC-115`, `OC-124`, `OC-130`) so the next PM turn knows exactly which children belong in the closeout update
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestShouldBlockProjectContinuationFocusedDraftMutationRequiresParentCompletionEvidence`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationFocusedDraftMutationRequiresParentCompletionEvidence|ProjectContinuation(ParentCompletionTaskLabelsDedupesTaskRefs|CompletedChildTaskLabelsUsesDoneDirectChildren)|HandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionRequirementsWithFreshMessage)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationFocusedDraftMutation(RequiresParentCompletionEvidence|AllowsSatisfiedCloseoutReadyParent|ForAncestorPromotion)|HandleCompletedProjectExecutionContinuationTurn(RetriesParentCompletionRequirementsWithFreshMessage|RetriesBoundedSizeStopWithFreshMessage|RetriesReplacementChildWorkWithFreshMessage|RetriesMissingDependencyStopWithFreshMessage)|ProjectContinuation(ParentCompletionTaskLabelsDedupesTaskRefs|CompletedChildTaskLabelsUsesDoneDirectChildren)|BuildProjectContinuationActionPromptAdds(SatisfiedCloseoutGuidance|CompletedCloseoutGuidance)|ProjectContinuationDraftTaskReadyForParentClosureAllows(SatisfiedOutcomeWithOnlyBlockedChildren|OnlyBlockedChildren))$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary is still task `113` on PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where the malformed closeout `task.update` should now be blocked before it reaches the native completion gate

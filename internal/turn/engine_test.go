@@ -23303,6 +23303,87 @@ func TestShouldBlockProjectContinuationFocusedDraftMutationAllowsSatisfiedCloseo
 	}
 }
 
+func TestShouldBlockProjectContinuationFocusedDraftMutationRequiresParentCompletionEvidence(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	focusTaskID := uuid.New()
+	doneChildA := uuid.New()
+	doneChildB := uuid.New()
+	doneChildC := uuid.New()
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	focusMetadata := json.RawMessage(`{
+		"parent_orchestration": {
+			"outcome_assessment": {
+				"satisfied": true,
+				"summary": "planning/sambot-feature-spec.md is already complete."
+			}
+		}
+	}`)
+	focusDescription := "Close out the satisfied planning/sambot-feature-spec.md parent task."
+	childMetadata := func(parentID uuid.UUID) json.RawMessage {
+		return mustJSONRaw(map[string]any{"decomposition_parent_task_id": parentID.String()})
+	}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			focusTaskID: {
+				ID:          focusTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  113,
+				Title:       "Finalize Sambot feature spec",
+				Description: &focusDescription,
+				WorkStatus:  "draft",
+				Metadata:    focusMetadata,
+			},
+			doneChildA: {
+				ID:         doneChildA,
+				ProjectID:  projectID,
+				TaskNumber: 115,
+				Title:      "Mission statement child",
+				WorkStatus: "done",
+				Metadata:   childMetadata(focusTaskID),
+			},
+			doneChildB: {
+				ID:         doneChildB,
+				ProjectID:  projectID,
+				TaskNumber: 124,
+				Title:      "Replacement child",
+				WorkStatus: "done",
+				Metadata:   childMetadata(focusTaskID),
+			},
+			doneChildC: {
+				ID:         doneChildC,
+				ProjectID:  projectID,
+				TaskNumber: 130,
+				Title:      "Replacement child v3",
+				WorkStatus: "done",
+				Metadata:   childMetadata(focusTaskID),
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session:            fixture.session,
+		initialMessageText: "Continue the active project execution now. Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 113 (Finalize Sambot feature spec) id=" + focusTaskID.String() + " title=\"Finalize Sambot feature spec\" work_status=draft outcome_satisfied=true",
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftMutationTool(context.Background(), rt, "task.update", map[string]any{
+		"task_id":     focusTaskID.String(),
+		"work_status": "done",
+	})
+	if !blocked {
+		t.Fatal("expected closeout-ready parent done update without orchestration metadata to be blocked")
+	}
+	if !strings.Contains(reason, "child_output_verifications") || !strings.Contains(reason, "integration_check.status=passed") {
+		t.Fatalf("reason = %q, want explicit parent completion evidence guidance", reason)
+	}
+	if !strings.Contains(reason, "OC-115") || !strings.Contains(reason, "OC-124") || !strings.Contains(reason, "OC-130") {
+		t.Fatalf("reason = %q, want inferred completed child labels", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationFocusedDraftMutationIgnoresCancelledPromptFocus(t *testing.T) {
 	t.Parallel()
 

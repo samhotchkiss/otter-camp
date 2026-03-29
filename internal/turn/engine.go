@@ -31627,6 +31627,38 @@ func buildProjectContinuationFocusedDraftCloseoutTaskCreateGuardError(focusTask 
 	return fmt.Sprintf("project continuation already has focused draft task %s in a closeout-ready state for the same deliverable. Do not create another replacement child beneath %s from the project lane; advance or close %s directly instead.", label, label, label)
 }
 
+func buildProjectContinuationFocusedDraftCloseoutMetadataGuardError(focusTask repo.ProjectTask, requiredChildLabels []string) string {
+	label := projectBootstrapTaskLabel(focusTask)
+	message := fmt.Sprintf("parent task requires child verification and passed integration before completion: closeout-ready parent %s must include child_output_verifications, integration_check.status=passed, outcome_assessment.satisfied=true, and work_status=done in the same task.update.", label)
+	if len(requiredChildLabels) > 0 {
+		message += fmt.Sprintf(" Completed children: %s.", strings.Join(requiredChildLabels, ", "))
+	}
+	if focusTask.ID != uuid.Nil {
+		message += fmt.Sprintf(" If any child task IDs are still unknown, use only task.list(parent_task_id=%s) once first.", focusTask.ID.String())
+	}
+	return message
+}
+
+func projectContinuationDoneUpdateIncludesParentCompletionEvidence(arguments map[string]any) bool {
+	if len(arguments) == 0 {
+		return false
+	}
+	childItems, ok := arguments["child_output_verifications"].([]any)
+	if !ok || len(childItems) == 0 {
+		return false
+	}
+	integrationCheck, ok := arguments["integration_check"].(map[string]any)
+	if !ok || !strings.EqualFold(strings.TrimSpace(stringValue(integrationCheck["status"])), "passed") {
+		return false
+	}
+	outcomeAssessment, ok := arguments["outcome_assessment"].(map[string]any)
+	if !ok {
+		return false
+	}
+	satisfied, ok := outcomeAssessment["satisfied"].(bool)
+	return ok && satisfied
+}
+
 func buildProjectContinuationFocusedDraftAncestorPromotionGuardError(targetTask, focusTask repo.ProjectTask) string {
 	targetLabel := projectBootstrapTaskLabel(targetTask)
 	focusLabel := projectBootstrapTaskLabel(focusTask)
@@ -31725,6 +31757,12 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 	focusTaskID = focusTask.ID
 	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	focusActivity := childActivity[focusTaskID]
+	if targetTaskID == focusTaskID &&
+		nextStatus == "done" &&
+		projectContinuationDraftTaskReadyForParentClosureForTask(focusTask, focusActivity) &&
+		!projectContinuationDoneUpdateIncludesParentCompletionEvidence(arguments) {
+		return true, buildProjectContinuationFocusedDraftCloseoutMetadataGuardError(focusTask, projectContinuationCompletedChildTaskLabels(projectTasks, focusTaskID))
+	}
 	if targetTaskID == focusTaskID && projectContinuationDraftTaskNeedsFreshReplacementChildWorkForTask(focusTask, focusActivity) {
 		return true, buildProjectContinuationFocusedDraftReplacementGuardError(focusTask, focusActivity)
 	}
