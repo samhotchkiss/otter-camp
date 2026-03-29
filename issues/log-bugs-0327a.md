@@ -570,3 +570,14 @@
   - impact:
     - child execution lanes spend retries fighting `recovery_target_focus_required` against stale parent-spec targets instead of writing their actual `sambot/...` deliverables
     - PM snapshots and worker-authored continuation prompts can under-specify the real output path for the active child work
+- 2026-03-29 15:29 MDT - Broad non-markdown backend tasks can still accept the wrong historical/review target when the task contract has no explicit output path.
+  - fresh live evidence:
+    - after the explicit-path parser fix, task `176` correctly anchored on `sambot/api.js`, but task `174` still drifted during execution/review
+    - work-session `33aec6cd-7324-47a3-920d-5fed8f60b23c` accepted frontend widget target `sambot/widget.html` as a valid recovery target even though the task is `Backend API wiring`
+    - the same task description also names `planning/sambot-feature-spec.md` only as context, but that planning artifact remained eligible as a deliverable candidate because the generic contract matcher treated any non-markdown path as acceptable
+  - bug:
+    - for non-markdown tasks without an explicit deliverable path or output root, `deliverableTargetMatchesTaskContract(...)` was too permissive
+    - it did not reject dependency artifacts named only for context, and it did not reject obvious frontend/backend role mismatches
+  - impact:
+    - backend tasks can review or recover against sibling frontend files
+    - dependency planning artifacts can keep poisoning target selection long after the real task-owned deliverable is known

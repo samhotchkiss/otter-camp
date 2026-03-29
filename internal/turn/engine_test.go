@@ -39939,6 +39939,39 @@ func TestSessionTaskDeliverablePathPrefersChildLeadingPathTitleOverParentDeliver
 	}
 }
 
+func TestDeliverableTargetMatchesTaskContractRejectsDependencyArtifactForBackendTask(t *testing.T) {
+	t.Parallel()
+
+	description := "Backend API wiring — implement POST /api/sambot/chat. Use the architecture and feature spec already at planning/sambot-feature-spec.md for context on personality, tone, and knowledge base approach."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  174,
+		Title:       "Backend API wiring",
+		Description: &description,
+	}
+
+	if deliverableTargetMatchesTaskContract(taskRecord, "planning/sambot-feature-spec.md") {
+		t.Fatal("expected dependency planning artifact to be rejected as backend deliverable target")
+	}
+}
+
+func TestDeliverableTargetMatchesTaskContractRejectsFrontendArtifactForBackendTask(t *testing.T) {
+	t.Parallel()
+
+	description := "Backend API wiring — implement POST /api/sambot/chat that returns { response, session_id }."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  174,
+		Title:       "Backend API wiring",
+		Description: &description,
+	}
+
+	if deliverableTargetMatchesTaskContract(taskRecord, "sambot/widget.html") {
+		t.Fatal("expected frontend widget artifact to be rejected for backend task")
+	}
+	if !deliverableTargetMatchesTaskContract(taskRecord, "sambot/api.js") {
+		t.Fatal("expected backend api.js artifact to remain valid for backend task")
+	}
+}
+
 func TestRecoveryTargetPathForSessionPrefersParentExplicitDeliverableOverWrongCheckpoint(t *testing.T) {
 	t.Parallel()
 

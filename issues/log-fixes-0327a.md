@@ -3555,3 +3555,20 @@
     - rebuilt/restarted cleanly; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
     - fresh live proof on task `176` session `12727f59-f7ea-4e3f-a8d0-ab3ff093110c`: prompt `30` now continues directly from `sambot/api.js`, and tool result `32` blocks a stale reread of `planning/sambot-feature-spec.md` with `deliverable_path":"sambot/api.js"`
     - task `173` / `175` still have older in-flight widget turns, so live proof for the `sambot/widget.html` side is still pending the next fresh retry window
+- 2026-03-29 15:29 MDT - Tightened non-markdown task contract matching so backend tasks stop accepting dependency artifacts and frontend widget files as valid deliverable targets.
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `deliverableTargetMatchesTaskContract(...)` now rejects paths that are mentioned only as dependency/context artifacts in the task brief
+    - it also rejects obvious frontend/backend target mismatches for broad tasks without explicit output paths
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - mirrored the same dependency-artifact and role-conflict checks in turn-engine deliverable-target matching so session/review target selection and recovery target reuse stay aligned with the native layer
+  - changed tests:
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go)
+      - added backend-task contract coverage rejecting `planning/sambot-feature-spec.md` and `sambot/widget.html` while still allowing `sambot/api.js`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added matching turn-engine contract coverage for the same backend task family
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(DeliverableTargetMatchesTaskContractRejectsDependencyArtifactForBackendTask|DeliverableTargetMatchesTaskContractRejectsFrontendArtifactForBackendTask)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(DeliverableTargetMatchesTaskContractRejectsDependencyArtifactForBackendTask|DeliverableTargetMatchesTaskContractRejectsFrontendArtifactForBackendTask)$' -count=1`
+  - deploy / proof status:
+    - rebuilt/restarted cleanly; [`ottercamp`](/Users/sam/dev/otter-camp/bin/ottercamp) health is `ok`
+    - direct post-deploy proof for the review-target side is still pending because task `174` already had an in-flight review turn using the older widget target when this slice went live

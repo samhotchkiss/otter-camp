@@ -18960,6 +18960,12 @@ func deliverableTargetMatchesTaskContract(taskRecord repo.ProjectTask, candidate
 	if explicit := normalizeWorkspaceRelativePath(explicitDeliverablePath(taskRecord)); explicit != "" {
 		return sameWorkspaceRelativePath(candidate, explicit)
 	}
+	if taskTreatsPathAsDependencyArtifact(taskRecord, candidate) {
+		return false
+	}
+	if taskDeliverablePathConflictsWithRole(taskRecord, candidate) {
+		return false
+	}
 	if workspacePathLooksParameterized(candidate) {
 		return false
 	}
@@ -18972,6 +18978,62 @@ func deliverableTargetMatchesTaskContract(taskRecord repo.ProjectTask, candidate
 	default:
 		return false
 	}
+}
+
+func taskTreatsPathAsDependencyArtifact(taskRecord repo.ProjectTask, candidate string) bool {
+	candidate = strings.ToLower(normalizeWorkspaceRelativePath(candidate))
+	if candidate == "" {
+		return false
+	}
+	for _, raw := range taskContractDescriptionCandidates(taskRecord) {
+		lower := strings.ToLower(strings.TrimSpace(raw))
+		if lower == "" {
+			continue
+		}
+		idx := strings.Index(lower, candidate)
+		if idx < 0 {
+			continue
+		}
+		start := max(0, idx-120)
+		prefix := lower[start:idx]
+		if containsAny(prefix,
+			"use ",
+			"using ",
+			"read ",
+			"reference ",
+			"refer to ",
+			"context ",
+			"for context",
+			"based on ",
+			"guided by ",
+			"consult ",
+		) {
+			return true
+		}
+	}
+	return false
+}
+
+func taskDeliverablePathConflictsWithRole(taskRecord repo.ProjectTask, candidate string) bool {
+	text := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	if taskRecord.Description != nil {
+		text += " " + strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	candidate = strings.ToLower(strings.TrimSpace(candidate))
+	if text == "" || candidate == "" {
+		return false
+	}
+	taskLooksFrontend := containsAny(text, "frontend", "widget", "chat widget", "iframe", "script tag", "html/css/js", "ui")
+	taskLooksBackend := containsAny(text, "backend", "api endpoint", "api wiring", "post /api/", "endpoint", "serverless", "server.js", "api.js")
+	candidateLooksFrontend := containsAny(candidate, "widget", "index.html", ".html")
+	candidateLooksBackend := containsAny(candidate, "api.js", "server.js", "/api", "endpoint")
+	if taskLooksBackend && candidateLooksFrontend && !candidateLooksBackend {
+		return true
+	}
+	if taskLooksFrontend && candidateLooksBackend && !candidateLooksFrontend {
+		return true
+	}
+	return false
 }
 
 func taskExpectsMarkdownDeliverables(taskRecord repo.ProjectTask) bool {
