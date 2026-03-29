@@ -12839,6 +12839,13 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesBoundedSizeStopWi
 			"tool_name": "task.update",
 			"output": map[string]any{
 				"error": "task exceeds bounded size policy (estimated 75 minutes > 60 minute limit): split the work into smaller reviewable tasks before queueing",
+				"suggested_decomposition": map[string]any{
+					"child_titles": []string{
+						"Overview & Purpose",
+						"Architecture & Tech Stack",
+						"Data Pipeline & Retrieval",
+					},
+				},
 			},
 		})),
 	}
@@ -12901,6 +12908,42 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesBoundedSizeStopWi
 	}
 	if !strings.Contains(retryMessage.Content, "task.list(parent_task_id="+boundedTaskID.String()+")") {
 		t.Fatalf("retry message = %q, want narrow child inspection guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "\"Overview & Purpose\"") {
+		t.Fatalf("retry message = %q, want suggested decomposition child title", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "Do not create one replacement child that still owns the whole deliverable") {
+		t.Fatalf("retry message = %q, want explicit multi-child split guidance", retryMessage.Content)
+	}
+}
+
+func TestProjectContinuationBoundedSizeSuggestedChildTitles(t *testing.T) {
+	t.Parallel()
+
+	turnID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+	messages := []repo.ChatMessage{
+		{
+			Role:   "tool_result",
+			TurnID: uuidPtr(turnID),
+			Content: string(mustJSONRaw(map[string]any{
+				"tool_name": "task.update",
+				"output": map[string]any{
+					"error": "task exceeds bounded size policy (estimated 75 minutes > 60 minute limit): split the work into smaller reviewable tasks before queueing",
+					"suggested_decomposition": map[string]any{
+						"child_titles": []string{"Overview", "Architecture", "Operations"},
+					},
+				},
+			})),
+		},
+	}
+
+	titles := projectContinuationBoundedSizeSuggestedChildTitles(messages, turnID)
+	if len(titles) != 3 {
+		t.Fatalf("len(titles) = %d, want 3", len(titles))
+	}
+	if titles[0] != "Overview" || titles[1] != "Architecture" || titles[2] != "Operations" {
+		t.Fatalf("titles = %#v, want suggested decomposition titles", titles)
 	}
 }
 
@@ -14418,6 +14461,7 @@ func TestHandleCompletedProjectExecutionContinuationTurnKeepsBoundedSizeContextW
 			boundedTask,
 			projectContinuationChildActivity{},
 			projectContinuationTaskHints{DeliverablePath: "templates/template-08-replace.html"},
+			nil,
 		),
 		Metadata: mustJSONRaw(map[string]any{
 			"source":            projectExecutionContinuationSource,

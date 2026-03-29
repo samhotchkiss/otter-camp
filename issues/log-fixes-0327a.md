@@ -1,5 +1,12 @@
 # 0327a Fix Log
 
+- 2026-03-29 13:00:36 MDT - `pending` `Carry bounded-size split hints into PM retry prompts`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `retryProjectExecutionContinuationForBoundedSizeStop(...)` now extracts `suggested_decomposition.child_titles` from the failing bounded-size `task.create` / `task.update` tool result on the just-completed turn
+  - `buildProjectExecutionContinuationBoundedSizeRetryPrompt(...)` now includes those suggested child titles directly in the next PM continuation prompt and explicitly says not to create one replacement child that still owns the whole deliverable
+  - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) for both the child-title extraction helper and the bounded-size retry message content
+  - verified with `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurnRetriesBoundedSizeStopWithFreshMessage|ProjectContinuationBoundedSizeSuggestedChildTitles|HandleCompletedProjectExecutionContinuationTurnKeepsBoundedSizeContextWhenFocusedDeliverableIsMissing|DispatchToolsStopsAfterSecondSingleBlockedProjectContinuationRediscoveryInSameTurn|ShouldStopAfterBlockedProjectContinuationRediscovery|BlockedProjectContinuationRediscoveryResultCount)$' -count=1`
+  - pre-deploy live proof: PM turns `15903934-a89d-45f7-8eed-4187be9c3b0e` and `8e86ea62-823d-4ba3-a778-4b4e189db58b` kept trying to create one broad replacement child under task `146` even though the bounded-size result already carried a concrete split hint
+  - direct post-deploy proof is still pending the next fresh PM continuation on the rebuilt binary
 - 2026-03-29 12:55:14 MDT - `pending` `Stop PM turns after repeated single-call rediscovery blocks`
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so async project continuations now stop after the second cumulative blocked rediscovery tool result in the same PM turn, not just when two blocked rereads happen inside a single batch
   - added a shared blocked-rediscovery classifier plus turn-message counting, then used it to end turns that keep serially replaying blocked `file.read` / `task.list` / similar rediscovery attempts across successive model retries

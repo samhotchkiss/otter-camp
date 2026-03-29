@@ -5372,6 +5372,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForBoundedSizeStop(
 		focusTask,
 		childActivity[focusTask.ID],
 		taskHintsByTask[focusTask.ID],
+		projectContinuationBoundedSizeSuggestedChildTitles(messages, latestCompleted.ID),
 	)
 	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
 	if err != nil {
@@ -5896,6 +5897,7 @@ func buildProjectExecutionContinuationBoundedSizeRetryPrompt(
 	focusTask repo.ProjectTask,
 	focusActivity projectContinuationChildActivity,
 	focusHints projectContinuationTaskHints,
+	suggestedChildTitles []string,
 ) string {
 	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot)
 	focusLabel := projectBootstrapTaskLabel(focusTask)
@@ -5910,6 +5912,10 @@ func buildProjectExecutionContinuationBoundedSizeRetryPrompt(
 		retryPrompt += fmt.Sprintf(" Keep the new child work tightly scoped to deliverable `%s`.", deliverablePath)
 	} else if deliverableRoot := strings.TrimSpace(focusHints.DeliverableRoot); deliverableRoot != "" {
 		retryPrompt += fmt.Sprintf(" Keep the new child work tightly scoped inside deliverable root `%s`.", deliverableRoot)
+	}
+	if len(suggestedChildTitles) > 0 {
+		retryPrompt += fmt.Sprintf(" The last bounded-size tool result already suggested a concrete split: %s.", formatQuotedTitles(suggestedChildTitles))
+		retryPrompt += " Do not create one replacement child that still owns the whole deliverable; create multiple bounded child tasks that follow that split directly."
 	}
 	if focusTask.ID != uuid.Nil {
 		retryPrompt += fmt.Sprintf(" Your next assistant action must split %s into smaller reviewable child tasks now, or queue an already-bounded direct child if one already exists unchanged. If you must inspect child lanes first, use only task.list(parent_task_id=%s).", focusLabel, focusTask.ID.String())
@@ -5933,6 +5939,7 @@ func buildProjectExecutionContinuationBoundedSizeMissingDeliverableRetryPrompt(
 		focusTask,
 		focusActivity,
 		focusHints,
+		nil,
 	)
 	focusLabel := projectBootstrapTaskLabel(focusTask)
 	if normalized := normalizeWorkspaceRelativePath(missingPath); normalized != "" {
@@ -5942,6 +5949,60 @@ func buildProjectExecutionContinuationBoundedSizeMissingDeliverableRetryPrompt(
 	}
 	retryPrompt += fmt.Sprintf(" Do not treat that missing deliverable as a separate prerequisite artifact, do not reread it from the project lane, and do not try to queue %s again until you split it into smaller child tasks.", focusLabel)
 	return retryPrompt
+}
+
+func projectContinuationBoundedSizeSuggestedChildTitles(messages []repo.ChatMessage, turnID uuid.UUID) []string {
+	if turnID == uuid.Nil || len(messages) == 0 {
+		return nil
+	}
+	for _, message := range messages {
+		if message.TurnID == nil || *message.TurnID != turnID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(toolName), "task.create") &&
+			!strings.EqualFold(strings.TrimSpace(toolName), "task.update") {
+			continue
+		}
+		lowerErr := strings.ToLower(strings.TrimSpace(errText))
+		if !strings.Contains(lowerErr, "bounded size policy") && !strings.Contains(lowerErr, "bounded task-size policy") {
+			continue
+		}
+		suggested, _ := output["suggested_decomposition"].(map[string]any)
+		titles := anyStrings(suggested["child_titles"])
+		if len(titles) == 0 {
+			continue
+		}
+		return titles
+	}
+	return nil
+}
+
+func formatQuotedTitles(titles []string) string {
+	trimmed := make([]string, 0, min(len(titles), 3))
+	for _, title := range titles {
+		title = strings.TrimSpace(title)
+		if title == "" {
+			continue
+		}
+		trimmed = append(trimmed, fmt.Sprintf("%q", title))
+		if len(trimmed) == 3 {
+			break
+		}
+	}
+	if len(trimmed) == 0 {
+		return ""
+	}
+	if len(titles) > len(trimmed) {
+		return strings.Join(trimmed, ", ") + ", ..."
+	}
+	return strings.Join(trimmed, ", ")
 }
 
 func projectContinuationProducerTaskRefsForPath(
