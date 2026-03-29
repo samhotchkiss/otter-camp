@@ -3541,6 +3541,8 @@ func projectContinuationBlockedTaskResumePolicyForWorker(reason string) string {
 		return "terminal_keep_blocked"
 	case strings.Contains(normalized, "recovery halted after recovered file.write"):
 		return "manual_recovery_repair"
+	case strings.Contains(normalized, "requires direct human operator continuation"):
+		return "requires_human_continuation"
 	case strings.Contains(normalized, "review turn completed without calling flow.review_decision"):
 		return "resume_review_decision"
 	case strings.Contains(normalized, "review turn repeatedly hit"):
@@ -3551,13 +3553,16 @@ func projectContinuationBlockedTaskResumePolicyForWorker(reason string) string {
 }
 
 func projectContinuationTaskResumePolicyForWorker(task repo.ProjectTask, blockedReason string) string {
+	if blockedPolicy := projectContinuationBlockedTaskResumePolicyForWorker(blockedReason); blockedPolicy != "" {
+		return blockedPolicy
+	}
 	if failureCode, blocked := projectContinuationValidationGuardFailureCodeForWorker(task.Metadata); blocked {
 		switch strings.ToLower(strings.TrimSpace(failureCode)) {
 		case "review_action_required", "review_decision_required":
 			return "resume_review_decision"
 		}
 	}
-	return projectContinuationBlockedTaskResumePolicyForWorker(blockedReason)
+	return ""
 }
 
 func projectContinuationValidationGuardFailureCodeForWorker(metadata json.RawMessage) (string, bool) {
@@ -3763,6 +3768,9 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 		}
 		if strings.Contains(activeLine, "resume_policy=manual_recovery_repair") {
 			lines = append(lines, "If a named blocked task above already shows resume_policy=manual_recovery_repair, queue only the targeted manual repair needed for that deliverable instead of broader session or project listing.")
+		}
+		if strings.Contains(activeLine, "resume_policy=requires_human_continuation") {
+			lines = append(lines, "If a named blocked task above already shows resume_policy=requires_human_continuation, leave it blocked and surface that human/operator dependency instead of resuming the review lane or creating replacement work.")
 		}
 		if strings.Contains(activeLine, "deliverable_path=") {
 			lines = append(lines, "If a named active task above already shows deliverable_path=..., inspect or write that exact path instead of broad workspace-root or artifact-root browsing.")

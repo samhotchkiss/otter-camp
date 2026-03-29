@@ -19411,6 +19411,87 @@ func TestJobWorkerProjectExecutionContinuationSnapshotPrefersReviewGuardAndCompl
 	}
 }
 
+func TestJobWorkerProjectExecutionContinuationSnapshotKeepsHumanContinuationPolicyOverStaleReviewGuard(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "project-continuation-snapshot-human-continuation",
+		DisplayName: "Project Continuation Snapshot Human Continuation",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "project-continuation-snapshot-human-continuation-project",
+		DisplayName:    "Project Continuation Snapshot Human Continuation Project",
+		Description:    "Project for human continuation snapshot behavior",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Human Continuation Snapshot Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Close-out verification",
+		WorkStatus:      "blocked",
+		AssignedAgentID: &agent.ID,
+		CreatedByType:   "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+		Metadata: json.RawMessage(`{"agent_turn_validation_guard":{"tool_name":"flow.review_decision","failure_class":"tool_validation","failure_code":"review_decision_required","failure_reason":"review_decision_required","count":1,"blocked":true}}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if _, recordErr := repo.NewProjectTaskEventRepo(pool).Record(ctx, repo.ProjectTaskEvent{
+		TaskID:    task.ID,
+		ProjectID: project.ID,
+		EventType: "status.changed",
+		ActorType: "system",
+		Payload:   json.RawMessage(`{"to_status":"blocked","blocker_reason":"review approval recorded but blocked task requires direct human operator continuation"}`),
+	}); recordErr != nil {
+		t.Fatalf("record blocked reason: %v", recordErr)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if !strings.Contains(snapshot.ActiveTaskLine, "resume_policy=requires_human_continuation") {
+		t.Fatalf("ActiveTaskLine = %q, want human continuation policy to override stale review guard", snapshot.ActiveTaskLine)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "resume_policy=resume_review_decision") {
+		t.Fatalf("ActiveTaskLine = %q, should not keep stale review-resume policy once human continuation is required", snapshot.ActiveTaskLine)
+	}
+}
+
 func TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedActiveReplacementContinuation(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

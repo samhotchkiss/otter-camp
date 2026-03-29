@@ -1794,6 +1794,27 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 		}
 		return true, nil
 	}
+	if e.messages != nil {
+		executionID := parseFlowNodeExecutionIDFromMetadata(latestUser.Metadata)
+		if executionID != uuid.Nil {
+			messages, err := e.messages.ListBySession(ctx, session.ID)
+			if err != nil {
+				return true, err
+			}
+			if latestReviewApprovalAttemptRequiresHumanContinuation(messages, executionID) {
+				return e.blockReviewTurnWithoutDecision(
+					ctx,
+					session,
+					taskRecord,
+					latestUser,
+					latestCompleted,
+					"review approval recorded but blocked task requires direct human operator continuation",
+					"[Review approval was already recorded, but this task remains blocked and requires direct human operator continuation before the flow can advance. Leaving this review lane blocked instead of retrying flow.review_decision.]",
+					assistantContent,
+				)
+			}
+		}
+	}
 
 	reason := "review turn completed without calling flow.review_decision"
 	if readNotFoundCount, readNotFoundCapReached, readNotFoundErr := e.repeatedReviewValidationLoopMessageTurnCapReached(ctx, session.ID, latestCompleted, reviewRepeatedFileReadNotFoundTurnStopSubstring, maxRepeatedReviewReadNotFoundCapTurns); readNotFoundErr != nil {
@@ -3044,6 +3065,32 @@ func latestReviewApprovalAttemptBlockedOnDirtyWorkspace(messages []repo.ChatMess
 			continue
 		}
 		if !strings.Contains(msg.Content, "review_approval_requires_clean_workspace") {
+			continue
+		}
+		for j := i - 1; j >= 0; j-- {
+			assistant := messages[j]
+			if !strings.EqualFold(strings.TrimSpace(assistant.Role), "assistant") {
+				continue
+			}
+			if assistantEmittedReviewDecisionCall(assistant.Metadata, executionID, "approve") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func latestReviewApprovalAttemptRequiresHumanContinuation(messages []repo.ChatMessage, executionID uuid.UUID) bool {
+	if executionID == uuid.Nil {
+		return false
+	}
+	humanContinuationText := strings.ToLower(tasksvc.ErrBlockedInProgressRequiresHumanActor.Error())
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "tool_result") {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(msg.Content), humanContinuationText) {
 			continue
 		}
 		for j := i - 1; j >= 0; j-- {
@@ -7605,6 +7652,9 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		}
 		if strings.Contains(activeLine, "resume_policy=manual_recovery_repair") {
 			lines = append(lines, "If a named blocked task above already shows resume_policy=manual_recovery_repair, queue only the targeted manual repair needed for that deliverable instead of broader session or project listing.")
+		}
+		if strings.Contains(activeLine, "resume_policy=requires_human_continuation") {
+			lines = append(lines, "If a named blocked task above already shows resume_policy=requires_human_continuation, leave it blocked and surface that human/operator dependency instead of resuming the review lane or creating replacement work.")
 		}
 		if strings.Contains(activeLine, "deliverable_path=") {
 			lines = append(lines, "If a named active task above already shows deliverable_path=..., inspect or write that exact path instead of broad workspace-root or artifact-root browsing.")
@@ -14186,6 +14236,12 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Review approval failed because the workspace is still dirty. Ending this turn now so the next retry can reject immediately instead of re-inspecting repo or deliverable state.]")
 			return true, nil
 		}
+		if shouldStopAfterHumanContinuationReviewApproval(rt, call, result) {
+			rt.toolCallsUsed++
+			rt.stopReason = stopReasonValidationBlocked
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Review approval was already recorded, but this task remains blocked and requires direct human operator continuation before the flow can advance. Ending this turn now instead of retrying flow.review_decision.]")
+			return true, nil
+		}
 		if err := e.maybeRefreshBootstrapStateAfterExternalProjectMutations(ctx, rt, []ToolCall{call}, []ToolResult{result}); err != nil {
 			return false, err
 		}
@@ -14376,6 +14432,24 @@ func shouldStopAfterDirtyWorkspaceReviewApproval(rt *turnRuntime, call ToolCall,
 		return false
 	}
 	return strings.EqualFold(toolResultErrorCode(result), "review_approval_requires_clean_workspace")
+}
+
+func shouldStopAfterHumanContinuationReviewApproval(rt *turnRuntime, call ToolCall, result ToolResult) bool {
+	if rt == nil || !taskReviewPromptActive(rt) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(call.Name)) {
+	case "flow.review_decision", "flow_review_decision":
+	default:
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(stringValue(call.Arguments["decision"])), "approve") {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(result.Name), "flow.review_decision") {
+		return false
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(result.Error)), strings.ToLower(tasksvc.ErrBlockedInProgressRequiresHumanActor.Error()))
 }
 
 func (e *TurnEngine) persistResolvedRecoveryTargetWritePath(ctx context.Context, rt *turnRuntime, result ToolResult) error {
@@ -18368,6 +18442,9 @@ func buildTaskContinuationActionPrompt(summary string, snapshot taskExecutionCon
 		if strings.Contains(currentLine, "resume_policy=terminal_keep_blocked") {
 			lines = append(lines, "If the current task above already shows resume_policy=terminal_keep_blocked, keep it blocked and work around it instead of retrying the same lane.")
 		}
+		if strings.Contains(currentLine, "resume_policy=requires_human_continuation") {
+			lines = append(lines, "If the current task above already shows resume_policy=requires_human_continuation, leave it blocked and surface the human/operator dependency instead of retrying the same review lane.")
+		}
 		if strings.Contains(currentLine, "deliverable_path=") {
 			lines = append(lines, "If the current task above already shows deliverable_path=..., inspect or write that exact path instead of broad workspace or external browsing.")
 		} else if strings.Contains(currentLine, "deliverable_root=") {
@@ -19166,6 +19243,8 @@ func projectContinuationBlockedTaskResumePolicy(reason string) string {
 		return "terminal_keep_blocked"
 	case strings.Contains(normalized, "recovery halted after recovered file.write"):
 		return "manual_recovery_repair"
+	case strings.Contains(normalized, "requires direct human operator continuation"):
+		return "requires_human_continuation"
 	case strings.Contains(normalized, "review turn completed without calling flow.review_decision"):
 		return "resume_review_decision"
 	case strings.Contains(normalized, "review turn repeatedly hit"):

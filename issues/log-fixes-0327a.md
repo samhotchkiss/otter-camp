@@ -2180,3 +2180,24 @@
   - deploy / proof status:
     - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and health is `ok` on `repo_version=3509` (`request_id=750635f2-df83-4c44-93a4-d8fbcce2d06a`)
     - the old worker error is gone; after restart, pane `0.1` logs `purged stale agent_turn jobs count=1` at `23:19:50 MDT` and does not emit the prior `successful recovery resumes` JSON-cast failure
+- 2026-03-28 23:34:00 MDT - Finished: stop blocked review approvals from reopening review lanes as if the decision were still missing.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - review turns now detect approve attempts that bounced on `blocked to in_progress requires direct human operator continuation`
+    - those turns stop immediately, append a specific human-continuation system message, and block the review lane instead of retrying as a generic no-decision review pass
+    - project-continuation snapshots now map that blocker family to `resume_policy=requires_human_continuation`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - worker snapshot policy selection now gives the blocked reason precedence over stale validation-guard state
+    - blocked tasks carrying the human-continuation blocker now surface as `resume_policy=requires_human_continuation` instead of `resume_review_decision`
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestHandleTurnCompletedEventBlocksReviewApprovalRequiringHumanContinuation`
+      - added `TestProjectExecutionContinuationSnapshotKeepsHumanContinuationPolicyOverStaleReviewGuard`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+      - added `TestJobWorkerProjectExecutionContinuationSnapshotKeepsHumanContinuationPolicyOverStaleReviewGuard`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - repo version remains `3510` for this slice because the local tree was already on that version when I picked up the fix
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleTurnCompletedEventBlocksReviewApprovalRequiringHumanContinuation|ProjectExecutionContinuationSnapshotKeepsHumanContinuationPolicyOverStaleReviewGuard)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotKeepsHumanContinuationPolicyOverStaleReviewGuard$' -count=1`
+  - deploy / proof status:
+    - pending fresh post-deploy live proof on the next blocked review approval or PM snapshot for task `78`

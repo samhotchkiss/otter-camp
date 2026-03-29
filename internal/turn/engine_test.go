@@ -4320,6 +4320,109 @@ func TestHandleCompletedReviewTurnWithoutDecisionRetriesWithRejectPromptWhileWor
 	}
 }
 
+func TestHandleTurnCompletedEventBlocksReviewApprovalRequiringHumanContinuation(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	executionID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		ProjectID:  projectID,
+		TaskNumber: 78,
+		Title:      "Close-out verification",
+		WorkStatus: "review",
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.taskTransitions = blocker
+
+	userMessage := repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Review only.\nInspect the current deliverables and use flow.review_decision to approve or reject this review step.\nUse flow_node_execution_id " + executionID.String() + " in flow.review_decision.",
+		Metadata: mustRawJSON(t, map[string]any{
+			"flow_node_execution_id": executionID.String(),
+		}),
+	}
+	fixture.messages.create(userMessage)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "The review is complete and approved, but the task is still blocked.")
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "The review is complete and approved, but the task is still blocked.",
+		Metadata: mustRawJSON(t, map[string]any{
+			"tool_calls": []map[string]any{{
+				"id":   "review-approve-1",
+				"name": "flow.review_decision",
+				"arguments": map[string]any{
+					"flow_node_execution_id": executionID.String(),
+					"decision":               "approve",
+				},
+			}},
+		}),
+	})
+	appendToolResultMessage(t, fixture, turnID, map[string]any{
+		"tool_name": "flow.review_decision",
+		"error":     tasksvc.ErrBlockedInProgressRequiresHumanActor.Error(),
+	})
+
+	turns, err := fixture.engine.turns.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	latestCompleted := latestCompletedTurn(turns)
+	if latestCompleted == nil || latestCompleted.ID != turnID {
+		t.Fatalf("latestCompleted = %#v, want turn %s", latestCompleted, turnID)
+	}
+
+	handled, err := fixture.engine.handleCompletedReviewTurnWithoutDecision(
+		context.Background(),
+		fixture.session,
+		taskRepo.items[taskID],
+		latestCompleted,
+		&userMessage,
+		"The review is complete and approved, but the task is still blocked.",
+	)
+	if err != nil {
+		t.Fatalf("handleCompletedReviewTurnWithoutDecision: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(fixture.enqueuer.agentTurnJobs()) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(fixture.enqueuer.agentTurnJobs()))
+	}
+	if len(blocker.calls) != 1 {
+		t.Fatalf("blocked calls = %d, want 1", len(blocker.calls))
+	}
+	if !strings.Contains(blocker.calls[0].reason, "requires direct human operator continuation") {
+		t.Fatalf("blocked reason = %q, want human continuation guidance", blocker.calls[0].reason)
+	}
+	if !fixture.messages.containsContentSubstring("requires direct human operator continuation") {
+		t.Fatal("expected human continuation system message")
+	}
+}
+
 func TestMaybeRewriteDirtyWorkspaceReviewApprovalToolCalls(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -20625,6 +20728,43 @@ func TestProjectExecutionContinuationSnapshotKeepsTerminalBlockedPolicyOverStale
 	}
 	if strings.Contains(snapshot.ActiveTaskLine, "resume_policy=resume_review_decision") {
 		t.Fatalf("ActiveTaskLine = %q, should not keep stale review-resume policy once flow rejection max visits is exceeded", snapshot.ActiveTaskLine)
+	}
+}
+
+func TestProjectExecutionContinuationSnapshotKeepsHumanContinuationPolicyOverStaleReviewGuard(t *testing.T) {
+	projectID := uuid.New()
+	assignedID := uuid.New()
+	taskID := uuid.New()
+	projectTasks := []repo.ProjectTask{
+		{
+			ID:              taskID,
+			ProjectID:       projectID,
+			TaskNumber:      78,
+			Title:           "Close-out verification",
+			WorkStatus:      "blocked",
+			AssignedAgentID: &assignedID,
+			Metadata: mustJSONRaw(map[string]any{
+				tasksvc.ValidationGuardMetadataKey: tasksvc.ValidationGuardState{
+					ToolName:      "flow.review_decision",
+					FailureClass:  "tool_validation",
+					FailureCode:   "review_decision_required",
+					FailureReason: "review_decision_required",
+					Count:         1,
+					Blocked:       true,
+				},
+			}),
+		},
+	}
+	taskHintsByTask := buildProjectContinuationTaskHints(projectTasks, map[uuid.UUID]string{
+		taskID: "review approval recorded but blocked task requires direct human operator continuation",
+	})
+
+	snapshot, _ := buildProjectExecutionContinuationSnapshot(projectTasks, taskHintsByTask, nil)
+	if !strings.Contains(snapshot.ActiveTaskLine, "resume_policy=requires_human_continuation") {
+		t.Fatalf("ActiveTaskLine = %q, want human continuation policy to override stale review guard", snapshot.ActiveTaskLine)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "resume_policy=resume_review_decision") {
+		t.Fatalf("ActiveTaskLine = %q, should not keep stale review-resume policy once human continuation is required", snapshot.ActiveTaskLine)
 	}
 }
 
