@@ -79,6 +79,7 @@ const (
 	maxTransientInfraRetries                      = 5
 	maxConsecutiveAutoTurns                       = 10
 	maxGenericRecoveryReplyRetries                = defaultModelRetryBudget - 1
+	maxProjectContinuationParentCompletionRetries = maxGenericRecoveryReplyRetries + 1
 	maxProjectBootstrapAutoTurns                  = 3
 	maxEmptyReviewOutputCapTurns                  = 3
 	maxRepeatedReviewReadNotFoundCapTurns         = 3
@@ -5266,7 +5267,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForBoundedSizeStop(
 	if e == nil || session == nil || latestCompleted == nil || latestUser == nil || e.tasks == nil {
 		return false, nil
 	}
-	if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
+	if latestCompleted.RetryCount >= maxProjectContinuationParentCompletionRetries {
 		return false, nil
 	}
 	completedTaskID, _ := parseUUIDAny(messageMetadataMap(latestUser.Metadata)["completed_task_id"])
@@ -5446,6 +5447,9 @@ func (e *TurnEngine) retryProjectExecutionContinuationForParentCompletionRequire
 	focusActivity := childActivity[focusTask.ID]
 	if !projectContinuationDraftTaskReadyForParentClosureForTask(focusTask, focusActivity) {
 		return false, nil
+	}
+	if len(requiredChildLabels) == 0 {
+		requiredChildLabels = projectContinuationCompletedChildTaskLabels(projectTasks, focusTask.ID)
 	}
 	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
 	if err != nil {
@@ -8218,6 +8222,26 @@ func projectContinuationParentCompletionTaskLabels(text string) []string {
 		seen[label] = struct{}{}
 		labels = append(labels, label)
 	}
+	return labels
+}
+
+func projectContinuationCompletedChildTaskLabels(projectTasks []repo.ProjectTask, parentTaskID uuid.UUID) []string {
+	if parentTaskID == uuid.Nil || len(projectTasks) == 0 {
+		return nil
+	}
+	labels := make([]string, 0, 4)
+	for _, task := range projectTasks {
+		if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "done") || task.TaskNumber <= 0 {
+			continue
+		}
+		metadata := messageMetadataMap(task.Metadata)
+		parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+		if !ok || parentID != parentTaskID {
+			continue
+		}
+		labels = append(labels, fmt.Sprintf("OC-%d", task.TaskNumber))
+	}
+	sort.Strings(labels)
 	return labels
 }
 

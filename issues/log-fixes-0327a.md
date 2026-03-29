@@ -3136,3 +3136,19 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurn(RetriesParentCompletionRequirementsWithFreshMessage|RetriesBoundedSizeStopWithFreshMessage|RetriesReplacementChildWorkWithFreshMessage|RetriesMissingDependencyStopWithFreshMessage)|BuildProjectContinuationActionPromptAdds(SatisfiedCloseoutGuidance|CompletedCloseoutGuidance)|ProjectContinuationDraftTaskReadyForParentClosureAllows(SatisfiedOutcomeWithOnlyBlockedChildren|OnlyBlockedChildren))$' -count=1`
   - deploy / proof status:
     - ready to deploy next; expected live canary remains PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where the next parent-completion failure should append a fresh continuation that names the exact `OC-*` children and suppresses another file-read / child-list loop
+- 2026-03-29 10:32 MDT - Let the parent-completion retry survive deeper PM retry chains and infer `OC-*` child labels from the task tree when the runtime emits the shorter completion error.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `maxProjectContinuationParentCompletionRetries = maxGenericRecoveryReplyRetries + 1`
+    - added [`projectContinuationCompletedChildTaskLabels(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - [`retryProjectExecutionContinuationForParentCompletionRequirements(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now:
+      - allows one extra retry specifically for the parent-completion stop family
+      - falls back to inferred completed-child `OC-*` labels from direct done children under the focus parent when the runtime error omits them
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - added `TestProjectContinuationCompletedChildTaskLabelsUsesDoneDirectChildren`
+      - widened `TestHandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionRequirementsWithFreshMessage` so it now covers the shorter runtime error and still expects inferred `OC-115`, `OC-124`, and `OC-130`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectContinuation(ParentCompletionTaskLabelsDedupesTaskRefs|CompletedChildTaskLabelsUsesDoneDirectChildren)|HandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionRequirementsWithFreshMessage)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurn(RetriesParentCompletionRequirementsWithFreshMessage|RetriesBoundedSizeStopWithFreshMessage|RetriesReplacementChildWorkWithFreshMessage|RetriesMissingDependencyStopWithFreshMessage)|ProjectContinuation(ParentCompletionTaskLabelsDedupesTaskRefs|CompletedChildTaskLabelsUsesDoneDirectChildren)|BuildProjectContinuationActionPromptAdds(SatisfiedCloseoutGuidance|CompletedCloseoutGuidance)|ProjectContinuationDraftTaskReadyForParentClosureAllows(SatisfiedOutcomeWithOnlyBlockedChildren|OnlyBlockedChildren))$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary is still PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, but now even a short `parent task requires child verification...` error at retry depth `2` should still append the sharper retry prompt with inferred `OC-*` labels

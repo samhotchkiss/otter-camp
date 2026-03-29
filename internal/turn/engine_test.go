@@ -12830,6 +12830,32 @@ func TestProjectContinuationParentCompletionTaskLabelsDedupesTaskRefs(t *testing
 	}
 }
 
+func TestProjectContinuationCompletedChildTaskLabelsUsesDoneDirectChildren(t *testing.T) {
+	t.Parallel()
+
+	parentTaskID := uuid.New()
+	otherParentID := uuid.New()
+	childMetadata := func(parentID uuid.UUID) json.RawMessage {
+		return mustJSONRaw(map[string]any{"decomposition_parent_task_id": parentID.String()})
+	}
+	labels := projectContinuationCompletedChildTaskLabels([]repo.ProjectTask{
+		{TaskNumber: 124, WorkStatus: "done", Metadata: childMetadata(parentTaskID)},
+		{TaskNumber: 115, WorkStatus: "done", Metadata: childMetadata(parentTaskID)},
+		{TaskNumber: 130, WorkStatus: "done", Metadata: childMetadata(parentTaskID)},
+		{TaskNumber: 129, WorkStatus: "blocked", Metadata: childMetadata(parentTaskID)},
+		{TaskNumber: 200, WorkStatus: "done", Metadata: childMetadata(otherParentID)},
+	}, parentTaskID)
+	want := []string{"OC-115", "OC-124", "OC-130"}
+	if len(labels) != len(want) {
+		t.Fatalf("labels len = %d, want %d (%v)", len(labels), len(want), labels)
+	}
+	for i := range want {
+		if labels[i] != want[i] {
+			t.Fatalf("labels[%d] = %q, want %q (all labels: %v)", i, labels[i], want[i], labels)
+		}
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionRequirementsWithFreshMessage(t *testing.T) {
 	t.Parallel()
 
@@ -12838,6 +12864,8 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionR
 	focusTaskID := uuid.New()
 	blockedChildID := uuid.New()
 	doneChildID := uuid.New()
+	secondDoneChildID := uuid.New()
+	thirdDoneChildID := uuid.New()
 	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
 
 	fixture := newUnitFixture(t, "async")
@@ -12888,8 +12916,24 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionR
 			doneChildID: {
 				ID:         doneChildID,
 				ProjectID:  projectID,
-				TaskNumber: 130,
+				TaskNumber: 115,
 				Title:      "Done replacement child",
+				WorkStatus: "done",
+				Metadata:   childMetadata,
+			},
+			secondDoneChildID: {
+				ID:         secondDoneChildID,
+				ProjectID:  projectID,
+				TaskNumber: 124,
+				Title:      "Done replacement child 2",
+				WorkStatus: "done",
+				Metadata:   childMetadata,
+			},
+			thirdDoneChildID: {
+				ID:         thirdDoneChildID,
+				ProjectID:  projectID,
+				TaskNumber: 130,
+				Title:      "Done replacement child 3",
 				WorkStatus: "done",
 				Metadata:   childMetadata,
 			},
@@ -12932,7 +12976,7 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionR
 		Content: string(mustJSONRaw(map[string]any{
 			"tool_name": "task.update",
 			"output": map[string]any{
-				"error": "parent task requires child verification and passed integration before completion: all child tasks must complete before the parent can finish integration; verify child outputs for OC-115, OC-124, OC-130",
+				"error": "parent task requires child verification and passed integration before completion: all child tasks must complete before the parent can finish integration",
 			},
 		})),
 	}
