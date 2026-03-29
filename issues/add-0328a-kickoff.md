@@ -141,3 +141,13 @@ A good kickoff is one where:
 - Likely touchpoints: kickoff prompt assembly in `internal/turn/engine.go`, org/project bootstrap prompt builders, and persisted project-spec / assumptions metadata.
 - Integration plan: add a kickoff question filter based on inferability, material impact, and reversibility, then persist the resulting assumptions into project state so later PM turns can reuse them.
 - Status: queued behind the current execution-hardening follow-ons (`add-0328f`, `add-0328h`, `add-0328e`).
+- 2026-03-29 12:46 MDT - Picked up the first narrow implementation slice in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go): Frank’s synthetic project kickoff handoff now explicitly frames kickoff as a chief-of-staff decision pass instead of an open-ended interview.
+- The new handoff guidance now says:
+  - infer from request/project/org context before asking anything
+  - ask only questions that are non-inferable and materially outcome-changing
+  - keep the normal question budget small (`0-5`)
+  - decide small / obvious / reversible choices locally
+  - restate the working spec and move toward execution by default
+  - reserve optional value-add ideation for after the core spec is solid
+- Focused coverage is in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) under `TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext`.
+- This is intentionally the first kickoff slice, not the full feature. It improves kickoff behavior at the prompt/handoff layer without yet persisting assumption state or adding a structured kickoff-question classifier.

@@ -888,14 +888,14 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 	}
 
 	// Condition 5b: a consumed recovery-resume message that already produced a
-	// successful clean file.write in a completed turn should not be
+	// successful durable artifact mutation in a completed turn should not be
 	// re-dispatched. Validation-loop-blocked turns can still contain a
-	// successful file.write before the recovery attempt fails again, so those
-	// stale retries must remain eligible for requeue.
+	// successful file.write/file.edit before the recovery attempt fails again,
+	// so those stale retries must remain eligible for requeue.
 	ct5b, err := w.pool.Exec(ctx, `
 		UPDATE job_queue jq
 		SET status = 'dead_letter',
-		    last_error = 'purged stale recovery resume after successful file.write',
+		    last_error = 'purged stale recovery resume after successful artifact mutation',
 		    updated_at = now()
 		WHERE jq.status = 'pending'
 		  AND jq.job_type = 'agent_turn'
@@ -925,10 +925,17 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 			  AND ct.status = 'completed'
 			  AND COALESCE(ct.stop_reason, '') = ''
 			  AND LEFT(LTRIM(tool_result.content), 1) = '{'
-			  AND COALESCE(tool_result.content::jsonb->>'tool_name', '') = 'file.write'
 			  AND COALESCE(tool_result.content::jsonb->>'error', '') = ''
 			  AND COALESCE(tool_result.content::jsonb->'output'->>'error', '') = ''
-			  AND COALESCE((tool_result.content::jsonb->'output'->>'byte_size')::int, 0) > 0
+			  AND (
+			    (
+			      COALESCE(tool_result.content::jsonb->>'tool_name', '') = 'file.write'
+			      AND COALESCE((tool_result.content::jsonb->'output'->>'byte_size')::int, 0) > 0
+			    ) OR (
+			      COALESCE(tool_result.content::jsonb->>'tool_name', '') = 'file.edit'
+			      AND COALESCE((tool_result.content::jsonb->'output'->>'replacements_made')::int, 0) > 0
+			    )
+			  )
 		  )
 	`)
 	if err != nil {
@@ -1643,11 +1650,11 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			return repaired, fmt.Errorf("scan active execution session without turn: %w", err)
 		}
 		if messageConsumed && strings.EqualFold(strings.TrimSpace(messageSource), "task_recovery_resume") {
-			successfulRecoveryWrite, recoveryErr := w.recoveryResumeMessageCompletedWithSuccessfulFileWrite(ctx, sessionID, messageID)
+			successfulRecoveryMutation, recoveryErr := w.recoveryResumeMessageCompletedWithDurableArtifactMutation(ctx, sessionID, messageID)
 			if recoveryErr != nil {
 				return repaired, fmt.Errorf("check completed recovery resume for session %s: %w", sessionID, recoveryErr)
 			}
-			if successfulRecoveryWrite {
+			if successfulRecoveryMutation {
 				continue
 			}
 		}
@@ -1851,11 +1858,11 @@ func (w *Worker) RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(ctx c
 			return repaired, fmt.Errorf("scan terminal recovery resume without live execution: %w", err)
 		}
 		if messageConsumed {
-			successfulRecoveryWrite, recoveryErr := w.recoveryResumeMessageCompletedWithSuccessfulFileWrite(ctx, sessionID, messageID)
+			successfulRecoveryMutation, recoveryErr := w.recoveryResumeMessageCompletedWithDurableArtifactMutation(ctx, sessionID, messageID)
 			if recoveryErr != nil {
 				return repaired, fmt.Errorf("check completed terminal recovery resume for session %s: %w", sessionID, recoveryErr)
 			}
-			if successfulRecoveryWrite {
+			if successfulRecoveryMutation {
 				continue
 			}
 		}
@@ -1895,7 +1902,7 @@ func (w *Worker) RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(ctx c
 	return repaired, nil
 }
 
-func (w *Worker) recoveryResumeMessageCompletedWithSuccessfulFileWrite(ctx context.Context, sessionID, messageID uuid.UUID) (bool, error) {
+func (w *Worker) recoveryResumeMessageCompletedWithDurableArtifactMutation(ctx context.Context, sessionID, messageID uuid.UUID) (bool, error) {
 	if w == nil || w.pool == nil || sessionID == uuid.Nil || messageID == uuid.Nil {
 		return false, nil
 	}
@@ -1913,10 +1920,17 @@ func (w *Worker) recoveryResumeMessageCompletedWithSuccessfulFileWrite(ctx conte
 			  AND ct.status = 'completed'
 			  AND COALESCE(ct.stop_reason, '') = ''
 			  AND LEFT(LTRIM(tool_result.content), 1) = '{'
-			  AND COALESCE(tool_result.content::jsonb->>'tool_name', '') = 'file.write'
 			  AND COALESCE(tool_result.content::jsonb->>'error', '') = ''
 			  AND COALESCE(tool_result.content::jsonb->'output'->>'error', '') = ''
-			  AND COALESCE((tool_result.content::jsonb->'output'->>'byte_size')::int, 0) > 0
+			  AND (
+			    (
+			      COALESCE(tool_result.content::jsonb->>'tool_name', '') = 'file.write'
+			      AND COALESCE((tool_result.content::jsonb->'output'->>'byte_size')::int, 0) > 0
+			    ) OR (
+			      COALESCE(tool_result.content::jsonb->>'tool_name', '') = 'file.edit'
+			      AND COALESCE((tool_result.content::jsonb->'output'->>'replacements_made')::int, 0) > 0
+			    )
+			  )
 		)
 	`, sessionID, messageID).Scan(&successful); err != nil {
 		return false, err

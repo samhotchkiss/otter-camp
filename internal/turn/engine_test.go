@@ -9006,6 +9006,24 @@ func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testin
 	if !strings.Contains(handoff, "Do not call memory.query, memory.list, or other memory tools during this bootstrap handoff") {
 		t.Fatalf("handoff = %q, want explicit no-memory guidance", handoff)
 	}
+	if !strings.Contains(handoff, "Start kickoff like a decisive chief of staff.") {
+		t.Fatalf("handoff = %q, want decisive kickoff framing", handoff)
+	}
+	if !strings.Contains(handoff, "Only ask a kickoff question if the answer is not already reasonably inferable") {
+		t.Fatalf("handoff = %q, want kickoff question quality filter", handoff)
+	}
+	if !strings.Contains(handoff, "Keep kickoff questions scarce. In normal cases ask zero to five high-leverage questions") {
+		t.Fatalf("handoff = %q, want kickoff question budget guidance", handoff)
+	}
+	if !strings.Contains(handoff, "Do not stop on small, obvious, reversible, or low-risk choices.") {
+		t.Fatalf("handoff = %q, want default-decision policy guidance", handoff)
+	}
+	if !strings.Contains(handoff, "briefly restate the working spec back") {
+		t.Fatalf("handoff = %q, want working-spec summary guidance", handoff)
+	}
+	if !strings.Contains(handoff, "do not keep interrogating the operator") {
+		t.Fatalf("handoff = %q, want anti-interrogation guidance", handoff)
+	}
 	if !strings.Contains(handoff, "Frank, Lori, and Ellie are starter-trio governance agents") {
 		t.Fatalf("handoff = %q, want starter-trio staffing guidance", handoff)
 	}

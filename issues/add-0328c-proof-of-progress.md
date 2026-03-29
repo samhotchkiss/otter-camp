@@ -42,3 +42,10 @@ Without explicit proof-of-progress rules, the system can spend long periods:
 - 2026-03-29 11:12 MDT - Picked up the first narrow implementation slice in `internal/jobqueue/worker.go`: repeated PM continuation suppression now checks the latest blocked continuation turn for explicit progress-bearing tool results before classifying it as "repeat with no progress."
 - Initial progress signals for this slice are intentionally narrow and durable: successful `task.create`, successful `task.update`, and successful `flow.review_decision` tool results on the latest terminal continuation turn.
 - Integration coverage added in `internal/jobqueue/worker_integration_test.go` for both entry points that matter here: direct `ensureProjectContinuationMessageDecision(...)` retries and worker-side `RequeueActiveProjectSessionsWithoutTurns(...)` retries.
+- 2026-03-29 12:58 MDT - Picked up the next narrow proof-of-progress slice in `internal/jobqueue/worker.go`: recovery-session progress now treats successful `file.edit` the same as successful `file.write` when deciding whether a consumed recovery-resume already produced a durable artifact mutation.
+- Why this slice matters: the worker previously suppressed stale recovery resumes only after completed `file.write` turns, even though many bounded repair lanes make real forward progress through `file.edit` on an existing deliverable.
+- This slice widens the durable-mutation classifier used by:
+  - `RequeueActiveExecutionSessionsWithoutTurns(...)`
+  - `RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(...)`
+  - stale `agent_turn` purge for consumed recovery resumes
+- Focused integration coverage is in `internal/jobqueue/worker_integration_test.go` for successful `file.edit` paths across active requeue, terminal requeue, and stale-job purge.

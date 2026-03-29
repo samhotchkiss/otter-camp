@@ -13919,7 +13919,7 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsValidationLoopB
 	}
 }
 
-func createRecoveryResumeExecutionFixture(t *testing.T, pool *pgxpool.Pool, slug string, stopReason *string) (context.Context, repo.ChatSession, repo.FlowNodeExecution, repo.ChatMessage) {
+func createRecoveryResumeExecutionFixtureWithToolResult(t *testing.T, pool *pgxpool.Pool, slug string, stopReason *string, toolName string, output map[string]any) (context.Context, repo.ChatSession, repo.FlowNodeExecution, repo.ChatMessage) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -14041,13 +14041,19 @@ func createRecoveryResumeExecutionFixture(t *testing.T, pool *pgxpool.Pool, slug
 	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, nil); err != nil {
 		t.Fatalf("clear current turn: %v", err)
 	}
-	toolResultBody, err := json.Marshal(map[string]any{
-		"tool_name": "file.write",
-		"output": map[string]any{
+	if strings.TrimSpace(toolName) == "" {
+		toolName = "file.write"
+	}
+	if output == nil {
+		output = map[string]any{
 			"path":      "templates/recovered-layout.html",
 			"byte_size": 128,
 			"created":   true,
-		},
+		}
+	}
+	toolResultBody, err := json.Marshal(map[string]any{
+		"tool_name": toolName,
+		"output":    output,
 	})
 	if err != nil {
 		t.Fatalf("marshal tool result: %v", err)
@@ -14065,9 +14071,22 @@ func createRecoveryResumeExecutionFixture(t *testing.T, pool *pgxpool.Pool, slug
 	return ctx, session, execution, message
 }
 
+func createRecoveryResumeExecutionFixture(t *testing.T, pool *pgxpool.Pool, slug string, stopReason *string) (context.Context, repo.ChatSession, repo.FlowNodeExecution, repo.ChatMessage) {
+	t.Helper()
+	return createRecoveryResumeExecutionFixtureWithToolResult(t, pool, slug, stopReason, "file.write", nil)
+}
+
 func createSuccessfulRecoveryResumeExecutionFixture(t *testing.T, pool *pgxpool.Pool, slug string) (context.Context, repo.ChatSession, repo.FlowNodeExecution, repo.ChatMessage) {
 	t.Helper()
 	return createRecoveryResumeExecutionFixture(t, pool, slug, nil)
+}
+
+func createSuccessfulRecoveryResumeEditExecutionFixture(t *testing.T, pool *pgxpool.Pool, slug string) (context.Context, repo.ChatSession, repo.FlowNodeExecution, repo.ChatMessage) {
+	t.Helper()
+	return createRecoveryResumeExecutionFixtureWithToolResult(t, pool, slug, nil, "file.edit", map[string]any{
+		"path":              "templates/recovered-layout.html",
+		"replacements_made": 1,
+	})
 }
 
 func appendLegacyPlaintextToolResultToRecoveryTurn(t *testing.T, pool *pgxpool.Pool, sessionID, messageID uuid.UUID, content string) {
@@ -14305,6 +14324,39 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsSuccessfulRecov
 	}
 }
 
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsSuccessfulRecoveryResumeEdit(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx, session, _, _ := createSuccessfulRecoveryResumeEditExecutionFixture(t, pool, "requeue-active-execution-skip-successful-recovery-resume-edit")
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 0 {
+		t.Fatalf("requeued sessions = %d, want 0 when recovery resume already edited the target file", requeued)
+	}
+
+	var queuedJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		  AND status IN ('pending', 'claimed')
+	`, session.ID).Scan(&queuedJobs); err != nil {
+		t.Fatalf("count queued jobs: %v", err)
+	}
+	if queuedJobs != 0 {
+		t.Fatalf("queued jobs = %d, want 0 after successful recovery edit", queuedJobs)
+	}
+}
+
 func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsSuccessfulRecoveryResumeWriteWithPlaintextToolResultNoise(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -14368,7 +14420,55 @@ func TestJobWorkerPurgeStaleAgentTurnJobsPurgesSuccessfulRecoveryResumeWrite(t *
 	if status != "dead_letter" {
 		t.Fatalf("job status = %q, want dead_letter", status)
 	}
-	if lastError != "purged stale recovery resume after successful file.write" {
+	if lastError != "purged stale recovery resume after successful artifact mutation" {
+		t.Fatalf("last_error = %q, want successful recovery purge reason", lastError)
+	}
+}
+
+func TestJobWorkerPurgeStaleAgentTurnJobsPurgesSuccessfulRecoveryResumeEdit(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx, session, execution, message := createSuccessfulRecoveryResumeEditExecutionFixture(t, pool, "purge-successful-recovery-resume-edit")
+
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, $2, 70, $3, $4)
+		RETURNING id
+	`,
+		fmt.Sprintf(`{"session_id":"%s","message_id":"%s","flow_node_execution_id":"%s","retry_count":1}`, session.ID, message.ID, execution.ID),
+		time.Now().UTC(),
+		fmt.Sprintf("agent_turn:%s:%s:1", session.ID, message.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, message.ID, 1),
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert stale recovery resume job: %v", err)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 1 {
+		t.Fatalf("purged jobs = %d, want 1", purged)
+	}
+
+	var status, lastError string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(last_error, '')
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status, &lastError); err != nil {
+		t.Fatalf("query purged job: %v", err)
+	}
+	if status != "dead_letter" {
+		t.Fatalf("job status = %q, want dead_letter", status)
+	}
+	if lastError != "purged stale recovery resume after successful artifact mutation" {
 		t.Fatalf("last_error = %q, want successful recovery purge reason", lastError)
 	}
 }
@@ -14548,6 +14648,60 @@ func TestJobWorkerRequeueTerminalRecoveryResumeSessionsWithoutLiveExecutionSkips
 	}
 	if queuedJobs != 0 {
 		t.Fatalf("queued jobs = %d, want 0 when successful terminal recovery write should not requeue", queuedJobs)
+	}
+}
+
+func TestJobWorkerRequeueTerminalRecoveryResumeSessionsWithoutLiveExecutionSkipsSuccessfulEdit(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx, session, _, _ := createRecoveryResumeExecutionFixtureWithToolResult(t, pool, "requeue-terminal-recovery-skip-successful-edit", nil, "file.edit", map[string]any{
+		"path":              "templates/recovered-layout.html",
+		"replacements_made": 1,
+	})
+	if _, err := pool.Exec(ctx, `
+		UPDATE flow_node_execution
+		SET status = 'abandoned',
+		    completed_at = COALESCE(completed_at, now())
+		WHERE session_id = $1
+	`, session.ID); err != nil {
+		t.Fatalf("abandon recovery execution: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE project_task pt
+		SET work_status = 'blocked',
+		    updated_at = now()
+		FROM chat_session cs
+		WHERE cs.id = $1
+		  AND pt.id = cs.scope_id
+	`, session.ID); err != nil {
+		t.Fatalf("block recovery task: %v", err)
+	}
+
+	requeued, err := worker.RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(ctx)
+	if err != nil {
+		t.Fatalf("RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution: %v", err)
+	}
+	if requeued != 0 {
+		t.Fatalf("requeued terminal recovery resumes = %d, want 0 after successful recovery edit", requeued)
+	}
+
+	var queuedJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status IN ('pending', 'claimed')
+		  AND (payload->>'session_id')::uuid = $1
+	`, session.ID).Scan(&queuedJobs); err != nil {
+		t.Fatalf("count queued jobs: %v", err)
+	}
+	if queuedJobs != 0 {
+		t.Fatalf("queued jobs = %d, want 0 when successful terminal recovery edit should not requeue", queuedJobs)
 	}
 }
 
