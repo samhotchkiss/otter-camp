@@ -21336,6 +21336,123 @@ func TestProjectExecutionContinuationSnapshotTreatsMarkParentCompleteTitleAsClos
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotIgnoresSupersededCloseoutDrafts(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	indexDoneParentID := uuid.New()
+	postsDoneParentID := uuid.New()
+	indexDraftID := uuid.New()
+	postsDraftParentID := uuid.New()
+	postsDraftChildID := uuid.New()
+	indexDescription := "Produce content/technonymous-index.json by crawling technonymous.org."
+	indexDraftDescription := "Navigate to technonymous.org using browser tools."
+	postsDescription := "Scrape all 35 technonymous.org posts to markdown using web_fetch and save them under content/posts/."
+	closeoutIndexDescription := "Verify content/technonymous-index.json delivered and confirm the parent can close."
+	closeoutPostsDescription := "Verify all scraped posts exist in content/posts/ and confirm the parent can close."
+	childMetadata := func(parentID uuid.UUID) json.RawMessage {
+		return json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentID.String()))
+	}
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			indexDoneParentID: {
+				ID:          indexDoneParentID,
+				ProjectID:   projectID,
+				TaskNumber:  44,
+				Title:       "Produce content/technonymous-index.json by crawling technonymous.org",
+				Description: &indexDescription,
+				WorkStatus:  "done",
+			},
+			uuid.New(): {
+				ID:          uuid.New(),
+				ProjectID:   projectID,
+				TaskNumber:  75,
+				Title:       "Verify content/technonymous-index.json delivered - close parent OC-44",
+				Description: &closeoutIndexDescription,
+				WorkStatus:  "done",
+				Metadata:    childMetadata(indexDoneParentID),
+			},
+			postsDoneParentID: {
+				ID:          postsDoneParentID,
+				ProjectID:   projectID,
+				TaskNumber:  34,
+				Title:       "Scrape and import technonymous.org posts from URL index",
+				Description: &postsDescription,
+				WorkStatus:  "done",
+			},
+			uuid.New(): {
+				ID:          uuid.New(),
+				ProjectID:   projectID,
+				TaskNumber:  80,
+				Title:       "Close out OC-34: verify content/posts/ contains all scraped posts and mark parent complete",
+				Description: &closeoutPostsDescription,
+				WorkStatus:  "done",
+				Metadata:    childMetadata(postsDoneParentID),
+			},
+			indexDraftID: {
+				ID:          indexDraftID,
+				ProjectID:   projectID,
+				TaskNumber:  39,
+				Title:       "Replacement: Crawl technonymous.org and produce content/technonymous-index.json",
+				Description: &indexDraftDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"mode":               "parallel_children",
+						"applied":            true,
+						"orchestration_only": true,
+						"source_description": "Crawl technonymous.org, discover all blog post URLs, and produce content/technonymous-index.json containing an array of objects.",
+					},
+				}),
+			},
+			postsDraftParentID: {
+				ID:          postsDraftParentID,
+				ProjectID:   projectID,
+				TaskNumber:  55,
+				Title:       "Scrape all 35 technonymous.org posts to markdown using web_fetch",
+				Description: &postsDescription,
+				WorkStatus:  "draft",
+			},
+			postsDraftChildID: {
+				ID:          postsDraftChildID,
+				ProjectID:   projectID,
+				TaskNumber:  58,
+				Title:       "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/",
+				Description: &postsDescription,
+				WorkStatus:  "draft",
+				Metadata:    childMetadata(postsDraftParentID),
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshotForSummary(context.Background(), projectID, "content/technonymous-index.json content/posts")
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshotForSummary: %v", err)
+	}
+	for _, label := range []string{
+		"task 39 (Replacement: Crawl technonymous.org and produce content/technonymous-index.json)",
+		"task 55 (Scrape all 35 technonymous.org posts to markdown using web_fetch)",
+		"task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/)",
+	} {
+		if strings.Contains(snapshot.DraftTaskLine, label) || strings.Contains(snapshot.ReplacementDraftLine, label) || strings.Contains(snapshot.FocusTaskLine, label) {
+			t.Fatalf("snapshot = %+v, should ignore superseded closeout draft %s", snapshot, label)
+		}
+	}
+
+	count, err := fixture.engine.countProjectDraftTasks(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("countProjectDraftTasks: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("countProjectDraftTasks = %d, want 0 after ignoring superseded closeout drafts", count)
+	}
+}
+
 func TestShouldBlockProjectContinuationFocusedDraftMutationForMalformedChildParent(t *testing.T) {
 	t.Parallel()
 

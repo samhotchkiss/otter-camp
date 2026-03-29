@@ -27906,6 +27906,274 @@ func TestJobWorkerProjectExecutionContinuationSnapshotTreatsMarkParentCompleteTi
 	}
 }
 
+func TestJobWorkerRequeueActiveProjectSessionsMissingContinuationIgnoresSupersededCloseoutDrafts(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "worker-project-session-ignores-superseded-closeout-drafts",
+		DisplayName: "Worker Project Session Ignores Superseded Closeout Drafts",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "worker-project-session-ignores-superseded-closeout-drafts-project",
+		DisplayName:    "Worker Project Session Ignores Superseded Closeout Drafts Project",
+		Description:    "Project for superseded closeout-draft continuation suppression coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "worker-project-session-ignores-superseded-closeout-drafts-template",
+		DisplayName:    "Worker Project Session Ignores Superseded Closeout Drafts Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	indexDescription := "Produce content/technonymous-index.json by crawling technonymous.org."
+	postsDescription := "Scrape all 35 technonymous.org posts to markdown using web_fetch and save them under content/posts/."
+	indexDoneParent, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     44,
+		Title:          "Produce content/technonymous-index.json by crawling technonymous.org",
+		Description:    &indexDescription,
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done index parent: %v", err)
+	}
+	indexChildMetadata := json.RawMessage(`{"decomposition_parent_task_id":"` + indexDoneParent.ID.String() + `"}`)
+	closeoutIndexDescription := "Verify content/technonymous-index.json delivered and confirm the parent can close."
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     75,
+		Title:          "Verify content/technonymous-index.json delivered - close parent OC-44",
+		Description:    &closeoutIndexDescription,
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata:      indexChildMetadata,
+	}); err != nil {
+		t.Fatalf("create done index closeout child: %v", err)
+	}
+	postsDoneParent, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     34,
+		Title:          "Scrape and import technonymous.org posts from URL index",
+		Description:    &postsDescription,
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done posts parent: %v", err)
+	}
+	postsChildMetadata := json.RawMessage(`{"decomposition_parent_task_id":"` + postsDoneParent.ID.String() + `"}`)
+	closeoutPostsDescription := "Verify all scraped posts exist in content/posts/ and confirm the parent can close."
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     80,
+		Title:          "Close out OC-34: verify content/posts/ contains all scraped posts and mark parent complete",
+		Description:    &closeoutPostsDescription,
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata:      postsChildMetadata,
+	}); err != nil {
+		t.Fatalf("create done posts closeout child: %v", err)
+	}
+
+	indexDraftDescription := "Navigate to technonymous.org using browser tools."
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     39,
+		Title:          "Replacement: Crawl technonymous.org and produce content/technonymous-index.json",
+		Description:    &indexDraftDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata:      json.RawMessage(`{"decomposition":{"mode":"parallel_children","applied":true,"orchestration_only":true,"source_description":"Crawl technonymous.org, discover all blog post URLs, and produce content/technonymous-index.json containing an array of objects."}}`),
+	}); err != nil {
+		t.Fatalf("create stale index draft: %v", err)
+	}
+	postsDraftParent, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     55,
+		Title:          "Scrape all 35 technonymous.org posts to markdown using web_fetch",
+		Description:    &postsDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create stale posts parent draft: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     58,
+		Title:          "Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/",
+		Description:    &postsDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata:      json.RawMessage(`{"decomposition_parent_task_id":"` + postsDraftParent.ID.String() + `"}`),
+	}); err != nil {
+		t.Fatalf("create stale posts child draft: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	for _, label := range []string{
+		"task 39 (Replacement: Crawl technonymous.org and produce content/technonymous-index.json)",
+		"task 55 (Scrape all 35 technonymous.org posts to markdown using web_fetch)",
+		"task 58 (Fetch all 35 technonymous.org posts via web_fetch and save as markdown files under content/posts/)",
+	} {
+		if strings.Contains(snapshot.DraftTaskLine, label) || strings.Contains(snapshot.ReplacementDraftLine, label) || strings.Contains(snapshot.FocusTaskLine, label) {
+			t.Fatalf("snapshot = %+v, should ignore superseded closeout draft %s", snapshot, label)
+		}
+	}
+
+	count, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("countActionableProjectDraftTasks = %d, want 0 after ignoring superseded closeout drafts", count)
+	}
+
+	repaired, err := worker.RequeueActiveProjectSessionsMissingContinuation(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveProjectSessionsMissingContinuation: %v", err)
+	}
+	if repaired != 0 {
+		t.Fatalf("repaired = %d, want 0 when only superseded closeout drafts remain", repaired)
+	}
+
+	var pendingMessages int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_message
+		WHERE session_id = $1
+		  AND role = 'user'
+		  AND status = 'pending'
+	`, session.ID).Scan(&pendingMessages); err != nil {
+		t.Fatalf("count pending continuation messages: %v", err)
+	}
+	if pendingMessages != 0 {
+		t.Fatalf("pending continuation messages = %d, want 0", pendingMessages)
+	}
+	var pendingJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status IN ('pending', 'claimed')
+		  AND (payload->>'session_id')::uuid = $1
+	`, session.ID).Scan(&pendingJobs); err != nil {
+		t.Fatalf("count pending jobs: %v", err)
+	}
+	if pendingJobs != 0 {
+		t.Fatalf("pending jobs = %d, want 0", pendingJobs)
+	}
+}
+
 func createOrgForJobQueue(t *testing.T, pool *pgxpool.Pool, slug string) repo.Organization {
 	t.Helper()
 

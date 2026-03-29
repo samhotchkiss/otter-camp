@@ -2501,3 +2501,23 @@
     - assistant `5d29d858-ee03-454d-a188-7348daebbff7` tried the correct bounded `task.update` on parent `34`
     - tool result `e6845dbc-e879-4e84-ab1f-52cbbbe5d565` returned `parent task requires child verification and passed integration before completion`
     - the turn then ended immediately with system correction `bc55fde8-d3e1-4f5e-9f5b-0a2d7fa2a15d` instructing the lane to record `parent_orchestration` evidence instead of cancelling blocked stale child lanes
+- 2026-03-29 03:18:32 MDT - Finished and live-proven: ignore superseded closeout drafts in PM continuation snapshots and worker repair decisions.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - PM continuation deliverable-hint extraction now falls back to task titles and inherited child deliverable identity, so stale duplicate drafts like `Replacement: Crawl technonymous.org and produce content/technonymous-index.json` get a concrete deliverable identity even when their description text is generic
+    - snapshot building, draft counting, and current-focus selection now ignore drafts superseded by equivalent done deliverable families that already have closeout proof
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - worker-side PM continuation snapshots/counts now use the same title/child-derived deliverable hints and superseded-draft filtering as the turn engine
+    - `RequeueActiveProjectSessionsMissingContinuation(...)` no longer increments the repair count when no continuation message/job is actually created
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): added `TestProjectExecutionContinuationSnapshotIgnoresSupersededCloseoutDrafts`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go): added `TestJobWorkerRequeueActiveProjectSessionsMissingContinuationIgnoresSupersededCloseoutDrafts`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped runtime version to `3534`
+  - verified with:
+    - `go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshotIgnoresSupersededCloseoutDrafts|ProjectExecutionContinuationSnapshotTreatsMarkParentCompleteTitleAsCloseoutProof|ProjectExecutionContinuationSnapshotLiveTask44CompletedCloseoutBeatsReplacementBucket)$' -count=1`
+    - `go test -tags=integration ./internal/jobqueue -run 'Test(JobWorkerProjectExecutionContinuationSnapshotTreatsMarkParentCompleteTitleAsCloseoutProof|JobWorkerRequeueActiveProjectSessionsMissingContinuationIgnoresSupersededCloseoutDrafts)$' -count=1`
+    - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324` with `.env` exported, and `./bin/ottercamp health --output json` returned `status=ok`
+  - deploy / proof status:
+    - pre-fix live SQL still showed only three lingering drafts (`39`, `55`, `58`) with no pending/claimed PM `agent_turn` jobs for session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`
+    - fresh post-`3534` continuation message `67cc224a-267a-46d3-9aa1-51b609515efa` no longer includes tasks `39`, `55`, or `58` anywhere in the snapshot
+    - the new PM snapshot instead starts from genuinely actionable blocked tasks `81`, `78`, `77`, and `71`, which proves stale duplicate drafts are no longer driving PM continuation focus

@@ -82,6 +82,7 @@ var explicitDeliverablePathPatternsForWorker = []*regexp.Regexp{
 }
 
 var projectContinuationBatchRangePatternForWorker = regexp.MustCompile(`(?i)\bposts?\s+(\d{1,3})\s*[–-]\s*(\d{1,3})\b`)
+var projectContinuationWorkspacePathPatternForWorker = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\b`)
 
 var preferredDeliverableRootPatternsForWorker = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:under|in)\s+/?((?:content(?:/[A-Za-z0-9._-]+)+)/?)`),
@@ -2156,7 +2157,6 @@ func (w *Worker) RequeueActiveProjectSessionsMissingContinuation(ctx context.Con
 			return repaired, fmt.Errorf("ensure missing project continuation message for session %s: %w", sessionID, err)
 		}
 		if suppressed || messageID == uuid.Nil {
-			repaired++
 			continue
 		}
 		payload := agentTurnKeyPayload{
@@ -2281,6 +2281,9 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			snapshot, snapshotErr := w.projectExecutionContinuationSnapshot(ctx, projectID)
 			if snapshotErr != nil {
 				return uuid.Nil, false, fmt.Errorf("build project continuation snapshot: %w", snapshotErr)
+			}
+			if remainingDrafts == 0 && !snapshot.HasActionableBlocked {
+				return uuid.Nil, false, nil
 			}
 			allowSuccessfulHandoffSuppression = projectContinuationSnapshotWaitsOnActiveChildWorkForWorker(remainingDrafts, snapshot)
 			expectedCompletedTaskID = completedTaskID.String()
@@ -2837,9 +2840,13 @@ func (w *Worker) countActionableProjectDraftTasks(ctx context.Context, projectID
 	taskHintsByTask := buildProjectContinuationTaskHintsForWorker(projectTasks, nil)
 	childActivity := projectContinuationChildTaskActivityForWorker(projectTasks, taskHintsByTask)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDsForWorker(projectTasks)
+	supersededDraftTaskIDs := projectContinuationSupersededDraftTaskIDsForWorker(projectTasks, taskHintsByTask, childActivity, malformedChildTaskIDs)
 	count := 0
 	for _, task := range projectTasks {
 		if _, skip := malformedChildTaskIDs[task.ID]; skip {
+			continue
+		}
+		if _, superseded := supersededDraftTaskIDs[task.ID]; superseded {
 			continue
 		}
 		if isProjectContinuationActionableDraftTaskForWorker(task, childActivity[task.ID]) {
@@ -2961,6 +2968,7 @@ type projectExecutionContinuationSnapshotForWorker struct {
 	ReplacementDraftLine string
 	ChildActiveDraftLine string
 	FocusTaskLine        string
+	HasActionableBlocked bool
 }
 
 type projectContinuationTaskHintsForWorker struct {
@@ -3018,6 +3026,81 @@ func projectContinuationDraftTaskReadyForParentClosureForWorker(activity project
 	return activity.childTaskCount == 0 || activity.childTaskCount == activity.blockedChildTaskCount
 }
 
+func projectContinuationSupersededDraftTaskIDsForWorker(
+	projectTasks []repo.ProjectTask,
+	taskHintsByTask map[uuid.UUID]projectContinuationTaskHintsForWorker,
+	childActivity map[uuid.UUID]projectContinuationChildActivityForWorker,
+	malformedChildTaskIDs map[uuid.UUID]struct{},
+) map[uuid.UUID]struct{} {
+	if len(projectTasks) == 0 {
+		return nil
+	}
+	var superseded map[uuid.UUID]struct{}
+	for _, draftTask := range projectTasks {
+		if _, malformed := malformedChildTaskIDs[draftTask.ID]; malformed {
+			continue
+		}
+		if !isActionableProjectDraftTaskForWorker(draftTask) {
+			continue
+		}
+		draftHints := taskHintsByTask[draftTask.ID]
+		if !projectContinuationTaskHasDeliverableIdentityForWorker(draftHints.DeliverablePath, draftHints.DeliverableRoot) {
+			continue
+		}
+		for _, doneTask := range projectTasks {
+			if doneTask.ID == draftTask.ID {
+				continue
+			}
+			if _, malformed := malformedChildTaskIDs[doneTask.ID]; malformed {
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(doneTask.WorkStatus), "done") {
+				continue
+			}
+			if !projectContinuationDoneTaskSupersedesDraftForWorker(draftHints, taskHintsByTask[doneTask.ID], childActivity[doneTask.ID]) {
+				continue
+			}
+			if superseded == nil {
+				superseded = make(map[uuid.UUID]struct{})
+			}
+			superseded[draftTask.ID] = struct{}{}
+			break
+		}
+	}
+	return superseded
+}
+
+func projectContinuationDoneTaskSupersedesDraftForWorker(
+	draftHints projectContinuationTaskHintsForWorker,
+	doneHints projectContinuationTaskHintsForWorker,
+	doneActivity projectContinuationChildActivityForWorker,
+) bool {
+	if doneActivity.completedCloseoutChildTaskCount == 0 {
+		return false
+	}
+	draftPath := normalizeWorkspaceRelativePathForWorker(draftHints.DeliverablePath)
+	donePath := normalizeWorkspaceRelativePathForWorker(doneHints.DeliverablePath)
+	if draftPath != "" && donePath != "" && sameWorkspaceRelativePathForWorker(draftPath, donePath) {
+		return true
+	}
+	draftRoot := normalizeWorkspaceRelativePathForWorker(draftHints.DeliverableRoot)
+	doneRoot := normalizeWorkspaceRelativePathForWorker(doneHints.DeliverableRoot)
+	return draftRoot != "" && doneRoot != "" && sameWorkspaceRelativePathForWorker(draftRoot, doneRoot)
+}
+
+func projectContinuationTaskHasDeliverableIdentityForWorker(deliverablePath, deliverableRoot string) bool {
+	return strings.TrimSpace(deliverablePath) != "" || strings.TrimSpace(deliverableRoot) != ""
+}
+
+func projectContinuationResumePolicyNeedsProjectActionForWorker(policy string) bool {
+	switch strings.TrimSpace(policy) {
+	case "needs_replacement_work", "resume_review_decision", "manual_recovery_repair":
+		return true
+	default:
+		return false
+	}
+}
+
 func projectContinuationSnapshotWaitsOnActiveChildWorkForWorker(remainingDraftTasks int, snapshot projectExecutionContinuationSnapshotForWorker) bool {
 	if remainingDraftTasks != 0 {
 		return false
@@ -3057,6 +3140,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 	replacementDraftTasks := make([]string, 0, 4)
 	childActiveDraftTasks := make([]string, 0, 4)
 	completedBatchFamilies := projectContinuationRelevantCompletedBatchFamiliesForWorker(projectTasks, taskHintsByTask, malformedChildTaskIDs)
+	supersededDraftTaskIDs := projectContinuationSupersededDraftTaskIDsForWorker(projectTasks, taskHintsByTask, childActivity, malformedChildTaskIDs)
 	focusTask := ""
 	for _, task := range projectTasks {
 		if _, skip := malformedChildTaskIDs[task.ID]; skip {
@@ -3064,6 +3148,9 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 		}
 		status := strings.ToLower(strings.TrimSpace(task.WorkStatus))
 		if status == "" || status == "cancelled" {
+			continue
+		}
+		if _, superseded := supersededDraftTaskIDs[task.ID]; superseded {
 			continue
 		}
 		activity := childActivity[task.ID]
@@ -3107,6 +3194,9 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 				focusTask = taskRef
 			}
 			continue
+		}
+		if status == "blocked" && projectContinuationResumePolicyNeedsProjectActionForWorker(hints.ResumePolicy) {
+			snapshot.HasActionableBlocked = true
 		}
 		if len(activeTasks) < 4 {
 			activeTasks = append(activeTasks, taskRef)
@@ -3268,11 +3358,11 @@ func projectContinuationBatchRangeFromTextForWorker(text string) string {
 }
 
 func projectContinuationTaskDeliverableHintsForWorker(task repo.ProjectTask, tasksByID map[uuid.UUID]repo.ProjectTask) (string, string) {
-	if explicit := strings.TrimSpace(explicitDeliverablePathForWorker(task)); explicit != "" {
-		return explicit, ""
+	if explicit, root := projectContinuationOwnDeliverableHintsForWorker(task); explicit != "" || root != "" {
+		return explicit, root
 	}
-	if root := strings.TrimSpace(preferredTaskDeliverableRootForWorker(task)); root != "" {
-		return "", root
+	if explicit, root := projectContinuationChildDeliverableHintsForWorker(task.ID, tasksByID); explicit != "" || root != "" {
+		return explicit, root
 	}
 	var metadata map[string]any
 	if err := json.Unmarshal(task.Metadata, &metadata); err != nil {
@@ -3287,13 +3377,108 @@ func projectContinuationTaskDeliverableHintsForWorker(task repo.ProjectTask, tas
 	if !ok {
 		return "", ""
 	}
-	if explicit := strings.TrimSpace(explicitDeliverablePathForWorker(parentTask)); explicit != "" {
+	if explicit, root := projectContinuationOwnDeliverableHintsForWorker(parentTask); explicit != "" || root != "" {
+		return explicit, root
+	}
+	return "", ""
+}
+
+func projectContinuationChildDeliverableHintsForWorker(taskID uuid.UUID, tasksByID map[uuid.UUID]repo.ProjectTask) (string, string) {
+	if taskID == uuid.Nil || len(tasksByID) == 0 {
+		return "", ""
+	}
+	for _, candidate := range tasksByID {
+		var metadata map[string]any
+		if err := json.Unmarshal(candidate.Metadata, &metadata); err != nil {
+			continue
+		}
+		parentIDText := strings.TrimSpace(fmt.Sprint(metadata["decomposition_parent_task_id"]))
+		parentID, err := uuid.Parse(parentIDText)
+		if err != nil || parentID != taskID {
+			continue
+		}
+		if explicit, root := projectContinuationOwnDeliverableHintsForWorker(candidate); explicit != "" || root != "" {
+			return explicit, root
+		}
+	}
+	return "", ""
+}
+
+func projectContinuationOwnDeliverableHintsForWorker(task repo.ProjectTask) (string, string) {
+	if explicit := strings.TrimSpace(explicitDeliverablePathForWorker(task)); explicit != "" {
 		return explicit, ""
 	}
-	if root := strings.TrimSpace(preferredTaskDeliverableRootForWorker(parentTask)); root != "" {
+	if root := strings.TrimSpace(preferredTaskDeliverableRootForWorker(task)); root != "" {
+		return "", root
+	}
+	title := strings.TrimSpace(task.Title)
+	if title == "" {
+		return "", ""
+	}
+	if explicit := projectContinuationExplicitDeliverablePathFromTextForWorker(title); explicit != "" {
+		return explicit, ""
+	}
+	if root := projectContinuationPreferredDeliverableRootFromTextForWorker(title); root != "" {
 		return "", root
 	}
 	return "", ""
+}
+
+func projectContinuationExplicitDeliverablePathFromTextForWorker(text string) string {
+	for _, pattern := range explicitDeliverablePathPatternsForWorker {
+		matches := pattern.FindStringSubmatch(text)
+		if len(matches) < 2 {
+			continue
+		}
+		rawCandidate := strings.TrimSpace(matches[1])
+		candidate := normalizeExplicitDeliverablePathCandidateForWorker(rawCandidate)
+		if !looksLikeExplicitDeliverablePathForWorker(candidate, rawCandidate) {
+			continue
+		}
+		return candidate
+	}
+	for _, rawPath := range projectContinuationWorkspacePathPatternForWorker.FindAllString(text, -1) {
+		candidate := normalizeWorkspaceRelativePathForWorker(rawPath)
+		if !looksLikeExplicitDeliverablePathForWorker(candidate, rawPath) {
+			continue
+		}
+		return candidate
+	}
+	return ""
+}
+
+func projectContinuationPreferredDeliverableRootFromTextForWorker(text string) string {
+	for _, pattern := range preferredDeliverableRootPatternsForWorker {
+		matches := pattern.FindAllStringSubmatch(text, -1)
+		for _, match := range matches {
+			if len(match) < 2 {
+				continue
+			}
+			root := normalizeExplicitDeliverablePathCandidateForWorker(match[1])
+			if !looksLikePreferredDeliverableRootPathForWorker(root) {
+				continue
+			}
+			return root
+		}
+	}
+	for _, match := range workspacePathInBackticksPatternForWorker.FindAllStringSubmatch(text, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		root := normalizeExplicitDeliverablePathCandidateForWorker(match[1])
+		if !looksLikePreferredDeliverableRootPathForWorker(root) {
+			continue
+		}
+		return root
+	}
+	for _, rawPath := range projectContinuationWorkspacePathPatternForWorker.FindAllString(text, -1) {
+		normalized := normalizeWorkspaceRelativePathForWorker(rawPath)
+		if !looksLikePreferredDeliverableRootPathForWorker(normalized) {
+			continue
+		}
+		return normalized
+	}
+	return ""
 }
 
 func projectContinuationTaskDependencyHintPathForWorker(task repo.ProjectTask, tasks []repo.ProjectTask) string {

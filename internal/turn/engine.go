@@ -5320,9 +5320,13 @@ func (e *TurnEngine) countProjectDraftTasks(ctx context.Context, projectID uuid.
 	taskHintsByTask := buildProjectContinuationTaskHints(projectTasks, nil)
 	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
+	supersededDraftTaskIDs := projectContinuationSupersededDraftTaskIDs(projectTasks, taskHintsByTask, childActivity, malformedChildTaskIDs)
 	count := 0
 	for _, task := range projectTasks {
 		if _, skip := malformedChildTaskIDs[task.ID]; skip {
+			continue
+		}
+		if _, superseded := supersededDraftTaskIDs[task.ID]; superseded {
 			continue
 		}
 		if isProjectContinuationActionableDraftTask(task, childActivity[task.ID]) {
@@ -18680,6 +18684,7 @@ type projectExecutionContinuationSnapshot struct {
 	ReplacementDraftLine string
 	ChildActiveDraftLine string
 	FocusTaskLine        string
+	HasActionableBlocked bool
 }
 
 func projectContinuationSnapshotWaitsOnActiveChildWork(remainingDraftTasks int, snapshot projectExecutionContinuationSnapshot) bool {
@@ -18754,6 +18759,7 @@ func buildProjectExecutionContinuationSnapshot(
 	childActiveDraftTasks := make([]string, 0, 4)
 	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
+	supersededDraftTaskIDs := projectContinuationSupersededDraftTaskIDs(projectTasks, taskHintsByTask, childActivity, malformedChildTaskIDs)
 	completedBatchFamilies := projectContinuationRelevantCompletedBatchFamilies(projectTasks, taskHintsByTask, priorityPaths, malformedChildTaskIDs)
 	focusTask := ""
 	filterByPriority := len(priorityPaths) > 0
@@ -18773,6 +18779,9 @@ func buildProjectExecutionContinuationSnapshot(
 		}
 		if filterByPriority {
 			matchedPriority = true
+		}
+		if _, superseded := supersededDraftTaskIDs[task.ID]; superseded {
+			continue
 		}
 		taskRef := projectExecutionContinuationTaskRef(task, activity, hints)
 		if status == "done" {
@@ -18813,6 +18822,9 @@ func buildProjectExecutionContinuationSnapshot(
 				focusTask = taskRef
 			}
 			continue
+		}
+		if status == "blocked" && projectContinuationResumePolicyNeedsProjectAction(hints.ResumePolicy) {
+			snapshot.HasActionableBlocked = true
 		}
 		if len(activeTasks) < 4 {
 			activeTasks = append(activeTasks, taskRef)
@@ -19037,11 +19049,11 @@ func projectContinuationBatchRangeFromText(text string) string {
 }
 
 func projectContinuationTaskDeliverableHints(task repo.ProjectTask, tasksByID map[uuid.UUID]repo.ProjectTask) (string, string) {
-	if explicit := strings.TrimSpace(explicitDeliverablePath(task)); explicit != "" {
-		return explicit, ""
+	if explicit, root := projectContinuationOwnDeliverableHints(task); explicit != "" || root != "" {
+		return explicit, root
 	}
-	if root := strings.TrimSpace(preferredTaskDeliverableRoot(task)); root != "" {
-		return "", root
+	if explicit, root := projectContinuationChildDeliverableHints(task.ID, tasksByID); explicit != "" || root != "" {
+		return explicit, root
 	}
 	metadata := messageMetadataMap(task.Metadata)
 	parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
@@ -19052,13 +19064,104 @@ func projectContinuationTaskDeliverableHints(task repo.ProjectTask, tasksByID ma
 	if !ok {
 		return "", ""
 	}
-	if explicit := strings.TrimSpace(explicitDeliverablePath(parentTask)); explicit != "" {
+	if explicit, root := projectContinuationOwnDeliverableHints(parentTask); explicit != "" || root != "" {
+		return explicit, root
+	}
+	return "", ""
+}
+
+func projectContinuationChildDeliverableHints(taskID uuid.UUID, tasksByID map[uuid.UUID]repo.ProjectTask) (string, string) {
+	if taskID == uuid.Nil || len(tasksByID) == 0 {
+		return "", ""
+	}
+	for _, candidate := range tasksByID {
+		metadata := messageMetadataMap(candidate.Metadata)
+		parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+		if !ok || parentID != taskID {
+			continue
+		}
+		if explicit, root := projectContinuationOwnDeliverableHints(candidate); explicit != "" || root != "" {
+			return explicit, root
+		}
+	}
+	return "", ""
+}
+
+func projectContinuationOwnDeliverableHints(task repo.ProjectTask) (string, string) {
+	if explicit := strings.TrimSpace(explicitDeliverablePath(task)); explicit != "" {
 		return explicit, ""
 	}
-	if root := strings.TrimSpace(preferredTaskDeliverableRoot(parentTask)); root != "" {
+	if root := strings.TrimSpace(preferredTaskDeliverableRoot(task)); root != "" {
+		return "", root
+	}
+	title := strings.TrimSpace(task.Title)
+	if title == "" {
+		return "", ""
+	}
+	if explicit := projectContinuationExplicitDeliverablePathFromText(title); explicit != "" {
+		return explicit, ""
+	}
+	if root := projectContinuationPreferredDeliverableRootFromText(title); root != "" {
 		return "", root
 	}
 	return "", ""
+}
+
+func projectContinuationExplicitDeliverablePathFromText(text string) string {
+	for _, pattern := range explicitDeliverablePathPatterns {
+		matches := pattern.FindStringSubmatch(text)
+		if len(matches) < 2 {
+			continue
+		}
+		rawCandidate := strings.TrimSpace(matches[1])
+		candidate := normalizeExplicitDeliverablePathCandidate(rawCandidate)
+		if !looksLikeExplicitDeliverablePath(candidate, rawCandidate) {
+			continue
+		}
+		return candidate
+	}
+	for _, rawPath := range projectContinuationWorkspacePathPattern.FindAllString(text, -1) {
+		candidate := normalizeWorkspaceRelativePath(rawPath)
+		if !looksLikeExplicitDeliverablePath(candidate, rawPath) {
+			continue
+		}
+		return candidate
+	}
+	return ""
+}
+
+func projectContinuationPreferredDeliverableRootFromText(text string) string {
+	for _, pattern := range preferredDeliverableRootPatterns {
+		matches := pattern.FindAllStringSubmatch(text, -1)
+		for _, match := range matches {
+			if len(match) < 2 {
+				continue
+			}
+			root := normalizeExplicitDeliverablePathCandidate(match[1])
+			if !looksLikePreferredDeliverableRootPath(root) {
+				continue
+			}
+			return root
+		}
+	}
+	for _, match := range workspacePathInBackticksPattern.FindAllStringSubmatch(text, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		root := normalizeExplicitDeliverablePathCandidate(match[1])
+		if !looksLikePreferredDeliverableRootPath(root) {
+			continue
+		}
+		return root
+	}
+	for _, rawPath := range projectContinuationWorkspacePathPattern.FindAllString(text, -1) {
+		normalized := normalizeWorkspaceRelativePath(rawPath)
+		if !looksLikePreferredDeliverableRootPath(normalized) {
+			continue
+		}
+		return normalized
+	}
+	return ""
 }
 
 func projectContinuationTaskDependencyHintPath(task repo.ProjectTask, tasks []repo.ProjectTask) string {
@@ -19323,9 +19426,13 @@ func projectContinuationFocusCandidateTask(task repo.ProjectTask, activity proje
 func projectContinuationCurrentFocusTask(projectTasks []repo.ProjectTask, taskHintsByTask map[uuid.UUID]projectContinuationTaskHints, priorityPaths map[string]struct{}) (repo.ProjectTask, bool) {
 	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
+	supersededDraftTaskIDs := projectContinuationSupersededDraftTaskIDs(projectTasks, taskHintsByTask, childActivity, malformedChildTaskIDs)
 	filterByPriority := len(priorityPaths) > 0
 	for _, task := range projectTasks {
 		if _, skip := malformedChildTaskIDs[task.ID]; skip {
+			continue
+		}
+		if _, superseded := supersededDraftTaskIDs[task.ID]; superseded {
 			continue
 		}
 		status := strings.ToLower(strings.TrimSpace(task.WorkStatus))
@@ -19342,6 +19449,81 @@ func projectContinuationCurrentFocusTask(projectTasks []repo.ProjectTask, taskHi
 		}
 	}
 	return repo.ProjectTask{}, false
+}
+
+func projectContinuationSupersededDraftTaskIDs(
+	projectTasks []repo.ProjectTask,
+	taskHintsByTask map[uuid.UUID]projectContinuationTaskHints,
+	childActivity map[uuid.UUID]projectContinuationChildActivity,
+	malformedChildTaskIDs map[uuid.UUID]struct{},
+) map[uuid.UUID]struct{} {
+	if len(projectTasks) == 0 {
+		return nil
+	}
+	var superseded map[uuid.UUID]struct{}
+	for _, draftTask := range projectTasks {
+		if _, malformed := malformedChildTaskIDs[draftTask.ID]; malformed {
+			continue
+		}
+		if !isActionableProjectDraftTask(draftTask) {
+			continue
+		}
+		draftHints := taskHintsByTask[draftTask.ID]
+		if !projectContinuationTaskHasDeliverableIdentity(draftHints.DeliverablePath, draftHints.DeliverableRoot) {
+			continue
+		}
+		for _, doneTask := range projectTasks {
+			if doneTask.ID == draftTask.ID {
+				continue
+			}
+			if _, malformed := malformedChildTaskIDs[doneTask.ID]; malformed {
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(doneTask.WorkStatus), "done") {
+				continue
+			}
+			if !projectContinuationDoneTaskSupersedesDraft(draftHints, taskHintsByTask[doneTask.ID], childActivity[doneTask.ID]) {
+				continue
+			}
+			if superseded == nil {
+				superseded = make(map[uuid.UUID]struct{})
+			}
+			superseded[draftTask.ID] = struct{}{}
+			break
+		}
+	}
+	return superseded
+}
+
+func projectContinuationDoneTaskSupersedesDraft(
+	draftHints projectContinuationTaskHints,
+	doneHints projectContinuationTaskHints,
+	doneActivity projectContinuationChildActivity,
+) bool {
+	if doneActivity.completedCloseoutChildTaskCount == 0 {
+		return false
+	}
+	draftPath := normalizeWorkspaceRelativePath(draftHints.DeliverablePath)
+	donePath := normalizeWorkspaceRelativePath(doneHints.DeliverablePath)
+	if draftPath != "" && donePath != "" && sameWorkspaceRelativePath(draftPath, donePath) {
+		return true
+	}
+	draftRoot := normalizeWorkspaceRelativePath(draftHints.DeliverableRoot)
+	doneRoot := normalizeWorkspaceRelativePath(doneHints.DeliverableRoot)
+	return draftRoot != "" && doneRoot != "" && sameWorkspaceRelativePath(draftRoot, doneRoot)
+}
+
+func projectContinuationTaskHasDeliverableIdentity(deliverablePath, deliverableRoot string) bool {
+	return strings.TrimSpace(deliverablePath) != "" || strings.TrimSpace(deliverableRoot) != ""
+}
+
+func projectContinuationResumePolicyNeedsProjectAction(policy string) bool {
+	switch strings.TrimSpace(policy) {
+	case "needs_replacement_work", "resume_review_decision", "manual_recovery_repair":
+		return true
+	default:
+		return false
+	}
 }
 
 func isProjectContinuationActionableDraftTask(task repo.ProjectTask, activity projectContinuationChildActivity) bool {
