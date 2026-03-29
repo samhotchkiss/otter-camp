@@ -2380,3 +2380,24 @@
   - deploy / proof status:
     - pre-fix live evidence is task `81` session `2175bbde-f279-4b13-9c23-e418626de537`, where tool results `6`, `11`, and `17` kept rewriting [`content/posts/stop-preparing-your-kids-for-jobs.md`](/Users/sam/otter-data/task-worktrees/sam-blog-rebuild-restart-12/task-81/content/posts/stop-preparing-your-kids-for-jobs.md) with runtime handoff prose, and `file.read` result `80` later returned the same poisoned file body raw
     - direct post-`3525` proof target is the next task-81 recovery retry, which should reject that prose at `file.write`/`file.read` time instead of treating it as valid markdown
+- 2026-03-29 01:32:41 MDT - Finished locally, queued for deploy: reject content-migration status narration when it leaks into task deliverables.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `recoveryFileWriteDraftRejectReason(...)` now rejects content-migration status narration like `missing valid frontmatter`, `bad placeholder file`, and `I need to fetch the actual post and write it`
+    - added `looksLikeContentMigrationStatusPlaceholderWithoutBody(...)` for the task-81 poisoned-file variant that survived `3525`
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - `file.write` now returns `non_substantive_content` for that same status narration
+    - added `looksLikeContentMigrationStatusPlaceholder(...)` alongside the earlier runtime-handoff classifier
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `looksLikeRejectedDeliverablePlaceholder(...)` now treats the same status narration as a placeholder deliverable on reread
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): added `TestRecoveryFileWriteDraftRejectReasonRejectsContentMigrationStatusPlaceholder`
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go): added `TestFileWriteRejectsContentMigrationStatusPlaceholderContent`
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go): added `TestFileReadRejectsContentMigrationStatusPlaceholderAtInProgressDeliverablePath`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - next runtime version should land as `3526`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(RecoveryFileWriteDraftRejectReasonRejects(ContentMigrationStatusPlaceholder|RuntimeOwnedCommitHandoffPlaceholder)|ContinuationSummaryLooksUnavailableRejectsRuntimeOwnedCommitPlan|HandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitWhenCheckpointUpdatedEarlierInTurn)$' -count=1`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(File(WriteRejects(ContentMigrationStatusPlaceholderContent|RuntimeOwnedCommitHandoffPlaceholderContent)|ReadRejects(ContentMigrationStatusPlaceholderAtInProgressDeliverablePath|RuntimeOwnedCommitHandoffPlaceholderAtInProgressDeliverablePath)))$' -count=1`
+  - deploy / proof status:
+    - pre-fix live evidence is task `81` session `2175bbde-f279-4b13-9c23-e418626de537`, where the `3525` runtime had already removed the exact commit-handoff paragraph but still accepted the shorter poisoned status note `missing valid frontmatter ... bad placeholder file I should remove`
+    - direct post-`3526` proof target is the next task-81 recovery retry, which should reject both the earlier commit-handoff prose and this narrower status narration at `file.write` / `file.read`

@@ -715,6 +715,33 @@ func looksLikeRuntimeOwnedCommitHandoffPlaceholder(content string) bool {
 	)
 }
 
+func looksLikeContentMigrationStatusPlaceholder(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if !containsAnySubstring(lower,
+		"missing valid frontmatter",
+		"missing frontmatter",
+		"bad placeholder file",
+		"placeholder file i should remove",
+		"placeholder file i should delete",
+		"only real post file",
+	) {
+		return false
+	}
+	return containsAnySubstring(lower,
+		"i need to fetch the actual post",
+		"i need to fetch the real content",
+		"i need to fetch the post",
+		"write it",
+		"write the real file",
+		"{slug}.md",
+		"placeholder file",
+	)
+}
+
 func taskDraftSemanticallyMismatchesScope(taskRecord repo.ProjectTask, content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
@@ -1755,6 +1782,12 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 		return map[string]any{
 			"error":   "non_substantive_content",
 			"message": "file.write content appears to be runtime-owned commit or flow handoff prose, not the concrete deliverable body itself. Write the real file contents directly.",
+		}, nil
+	}
+	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikeContentMigrationStatusPlaceholder(content) {
+		return map[string]any{
+			"error":   "non_substantive_content",
+			"message": "file.write content appears to be content-migration status narration, not the concrete post body itself. Fetch and write the real article markdown directly.",
 		}, nil
 	}
 	encoding := "utf8"

@@ -278,6 +278,57 @@ func TestFileWriteRejectsRuntimeOwnedCommitHandoffPlaceholderContent(t *testing.
 	}
 }
 
+func TestFileWriteRejectsContentMigrationStatusPlaceholderContent(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("79797979-7979-7979-7979-797979797979")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project_task",
+				ScopeID:        taskID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "content/posts/stop-preparing-your-kids-for-jobs.md",
+		"content": "So `stop-preparing-your-kids-for-jobs.md` is the only real post file missing valid frontmatter. " +
+			"I need to fetch the actual post and write it. Also `{slug}.md` is a bad placeholder file I should remove.",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
 func TestCLIExecuteBlockedInReviewTaskSession(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

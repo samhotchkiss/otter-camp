@@ -37101,6 +37101,18 @@ func TestRecoveryFileWriteDraftRejectReasonRejectsRuntimeOwnedCommitHandoffPlace
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReasonRejectsContentMigrationStatusPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	content := "So `stop-preparing-your-kids-for-jobs.md` is the only real post file missing valid frontmatter. " +
+		"I need to fetch the actual post and write it. Also `{slug}.md` is a bad placeholder file I should remove."
+
+	reason := recoveryFileWriteDraftRejectReason(content, "content/posts/stop-preparing-your-kids-for-jobs.md")
+	if !strings.Contains(reason, "content-migration status narration") {
+		t.Fatalf("reason = %q, want content-migration status rejection", reason)
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReasonRejectsContentMigrationTaskScaffoldWithoutBody(t *testing.T) {
 	t.Parallel()
 

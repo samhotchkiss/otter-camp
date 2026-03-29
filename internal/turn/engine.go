@@ -21288,6 +21288,9 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	if looksLikeContentMigrationTaskScaffoldWithoutBody(path, trimmed) {
 		return fmt.Sprintf("assistant draft for %s repeated a source-backed content-migration task scaffold instead of the file body", path)
 	}
+	if looksLikeContentMigrationStatusPlaceholderWithoutBody(trimmed) {
+		return fmt.Sprintf("assistant draft for %s repeated content-migration status narration instead of the file body", path)
+	}
 	if looksLikeRuntimeOwnedCommitHandoffPlaceholder(trimmed) {
 		return fmt.Sprintf("assistant draft for %s repeated runtime-owned commit handoff prose instead of the file body", path)
 	}
@@ -21997,6 +22000,33 @@ func looksLikeRuntimeOwnedCommitHandoffPlaceholder(content string) bool {
 		"let me check git status and commit",
 		"let me update the task status",
 		"let me advance the flow",
+	)
+}
+
+func looksLikeContentMigrationStatusPlaceholderWithoutBody(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if !containsAny(lower,
+		"missing valid frontmatter",
+		"missing frontmatter",
+		"bad placeholder file",
+		"placeholder file i should remove",
+		"placeholder file i should delete",
+		"only real post file",
+	) {
+		return false
+	}
+	return containsAny(lower,
+		"i need to fetch the actual post",
+		"i need to fetch the real content",
+		"i need to fetch the post",
+		"write it",
+		"write the real file",
+		"{slug}.md",
+		"placeholder file",
 	)
 }
 
