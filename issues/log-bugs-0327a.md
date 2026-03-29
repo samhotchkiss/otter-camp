@@ -350,3 +350,8 @@
   - that turn had four completed model invocations, no run ownership, no pending/claimed `agent_turn` job, and a terminal halt message already written
   - the active `flow_node_execution` still pointed at older completed `live_turn_id=f60d5eb6-c5d7-4c60-9044-1d84eed77ffc`
   Root cause: project-task stale-turn recovery preferred `flow_node_execution.metadata.live_turn_id` even after that pointer had fallen behind the session’s newer leaked `current_turn_id`. Impact: leaked review/execution turns can remain stuck forever with no job ownership because the worker keeps evaluating the wrong completed turn instead of the actual in-progress leak that needs recovery.
+- 2026-03-29 09:42 MDT - The remaining live PM seam was a native mutation-boundary hole on planning deliverables. Fresh evidence on project continuation turn `242f846d-a862-4cb1-83d6-c6773707712e` in session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`:
+  - the PM lane read `planning/sambot-feature-spec.md`
+  - then it directly edited that file from the project session
+  - then it attempted `cli.execute` from the same PM lane
+  Root cause: native project-session deliverable blocking exempted all `planning/` paths, and `cli.execute` had no equivalent project-session guard at all. Impact: the PM lane could still do task-owned spec mutations and shell work against live deliverables even after executable task lanes existed, bypassing the intended bounded project-management contract.

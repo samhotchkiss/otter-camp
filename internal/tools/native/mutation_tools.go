@@ -1266,13 +1266,66 @@ func (e *NativeToolExecutor) rejectProjectSessionExecutionMutation(ctx context.C
 	if normalizedPath == "" {
 		return nil, false, nil
 	}
-	if strings.HasPrefix(normalizedPath, "bootstrap/") || strings.HasPrefix(normalizedPath, "planning/") {
+	if strings.HasPrefix(normalizedPath, "bootstrap/") {
 		return nil, false, nil
 	}
 
-	projectTasks, err := e.tasks.ListByProject(ctx, *scope.projectID)
+	hasExecutableTask, bootstrapActive, err := e.projectSessionHasExecutableTasks(ctx, *scope.projectID)
 	if err != nil {
 		return nil, false, err
+	}
+	if !hasExecutableTask {
+		return nil, false, nil
+	}
+
+	message := fmt.Sprintf("Executable project tasks already exist for this project. Do not write deliverable files like `%s` from the project session. Queue or advance the specific task and let the bound project_task session write the deliverable.", normalizeWorkspacePath(relativePath))
+	if bootstrapActive {
+		message = fmt.Sprintf("Bootstrap has already materialized executable project tasks. Do not write deliverable files like `%s` from the project session. Keep bootstrap moving with task, assignment, flow, and bootstrap.setup.persist actions, and let project_task sessions write the deliverables.", normalizeWorkspacePath(relativePath))
+	}
+	return map[string]any{
+		"error":   "task_execution_required",
+		"message": message,
+	}, true, nil
+}
+
+func (e *NativeToolExecutor) rejectProjectSessionCLIExecute(ctx context.Context, scope workspaceScope) (map[string]any, bool, error) {
+	if e == nil || e.chatSessions == nil || e.tasks == nil || scope.sessionID == nil || *scope.sessionID == uuid.Nil || scope.projectID == nil || *scope.projectID == uuid.Nil {
+		return nil, false, nil
+	}
+	session, err := e.chatSessions.GetByID(ctx, *scope.sessionID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") {
+		return nil, false, nil
+	}
+	hasExecutableTask, bootstrapActive, err := e.projectSessionHasExecutableTasks(ctx, *scope.projectID)
+	if err != nil {
+		return nil, false, err
+	}
+	if !hasExecutableTask {
+		return nil, false, nil
+	}
+	message := "Executable project tasks already exist for this project. Do not use cli.execute from the project session. Queue or advance the specific task and let the bound project_task session do the concrete workspace work."
+	if bootstrapActive {
+		message = "Bootstrap has already materialized executable project tasks. Do not use cli.execute from the project session. Keep bootstrap moving with task, assignment, flow, and bootstrap.setup.persist actions, and let project_task sessions do the concrete workspace work."
+	}
+	return map[string]any{
+		"error":   "task_execution_required",
+		"message": message,
+	}, true, nil
+}
+
+func (e *NativeToolExecutor) projectSessionHasExecutableTasks(ctx context.Context, projectID uuid.UUID) (bool, bool, error) {
+	if e == nil || e.tasks == nil || projectID == uuid.Nil {
+		return false, false, nil
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, projectID)
+	if err != nil {
+		return false, false, err
 	}
 	hasExecutableTask := false
 	bootstrapActive := false
@@ -1291,18 +1344,7 @@ func (e *NativeToolExecutor) rejectProjectSessionExecutionMutation(ctx context.C
 		hasExecutableTask = true
 		break
 	}
-	if !hasExecutableTask {
-		return nil, false, nil
-	}
-
-	message := fmt.Sprintf("Executable project tasks already exist for this project. Do not write deliverable files like `%s` from the project session. Queue or advance the specific task and let the bound project_task session write the deliverable.", normalizeWorkspacePath(relativePath))
-	if bootstrapActive {
-		message = fmt.Sprintf("Bootstrap has already materialized executable project tasks. Do not write deliverable files like `%s` from the project session. Keep bootstrap moving with task, assignment, flow, and bootstrap.setup.persist actions, and let project_task sessions write the deliverables.", normalizeWorkspacePath(relativePath))
-	}
-	return map[string]any{
-		"error":   "task_execution_required",
-		"message": message,
-	}, true, nil
+	return hasExecutableTask, bootstrapActive, nil
 }
 
 func (e *NativeToolExecutor) rejectExecutionFirstDeliverableMutation(ctx context.Context, scope workspaceScope, relativePath string) (map[string]any, bool, error) {
@@ -2380,6 +2422,11 @@ func (e *NativeToolExecutor) handleCLIExecute(ctx context.Context, input map[str
 		return nil, err
 	}
 	if blocked, reject, rejectErr := e.rejectReviewTaskCLIExecute(ctx, scope); rejectErr != nil {
+		return nil, rejectErr
+	} else if reject {
+		return blocked, nil
+	}
+	if blocked, reject, rejectErr := e.rejectProjectSessionCLIExecute(ctx, scope); rejectErr != nil {
 		return nil, rejectErr
 	} else if reject {
 		return blocked, nil

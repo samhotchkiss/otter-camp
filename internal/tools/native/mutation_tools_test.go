@@ -1277,6 +1277,7 @@ func TestFileWriteRejectsProjectSessionExecutionDeliverableMutation(t *testing.T
 	executableTaskID := uuid.New()
 
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.cli = &fakeCLIExecutor{}
 	executor.tasks = &mockTaskRepo{
 		listByProjectTasks: []repo.ProjectTask{
 			{
@@ -1330,6 +1331,125 @@ func TestFileWriteRejectsProjectSessionExecutionDeliverableMutation(t *testing.T
 	}
 	if _, statErr := os.Stat(filepath.Join(root, "validation-rules.md")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("deliverable file should not be written from project session, stat err = %v", statErr)
+	}
+}
+
+func TestFileEditRejectsProjectSessionPlanningDeliverableMutation(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	executableTaskID := uuid.New()
+	target := filepath.Join(root, "planning", "sambot-feature-spec.md")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("mkdir planning: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("# SamBot Feature Specification\n\n## Existing\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:              executableTaskID,
+				OrganizationID:  orgID,
+				ProjectID:       projectID,
+				Title:           "Append UI/UX Design section to planning/sambot-feature-spec.md",
+				WorkStatus:      "draft",
+				AssignedAgentID: &agentID,
+			},
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project",
+			ScopeID:        projectID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+	})
+	out, err := executor.Execute(ctx, "file.edit", map[string]any{
+		"path":       "planning/sambot-feature-spec.md",
+		"old_string": "## Existing",
+		"new_string": "## UI/UX Design",
+	})
+	if err != nil {
+		t.Fatalf("file.edit: %v", err)
+	}
+	if out["error"] != "task_execution_required" {
+		t.Fatalf("error = %v, want task_execution_required", out["error"])
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read target: %v", err)
+	}
+	if string(got) != "# SamBot Feature Specification\n\n## Existing\n" {
+		t.Fatalf("planning deliverable mutated unexpectedly: %q", string(got))
+	}
+}
+
+func TestCLIExecuteRejectsProjectSessionExecutionMutation(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	executableTaskID := uuid.New()
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.cli = &fakeCLIExecutor{}
+	executor.tasks = &mockTaskRepo{
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:              executableTaskID,
+				OrganizationID:  orgID,
+				ProjectID:       projectID,
+				Title:           "Write SamBot feature specification to planning/sambot-feature-spec.md",
+				WorkStatus:      "draft",
+				AssignedAgentID: &agentID,
+			},
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project",
+			ScopeID:        projectID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+	})
+	out, err := executor.Execute(ctx, "cli.execute", map[string]any{
+		"command": "pwd",
+	})
+	if err != nil {
+		t.Fatalf("cli.execute: %v", err)
+	}
+	if out["error"] != "task_execution_required" {
+		t.Fatalf("error = %v, want task_execution_required", out["error"])
+	}
+	message, _ := out["message"].(string)
+	if !strings.Contains(message, "Do not use cli.execute from the project session") {
+		t.Fatalf("message = %q, want project-session cli.execute guidance", message)
 	}
 }
 

@@ -3034,3 +3034,16 @@
     - ready to deploy next; expected live canary is task `127`, where the worker should stop trusting stale `live_turn_id=f60d...`, fail leaked current turn `1d08f...`, clear `current_turn_id`, and enqueue/allow the next bounded review retry
   - caveat:
     - one older adjacent integration fixture, `TestJobWorkerRecoverStaleInProgressTriggeredTurnsUsesExecutionMetadataLiveTurn`, is still red on its historic expectation and I kept that separate from this narrow drift-repair slice
+- 2026-03-29 09:42 MDT - Closed the PM-lane planning-deliverable mutation hole.
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - [`rejectProjectSessionExecutionMutation(...)`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go) now blocks `planning/...` deliverable mutations from project sessions once executable task lanes exist; only `bootstrap/...` remains exempt
+    - added [`projectSessionHasExecutableTasks(...)`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go) to share executable-task detection
+    - added [`rejectProjectSessionCLIExecute(...)`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go) and wired it into [`handleCLIExecute(...)`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go)
+  - changed tests:
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go)
+      - added `TestFileEditRejectsProjectSessionPlanningDeliverableMutation`
+      - added `TestCLIExecuteRejectsProjectSessionExecutionMutation`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(FileWriteRejectsProjectSessionExecutionDeliverableMutation|FileEditRejectsProjectSessionPlanningDeliverableMutation|CLIExecuteRejectsProjectSessionExecutionMutation)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; expected live canary is project session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where direct `planning/sambot-feature-spec.md` edits and follow-on `cli.execute` should now be rejected with `task_execution_required` instead of mutating the spec from the PM lane
