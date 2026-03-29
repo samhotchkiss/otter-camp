@@ -28862,7 +28862,7 @@ func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName str
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "project.list", "project.get":
 		return true
-	case "task.list":
+	case "task.list", "task_list":
 		if compactLateResume {
 			return true
 		}
@@ -31196,9 +31196,9 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 			return false, ""
 		}
 		return true, buildProjectContinuationSnapshotRediscoveryGuardError(toolName, uuid.Nil)
-	case "flow.get_execution":
+	case "flow.get_execution", "flow_get_execution":
 		return true, buildProjectContinuationSnapshotFlowExecutionGuardError()
-	case "file.list":
+	case "file.list", "file_list":
 		path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
 		if path == "" || path == "." {
 			return true, buildProjectContinuationSnapshotArtifactBrowseGuardError(path)
@@ -31207,7 +31207,7 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 			return false, ""
 		}
 		return true, buildProjectContinuationSnapshotArtifactBrowseGuardError(path)
-	case "file.read":
+	case "file.read", "file_read":
 		path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
 		if path == "" {
 			return false, ""
@@ -31239,7 +31239,7 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 			return true, buildProjectContinuationCompanionPlanningArtifactGuardError(planningTargets, path)
 		}
 		return false, ""
-	case "task.get":
+	case "task.get", "task_get":
 		taskIDText := strings.TrimSpace(stringValue(arguments["task_id"]))
 		if taskIDText == "" {
 			return false, ""

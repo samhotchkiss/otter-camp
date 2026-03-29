@@ -23781,7 +23781,7 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksTerminalBloc
 		}),
 	}
 
-	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "file.read", map[string]any{
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "file_read", map[string]any{
 		"path": "planning/sambot-feature-spec.md",
 	})
 	if !blocked {

@@ -3230,3 +3230,13 @@
     - `GOFLAGS='' go test ./internal/turn -run 'TestShouldBlockProjectContinuationSnapshotRediscoveryTool(BlocksActiveDeliverableRead|BlocksTerminalBlockedLeafDeliverableRead|BlocksCompanionPlanningArtifactRead)$' -count=1`
   - deploy / proof status:
     - ready to deploy next; the live canary is Sam.blog PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, where the old `task.list` guard + `file.read planning/sambot-feature-spec.md` sequence should collapse to the first guard only
+- 2026-03-29 11:26 MDT - Widened the blocked-leaf deliverable guard to cover underscored tool aliases, matching the live PM call shape.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - [`shouldBlockProjectContinuationSnapshotRediscoveryTool(...)`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now treats `task_list`, `task_get`, `file_list`, `file_read`, and `flow_get_execution` the same as their dotted equivalents inside the project-continuation rediscovery guard family
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - `TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksTerminalBlockedLeafDeliverableRead` now exercises the exact live alias `file_read`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShouldBlockProjectContinuationSnapshotRediscoveryTool(BlocksActiveDeliverableRead|BlocksTerminalBlockedLeafDeliverableRead|BlocksCompanionPlanningArtifactRead)$' -count=1`
+  - deploy / proof status:
+    - ready to deploy next; live canary remains Sam.blog PM turn family reading `planning/sambot-feature-spec.md` from the project lane
