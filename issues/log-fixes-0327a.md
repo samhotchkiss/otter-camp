@@ -2248,3 +2248,29 @@
     - rebuilt `./bin/ottercamp`, restarted tmux `codex-e2e-20260324`, and health is `ok`
     - direct live diagnosis is task `78` review session `4e2fe5e3-cdc4-4f63-8c14-511cae1ac459`, where `README.md` contained review-summary approval prose and `VERIFICATION.md` held the real README/import summary
     - fresh direct production proof for the new `mismatched_deliverable_context` read classification is still pending the next review-lane reread of those checkpoint outputs, because task `78` legitimately rejected back to work and reopened execution node `d9f29f23-ba35-4044-bbc4-6878127c8016` before the new binary re-entered the review node
+- 2026-03-29 00:27:53 MDT - Finished locally: carry concrete review-repair evidence into recovery resumes instead of promoting generic task scaffolds.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `loadRecoveryResumeState(...)` now pulls the latest persisted blocked-review reason for the current task and derives a bounded repair hint when that reason says the target deliverable contains review / rejection narration instead of the real file body
+    - recovery state now carries `reviewRepairNote` / `reviewRepairSourcePath`, appends that note to `Task-specific recovery context`, and suppresses the inferred task-brief scaffold when prior review evidence already identified a concrete repair
+    - `buildRecoveryResumeActionPrompt(...)` now tells the model to repair the named defect directly and, when available, to inspect the bounded sibling source file before any broader read
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestBuildRecoveryResumeActionPromptUsesPriorReviewRepairHint`
+    - added `TestLoadRecoveryResumeStateUsesPriorReviewRepairEvidence`
+  - changed [`internal/version/repo_version.txt`](/Users/sam/dev/otter-camp/internal/version/repo_version.txt):
+    - bumped runtime version to `3516`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildRecoveryResumeActionPromptUsesPriorReviewRepairHint|LoadRecoveryResumeStateUsesPriorReviewRepairEvidence)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildRecoveryResumeActionPrompt(HardensIntentOnlyCheckpointWithoutDraft|NoDraftContentPostTargetRequiresSourceBody|ForTrackedContentMigrationOutputsPrefersCheckpointContext|UsesAvailableDraftDirectly|UsesContinuationSummaryDraftDirectly|UsesPriorReviewRepairHint)|LoadRecoveryResumeState(UsesPriorReviewRepairEvidence|RejectsContentMigrationCheckpointSummaryDraft|RejectsContentMigrationRecoveryNoteDraft|RejectsContentMigrationTaskScaffoldSummaryDraft|PrefersCheckpointContextForTrackedContentMigrationOutputs))$' -count=1`
+  - deploy / proof status:
+    - pre-fix live evidence is task `78` work session `2565c314-693a-4e54-8c60-7a4f06ae1a25`, where the runtime already knew the README-vs-VERIFICATION defect but still promoted a generic close-out scaffold and reopened `recovery_target_focus_required` reads
+    - fresh direct live proof will be the next reopened task-78 work/recovery turn after the `3516` restart; that prompt should carry the concrete README/VERIFICATION repair note instead of the inferred task scaffold
+- 2026-03-29 00:27:53 MDT - Finished locally: reject the second checkpoint-owned combined review-summary placeholder family.
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `reviewCheckpointOutputLooksLikeDecisionNarration(...)` now also classifies combined meta summaries like “both checkpoint outputs are rejected placeholders ... I cannot confirm the deliverables are satisfied ... Rejecting this review.” as invalid checkpoint-owned review output content
+  - changed [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go):
+    - added `TestFileReadRejectsCheckpointOwnedCombinedReviewSummaryPlaceholder`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'TestFileReadRejects(PlaceholderReviewPromptTargetWithoutExplicitDeliverable|MarkdownReviewAssessmentPlaceholderAtPreferredTarget|ReviewSummaryPlaceholderAtCheckpointOwnedReviewOutput|CheckpointOwnedCombinedReviewSummaryPlaceholder)$' -count=1`
+  - deploy / proof status:
+    - pre-fix live evidence is task `78` review session `337fe47d-a163-4b9f-97dd-4089fbbaed47`, where `file.read(content/posts/README.md)` returned the combined placeholder blob instead of an invalid-deliverable error
+    - fresh direct live proof will be the next task-78 review reread of `content/posts/README.md` after the `3516` restart

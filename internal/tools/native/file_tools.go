@@ -255,7 +255,7 @@ func reviewCheckpointOutputLooksLikeDecisionNarration(taskRecord repo.ProjectTas
 	if lower == "" {
 		return false
 	}
-	return containsAnySubstring(lower,
+	if containsAnySubstring(lower,
 		"the workspace is blocking further reads under",
 		"evidence already gathered across this review session",
 		"i have sufficient evidence from prior turns to render the decision now",
@@ -265,6 +265,17 @@ func reviewCheckpointOutputLooksLikeDecisionNarration(taskRecord repo.ProjectTas
 		"approving.",
 		"review decision: approve",
 		"review decision: reject",
+	) {
+		return true
+	}
+	return containsAnySubstring(lower,
+		"these are the core deliverables for this task per the checkpoint",
+		"both returned errors indicating they are rejected placeholders",
+		"i cannot confirm the deliverables are satisfied",
+	) && containsAnySubstring(lower,
+		"rejecting this review",
+		"review decision: reject",
+		"reject the review immediately",
 	)
 }
 

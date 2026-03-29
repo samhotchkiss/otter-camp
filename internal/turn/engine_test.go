@@ -21978,6 +21978,26 @@ func TestBuildRecoveryResumeActionPromptUsesContinuationSummaryDraftDirectly(t *
 	}
 }
 
+func TestBuildRecoveryResumeActionPromptUsesPriorReviewRepairHint(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildRecoveryResumeActionPrompt(recoveryResumeState{
+		targetPath:             "content/posts/README.md",
+		reviewRepairNote:       "Prior review evidence says `content/posts/README.md` contains review or rejection narration instead of the deliverable body. Inspect `content/posts/VERIFICATION.md` first as the bounded sibling source, then repair `content/posts/README.md` directly.",
+		reviewRepairSourcePath: "content/posts/VERIFICATION.md",
+	})
+
+	if !strings.Contains(prompt, "Prior review already identified the concrete deliverable defect below.") {
+		t.Fatalf("prompt = %q, want prior-review defect guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Inspect `content/posts/VERIFICATION.md` first as the bounded sibling source") {
+		t.Fatalf("prompt = %q, want sibling repair-source guidance", prompt)
+	}
+	if !strings.Contains(prompt, "inspect `content/posts/VERIFICATION.md` directly before any broader read") {
+		t.Fatalf("prompt = %q, want bounded-read repair-source guidance", prompt)
+	}
+}
+
 func TestLooksLikeRecoveryIntentNarrationPlaceholderDetectsNowIllWritePreface(t *testing.T) {
 	t.Parallel()
 
@@ -37448,6 +37468,134 @@ func TestLoadRecoveryResumeStateIncludesValidationSiblingContext(t *testing.T) {
 	}
 	if strings.Contains(joined, "Task 13") {
 		t.Fatalf("contextNotes = %q, did not want unrelated V3 task", joined)
+	}
+}
+
+func TestLoadRecoveryResumeStateUsesPriorReviewRepairEvidence(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = pool
+	fixture.engine.dataDir = t.TempDir()
+
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "recovery-review-repair-hint",
+		DisplayName: "Recovery Review Repair Hint",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "recovery-review-repair-hint",
+		DisplayName:    "Recovery Review Repair Hint",
+		Description:    "Project for recovery review repair hint coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	flowTemplate, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		Slug:           "recovery-review-repair-hint",
+		DisplayName:    "Recovery Review Repair Hint",
+		Description:    "Template for recovery review repair hint coverage",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowTemplateID := flowTemplate.ID
+	description := "Task 76 already verified all 35 technonymous.org posts exist as markdown files in content/posts/. This close-out task confirms the deliverables under the scrape-import parent are satisfied and writes README.md and VERIFICATION.md under content/posts/."
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     78,
+		Title:          "Close-out verification: confirm all 35 posts in content/posts/ and mark scrape-import workstream done",
+		Description:    &description,
+		WorkStatus:     "in_progress",
+		FlowTemplateID: &flowTemplateID,
+		CreatedByType:  "system",
+		CreatedByID:    nil,
+		Metadata: mustRawJSON(t, map[string]any{
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":        1,
+				"blocker_class":  taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint,
+				"target_path":    "content/posts/README.md",
+				"failure_reason": "recovery_target_focus_required",
+			},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if _, err := repo.NewProjectTaskEventRepo(pool).Record(ctx, repo.ProjectTaskEvent{
+		TaskID:     taskRecord.ID,
+		ProjectID:  project.ID,
+		EventType:  "status.changed",
+		ActorType:  "system",
+		FlowNodeID: nil,
+		Payload: mustRawJSON(t, map[string]any{
+			"to_status":      "blocked",
+			"from_status":    "review",
+			"blocker_reason": "review turn completed without calling flow.review_decision: Good — both named outputs exist. What was returned as `README.md` appears to be a review-session summary rather than an actual README, while `VERIFICATION.md` contains the substantive verification and import summary content.",
+		}),
+	}); err != nil {
+		t.Fatalf("record blocked review evidence: %v", err)
+	}
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskRecord.ID
+	fixture.engine.tasks = repo.NewProjectTaskRepo(pool)
+	fixture.engine.projects = repo.NewProjectRepo(pool)
+	fixture.engine.organizations = repo.NewOrgRepo(pool)
+
+	projectRoot := filepath.Join(fixture.engine.dataDir, "workspaces", project.Slug)
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatalf("mkdir project root: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	state, ok := fixture.engine.loadRecoveryResumeState(ctx, rt)
+	if !ok {
+		t.Fatal("expected recovery resume state")
+	}
+	if state.reviewRepairSourcePath != "content/posts/VERIFICATION.md" {
+		t.Fatalf("reviewRepairSourcePath = %q, want content/posts/VERIFICATION.md", state.reviewRepairSourcePath)
+	}
+	if !strings.Contains(state.reviewRepairNote, "`content/posts/README.md`") {
+		t.Fatalf("reviewRepairNote = %q, want target path guidance", state.reviewRepairNote)
+	}
+	if !strings.Contains(state.reviewRepairNote, "`content/posts/VERIFICATION.md`") {
+		t.Fatalf("reviewRepairNote = %q, want sibling repair source guidance", state.reviewRepairNote)
+	}
+	if state.summaryDraft != "" {
+		t.Fatalf("summaryDraft = %q, want inferred scaffold suppressed after review repair evidence", state.summaryDraft)
+	}
+	if !strings.Contains(state.summaryDraftRejectedReason, "prior review already identified a concrete deliverable repair") {
+		t.Fatalf("summaryDraftRejectedReason = %q, want review-repair suppression", state.summaryDraftRejectedReason)
+	}
+	joined := strings.Join(state.contextNotes, "\n")
+	if !strings.Contains(joined, "Inspect `content/posts/VERIFICATION.md` first as the bounded sibling source") {
+		t.Fatalf("contextNotes = %q, want prior review repair note", joined)
 	}
 }
 

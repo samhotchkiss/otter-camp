@@ -169,6 +169,8 @@ const (
 	taskContinuationResumeMessageSource        = "task_continuation_resume"
 )
 
+var recoveryResumeBacktickedFragmentPattern = regexp.MustCompile("`([^`]+)`")
+
 var projectContinuationPromptTaskIDPattern = regexp.MustCompile(`id=([0-9a-fA-F-]{36})`)
 var projectContinuationPromptLeafTaskIDPattern = regexp.MustCompile(`leaf_task_id=([0-9a-fA-F-]{36})`)
 var projectContinuationPromptDependencyPathPattern = regexp.MustCompile(`(?:depends_on_path|deliverable_path)=([^\s]+)`)
@@ -17732,6 +17734,9 @@ type recoveryResumeState struct {
 	preferCheckpointContext     bool
 	preferredRoot               string
 	checkpointArtifactPaths     []string
+	reviewRepairNote            string
+	reviewRepairSourcePath      string
+	inferredSummaryDraft        bool
 }
 
 func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRuntime, preserveInitialMessage bool) (bool, error) {
@@ -17913,6 +17918,11 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 		if projectTasks, err := e.tasks.ListByProject(ctx, taskRecord.ProjectID); err == nil {
 			state.contextNotes = validationTaskContextNotes(taskRecord, projectTasks)
 		}
+		if reviewRepairNote, reviewRepairSourcePath := e.recoveryResumeReviewRepairHint(ctx, taskRecord, state.targetPath); reviewRepairNote != "" {
+			state.reviewRepairNote = reviewRepairNote
+			state.reviewRepairSourcePath = reviewRepairSourcePath
+			state.contextNotes = append(state.contextNotes, "- "+reviewRepairNote)
+		}
 	}
 	if draft, found := e.readRecoveryWorkspaceText(ctx, rt, state.targetPath); found {
 		state.targetDraft, state.targetDraftRejectedReason = recoveryResumeDraftForPrompt(state.failureReason, state.targetPath, draft)
@@ -17970,7 +17980,13 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 	if strings.TrimSpace(state.targetDraft) == "" && strings.TrimSpace(state.artifactDraft) == "" && strings.TrimSpace(state.summaryDraft) == "" && haveTaskRecord {
 		if scaffold := inferredTaskDeliverableDraft(taskRecord); scaffold != "" {
 			state.summaryDraft = scaffold
+			state.inferredSummaryDraft = true
 		}
+	}
+	if state.inferredSummaryDraft && strings.TrimSpace(state.reviewRepairNote) != "" {
+		state.summaryDraft = ""
+		state.summaryDraftRejectedReason = "task-brief scaffold omitted because prior review already identified a concrete deliverable repair"
+		state.inferredSummaryDraft = false
 	}
 	if strings.TrimSpace(state.targetPath) == "" &&
 		strings.TrimSpace(state.targetDraft) == "" &&
@@ -18074,6 +18090,89 @@ func joinQuotedPaths(paths []string) string {
 		parts = append(parts, "`"+path+"`")
 	}
 	return strings.Join(parts, ", ")
+}
+
+func (e *TurnEngine) recoveryResumeReviewRepairHint(ctx context.Context, taskRecord repo.ProjectTask, targetPath string) (string, string) {
+	if e == nil || e.pool == nil || taskRecord.ID == uuid.Nil {
+		return "", ""
+	}
+	reasons, err := repo.NewProjectTaskEventRepo(e.pool).LatestBlockedReasonsByTask(ctx, []uuid.UUID{taskRecord.ID})
+	if err != nil {
+		return "", ""
+	}
+	return recoveryResumeReviewRepairHintFromBlockedReason(reasons[taskRecord.ID], targetPath)
+}
+
+func recoveryResumeReviewRepairHintFromBlockedReason(blockedReason, targetPath string) (string, string) {
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	if targetPath == "" {
+		return "", ""
+	}
+	normalized := strings.TrimSpace(blockedReason)
+	if normalized == "" {
+		return "", ""
+	}
+	lower := strings.ToLower(normalized)
+	targetBase := strings.ToLower(path.Base(targetPath))
+	if !strings.Contains(lower, strings.ToLower(targetPath)) && (targetBase == "" || !strings.Contains(lower, targetBase)) {
+		return "", ""
+	}
+	if !containsAny(lower,
+		"review-session summary rather than an actual",
+		"review summary rather than an actual",
+		"review summary rather than the actual",
+		"appears to contain a review summary rather than",
+		"reviewer assessment or rejection commentary",
+		"prior review rejection text",
+		"work file was overwritten with review commentary",
+		"work file is self-referential review text",
+	) {
+		return "", ""
+	}
+	sourcePath := recoveryResumeSiblingRepairSourcePath(normalized, targetPath)
+	if sourcePath != "" {
+		return fmt.Sprintf("Prior review evidence says `%s` contains review or rejection narration instead of the deliverable body. Inspect `%s` first as the bounded sibling source, then repair `%s` directly.", targetPath, sourcePath, targetPath), sourcePath
+	}
+	return fmt.Sprintf("Prior review evidence says `%s` contains review or rejection narration instead of the deliverable body. Repair `%s` directly instead of rereading workspace roots or checkpoint summaries.", targetPath, targetPath), ""
+}
+
+func recoveryResumeSiblingRepairSourcePath(blockedReason, targetPath string) string {
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	if targetPath == "" {
+		return ""
+	}
+	targetDir := path.Dir(targetPath)
+	if targetDir == "." {
+		targetDir = ""
+	}
+	for _, match := range recoveryResumeBacktickedFragmentPattern.FindAllStringSubmatch(blockedReason, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		candidate := recoveryResumeRepairPathCandidate(match[1], targetDir)
+		if candidate == "" || sameWorkspaceRelativePath(candidate, targetPath) {
+			continue
+		}
+		if targetDir != "" && path.Dir(candidate) != targetDir {
+			continue
+		}
+		return candidate
+	}
+	return ""
+}
+
+func recoveryResumeRepairPathCandidate(raw, targetDir string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.Contains(raw, "/") {
+		return normalizeWorkspaceRelativePath(raw)
+	}
+	if targetDir == "" || strings.Contains(raw, " ") || !strings.Contains(raw, ".") {
+		return ""
+	}
+	return normalizeWorkspaceRelativePath(path.Join(targetDir, raw))
 }
 
 func recoveryResumeDraftForPrompt(failureReason, targetPath, draft string) (string, string) {
@@ -18308,6 +18407,13 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 			lines = append(lines, "Treat "+target+" as an already-written batch-output reference unless the checkpoint context above proves that exact file still needs repair.")
 		} else {
 			lines = append(lines, "Treat "+target+" as the target file for this recovery turn.")
+		}
+	}
+	if note := strings.TrimSpace(state.reviewRepairNote); note != "" {
+		lines = append(lines, "Prior review already identified the concrete deliverable defect below. Repair that exact issue directly instead of rereading workspace roots, listings, or checkpoints.")
+		lines = append(lines, note)
+		if sourcePath := strings.TrimSpace(state.reviewRepairSourcePath); sourcePath != "" {
+			lines = append(lines, "If you need bounded grounding for the repair, inspect `"+sourcePath+"` directly before any broader read.")
 		}
 	}
 	lines = append(lines, "Do not browse .ottercamp/recovery broadly or read recovery artifacts for other tasks during this recovery turn.")
