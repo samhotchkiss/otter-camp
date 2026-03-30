@@ -73,6 +73,19 @@ func (e *NativeToolExecutor) handleFileRead(ctx context.Context, input map[strin
 	if !ok || pathInput == "" {
 		return map[string]any{"error": "not_found"}, nil
 	}
+	renderedPath := renderPath(wd.Root(), resolved)
+	if reject, blocked, rejectErr := e.rejectRecoveryTargetReread(ctx, scope, renderedPath); rejectErr != nil {
+		return nil, rejectErr
+	} else if blocked {
+		reject["path"] = renderedPath
+		return reject, nil
+	}
+	if reject, blocked, rejectErr := e.rejectExecutionFirstDeliverableReread(ctx, wd, scope, renderedPath); rejectErr != nil {
+		return nil, rejectErr
+	} else if blocked {
+		reject["path"] = renderedPath
+		return reject, nil
+	}
 
 	realPath, err := e.resolveExistingPath(wd, pathInput)
 	if err != nil {
@@ -136,19 +149,6 @@ func (e *NativeToolExecutor) handleFileRead(ctx context.Context, input map[strin
 		content = base64.StdEncoding.EncodeToString(payload)
 	}
 
-	renderedPath := renderPath(wd.Root(), resolved)
-	if reject, blocked, rejectErr := e.rejectRecoveryTargetReread(ctx, scope, renderedPath); rejectErr != nil {
-		return nil, rejectErr
-	} else if blocked {
-		reject["path"] = renderedPath
-		return reject, nil
-	}
-	if reject, blocked, rejectErr := e.rejectExecutionFirstDeliverableReread(ctx, wd, scope, renderedPath); rejectErr != nil {
-		return nil, rejectErr
-	} else if blocked {
-		reject["path"] = renderedPath
-		return reject, nil
-	}
 	if reject, blocked, rejectErr := e.rejectPlaceholderDeliverableRead(ctx, scope, renderedPath, content); rejectErr != nil {
 		return nil, rejectErr
 	} else if blocked {

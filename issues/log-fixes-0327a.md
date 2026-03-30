@@ -4951,3 +4951,18 @@
     - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(TaskLooksProceduralInstructionArtifact|ExtractDeliverablesIgnores(ReferenceOnlyInstructionLines|ProceduralChecklistFragments))$' -count=1`
     - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshotIgnoresMalformed(Procedural|ReferenceOnly|ChecklistFragment)Children$|TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation(StopsForFocusedDraftChildCreate|StopsForFocusedDraftChildCreateBatch|IgnoresUnfocusedDraftChildCreate|RequiresObservedQueuedState|ForMissingDependencyPrompt|ForFocusPrerepair|RequiresReplacementChildPrompt)?$|TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation$' -count=1`
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformed(ReferenceOnly|ChecklistFragment|DuplicateSharedFile)Children$' -count=1`
+- 2026-03-30 13:56 MDT - Applied recovery-target file.read guards before filesystem open/resolve so missing sibling files and directory paths fail as focus errors.
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `handleFileRead(...)` now runs `rejectRecoveryTargetReread(...)` and `rejectExecutionFirstDeliverableReread(...)` immediately after path parsing, before attempting `resolveExistingPath(...)` or opening the file
+    - this preserves the existing focused `recovery_target_focus_required` behavior for:
+      - off-target missing paths
+      - off-target directory paths
+      instead of leaking raw `not_found` / directory errors first
+  - changed [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go):
+    - added `TestFileReadRejectsRecoveryDirectoryRereadOutsideTarget`
+    - added `TestFileReadRejectsRecoveryNotFoundRereadOutsideTarget`
+  - changed [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go):
+    - added `TestIntegrationFileReadRejectsMissingRecoveryRereadOutsideTarget`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'TestFileRead(RejectsRecoveryDirectoryRereadOutsideTarget|RejectsRecoveryNotFoundRereadOutsideTarget|RejectsExecutionSiblingDeliverableInspectionWithinRecoveryTargetRootForBatchTask|AllowsCheckpointArtifactInspectionWhenTrackedBatchOutputsComplete)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/tools/native -run 'TestIntegrationFileReadRejectsMissingRecoveryRereadOutsideTarget$' -count=1`

@@ -1616,3 +1616,20 @@
     - because those patterns were not rejected, PM and worker continuation snapshots still had to reason around them after they were created
   - impact:
     - replacement-child decomposition can turn a single bounded file task into multiple junk lanes that consume task sessions, muddy PM focus, and reopen validation churn under the wrong parent
+- 2026-03-30 13:56 MDT - Recovery-target file.read guards still let off-target missing paths and directory reads leak through as raw filesystem errors.
+  - fresh live evidence:
+    - task `301` recovery for `planning/sambot-prompts/test-conversations-level3.md` still read:
+      - `planning/prd-spec/oc-246-prd.md` -> raw `not_found`
+      - `planning/sambot-prompts` -> raw directory read error
+    - those reads happened even though the recovery prompt already said the target file was fixed and broad planning/sibling inspection was forbidden
+  - bug:
+    - [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go) in `handleFileRead(...)` only called:
+      - `rejectRecoveryTargetReread(...)`
+      - `rejectExecutionFirstDeliverableReread(...)`
+    - after it had already resolved/opened/read the requested path
+    - so off-target paths that failed early as:
+      - `not_found`
+      - directory reads
+      bypassed the existing recovery-focus guard entirely
+  - impact:
+    - recovery turns can waste one more read-only hop on forbidden sibling paths before the validation-loop blocker fires, instead of receiving the stronger focused correction immediately

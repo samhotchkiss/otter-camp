@@ -968,6 +968,110 @@ func TestFileReadAllowsCheckpointArtifactInspectionWhenTrackedBatchOutputsComple
 	}
 }
 
+func TestFileReadRejectsRecoveryDirectoryRereadOutsideTarget(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "planning/sambot-prompts/test-conversations-level3.md"
+	directoryPath := "planning/sambot-prompts"
+
+	if err := os.MkdirAll(filepath.Join(root, "planning", "sambot-prompts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(planning/sambot-prompts): %v", err)
+	}
+
+	description := "Author three level-3 complexity SamBot test conversations in Markdown and save to planning/sambot-prompts/test-conversations-level3.md."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Author level-3 SamBot test dialogues file",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "system",
+				Content:   "[Recovery resume state]\nTarget file: planning/sambot-prompts/test-conversations-level3.md\n",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": directoryPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != "recovery_target_focus_required" {
+		t.Fatalf("error = %v, out=%v, want recovery_target_focus_required", got, out)
+	}
+	if got := out["deliverable_path"]; got != targetPath {
+		t.Fatalf("deliverable_path = %v, want %q", got, targetPath)
+	}
+}
+
+func TestFileReadRejectsRecoveryNotFoundRereadOutsideTarget(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "planning/sambot-prompts/test-conversations-level3.md"
+	missingPath := "planning/prd-spec/oc-246-prd.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "planning", "sambot-prompts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(planning/sambot-prompts): %v", err)
+	}
+
+	description := "Author three level-3 complexity SamBot test conversations in Markdown and save to planning/sambot-prompts/test-conversations-level3.md."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Author level-3 SamBot test dialogues file",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "system",
+				Content:   "[Recovery resume state]\nTarget file: planning/sambot-prompts/test-conversations-level3.md\n",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": missingPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != "recovery_target_focus_required" {
+		t.Fatalf("error = %v, out=%v, want recovery_target_focus_required", got, out)
+	}
+	if got := out["deliverable_path"]; got != targetPath {
+		t.Fatalf("deliverable_path = %v, want %q", got, targetPath)
+	}
+}
+
 func TestFileListAllowsBlockedReviewNodeDeliverableRootInspectionWithinRecoveryTargetRoot(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

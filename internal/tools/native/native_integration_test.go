@@ -898,6 +898,50 @@ func TestIntegrationFileReadRejectsDependencyArtifactAgainstFirstMissingBatchOut
 	}
 }
 
+func TestIntegrationFileReadRejectsMissingRecoveryRereadOutsideTarget(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	description := "Author three level-3 complexity SamBot test conversations in Markdown and save to planning/sambot-prompts/test-conversations-level3.md."
+	flowTemplate := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Title:          "Author level-3 SamBot test dialogues file",
+		Description:    &description,
+		FlowTemplateID: &flowTemplate.ID,
+		WorkStatus:     "in_progress",
+	})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	root := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: root})
+	ctx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	if _, err := repo.NewChatMessageRepo(pool).Create(context.Background(), repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "system",
+		Status:    "final",
+		Content:   "[Recovery resume state]\nTarget file: planning/sambot-prompts/test-conversations-level3.md\n",
+	}); err != nil {
+		t.Fatalf("create recovery system message: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(root, "planning", "sambot-prompts"), 0o755); err != nil {
+		t.Fatalf("mkdir planning/sambot-prompts: %v", err)
+	}
+
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": "planning/prd-spec/oc-246-prd.md"})
+	if err != nil {
+		t.Fatalf("file.read: %v", err)
+	}
+	if got := out["error"]; got != "recovery_target_focus_required" {
+		t.Fatalf("error = %v, out=%v, want recovery_target_focus_required", got, out)
+	}
+	if got := out["deliverable_path"]; got != "planning/sambot-prompts/test-conversations-level3.md" {
+		t.Fatalf("deliverable_path = %v, want %q", got, "planning/sambot-prompts/test-conversations-level3.md")
+	}
+}
+
 func TestIntegrationFileSearchRejectsRecoveryWorkspaceRereadOutsideTarget(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)
