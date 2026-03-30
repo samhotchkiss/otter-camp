@@ -12065,6 +12065,104 @@ func TestTurnEngineIntegrationMalformedDuplicateSharedFileChildKickoffPreflightB
 	}
 }
 
+func TestTurnEngineIntegrationMalformedConflictingDeliverableChildKickoffPreflightBlocksBeforeModelCall(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+
+	parentDescription := "Create the SamBot personality and tone specification at planning/sambot-personality-spec.md."
+	parentTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "Write planning/sambot-personality-spec.md",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		CreatedByType:  "human_user",
+		CreatedByID:    &fixture.user.ID,
+		Metadata: mustJSON(t, map[string]any{
+			"decomposition": map[string]any{
+				"orchestration_only":  true,
+				"source_description":  parentDescription,
+				"primary_deliverable": "planning/sambot-personality-spec.md",
+			},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Create parent task: %v", err)
+	}
+
+	flowTemplate := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	childDescription := "Add a Technical Depth Calibration section to planning/sambot-personality-spec.md."
+	childTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Technical depth calibration section",
+		Description:     &childDescription,
+		WorkStatus:      "in_progress",
+		FlowTemplateID:  &flowTemplate.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+		AssignedAgentID: &fixture.agent.ID,
+		Metadata: mustJSON(t, map[string]any{
+			"decomposition_parent_task_id": parentTask.ID.String(),
+			"decomposition": map[string]any{
+				"source_description":  "Create a markdown file at planning/sambot-prompts/complexity-test-conversations.md containing paired conversations.",
+				"primary_deliverable": "planning/sambot-prompts/complexity-test-conversations.md",
+			},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Create child task: %v", err)
+	}
+
+	taskSession, _ := mustCreateTaskSession(t, ctx, fixture, childTask, "operator opened an async conflicting-deliverable child session before the job was enqueued")
+	authorType := "human_user"
+	kickoffMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    buildTaskQueueKickoffMessageForTest(childTask),
+		Metadata: mustJSON(t, map[string]any{
+			"source": "task_queue_processor",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage kickoff: %v", err)
+	}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		return ModelResponse{Content: "should never reach model"}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, taskSession.ID, kickoffMessage.ID, &fixture.agent.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage malformed conflicting-deliverable child kickoff: %v", err)
+	}
+	if modelCalls != 0 {
+		t.Fatalf("model calls = %d, want 0 because malformed conflicting-deliverable child kickoff must halt in preflight", modelCalls)
+	}
+
+	refreshedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, childTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID child task: %v", err)
+	}
+	if refreshedTask.WorkStatus != "blocked" {
+		t.Fatalf("child task status = %q, want blocked", refreshedTask.WorkStatus)
+	}
+
+	blockedReasons, err := repo.NewProjectTaskEventRepo(fixture.pool).LatestBlockedReasonsByTask(ctx, []uuid.UUID{childTask.ID})
+	if err != nil {
+		t.Fatalf("LatestBlockedReasonsByTask: %v", err)
+	}
+	if blockedReason := blockedReasons[childTask.ID]; !strings.Contains(blockedReason, "visible task brief still targets") {
+		t.Fatalf("blocked reason = %q, want conflicting deliverable explanation", blockedReason)
+	}
+}
+
 func TestTurnEngineIntegrationMalformedProceduralBrowserChildReviewPreflightBlocksBeforeModelCall(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

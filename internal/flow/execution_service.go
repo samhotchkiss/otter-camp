@@ -974,6 +974,173 @@ func rejectTaskWorkStatusForNode(taskRecord repo.ProjectTask, rejectNode repo.Fl
 	return targetStatus
 }
 
+func flowTaskRejectShouldBlockVerificationOnlyCloseout(taskRecord repo.ProjectTask, currentNode repo.FlowNode) bool {
+	if !strings.EqualFold(strings.TrimSpace(currentNode.NodeType), "review") && !currentNode.RequiresHumanReview {
+		return false
+	}
+
+	title := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	description := ""
+	if taskRecord.Description != nil {
+		description = strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	if title == "" || description == "" {
+		return false
+	}
+	if !strings.Contains(title, "verify") {
+		return false
+	}
+	if !(strings.Contains(title, "close out") || strings.Contains(description, "verification-only")) {
+		return false
+	}
+	verificationMarkers := []string{
+		"already exists on disk",
+		"already written",
+		"verify completeness only",
+		"verification-only task",
+		"do not rewrite",
+	}
+	for _, marker := range verificationMarkers {
+		if strings.Contains(description, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *service) rejectFlowNodeVerificationOnlyCloseoutBlocked(
+	ctx context.Context,
+	taskRecord repo.ProjectTask,
+	currentNode repo.FlowNode,
+	activeExecution repo.FlowNodeExecution,
+	rejectNode repo.FlowNode,
+	nextVisit int,
+	actor Actor,
+) (*repo.FlowNodeExecution, error) {
+	const blockerReason = "verification-only closeout task rejected existing deliverable; parent orchestration must create replacement or revision work"
+
+	if s.pool == nil {
+		return s.rejectFlowNodeVerificationOnlyCloseoutBlockedNonTx(ctx, taskRecord, currentNode, activeExecution, rejectNode, nextVisit, actor, blockerReason)
+	}
+	executionsTx, execOK := s.executions.(flowNodeExecutionRepositoryTx)
+	_, taskOK := s.tasks.(projectTaskRepositoryTx)
+	taskServiceTx, svcOK := s.taskService.(taskCoordinatorTx)
+	if !execOK || !taskOK || !svcOK {
+		return s.rejectFlowNodeVerificationOnlyCloseoutBlockedNonTx(ctx, taskRecord, currentNode, activeExecution, rejectNode, nextVisit, actor, blockerReason)
+	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if _, err := executionsTx.UpdateMetadataTx(ctx, tx, activeExecution.ID, executionMetadataWithCompletedBy(activeExecution.Metadata, actor)); err != nil {
+		return nil, err
+	}
+	rejectedExecution, err := executionsTx.RejectTx(ctx, tx, activeExecution.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	statusPayload := map[string]any{
+		"transition_source":                   "flow_transition",
+		"flow_event_type":                     "flow.rejected",
+		"rejected_execution_id":               activeExecution.ID,
+		"attempted_reject_node_id":            rejectNode.ID,
+		"attempted_reject_visit":              nextVisit,
+		"flow_rejection_blocked_task":         true,
+		"verification_closeout_rejected_task": true,
+		"blocked_reason":                      blockerReason,
+	}
+	taskActor := toTaskActor(actor)
+	taskActor.AllowFlowRuntimeBypass = true
+	transitionedTask, err := taskServiceTx.TransitionStatusWithPayloadTx(ctx, tx, taskRecord, "blocked", taskActor, statusPayload)
+	if err != nil {
+		return nil, err
+	}
+	taskRecord.WorkStatus = transitionedTask.WorkStatus
+
+	payload := map[string]any{
+		"task_id":                             taskRecord.ID,
+		"project_id":                          taskRecord.ProjectID,
+		"from_flow_node_id":                   currentNode.ID,
+		"attempted_reject_node_id":            rejectNode.ID,
+		"attempted_reject_visit":              nextVisit,
+		"rejected_execution_id":               activeExecution.ID,
+		"blocked":                             true,
+		"blocked_reason":                      blockerReason,
+		"verification_closeout_rejected_task": true,
+	}
+	if err := s.recordTaskEventTx(ctx, tx, taskRecord, "flow.rejected", actor, payload); err != nil {
+		return nil, err
+	}
+	if err := s.publishDomainEvent(ctx, taskRecord.OrganizationID, "flow.rejected", actor.Type, actorIDPtr(actor), payload, tx); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &rejectedExecution, nil
+}
+
+func (s *service) rejectFlowNodeVerificationOnlyCloseoutBlockedNonTx(
+	ctx context.Context,
+	taskRecord repo.ProjectTask,
+	currentNode repo.FlowNode,
+	activeExecution repo.FlowNodeExecution,
+	rejectNode repo.FlowNode,
+	nextVisit int,
+	actor Actor,
+	blockerReason string,
+) (*repo.FlowNodeExecution, error) {
+	if _, err := s.executions.UpdateMetadata(ctx, activeExecution.ID, executionMetadataWithCompletedBy(activeExecution.Metadata, actor)); err != nil {
+		return nil, err
+	}
+	rejectedExecution, err := s.executions.Reject(ctx, activeExecution.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	statusPayload := map[string]any{
+		"transition_source":                   "flow_transition",
+		"flow_event_type":                     "flow.rejected",
+		"rejected_execution_id":               activeExecution.ID,
+		"attempted_reject_node_id":            rejectNode.ID,
+		"attempted_reject_visit":              nextVisit,
+		"flow_rejection_blocked_task":         true,
+		"verification_closeout_rejected_task": true,
+		"blocked_reason":                      blockerReason,
+	}
+	taskActor := toTaskActor(actor)
+	taskActor.AllowFlowRuntimeBypass = true
+	if _, err := s.taskService.TransitionStatusWithPayload(ctx, taskRecord.ID, "blocked", taskActor, statusPayload); err != nil {
+		return nil, err
+	}
+	taskRecord.WorkStatus = "blocked"
+
+	payload := map[string]any{
+		"task_id":                             taskRecord.ID,
+		"project_id":                          taskRecord.ProjectID,
+		"from_flow_node_id":                   currentNode.ID,
+		"attempted_reject_node_id":            rejectNode.ID,
+		"attempted_reject_visit":              nextVisit,
+		"rejected_execution_id":               activeExecution.ID,
+		"blocked":                             true,
+		"blocked_reason":                      blockerReason,
+		"verification_closeout_rejected_task": true,
+	}
+	if err := s.recordTaskEvent(ctx, taskRecord, "flow.rejected", actor, payload); err != nil {
+		return nil, err
+	}
+	if err := s.publishDomainEvent(ctx, taskRecord.OrganizationID, "flow.rejected", actor.Type, actorIDPtr(actor), payload); err != nil {
+		return nil, err
+	}
+	return &rejectedExecution, nil
+}
+
 func flowTaskRequiresBoundedChildren(taskRecord repo.ProjectTask) bool {
 	if flowTaskMetadataMarksOrchestrationOnly(taskRecord.Metadata) {
 		return true
@@ -1302,6 +1469,9 @@ func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Ac
 			return nil, markErr
 		}
 		return nil, ErrMaxVisitsExceeded
+	}
+	if flowTaskRejectShouldBlockVerificationOnlyCloseout(taskRecord, currentNode) {
+		return s.rejectFlowNodeVerificationOnlyCloseoutBlocked(ctx, taskRecord, currentNode, activeExecution, rejectNode, nextVisit, actor)
 	}
 	return s.rejectFlowNodeTx(ctx, taskRecord, currentNode, activeExecution, rejectNodeID, rejectNode, nextVisit, actor)
 }

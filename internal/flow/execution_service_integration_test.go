@@ -844,6 +844,84 @@ func TestFlowExecutionServiceRejectFlowNodeKeepsOrchestrationParentDraft(t *test
 	}
 }
 
+func TestFlowExecutionServiceRejectFlowNodeBlocksVerificationOnlyCloseoutTask(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, nodes := seedLinearTemplate(t, ctx, fixture, true, 5)
+	taskRecord := seedFlowTask(t, ctx, fixture, "Verify and close out planning/sambot-tech-architecture.md", "in_progress", &template.ID)
+	description := "The deliverable planning/sambot-tech-architecture.md already exists on disk. This is a verification-only task. Deliverable: planning/sambot-tech-architecture.md (already written — verify completeness only, do not rewrite)."
+	taskRecord.Description = &description
+	if _, err := fixture.taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("update verification-only task description: %v", err)
+	}
+
+	if _, err := fixture.service.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow to review: %v", err)
+	}
+
+	rejected, err := fixture.service.RejectFlowNode(ctx, taskRecord.ID, Actor{Type: "human_user", ID: fixture.pmUser.ID})
+	if err != nil {
+		t.Fatalf("RejectFlowNode verification-only closeout: %v", err)
+	}
+	if rejected == nil || rejected.Status != "rejected" {
+		t.Fatalf("rejected execution = %+v, want rejected execution", rejected)
+	}
+
+	updatedTask, err := fixture.taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task after rejection: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status after rejection = %q, want blocked", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nodes[1].ID {
+		t.Fatalf("task current_flow_node_id = %v, want review node %s", updatedTask.CurrentFlowNodeID, nodes[1].ID)
+	}
+
+	executions, err := fixture.executionRepo.ListByTask(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("ListByTask executions: %v", err)
+	}
+	if len(executions) != 2 {
+		t.Fatalf("execution row count = %d, want 2 (completed work node + rejected review node)", len(executions))
+	}
+	if executions[1].FlowNodeID != nodes[1].ID || executions[1].Status != "rejected" {
+		t.Fatalf("execution[1] = %+v, want rejected review-node execution", executions[1])
+	}
+
+	var (
+		toStatus      string
+		blockedReason string
+		blockedFlag   bool
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT COALESCE(payload->>'to_status', ''),
+		       COALESCE(payload->>'blocked_reason', ''),
+		       COALESCE((payload->>'verification_closeout_rejected_task')::boolean, false)
+		FROM project_task_event
+		WHERE task_id = $1
+		  AND event_type = 'status.changed'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, taskRecord.ID).Scan(&toStatus, &blockedReason, &blockedFlag); err != nil {
+		t.Fatalf("load blocked status.changed payload: %v", err)
+	}
+	if toStatus != "blocked" {
+		t.Fatalf("status.changed to_status = %q, want blocked", toStatus)
+	}
+	if !blockedFlag {
+		t.Fatal("expected verification_closeout_rejected_task flag on blocked transition")
+	}
+	if !strings.Contains(blockedReason, "parent orchestration must create replacement or revision work") {
+		t.Fatalf("blocked_reason = %q, want verification closeout blocker guidance", blockedReason)
+	}
+}
+
 func TestFlowExecutionServiceRejectFlowNodeMaxVisits(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

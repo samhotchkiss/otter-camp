@@ -1412,3 +1412,16 @@
     - unlike the engine path, it never scanned the project workspace for substantive deliverable bodies, never set `workspace_deliverable_present=true`, and still used the older activity-only closeout check that required a completed closeout child or satisfied outcome
   - impact:
     - worker-authored PM continuations can forget a closeout-ready parent that the engine already knows is on disk, dropping the focus line and reopening broad rediscovery before the turn even starts
+- 2026-03-30 09:40 MDT - Worker named bounded-size retries were built from a shadowed zero-value snapshot.
+  - fresh live evidence:
+    - even after the stale malformed-child focus was removed from the PM path, worker retry prompts still collapsed to:
+      - `Continue the active project execution now.`
+      - `The latest completed task was task 245 ...`
+      - `There are 1 remaining draft project tasks, but ignore every other draft parent until this bounded-size split is advanced.`
+    - those retries omitted both `Active project id: ...` and `Current focus parent: ...`
+  - bug:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) in `ensureProjectContinuationMessageDecision(...)` loaded `snapshot` with `:=` inside the completed-task branch, shadowing the outer retry-state variable
+    - later prompt builders therefore saw the zero-value snapshot even though `remainingDrafts` and the bounded-size retry path were active
+    - the same block also depended on exact snapshot-label equality, so older bounded-size stops that only named `task N` could miss the current snapshot label `task N (Title) ...`
+  - impact:
+    - worker-authored PM bounded-size retries can lose both the active project line and the focus parent, falling back into generic PM rediscovery even after the stale malformed child has been filtered out

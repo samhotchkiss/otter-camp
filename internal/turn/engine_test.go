@@ -7516,6 +7516,8 @@ func TestHandleUserMessageProjectBootstrapWatchdogCancelsBlockedChunkPersistence
 			projectID: {
 				ID:             projectID,
 				OrganizationID: fixture.session.OrganizationID,
+				Slug:           "blocked-tasks-project-session",
+				DisplayName:    "Blocked Tasks Project Session",
 				Status:         "active",
 			},
 		},
@@ -7582,6 +7584,8 @@ func TestHandleUserMessageProjectBootstrapWatchdogReturnsWhenModelIgnoresCancell
 			projectID: {
 				ID:             projectID,
 				OrganizationID: fixture.session.OrganizationID,
+				Slug:           "blocked-tasks-project-session",
+				DisplayName:    "Blocked Tasks Project Session",
 				Status:         "active",
 			},
 		},
@@ -13002,6 +13006,83 @@ func TestBuildProjectExecutionContinuationBoundedSizeRetryPromptTreatsWorkspaceD
 	}
 }
 
+func TestProjectContinuationBoundedSizeFocusTaskPrefersNamedRemainingDraftOverPriorCloseoutFocus(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	closeoutTaskID := uuid.New()
+	boundedTaskID := uuid.New()
+	turnID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	closeoutDescription := "Write planning/sambot-tech-architecture.md as the single technical architecture deliverable."
+	boundedDescription := "Match the visitor's technical depth in the SamBot personality spec."
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			closeoutTaskID: {
+				ID:          closeoutTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  245,
+				Title:       "Write planning/sambot-tech-architecture.md",
+				Description: &closeoutDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"parent_orchestration": map[string]any{
+						"outcome_assessment": map[string]any{
+							"satisfied": true,
+						},
+					},
+				}),
+			},
+			boundedTaskID: {
+				ID:          boundedTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  249,
+				Title:       "Technical depth: Match the visitor's level",
+				Description: &boundedDescription,
+				WorkStatus:  "draft",
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+
+	latestUser := &repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 245 (Write planning/sambot-tech-architecture.md) id=" + closeoutTaskID.String() + " work_status=draft deliverable_path=planning/sambot-tech-architecture.md workspace_deliverable_present=true malformed_child_tasks=1.",
+			"Because that focus parent is already closeout-ready, advance or close the parent directly instead of creating another replacement child.",
+		}, " "),
+	}
+	messages := []repo.ChatMessage{
+		{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			TurnID:    &turnID,
+			Role:      "system",
+			Status:    "final",
+			Content:   "[Project continuation found remaining draft task 249 (Technical depth: Match the visitor's level) but could not auto-queue it because it violates the bounded size policy: task exceeds bounded size policy (estimated 105 minutes > 30 minute limit): split the work into smaller reviewable tasks before queueing]",
+		},
+	}
+
+	focusTask, ok, err := fixture.engine.projectContinuationBoundedSizeFocusTask(context.Background(), projectID, latestUser, messages, turnID)
+	if err != nil {
+		t.Fatalf("projectContinuationBoundedSizeFocusTask: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected bounded-size focus task")
+	}
+	if focusTask.ID != boundedTaskID {
+		t.Fatalf("focusTask.ID = %s, want %s", focusTask.ID, boundedTaskID)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnRetriesBoundedSizeStopWithFreshMessage(t *testing.T) {
 	t.Parallel()
 
@@ -13063,11 +13144,32 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesBoundedSizeStopWi
 		Status:         "final",
 		Content:        "I'll create and queue the replacement draft now.",
 		SequenceNumber: 11,
+		Metadata: mustJSONRaw(map[string]any{
+			"tool_calls": []map[string]any{
+				{
+					"id":   "call-create",
+					"name": "task.create",
+					"arguments": map[string]any{
+						"title":       "Produce SamBot feature specification",
+						"work_status": "draft",
+					},
+				},
+				{
+					"id":   "call-update",
+					"name": "task.update",
+					"arguments": map[string]any{
+						"task_id":     boundedTaskID.String(),
+						"work_status": "queued",
+					},
+				},
+			},
+		}),
 	}
 	createResult := &repo.ChatMessage{
 		ID:             uuid.New(),
 		SessionID:      fixture.session.ID,
 		TurnID:         &turnID,
+		ToolCallID:     stringPtr("call-create"),
 		Role:           "tool_result",
 		Status:         "final",
 		SequenceNumber: 12,
@@ -13086,6 +13188,7 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesBoundedSizeStopWi
 		ID:             uuid.New(),
 		SessionID:      fixture.session.ID,
 		TurnID:         &turnID,
+		ToolCallID:     stringPtr("call-update"),
 		Role:           "tool_result",
 		Status:         "final",
 		SequenceNumber: 13,
@@ -13527,8 +13630,11 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionR
 	if !strings.Contains(retryMessage.Content, "child_output_verifications") {
 		t.Fatalf("retry message = %q, want parent verification update guidance", retryMessage.Content)
 	}
-	if !strings.Contains(retryMessage.Content, "work_status=done") {
-		t.Fatalf("retry message = %q, want direct closeout guidance", retryMessage.Content)
+	if !strings.Contains(retryMessage.Content, "task.update on task_id="+focusTaskID.String()) {
+		t.Fatalf("retry message = %q, want exact focus task id in parent verification guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "work_status=queued") {
+		t.Fatalf("retry message = %q, want queued parent completion guidance", retryMessage.Content)
 	}
 }
 
@@ -14280,8 +14386,8 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesFocusedCloseoutRe
 	if !strings.Contains(retryMessage.Content, "OC-259 task_id="+doneChildID.String()) {
 		t.Fatalf("retry message = %q, want direct child verification id", retryMessage.Content)
 	}
-	if !strings.Contains(retryMessage.Content, "issue one narrow task.update for task 245") {
-		t.Fatalf("retry message = %q, want direct closeout task.update guidance", retryMessage.Content)
+	if !strings.Contains(retryMessage.Content, "task.update on task_id="+focusTaskID.String()) {
+		t.Fatalf("retry message = %q, want direct closeout task.update guidance with exact task id", retryMessage.Content)
 	}
 	if strings.Contains(retryMessage.Content, "Do not begin with task.list without parent_task_id") {
 		t.Fatalf("retry message = %q, should not fall back to generic rediscovery retry guidance", retryMessage.Content)
@@ -17175,6 +17281,8 @@ func TestMaybeContinueProjectExecutionAfterTaskCompletionSupersedesStaleProjectC
 			projectID: {
 				ID:             projectID,
 				OrganizationID: fixture.session.OrganizationID,
+				Slug:           "project-continuation-supersede",
+				DisplayName:    "Project Continuation Supersede",
 				Status:         "active",
 			},
 		},
@@ -17361,6 +17469,8 @@ func TestMaybeContinueProjectExecutionAfterTaskCompletionClosesSettledSession(t 
 			projectID: {
 				ID:             projectID,
 				OrganizationID: fixture.session.OrganizationID,
+				Slug:           "blocked-tasks-project-session",
+				DisplayName:    "Blocked Tasks Project Session",
 				Status:         "active",
 			},
 		},
@@ -17499,6 +17609,8 @@ func TestMaybeContinueProjectExecutionAfterTaskCompletionIgnoresBlockedTasksForW
 			projectID: {
 				ID:             projectID,
 				OrganizationID: fixture.session.OrganizationID,
+				Slug:           "project-blocked-tail-wake",
+				DisplayName:    "Project Blocked Tail Wake",
 				Status:         "active",
 			},
 		},
@@ -17664,6 +17776,8 @@ func TestMaybeContinueProjectExecutionAfterTaskCompletionUsesLatestCompletedTask
 			projectID: {
 				ID:             projectID,
 				OrganizationID: fixture.session.OrganizationID,
+				Slug:           "project-blocked-status-wake",
+				DisplayName:    "Project Blocked Status Wake",
 				Status:         "active",
 			},
 		},
@@ -17832,6 +17946,8 @@ func TestHandleTaskStatusChangedEventBlockedWakesProjectContinuation(t *testing.
 			projectID: {
 				ID:             projectID,
 				OrganizationID: fixture.session.OrganizationID,
+				Slug:           "project-blocked-status-wake",
+				DisplayName:    "Project Blocked Status Wake",
 				Status:         "active",
 			},
 		},
@@ -23895,7 +24011,7 @@ func TestBuildProjectContinuationActionPromptAddsCompletedCloseoutGuidance(t *te
 	}
 }
 
-func TestBuildProjectContinuationActionPromptTreatsWorkspaceDeliverableFocusAsCloseoutReady(t *testing.T) {
+func TestBuildProjectContinuationActionPromptTreatsWorkspaceDeliverableFocusAsVerificationStep(t *testing.T) {
 	prompt := buildProjectContinuationActionPrompt("Active project request: finish planning/sambot-tech-architecture.md", projectExecutionContinuationSnapshot{
 		ProjectLine:   "Active project id: 123",
 		DraftTaskLine: "Actionable draft tasks already in the tree: task 245 (Write planning/sambot-tech-architecture.md) id=bbb title=\"Write planning/sambot-tech-architecture.md\" work_status=draft deliverable_path=planning/sambot-tech-architecture.md workspace_deliverable_present=true malformed_child_tasks=1",
@@ -23905,11 +24021,11 @@ func TestBuildProjectContinuationActionPromptTreatsWorkspaceDeliverableFocusAsCl
 	if !strings.Contains(prompt, "the deliverable body is already on disk. Treat that parent as a closeout/verification step") {
 		t.Fatalf("prompt = %q, want workspace-deliverable closeout guidance", prompt)
 	}
-	if !strings.Contains(prompt, "Because that focus parent is already closeout-ready, advance or close the parent directly instead of creating another replacement child") {
-		t.Fatalf("prompt = %q, want focus closeout guidance for workspace deliverable", prompt)
+	if !strings.Contains(prompt, "Because that focus parent only has malformed or stale child artifact lanes, do not queue the parent again from the project lane. Create the smallest fresh replacement child task under it now instead.") {
+		t.Fatalf("prompt = %q, want malformed-child replacement guidance for workspace deliverable focus", prompt)
 	}
-	if strings.Contains(prompt, "Because that focus parent only has malformed or stale child artifact lanes") {
-		t.Fatalf("prompt = %q, should not append malformed-child replacement guidance once workspace deliverable is present", prompt)
+	if strings.Contains(prompt, "Because that focus parent is already closeout-ready") {
+		t.Fatalf("prompt = %q, should not treat workspace-deliverable focus with malformed children as closeout-ready", prompt)
 	}
 }
 
@@ -23935,7 +24051,7 @@ func TestProjectContinuationDraftTaskReadyForParentClosureAllowsOnlyBlockedChild
 	}
 }
 
-func TestProjectContinuationDraftTaskReadyForParentClosureAllowsSatisfiedOutcomeWithOnlyBlockedChildren(t *testing.T) {
+func TestProjectContinuationDraftTaskReadyForParentClosureRejectsSatisfiedOutcomeWithOnlyReplaceableBlockedChildren(t *testing.T) {
 	t.Parallel()
 
 	task := repo.ProjectTask{
@@ -23948,19 +24064,19 @@ func TestProjectContinuationDraftTaskReadyForParentClosureAllowsSatisfiedOutcome
 			}
 		}`),
 	}
-	if !projectContinuationDraftTaskReadyForParentClosureForTask(task, projectContinuationChildActivity{
+	if projectContinuationDraftTaskReadyForParentClosureForTask(task, projectContinuationChildActivity{
 		childTaskCount:                   2,
 		blockedChildTaskCount:            2,
 		replaceableBlockedChildTaskCount: 2,
 	}) {
-		t.Fatal("expected satisfied outcome to mark blocked-only parent as closeout-ready")
+		t.Fatal("did not expect satisfied outcome to mark replaceable blocked-only parent as closeout-ready")
 	}
-	if projectContinuationDraftTaskNeedsFreshReplacementChildWorkForTask(task, projectContinuationChildActivity{
+	if !projectContinuationDraftTaskNeedsFreshReplacementChildWorkForTask(task, projectContinuationChildActivity{
 		childTaskCount:                   2,
 		blockedChildTaskCount:            2,
 		replaceableBlockedChildTaskCount: 2,
 	}) {
-		t.Fatal("did not expect satisfied blocked-only parent to require fresh replacement child work")
+		t.Fatal("expected satisfied replaceable blocked-only parent to require fresh replacement child work")
 	}
 }
 
@@ -24929,6 +25045,70 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFile
 	}
 	if strings.Contains(snapshot.FocusTaskLine, "task 225") {
 		t.Fatalf("FocusTaskLine = %q, should not focus source-description-only duplicate child artifact", snapshot.FocusTaskLine)
+	}
+}
+
+func TestProjectExecutionContinuationSnapshotIgnoresMalformedConflictingDeliverableChildren(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	parentDescription := "Create the SamBot personality and tone specification at planning/sambot-personality-spec.md."
+	childDescription := "Add a Technical Depth Calibration section to planning/sambot-personality-spec.md."
+	childID := uuid.New()
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:          parentDraftID,
+				ProjectID:   projectID,
+				TaskNumber:  246,
+				Title:       "Write planning/sambot-personality-spec.md",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"applied":             true,
+						"mode":                "parallel_children",
+						"orchestration_only":  true,
+						"source_description":  parentDescription,
+						"primary_deliverable": "planning/sambot-personality-spec.md",
+					},
+				}),
+			},
+			childID: {
+				ID:          childID,
+				ProjectID:   projectID,
+				TaskNumber:  249,
+				Title:       "Technical depth calibration section",
+				Description: &childDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition_parent_task_id": parentDraftID.String(),
+					"decomposition": map[string]any{
+						"source_description":  "Create a markdown file at planning/sambot-prompts/complexity-test-conversations.md containing paired conversations.",
+						"primary_deliverable": "planning/sambot-prompts/complexity-test-conversations.md",
+					},
+				}),
+			},
+		},
+	}
+	parentTask := fixture.engine.tasks.(*fakeTaskRepo).items[parentDraftID]
+	childTask := fixture.engine.tasks.(*fakeTaskRepo).items[childID]
+	if !projectContinuationMalformedConflictingDeliverableChildForParent(childTask, parentTask) {
+		t.Fatalf("conflicting deliverable matcher = false; visible=%q source=%q", taskVisibleBriefDeliverablePath(childTask), taskDecompositionSourceDeliverablePath(childTask))
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.DraftTaskLine, "task 249") {
+		t.Fatalf("DraftTaskLine = %q, should omit malformed conflicting-deliverable child", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "task 246") {
+		t.Fatalf("ReplacementDraftLine = %q, want parent restored as replacement draft", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=1") {
+		t.Fatalf("ReplacementDraftLine = %q, want malformed child count", snapshot.ReplacementDraftLine)
 	}
 }
 
@@ -27642,6 +27822,106 @@ func TestAppendContinuationSummaryAndActionRootsProjectContinuationAtSyntheticUs
 		t.Fatal("expected synthetic project continuation prompt to block task.get on a named active task in the same turn")
 	} else if !strings.Contains(reason, activeTask35ID.String()) {
 		t.Fatalf("task.get guard reason = %q, want named task id", reason)
+	}
+}
+
+func TestAppendContinuationSummaryAndActionUsesFocusedBoundedSizeProjectResumePrompt(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	focusTaskID := uuid.New()
+	triggerMessageID := uuid.New()
+	previousTurnID := uuid.New()
+	description := "Write planning/sambot-tech-architecture.md with the current bounded architecture split."
+	turn := &chat.ChatTurn{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnNumber:     2,
+		RespondingType: "agent",
+		RespondingID:   fixture.chat.participants[0].ParticipantID,
+		Status:         "in_progress",
+	}
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.session.Mode = "async"
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.chat.session.Mode = fixture.session.Mode
+	fixture.chat.turns[turn.ID] = turn
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turn.ID)
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 245,
+				Title:      "Close the architecture recovery branch",
+				WorkStatus: "done",
+			},
+			focusTaskID: {
+				ID:          focusTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  249,
+				Title:       "Write planning/sambot-tech-architecture.md",
+				Description: &description,
+				WorkStatus:  "draft",
+			},
+		},
+	}
+	fixture.messages.create(repo.ChatMessage{
+		ID:        triggerMessageID,
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now. The latest completed task was task 245.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":                 projectExecutionContinuationSource,
+			"synthetic_user_message": true,
+			"auto_continue":          true,
+			"completed_task_id":      completedTaskID.String(),
+		}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		TurnID:    &previousTurnID,
+		Role:      "system",
+		Content:   "[Project continuation found remaining draft task 249 (Write planning/sambot-tech-architecture.md) but could not auto-queue it because it violates the bounded size policy: task exceeds bounded size policy (estimated 105 minutes > 30 minute limit): split the work into smaller reviewable tasks before queueing]",
+	})
+	previousTurn := &repo.ChatTurn{
+		ID:               previousTurnID,
+		SessionID:        fixture.session.ID,
+		Status:           "completed",
+		TriggerMessageID: &triggerMessageID,
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn:    turn,
+	}
+
+	if err := fixture.engine.appendContinuationSummaryAndAction(context.Background(), rt, previousTurn, "Project execution is already underway."); err != nil {
+		t.Fatalf("appendContinuationSummaryAndAction: %v", err)
+	}
+	if rt.historyStartID == nil {
+		t.Fatal("historyStartID = nil, want focused bounded-size synthetic project continuation prompt")
+	}
+	message, err := fixture.messages.GetByID(context.Background(), *rt.historyStartID)
+	if err != nil {
+		t.Fatalf("GetByID historyStartID: %v", err)
+	}
+	if got := strings.TrimSpace(stringValue(messageMetadataMap(message.Metadata)["source"])); got != "project_continuation_resume" {
+		t.Fatalf("historyStart source = %q, want project_continuation_resume", got)
+	}
+	if got := strings.TrimSpace(stringValue(messageMetadataMap(message.Metadata)["completed_task_id"])); got != completedTaskID.String() {
+		t.Fatalf("historyStart completed_task_id = %q, want %s", got, completedTaskID.String())
+	}
+	if !strings.Contains(message.Content, "Your last continuation turn proved that task 249") {
+		t.Fatalf("historyStart content = %q, want focused bounded-size retry context", message.Content)
+	}
+	if !strings.Contains(message.Content, "split task 249 (Write planning/sambot-tech-architecture.md) into smaller reviewable child tasks now") {
+		t.Fatalf("historyStart content = %q, want bounded-size split instruction", message.Content)
 	}
 }
 

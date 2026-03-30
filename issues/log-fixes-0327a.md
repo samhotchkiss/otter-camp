@@ -4743,3 +4743,14 @@
     - added `TestJobWorkerEnsureProjectContinuationMessageTreatsWorkspaceDeliverableParentAsCloseout`
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(JobWorkerProjectExecutionContinuationSnapshotTreats(WorkspaceDeliverableParentAsActionableDraft|CloseoutReadyParentAsActionableDraft)|JobWorkerEnsureProjectContinuationMessageTreatsWorkspaceDeliverableParentAsCloseout|BuildProjectExecutionContinuationPromptForWorkerTreatsWorkspaceDeliverableAsCloseout|ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|ProjectContinuationTurnCloseoutReadyTaskLabelFallsBackToPromptFocusParent)$' -count=1`
+- 2026-03-30 09:40 MDT - Restored current-snapshot focus in worker named bounded-size retries.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `ensureProjectContinuationMessageDecision(...)` now assigns the computed project snapshot into the outer retry context instead of shadowing it
+    - bounded-size retry focus recovery now resolves only against the current snapshot, and snapshot label matching now accepts older bare `task N` bounded-size stops when the live snapshot label is `task N (Title) ...`
+    - bounded-size retry prompts now fall back through `ReplacementDraftLine` before generic draft lines when the current focus parent is a replacement draft
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerEnsureProjectContinuationMessageDropsStaleMalformedNamedBoundedSizeFocus`
+    - refreshed the existing named bounded-size fixtures to use the actual created task numbers instead of hardcoded legacy numbers
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(EnsureProjectContinuationMessage(RefreshesRepeatedConsumedNamedBoundedSizeContinuation|DropsStaleMalformedNamedBoundedSizeFocus|RefreshesStalePendingNamedBoundedSizeDuplicate)|RequeueActiveProjectSessionsWithoutTurnsRefreshesRepeatedFailedNamedBoundedSizeContinuation|ProjectExecutionContinuationSnapshotIgnoresMalformedConflictingDeliverableChildren)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationMalformedConflictingDeliverableChildKickoffPreflightBlocksBeforeModelCall$' -count=1`
