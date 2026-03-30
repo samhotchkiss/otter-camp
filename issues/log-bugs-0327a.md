@@ -1877,3 +1877,15 @@
   - impact:
     - single-file prompt corpus tasks can still explode into quality-note and heading-only child lanes
     - those stale rows then pollute PM continuation focus even though the real output is still one shared markdown file
+- 2026-03-30 15:58 MDT - Malformed whole-file shared-doc children could recursively decompose into another identical parent during queue transition.
+  - fresh live evidence:
+    - draft lineage for the level-3 prompt corpus file showed an uninterrupted same-file chain:
+      - `297 -> 328 -> 334 -> 340 -> ... -> 1540 -> 6472-6477`
+    - each child kept the same whole-file deliverable brief for `planning/sambot-prompts/test-conversations-level3.md`
+    - the fragment siblings were only half the problem; the deeper runtime bug was that queueing one malformed whole-file child spawned another malformed whole-file child parent
+  - bug:
+    - `task/service.go` allowed malformed duplicate same-deliverable children to enter `applyQueueDecomposition(...)`
+    - because those child tasks still looked like broad whole-file work, the runtime decomposed them again and created another identical replacement parent plus another fragment wave
+  - impact:
+    - one bad PM `task.create` could multiply into hundreds or thousands of recursive draft rows without any additional model creativity
+    - PM/session hardening alone could not stop the chain once the first malformed whole-file child had already been created

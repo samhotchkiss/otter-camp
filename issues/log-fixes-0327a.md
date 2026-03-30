@@ -5188,3 +5188,13 @@
   - verified with:
     - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(TaskLooksProceduralInstructionArtifact|ExtractDeliverablesIgnores(ProceduralChecklistFragments|ConversationRequirementFragments|SuggestedTopicSections|ConversationHeadingAndQualityFragments|InstructionOnlyRequirementLines))$' -count=1`
     - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshotIgnoresMalformed(InheritedSharedFileTopicChildren|ChecklistFragmentChildren|ReferenceOnlyChildren|ProceduralChildren)$' -count=1`
+- 2026-03-30 15:58 MDT - Blocked malformed duplicate same-deliverable children before queue-time decomposition.
+  - changed [`internal/task/service.go`](/Users/sam/dev/otter-camp/internal/task/service.go):
+    - added `validateQueueableDecompositionChild(...)` ahead of `applyQueueDecomposition(...)`
+    - malformed duplicate same-deliverable children now fail `draft -> queued` with `ErrExecutableTaskContractRequired` instead of recursively decomposing into another identical whole-file parent
+    - added local shared-file path / ownership helpers for the queue path
+  - changed [`internal/task/service_integration_test.go`](/Users/sam/dev/otter-camp/internal/task/service_integration_test.go):
+    - added `TestTaskServiceIntegrationQueueRejectsMalformedDuplicateSharedFileChild`
+    - kept the existing concrete single-file queue canaries green alongside the new guard
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/task -run 'TestTaskServiceIntegrationQueue(RejectsMalformedDuplicateSharedFileChild|RejectsProceduralInstructionArtifact|AllowsSingleConcreteTemplateWithRequirements|AllowsSingleConcreteTemplateWithTemplateConceptLine)$' -count=1`

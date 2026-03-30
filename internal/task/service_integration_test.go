@@ -3091,6 +3091,59 @@ func TestTaskServiceIntegrationQueueRejectsProceduralInstructionArtifact(t *test
 	}
 }
 
+func TestTaskServiceIntegrationQueueRejectsMalformedDuplicateSharedFileChild(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	parentDescription := "Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations that exercise SamBot's ability to speak as Sam Hotchkiss on hard technical subjects."
+	parent, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations",
+		Description:    &parentDescription,
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask parent: %v", err)
+	}
+
+	childDescription := strings.Join([]string{
+		"## Deliverable",
+		"Write the file `planning/sambot-prompts/test-conversations-level3.md` containing exactly 3 deeply technical multi-turn test conversations that exercise SamBot's ability to speak as Sam Hotchkiss on hard technical subjects.",
+	}, "\n")
+	child, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations that exercise SamBot's ability to speak as Sam Hotchkiss on hard technical subjects.",
+		Description:    &childDescription,
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		Metadata:       taskdecomp.ApplyChildMetadata(json.RawMessage(`{}`), parent.ID, 2),
+	})
+	if err != nil {
+		t.Fatalf("CreateTask child: %v", err)
+	}
+
+	_, err = svc.TransitionStatus(ctx, child.ID, "queued", Actor{Type: "system"})
+	if !errors.Is(err, taskdecomp.ErrExecutableTaskContractRequired) {
+		t.Fatalf("TransitionStatus queued err = %v, want ErrExecutableTaskContractRequired", err)
+	}
+	if !strings.Contains(strings.TrimSpace(err.Error()), "duplicate same-deliverable child") {
+		t.Fatalf("TransitionStatus queued err = %q, want duplicate same-deliverable child reason", err.Error())
+	}
+
+	children, err := taskRepo.ListByProject(ctx, project.ID, "draft")
+	if err != nil {
+		t.Fatalf("ListByProject draft: %v", err)
+	}
+	if len(children) != 2 {
+		t.Fatalf("draft task count = %d, want 2 without recursive decomposition", len(children))
+	}
+}
+
 func TestTaskServiceIntegrationQueueAllowsSingleConcreteTemplateWithRequirements(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

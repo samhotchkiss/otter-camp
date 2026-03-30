@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -759,6 +760,9 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 
 	decomposition := queueDecompositionResult{}
 	if from == "draft" && target == "queued" {
+		if err := s.validateQueueableDecompositionChild(ctx, taskRecord); err != nil {
+			return nil, err
+		}
 		decompositionResult, decompErr := s.applyQueueDecomposition(ctx, &taskRecord)
 		if decompErr != nil {
 			return nil, decompErr
@@ -1070,6 +1074,36 @@ type queueDecompositionResult struct {
 	childTaskIDs []uuid.UUID
 }
 
+func (s *service) validateQueueableDecompositionChild(ctx context.Context, taskRecord repo.ProjectTask) error {
+	parentID := taskdecomp.ParseParentTaskID(taskRecord.Metadata)
+	if parentID == uuid.Nil || s == nil || s.tasks == nil {
+		return nil
+	}
+	parentTask, err := s.tasks.GetByID(ctx, parentID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	parentPath := queueDuplicateSharedFileDeliverablePath(parentTask)
+	childPath := queueDuplicateSharedFileDeliverablePath(taskRecord)
+	if parentPath == "" || childPath == "" || !sameQueueWorkspaceRelativePath(parentPath, childPath) {
+		return nil
+	}
+	if !strings.Contains(filepath.Base(parentPath), ".") || !queueTaskClaimsWholeSharedFileOwnership(taskRecord, parentPath) {
+		return nil
+	}
+	return taskdecomp.ExecutableTaskContractError{
+		Reason: fmt.Sprintf(
+			"resume the bounded work from parent task %d instead of queueing duplicate same-deliverable child %d for `%s`",
+			parentTask.TaskNumber,
+			taskRecord.TaskNumber,
+			parentPath,
+		),
+	}
+}
+
 func (s *service) applyQueueDecomposition(ctx context.Context, taskRecord *repo.ProjectTask) (queueDecompositionResult, error) {
 	if taskRecord == nil {
 		return queueDecompositionResult{}, nil
@@ -1219,6 +1253,88 @@ func isTerminalTaskStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func queueDuplicateSharedFileDeliverablePath(taskRecord repo.ProjectTask) string {
+	for _, text := range queueTaskSharedFileOwnershipTexts(taskRecord) {
+		if explicit := queueExplicitDeliverablePathFromText(text); explicit != "" {
+			return explicit
+		}
+	}
+	return ""
+}
+
+func queueTaskSharedFileOwnershipTexts(taskRecord repo.ProjectTask) []string {
+	texts := []string{strings.TrimSpace(taskRecord.Title)}
+	if taskRecord.Description != nil {
+		texts = append(texts, strings.TrimSpace(*taskRecord.Description))
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(taskRecord.Metadata, &metadata); err == nil {
+		if decomposition, _ := metadata["decomposition"].(map[string]any); decomposition != nil {
+			if sourceDescription := strings.TrimSpace(fmt.Sprintf("%v", decomposition["source_description"])); sourceDescription != "" {
+				texts = append(texts, sourceDescription)
+			}
+		}
+	}
+	filtered := texts[:0]
+	for _, text := range texts {
+		if strings.TrimSpace(text) != "" {
+			filtered = append(filtered, text)
+		}
+	}
+	return filtered
+}
+
+func queueExplicitDeliverablePathFromText(text string) string {
+	for _, rawPath := range satisfiedDraftWorkspaceFilePathPattern.FindAllString(text, -1) {
+		normalized := filepath.ToSlash(filepath.Clean(filepath.FromSlash(strings.TrimSpace(rawPath))))
+		if normalized != "" {
+			return normalized
+		}
+	}
+	return ""
+}
+
+func sameQueueWorkspaceRelativePath(left, right string) bool {
+	return filepath.Clean(filepath.FromSlash(strings.TrimSpace(left))) == filepath.Clean(filepath.FromSlash(strings.TrimSpace(right)))
+}
+
+func queueTaskClaimsWholeSharedFileOwnership(taskRecord repo.ProjectTask, sharedPath string) bool {
+	sharedPath = strings.ToLower(strings.TrimSpace(filepath.ToSlash(filepath.Clean(filepath.FromSlash(sharedPath)))))
+	if sharedPath == "" || !strings.Contains(filepath.Base(sharedPath), ".") {
+		return false
+	}
+	text := strings.ToLower(strings.Join(strings.Fields(strings.Join(queueTaskSharedFileOwnershipTexts(taskRecord), " ")), " "))
+	if text == "" || !strings.Contains(text, sharedPath) {
+		return false
+	}
+	for _, prefix := range []string{
+		"produce the file ",
+		"write the file ",
+		"write the complete file ",
+		"draft the file ",
+		"create the file ",
+		"update the file ",
+		"update the complete file ",
+		"replace the file ",
+		"replace the complete file ",
+		"deliver the file ",
+		"deliver the complete file ",
+	} {
+		if strings.Contains(text, prefix+sharedPath) {
+			return true
+		}
+	}
+	for _, action := range []string{"produce", "write", "draft", "create", "update", "replace"} {
+		if strings.Contains(text, action+" "+sharedPath) {
+			return true
+		}
+		if strings.Contains(text, action+" a single file") || strings.Contains(text, action+" single file") {
+			return true
+		}
+	}
+	return false
 }
 
 func decompositionTaskLess(left, right repo.ProjectTask) bool {
