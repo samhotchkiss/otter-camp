@@ -1211,6 +1211,7 @@
   - bug:
     - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) used substring matches inside `taskClaimsWholeSharedFileOwnership(...)`
     - that let `overwrite` accidentally satisfy the `write` action test, so the child looked like it claimed the whole shared file even though it was explicitly a bounded insert/append section task
+    - separately, draft/shared-doc proof conflict logic treated any blocked sibling on the same parent file as equivalent proof against the draft child, even when the siblings were clearly different section-scoped fragments
   - impact:
     - PM continuations can keep treating a parent with a legitimate draft section child as if all children are still terminally blocked/malformed
     - that reopens replacement-parent handoff churn instead of advancing the existing draft child

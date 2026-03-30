@@ -4546,9 +4546,11 @@
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
     - `taskClaimsWholeSharedFileOwnership(...)` now requires standalone action-word matches, so `overwrite` no longer counts as `write`
     - `buildProjectExecutionContinuationSnapshotWithActivity(...)` now keeps superseded draft parents in `ChildActiveDraftLine` when they already have real child work, while still moving actionable focus to the child draft
+    - shared-doc proof conflict checks now compare concrete section targets before treating blocked siblings as proof against a draft child on the same file
   - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
     - added `TestProjectExecutionContinuationSnapshotPrefersSharedDocDraftChildOverReplacementParent`
+    - added `TestProjectExecutionContinuationSnapshotPrefersSharedDocDraftChildOverBlockedSiblingFragmentsWithoutPath`
     - kept the older draft-child snapshot regression green:
       - `TestProjectExecutionContinuationSnapshotPrefersDraftChildOverFreshReplacementParent`
   - verified with:
-    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshot(PrefersSharedDocDraftChildOverReplacementParent|PrefersDraftChildOverFreshReplacementParent)|HandleMalformedDuplicateSharedFileChildTaskPreflight|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshot(PrefersSharedDocDraftChildOverReplacementParent|PrefersSharedDocDraftChildOverBlockedSiblingFragmentsWithoutPath|PrefersDraftChildOverFreshReplacementParent)|HandleMalformedDuplicateSharedFileChildTaskPreflight|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren)$' -count=1`

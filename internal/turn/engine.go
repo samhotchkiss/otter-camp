@@ -22413,6 +22413,10 @@ func projectContinuationDraftHasOpenRejectedProofForSameDeliverable(
 	taskHintsByTask map[uuid.UUID]projectContinuationTaskHints,
 	malformedChildTaskIDs map[uuid.UUID]struct{},
 ) bool {
+	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(projectTasks))
+	for _, task := range projectTasks {
+		tasksByID[task.ID] = task
+	}
 	for _, openTask := range projectTasks {
 		if openTask.ID == draftTask.ID {
 			continue
@@ -22429,11 +22433,50 @@ func projectContinuationDraftHasOpenRejectedProofForSameDeliverable(
 		if !projectContinuationTaskHintsShareDeliverableIdentity(draftHints, openHints) {
 			continue
 		}
+		if projectContinuationSharedDocSectionTasksConflict(draftTask, draftHints, openTask, openHints, tasksByID) {
+			continue
+		}
 		if status == "blocked" || strings.EqualFold(strings.TrimSpace(openHints.ProofState), "rejected") {
 			return true
 		}
 	}
 	return false
+}
+
+func projectContinuationSharedDocSectionTasksConflict(
+	draftTask repo.ProjectTask,
+	draftHints projectContinuationTaskHints,
+	openTask repo.ProjectTask,
+	openHints projectContinuationTaskHints,
+	tasksByID map[uuid.UUID]repo.ProjectTask,
+) bool {
+	sharedPath := normalizeWorkspaceRelativePath(draftHints.DeliverablePath)
+	openPath := normalizeWorkspaceRelativePath(openHints.DeliverablePath)
+	if sharedPath == "" || openPath == "" || !sameWorkspaceRelativePath(sharedPath, openPath) {
+		return false
+	}
+	draftSection := projectContinuationTaskSharedSectionTarget(draftTask, sharedPath, tasksByID)
+	if draftSection == "" {
+		return false
+	}
+	openSection := projectContinuationTaskSharedSectionTarget(openTask, sharedPath, tasksByID)
+	return openSection == "" || !strings.EqualFold(strings.TrimSpace(openSection), strings.TrimSpace(draftSection))
+}
+
+func projectContinuationTaskSharedSectionTarget(task repo.ProjectTask, sharedPath string, tasksByID map[uuid.UUID]repo.ProjectTask) string {
+	if section := recoveryResumeSharedSectionTarget(task, sharedPath); section != "" {
+		return section
+	}
+	metadata := messageMetadataMap(task.Metadata)
+	parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+	if !ok || parentID == uuid.Nil {
+		return ""
+	}
+	parentTask, ok := tasksByID[parentID]
+	if !ok {
+		return ""
+	}
+	return recoveryResumeSharedSectionTarget(parentTask, sharedPath)
 }
 
 func projectContinuationTaskHintsShareDeliverableIdentity(
