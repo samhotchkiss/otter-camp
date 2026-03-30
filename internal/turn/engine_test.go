@@ -25596,6 +25596,61 @@ func TestBuildProjectExecutionContinuationPromptIncludesCompletedBatchSupersessi
 	}
 }
 
+func TestBuildProjectExecutionContinuationPromptIncludesBlockedOnlyStopGuidance(t *testing.T) {
+	task := repo.ProjectTask{TaskNumber: 243, Title: "Write templates/template-08-replace.html - final replacement"}
+
+	prompt := buildProjectExecutionContinuationPrompt(task, 0, projectExecutionContinuationSnapshot{
+		ProjectLine: "Active project id: 123",
+		ActiveTaskLine: strings.Join([]string{
+			"Already-active non-terminal tasks in the tree:",
+			`task 235 (Verify planning/sambot-tech-architecture.md meets PRD acceptance criteria) id=aaa title="Verify planning/sambot-tech-architecture.md meets PRD acceptance criteria" work_status=blocked deliverable_path=planning/sambot-tech-architecture.md resume_policy=terminal_keep_blocked blocker="flow rejection max visits exceeded"`,
+			`; task 181 (API contract) id=bbb title="API contract" work_status=blocked deliverable_path=planning/sambot-architecture.md resume_policy=requires_human_continuation blocker="review approval recorded but blocked task requires direct human operator continuation"`,
+		}, " "),
+		LeafActiveTaskLine: "Active leaf tasks already have no child tasks to inspect: task 235 (Verify planning/sambot-tech-architecture.md meets PRD acceptance criteria) leaf_task_id=aaa; task 181 (API contract) leaf_task_id=bbb",
+	})
+
+	if !strings.Contains(prompt, "All named remaining tasks are already blocked and none are project-lane actionable.") {
+		t.Fatalf("prompt = %q, want blocked-only stop guidance", prompt)
+	}
+	if !strings.Contains(prompt, "your next assistant message must be one concrete blocker sentence naming the blocked deliverable or human/operator dependency") {
+		t.Fatalf("prompt = %q, want blocker-sentence instruction", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationRediscoveryRetryPromptIncludesBlockedOnlyStopGuidance(t *testing.T) {
+	completedTask := repo.ProjectTask{TaskNumber: 243, Title: "Write templates/template-08-replace.html - final replacement"}
+	snapshot := projectExecutionContinuationSnapshot{
+		ProjectLine: "Active project id: 123",
+		ActiveTaskLine: strings.Join([]string{
+			"Already-active non-terminal tasks in the tree:",
+			`task 235 (Verify planning/sambot-tech-architecture.md meets PRD acceptance criteria) id=aaa title="Verify planning/sambot-tech-architecture.md meets PRD acceptance criteria" work_status=blocked deliverable_path=planning/sambot-tech-architecture.md resume_policy=terminal_keep_blocked blocker="flow rejection max visits exceeded"`,
+			`; task 181 (API contract) id=bbb title="API contract" work_status=blocked deliverable_path=planning/sambot-architecture.md resume_policy=requires_human_continuation blocker="review approval recorded but blocked task requires direct human operator continuation"`,
+		}, " "),
+		LeafActiveTaskLine: "Active leaf tasks already have no child tasks to inspect: task 235 (Verify planning/sambot-tech-architecture.md meets PRD acceptance criteria) leaf_task_id=aaa; task 181 (API contract) leaf_task_id=bbb",
+	}
+
+	prompt := buildProjectExecutionContinuationRediscoveryRetryPrompt(
+		completedTask,
+		0,
+		snapshot,
+		repo.ProjectTask{},
+		false,
+		projectContinuationChildActivity{},
+		projectContinuationTaskHints{},
+		repo.ProjectTask{},
+		false,
+		projectContinuationChildActivity{},
+		projectContinuationTaskHints{},
+	)
+
+	if !strings.Contains(prompt, "Your entire next assistant message must be one concrete blocker sentence naming the blocked deliverable or the human/operator dependency.") {
+		t.Fatalf("prompt = %q, want blocker-only rediscovery stop guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not add analysis bullets, a recap, or another discovery plan.") {
+		t.Fatalf("prompt = %q, want anti-analysis guidance", prompt)
+	}
+}
+
 func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksProjectIDTaskGet(t *testing.T) {
 	t.Parallel()
 
@@ -26369,6 +26424,15 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsContextSummaryReadyReply(t *tes
 	content := "I'm ready to help. I'm Alex, Technical Lead for the SAM.blog rebuild. Based on the context, I can see the target file and current blocker."
 	if !looksLikeGenericTaskRecoveryReply(content) {
 		t.Fatal("expected context-summary ready reply to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsSnapshotNarrationReply(t *testing.T) {
+	t.Parallel()
+
+	content := "Looking at the snapshot, here's the situation: the key question is whether any remaining draft tasks still need action. Let me directly address what I can act on."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected snapshot narration reply to be treated as generic recovery output")
 	}
 }
 

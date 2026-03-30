@@ -1052,3 +1052,17 @@
   - impact:
     - PM continuations could keep surfacing stale draft shells for `templates/template-08-replace.html` even after the real replacement task was already complete
     - worker recovery could keep treating those shells as actionable remaining draft work and enqueue unnecessary continuation traffic
+- 2026-03-30 01:07 MDT - Once the stale template-08 draft shells disappeared, blocked-only PM continuations still behaved like discovery tasks instead of terminal blocker reporting.
+  - fresh live evidence on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`:
+    - continuation message `946d5857-edde-4361-b416-d9788f25ba90` named only blocked leaf lanes:
+      - `planning/sambot-tech-architecture.md` with `resume_policy=terminal_keep_blocked`
+      - `planning/sambot-personality-spec.md` with `resume_policy=terminal_keep_blocked`
+      - `planning/sambot-architecture.md` with `resume_policy=requires_human_continuation`
+    - assistant replies still opened with narration (`Looking at the snapshot, here's the situation...`, `Let me directly address what I can act on`)
+    - the same PM turn then called blocked `task.list` rediscovery and ended with another rediscovery-guard stop
+  - bug:
+    - project-continuation prompts and rediscovery retries still implied there was some discoverable next move even when the snapshot had no actionable drafts and every named remaining task was already non-actionable blocked work
+    - the generic-reply detector also missed this newer PM narration family, so the runtime treated it as substantive enough to keep the loop going
+  - impact:
+    - PM lanes can keep burning turns on blocker recap plus blocked `task.list` retries even after the continuation snapshot has already converged on a blocked-only state
+    - that delays the real next action, which is a one-sentence blocker handoff or human/operator intervention

@@ -4915,6 +4915,13 @@ func buildProjectExecutionContinuationPromptForWorker(completedTaskNumber int, c
 		"Do not use task.update to mark untouched draft tasks done; queue or otherwise advance the next runnable task instead.",
 		"If the remaining work is blocked on a concrete prerequisite, report that blocker in one sentence instead of narrating intent.",
 	)
+	if projectContinuationSnapshotOnlyHasNonActionableBlockedWorkForWorker(snapshot) {
+		lines = append(lines,
+			"All named remaining tasks are already blocked and none are project-lane actionable.",
+			"Do not call task.list, task.get, file.list, file.read, session.list, session.history, inbox.list, cli.execute, git.status, or git.log just to re-check those blocked lanes.",
+			"If no fresh draft or replacement task is named below, your next assistant message must be one concrete blocker sentence naming the blocked deliverable or human/operator dependency.",
+		)
+	}
 	lines = appendProjectExecutionSnapshotGuidanceForWorker(lines, snapshot)
 	if completedBatchRange != "" && projectExecutionSnapshotContainsBatchRangeForWorker(snapshot, completedBatchRange) {
 		lines = append(lines,
@@ -4925,6 +4932,44 @@ func buildProjectExecutionContinuationPromptForWorker(completedTaskNumber int, c
 		)
 	}
 	return strings.Join(lines, " ")
+}
+
+func projectContinuationSnapshotOnlyHasNonActionableBlockedWorkForWorker(snapshot projectExecutionContinuationSnapshotForWorker) bool {
+	if snapshot.HasActionableBlocked {
+		return false
+	}
+	if strings.TrimSpace(snapshot.ActiveTaskLine) == "" {
+		return false
+	}
+	if strings.TrimSpace(snapshot.DraftTaskLine) != "" ||
+		strings.TrimSpace(snapshot.ReplacementDraftLine) != "" ||
+		strings.TrimSpace(snapshot.ChildActiveDraftLine) != "" ||
+		strings.TrimSpace(snapshot.FocusTaskLine) != "" {
+		return false
+	}
+	activeLine := strings.TrimSpace(snapshot.ActiveTaskLine)
+	lower := strings.ToLower(activeLine)
+	if strings.Contains(lower, "work_status=in_progress") ||
+		strings.Contains(lower, "work_status=review") ||
+		strings.Contains(lower, "work_status=queued") ||
+		strings.Contains(lower, "work_status=draft") {
+		return false
+	}
+	var blockedCount int
+	for idx, fragment := range strings.Split(activeLine, "; task ") {
+		if idx > 0 {
+			fragment = "task " + fragment
+		}
+		if !strings.Contains(fragment, "work_status=blocked") {
+			continue
+		}
+		blockedCount++
+		if !strings.Contains(fragment, "resume_policy=terminal_keep_blocked") &&
+			!strings.Contains(fragment, "resume_policy=requires_human_continuation") {
+			return false
+		}
+	}
+	return blockedCount > 0
 }
 
 func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {

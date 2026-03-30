@@ -34,6 +34,27 @@ They need sharper stopping rules than ordinary execution lanes.
 
 ### Working Notes
 
+- 2026-03-30 00:48 MDT - Picked up the next supervisory stop seam from the PM lane after the stale template-08 draft-shell cleanup landed.
+  - fresh live evidence on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`:
+    - the fresh continuation prompt after task `243` no longer surfaced the old template-08 draft shells at all
+    - the remaining named work in the prompt was only blocked leaf tasks:
+      - `terminal_keep_blocked` lanes on `planning/sambot-tech-architecture.md` and `planning/sambot-personality-spec.md`
+      - one `requires_human_continuation` lane on `planning/sambot-architecture.md`
+    - despite that, the PM turn still answered with narration like `Looking at the snapshot, here's the situation...` / `Let me directly address what I can act on`, then spent its tool batch on blocked `task.list` rediscovery
+  - local hardening is in:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+      - base project-continuation prompts now detect the blocked-only snapshot shape and explicitly require one blocker sentence instead of another discovery pass
+      - rediscovery-retry prompts now escalate that same shape to `Your entire next assistant message must be one concrete blocker sentence ... Do not add analysis bullets, a recap, or another discovery plan.`
+      - `looksLikeGenericTaskRecoveryReply(...)` now recognizes the exact live narration family (`Looking at the snapshot...`, `Here's the situation...`, `Let me directly address what I can act on`, `The key question is whether...`)
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+      - worker-generated PM continuation prompts now carry the same blocked-only stop contract
+  - focused verification is green:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectExecutionContinuationPrompt(IncludesCompletedBatchSupersessionGuidance|IncludesBlockedOnlyStopGuidance)|BuildProjectExecutionContinuationRediscoveryRetryPromptIncludesBlockedOnlyStopGuidance|LooksLikeGenericTaskRecoveryReplyDetects(SnapshotNarrationReply|ContextSummaryReadyReply))$' -count=1`
+    - `GOFLAGS='' go test ./internal/jobqueue -run 'TestBuildProjectExecutionContinuationPromptForWorkerIncludes(BlockerReuseGuidance|LeafTaskGuidance|BlockedOnlyStopGuidance)$' -count=1`
+  - deploy / proof target:
+    - the next PM continuation for session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` should stop trying `task.list` when only blocked leaf lanes remain
+    - expected outcome is one blocker sentence or a worker/engine-side generic-reply retry, not another blocked rediscovery loop
+
 - 2026-03-29 23:02 MDT - Picked up the next supervisory stop seam from the template-8 replacement family. Fresh live evidence on task `229` showed the runtime was already narrowing the lane onto the right file (`templates/template-08-replace.html`), but ordinary async task continuations still did not carry forward the stronger “direct write only” stop state that recovery prompts already use. The lane repeated `file.write` without `content`, got same-turn correction text, and then reopened the next continuation with the same “Let me provide...” narration instead of starting with the file body itself.
 - 2026-03-29 23:02 MDT - Local hardening is in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
   - task-continuation snapshots now surface `direct_write_only=true` when the latest validation guard is `content_required` for an exact deliverable path

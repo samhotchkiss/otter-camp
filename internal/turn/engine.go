@@ -5873,6 +5873,13 @@ func buildProjectExecutionContinuationRediscoveryRetryPrompt(
 	blockedHints projectContinuationTaskHints,
 ) string {
 	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot)
+	if projectContinuationSnapshotOnlyHasNonActionableBlockedWork(snapshot) {
+		retryPrompt += " Your last continuation turn tried to rediscover blocked work that the continuation snapshot had already fully described."
+		retryPrompt += " Do not call task.list, task.get, file.list, file.read, session.list, session.history, inbox.list, cli.execute, git.status, or git.log."
+		retryPrompt += " Your entire next assistant message must be one concrete blocker sentence naming the blocked deliverable or the human/operator dependency."
+		retryPrompt += " Do not add analysis bullets, a recap, or another discovery plan."
+		return retryPrompt
+	}
 	retryPrompt += " Your last continuation turn spent its entire tool batch on broad rediscovery that the continuation snapshot already provided."
 	retryPrompt += " Do not begin with task.list without parent_task_id, task.get, file.list, file.read, session.list, session.history, inbox.list, cli.execute, git.status, or git.log."
 	retryPrompt += buildProjectExecutionContinuationRediscoveryActionInstruction(
@@ -8861,6 +8868,13 @@ func buildProjectExecutionContinuationPrompt(completedTask repo.ProjectTask, rem
 		"Do not use task.update to mark untouched draft tasks done; queue or otherwise advance the next runnable task instead.",
 		"If the remaining work is blocked on a concrete prerequisite, report that blocker in one sentence instead of narrating intent.",
 	)
+	if projectContinuationSnapshotOnlyHasNonActionableBlockedWork(snapshot) {
+		lines = append(lines,
+			"All named remaining tasks are already blocked and none are project-lane actionable.",
+			"Do not call task.list, task.get, file.list, file.read, session.list, session.history, inbox.list, cli.execute, git.status, or git.log just to re-check those blocked lanes.",
+			"If no fresh draft or replacement task is named below, your next assistant message must be one concrete blocker sentence naming the blocked deliverable or human/operator dependency.",
+		)
+	}
 	lines = appendProjectExecutionSnapshotGuidance(lines, snapshot)
 	if completedBatchRange != "" && projectExecutionSnapshotContainsBatchRange(snapshot, completedBatchRange) {
 		lines = append(lines,
@@ -8871,6 +8885,44 @@ func buildProjectExecutionContinuationPrompt(completedTask repo.ProjectTask, rem
 		)
 	}
 	return strings.Join(lines, " ")
+}
+
+func projectContinuationSnapshotOnlyHasNonActionableBlockedWork(snapshot projectExecutionContinuationSnapshot) bool {
+	if snapshot.HasActionableBlocked {
+		return false
+	}
+	if strings.TrimSpace(snapshot.ActiveTaskLine) == "" {
+		return false
+	}
+	if strings.TrimSpace(snapshot.DraftTaskLine) != "" ||
+		strings.TrimSpace(snapshot.ReplacementDraftLine) != "" ||
+		strings.TrimSpace(snapshot.ChildActiveDraftLine) != "" ||
+		strings.TrimSpace(snapshot.FocusTaskLine) != "" {
+		return false
+	}
+	activeLine := strings.TrimSpace(snapshot.ActiveTaskLine)
+	lower := strings.ToLower(activeLine)
+	if strings.Contains(lower, "work_status=in_progress") ||
+		strings.Contains(lower, "work_status=review") ||
+		strings.Contains(lower, "work_status=queued") ||
+		strings.Contains(lower, "work_status=draft") {
+		return false
+	}
+	var blockedCount int
+	for idx, fragment := range strings.Split(activeLine, "; task ") {
+		if idx > 0 {
+			fragment = "task " + fragment
+		}
+		if !strings.Contains(fragment, "work_status=blocked") {
+			continue
+		}
+		blockedCount++
+		if !strings.Contains(fragment, "resume_policy=terminal_keep_blocked") &&
+			!strings.Contains(fragment, "resume_policy=requires_human_continuation") {
+			return false
+		}
+	}
+	return blockedCount > 0
 }
 
 func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress projectBootstrapProgress) string {
@@ -36214,6 +36266,10 @@ func looksLikeGenericTaskRecoveryReply(content string) bool {
 		"let me first check the current state of the workspace and the task",
 		"let me first check the current state of the workspace",
 		"let me first check the current state of the task",
+		"looking at the snapshot",
+		"here's the situation",
+		"let me directly address what i can act on",
+		"the key question is whether",
 		"let me read the strategy artifacts that are already locked",
 		"let me read those to understand the locked decisions",
 		"let me check the task flow and understand what step we're on",

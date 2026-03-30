@@ -88,6 +88,25 @@ func TestBuildProjectExecutionContinuationPromptForWorkerIncludesLeafTaskGuidanc
 	}
 }
 
+func TestBuildProjectExecutionContinuationPromptForWorkerIncludesBlockedOnlyStopGuidance(t *testing.T) {
+	prompt := buildProjectExecutionContinuationPromptForWorker(243, "Write templates/template-08-replace.html - final replacement", 0, projectExecutionContinuationSnapshotForWorker{
+		ProjectLine: "Active project id: 123",
+		ActiveTaskLine: strings.Join([]string{
+			"Already-active non-terminal tasks in the tree:",
+			`task 235 (Verify planning/sambot-tech-architecture.md meets PRD acceptance criteria) id=aaa title="Verify planning/sambot-tech-architecture.md meets PRD acceptance criteria" work_status=blocked deliverable_path=planning/sambot-tech-architecture.md resume_policy=terminal_keep_blocked blocker="flow rejection max visits exceeded"`,
+			`; task 181 (API contract) id=bbb title="API contract" work_status=blocked deliverable_path=planning/sambot-architecture.md resume_policy=requires_human_continuation blocker="review approval recorded but blocked task requires direct human operator continuation"`,
+		}, " "),
+		LeafActiveTaskLine: "Active leaf tasks already have no child tasks to inspect: task 235 (Verify planning/sambot-tech-architecture.md meets PRD acceptance criteria) leaf_task_id=aaa; task 181 (API contract) leaf_task_id=bbb",
+	})
+
+	if !strings.Contains(prompt, "All named remaining tasks are already blocked and none are project-lane actionable.") {
+		t.Fatalf("prompt = %q, want blocked-only stop guidance", prompt)
+	}
+	if !strings.Contains(prompt, "your next assistant message must be one concrete blocker sentence naming the blocked deliverable or human/operator dependency") {
+		t.Fatalf("prompt = %q, want blocker-sentence instruction", prompt)
+	}
+}
+
 func TestBuildProjectContinuationTaskHintsForWorkerIncludesDeliverableAndDependencyHints(t *testing.T) {
 	indexDescription := "Crawl technonymous.org archive pages and build post URL index. Output a JSON index at content/technonymous-index.json with title, URL, and date for each post."
 	scrapeDescription := "Scrape and import technonymous.org posts from the URL index under content/posts/"

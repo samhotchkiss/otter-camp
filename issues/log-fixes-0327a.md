@@ -4366,3 +4366,20 @@
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshotIgnoresSuperseded(Closeout|SatisfiedOutcome)Drafts$' -count=1`
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRequeueActiveProjectSessionsMissingContinuationIgnoresSuperseded(Closeout|SatisfiedOutcome)Drafts$' -count=1`
+- 2026-03-30 01:07 MDT - Added a blocked-only supervisory stop contract for PM continuations and rediscovery retries.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `buildProjectExecutionContinuationPrompt(...)` now detects snapshots with no actionable drafts and only non-actionable blocked lanes, and explicitly requires one blocker sentence instead of more rediscovery
+    - `buildProjectExecutionContinuationRediscoveryRetryPrompt(...)` now escalates that same blocked-only shape to a stricter blocker-only contract: no tool calls, no analysis bullets, no recap
+    - `looksLikeGenericTaskRecoveryReply(...)` now recognizes the live PM narration family: `Looking at the snapshot...`, `Here's the situation...`, `Let me directly address what I can act on`, and `The key question is whether...`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - worker-generated PM continuation prompts now carry the same blocked-only stop contract when no fresh draft or replacement work remains
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+      - added `TestBuildProjectExecutionContinuationPromptIncludesBlockedOnlyStopGuidance`
+      - added `TestBuildProjectExecutionContinuationRediscoveryRetryPromptIncludesBlockedOnlyStopGuidance`
+      - added `TestLooksLikeGenericTaskRecoveryReplyDetectsSnapshotNarrationReply`
+    - [`internal/jobqueue/worker_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_test.go):
+      - added `TestBuildProjectExecutionContinuationPromptForWorkerIncludesBlockedOnlyStopGuidance`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectExecutionContinuationPrompt(IncludesCompletedBatchSupersessionGuidance|IncludesBlockedOnlyStopGuidance)|BuildProjectExecutionContinuationRediscoveryRetryPromptIncludesBlockedOnlyStopGuidance|LooksLikeGenericTaskRecoveryReplyDetects(SnapshotNarrationReply|ContextSummaryReadyReply))$' -count=1`
+    - `GOFLAGS='' go test ./internal/jobqueue -run 'TestBuildProjectExecutionContinuationPromptForWorkerIncludes(BlockerReuseGuidance|LeafTaskGuidance|BlockedOnlyStopGuidance)$' -count=1`
