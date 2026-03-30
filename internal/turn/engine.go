@@ -30676,6 +30676,7 @@ func shouldStopAfterBlockedProjectExecutionBlockedMutation(rt *turnRuntime, resu
 			"review_action_required",
 			"deliverable_path_required",
 			"parent task requires child verification and passed integration before completion",
+			"closeout-ready state for the same deliverable",
 			"project continuation already has focused draft task",
 			"prompt already required a direct replacement-child handoff",
 			"task must remain orchestration-only while executable child tasks exist",
@@ -30923,6 +30924,9 @@ func projectExecutionBlockedMutationStopMessage(rt *turnRuntime, results []ToolR
 		if strings.Contains(errText, "repair the missing prerequisite fields first") ||
 			strings.Contains(errText, "assigned_agent_id / flow_template_id still missing") {
 			return "[Project continuation focus task still has explicit prerequisite fields missing. Do not inspect deliverables or sibling artifacts from the project lane. Repair the named assigned_agent_id / flow_template_id gaps on that exact task with one narrow task.update first, then continue the replacement-child handoff if it is still needed.]"
+		}
+		if strings.Contains(errText, "closeout-ready state for the same deliverable") {
+			return "[Project continuation already proved that the focused parent is closeout-ready for this deliverable. Do not rediscover sibling or child state from the project lane again. Advance or close that same parent directly, and if parent_orchestration evidence is still missing record it in one narrow task.update now.]"
 		}
 		if strings.Contains(errText, "project continuation already has focused draft task") {
 			return "[Project continuation already has a narrower focused draft task. Create or advance the smallest fresh child work beneath that focus task instead of re-queueing it or promoting its ancestors from the project lane.]"
@@ -34384,6 +34388,13 @@ func buildProjectContinuationFocusedPrerequisiteRepairGuardError(focusTaskID uui
 	return fmt.Sprintf("project continuation already has a focused draft task with explicit prerequisite fields missing. Do not call %s from the project lane now; repair the missing prerequisite fields first with one narrow task.update on that exact task, or report one blocker sentence if the required value is still unknown.", strings.TrimSpace(toolName))
 }
 
+func buildProjectContinuationFocusedCloseoutReadyGuardError(focusTaskID uuid.UUID, toolName string) string {
+	if focusTaskID != uuid.Nil {
+		return fmt.Sprintf("project continuation already has focused draft task id=%s in a closeout-ready state for the same deliverable. Do not call %s from the project lane now; advance or close that same parent directly. If parent_orchestration evidence is still missing, record parent_orchestration.child_verifications, parent_orchestration.integration_check.status=passed, and parent_orchestration.outcome_assessment.satisfied=true in one narrow task.update on that task first.", focusTaskID.String(), strings.TrimSpace(toolName))
+	}
+	return fmt.Sprintf("project continuation already has a focused closeout-ready parent for the same deliverable. Do not call %s from the project lane now; advance or close that same parent directly, and if parent_orchestration evidence is still missing record it in one narrow task.update first.", strings.TrimSpace(toolName))
+}
+
 func projectContinuationFocusedDraftReadGuardActive(initial string) bool {
 	initial = strings.TrimSpace(initial)
 	if initial == "" {
@@ -34414,6 +34425,23 @@ func projectContinuationFocusedPrerequisiteRepairActive(initial string) bool {
 	return strings.Contains(initial, "assigned_agent_id=missing") || strings.Contains(initial, "flow_template_id=missing")
 }
 
+func projectContinuationFocusedCloseoutReadyActive(initial string) bool {
+	initial = strings.TrimSpace(initial)
+	if initial == "" {
+		return false
+	}
+	return strings.Contains(initial, "already closeout-ready for the same deliverable") ||
+		strings.Contains(initial, "closeout-ready parent still needs parent_orchestration evidence")
+}
+
+func projectContinuationFocusedCloseoutReadyAllowsParentScopedTaskList(initial string) bool {
+	initial = strings.TrimSpace(initial)
+	if initial == "" {
+		return false
+	}
+	return strings.Contains(initial, "If any child task IDs are still unknown, use only task.list(parent_task_id=")
+}
+
 func projectContinuationFocusedTaskID(initial string) uuid.UUID {
 	if focusTaskID := projectContinuationPromptCurrentFocusParentTaskID(initial); focusTaskID != uuid.Nil {
 		return focusTaskID
@@ -34431,20 +34459,32 @@ func shouldBlockProjectContinuationFocusedDraftReadTool(rt *turnRuntime, toolNam
 	}
 	initial := strings.TrimSpace(rt.initialMessageText)
 	prerequisiteRepairActive := projectContinuationFocusedPrerequisiteRepairActive(initial)
-	if !projectContinuationReplacementChildHandoffActive(rt) && !prerequisiteRepairActive {
+	closeoutReadyActive := projectContinuationFocusedCloseoutReadyActive(initial)
+	if !projectContinuationReplacementChildHandoffActive(rt) && !prerequisiteRepairActive && !closeoutReadyActive {
 		return false, ""
 	}
-	if !projectContinuationFocusedDraftReadGuardActive(initial) && !prerequisiteRepairActive {
+	if !projectContinuationFocusedDraftReadGuardActive(initial) && !prerequisiteRepairActive && !closeoutReadyActive {
 		return false, ""
 	}
 	focusTaskID := projectContinuationFocusedTaskID(initial)
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "file.read", "file.list", "task.get":
+		if closeoutReadyActive {
+			return true, buildProjectContinuationFocusedCloseoutReadyGuardError(focusTaskID, toolName)
+		}
 		if prerequisiteRepairActive {
 			return true, buildProjectContinuationFocusedPrerequisiteRepairGuardError(focusTaskID, toolName)
 		}
 		return true, buildProjectContinuationFocusedDraftReadGuardError(focusTaskID, toolName)
 	case "task.list":
+		if closeoutReadyActive {
+			parentTaskID, ok := parseUUIDAny(arguments["parent_task_id"])
+			if !projectContinuationFocusedCloseoutReadyAllowsParentScopedTaskList(initial) ||
+				!ok || parentTaskID == uuid.Nil || focusTaskID == uuid.Nil || parentTaskID != focusTaskID {
+				return true, buildProjectContinuationFocusedCloseoutReadyGuardError(focusTaskID, toolName)
+			}
+			return false, ""
+		}
 		parentTaskID, ok := parseUUIDAny(arguments["parent_task_id"])
 		if !ok || parentTaskID == uuid.Nil || focusTaskID == uuid.Nil || parentTaskID != focusTaskID {
 			if prerequisiteRepairActive {

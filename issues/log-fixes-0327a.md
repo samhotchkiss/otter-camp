@@ -4620,3 +4620,20 @@
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(JobWorkerEnsureProjectContinuationMessage(AllowsRepeatedConsumedReplacementHandoffContinuation|AllowsStalePendingReplacementHandoffDuplicateRefresh)|BuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker)$' -count=1`
     - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurnRetriesReplacementHandoffStopWithFreshMessage$|TestShouldNotSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop(ViaTriggerMessageID)?$|TestBuildProjectContinuationActionPromptAddsReplacementChildGuidanceFor(Blocked|Malformed)Children$' -count=1`
+- 2026-03-31 05:14 MDT - Blocked closeout-ready PM rediscovery churn in the turn engine.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `projectContinuationFocusedCloseoutReadyActive(...)` to recognize the worker/engine-authored closeout-ready parent-advance prompt family
+    - extended `shouldBlockProjectContinuationFocusedDraftReadTool(...)` so closeout-ready PM continuations now block:
+      - `task.get`
+      - `file.read`
+      - `file.list`
+      - `task.list` unless it is the explicitly allowed `task.list(parent_task_id=...)` shape
+    - added a dedicated closeout-ready stop message to `projectExecutionBlockedMutationStopMessage(...)`
+    - extended `shouldStopAfterBlockedProjectExecutionBlockedMutation(...)` so the new closeout-ready guard errors terminate the PM turn immediately
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestProjectExecutionBlockedMutationStopMessageOnFocusedCloseoutReadyGuard`
+    - added `TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksCloseoutReadyTaskGet`
+    - added `TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksCloseoutReadyTaskListWithoutExplicitAllowance`
+    - widened the blocked-mutation stop regression to cover the closeout-ready guard family
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterBlockedProjectExecutionBlockedMutationOnTaskLaneBoundaryErrors|ProjectExecutionBlockedMutationStopMessageOnFocused(CloseoutReady|PrerequisiteRepair)Guard|ShouldBlockProjectContinuationFocusedDraftReadTool(BlocksCloseoutReadyTaskGet|BlocksCloseoutReadyTaskListWithoutExplicitAllowance|BlocksFileRead|AllowsParentScopedTaskList|BlocksTaskListWithoutParent|BlocksGeneralFocusPromptFileRead|BlocksPrerequisiteRepairFocusFileRead|AllowsParentScopedTaskListForGeneralFocusPrompt)|HandleCompletedProjectExecutionContinuationTurnRetriesReplacementHandoffStopWithFreshMessage|ShouldNotSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop(ViaTriggerMessageID)?|BuildProjectContinuationActionPromptAddsReplacementChildGuidanceFor(Blocked|Malformed)Children)$' -count=1`

@@ -1277,3 +1277,17 @@
     - the same path was also tied too tightly to `latestConsumedSameCompletedTaskMessageID`, so once the PM lane's latest completed task rolled from task `259` to task `84`, the closeout-ready stop was no longer considered
   - impact:
     - worker recovery can still author the wrong PM continuation immediately after deploy/restart, even though the runtime already proved the focused parent should be advanced directly
+- 2026-03-31 05:14 MDT - Closeout-ready PM continuations still depended on prompt obedience instead of a runtime tool guard.
+  - fresh live evidence:
+    - messages `12293` and `12323` were already the correct closeout-ready parent-advance prompts for task `245`
+    - the next PM turn still ran:
+      - `task.list`
+      - `task.get`
+      - broad `task.list`
+      - `file.read planning/sambot-tech-architecture.md`
+    - before ending on the runtime reminder that the parent still needed `parent_orchestration` evidence
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) only guarded focused draft rereads for prerequisite-repair / replacement-child handoff prompts
+    - the newer closeout-ready parent-advance prompt family had no matching tool-level guard, so the PM turn could ignore the prompt and spend a full turn rediscovering child/sibling state anyway
+  - impact:
+    - closeout-ready parents can still burn `task.get` / `task.list` / `file.read` churn after the runtime already proved the next valid action is one narrow parent mutation or closeout step

@@ -16282,6 +16282,7 @@ func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnTaskLaneBoundary
 		{Name: "file.write", Output: map[string]any{"error": "task_execution_required", "message": "Executable project tasks already exist for this project. Do not write deliverable files like `content/technonymous-index.json` from the project session."}},
 		{Name: "task.update", Error: "flow_owned_status_blocked: this task is flow-owned"},
 		{Name: "task.update", Error: "parent task requires child verification and passed integration before completion: verify child outputs for OC-66; record a passed integration or end-to-end check"},
+		{Name: "task.get", Error: "project continuation already has focused draft task id=123 in a closeout-ready state for the same deliverable. Do not call task.get from the project lane now; advance or close that same parent directly. If parent_orchestration evidence is still missing, record parent_orchestration.child_verifications, parent_orchestration.integration_check.status=passed, and parent_orchestration.outcome_assessment.satisfied=true in one narrow task.update on that task first."},
 		{Name: "file.write", Error: "deliverable_path_required: continue the concrete deliverable instead"},
 		{Name: "file.read", Error: "project continuation already has focused draft parent task id=123 and the prompt already required a direct replacement-child handoff. Do not call file.read from the project lane now; create the smallest fresh replacement child beneath that parent instead."},
 		{Name: "task.update", Error: "task must remain orchestration-only while executable child tasks exist"},
@@ -16380,6 +16381,22 @@ func TestProjectExecutionBlockedMutationStopMessageOnFocusedPrerequisiteRepairGu
 	}
 	if !strings.Contains(message, "one narrow task.update first") {
 		t.Fatalf("message = %q, want direct prerequisite repair guidance", message)
+	}
+}
+
+func TestProjectExecutionBlockedMutationStopMessageOnFocusedCloseoutReadyGuard(t *testing.T) {
+	t.Parallel()
+
+	message := projectExecutionBlockedMutationStopMessage(nil, []ToolResult{{
+		Name:  "task.get",
+		Error: "project continuation already has focused draft task id=123 in a closeout-ready state for the same deliverable. Do not call task.get from the project lane now; advance or close that same parent directly. If parent_orchestration evidence is still missing, record parent_orchestration.child_verifications, parent_orchestration.integration_check.status=passed, and parent_orchestration.outcome_assessment.satisfied=true in one narrow task.update on that task first.",
+	}})
+
+	if !strings.Contains(message, "focused parent is closeout-ready") {
+		t.Fatalf("message = %q, want closeout-ready stop summary", message)
+	}
+	if !strings.Contains(message, "one narrow task.update now") {
+		t.Fatalf("message = %q, want direct metadata-update guidance", message)
 	}
 }
 
@@ -27028,6 +27045,67 @@ func TestShouldBlockProjectContinuationFocusedDraftReadToolAllowsParentScopedTas
 	})
 	if blocked {
 		t.Fatalf("expected parent-scoped task.list to remain allowed, got %q", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksCloseoutReadyTaskGet(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Your last continuation turn confirmed this focused parent is already closeout-ready for the same deliverable.",
+			"Current focus parent: task 245 (Write planning/sambot-tech-architecture.md) id=" + focusTaskID.String() + ".",
+			"Do not call task.get, project.list, file.list, file.read, or any other broad rediscovery tool before acting.",
+			"Your next assistant action must advance or close task 245 (Write planning/sambot-tech-architecture.md) directly now.",
+			"If the parent still needs closeout metadata, update task 245 (Write planning/sambot-tech-architecture.md) with parent_orchestration.child_verifications, parent_orchestration.integration_check.status=passed, and parent_orchestration.outcome_assessment.satisfied=true before closing it.",
+		}, " "),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, "task.get", map[string]any{
+		"task_id": focusTaskID.String(),
+	})
+	if !blocked {
+		t.Fatal("expected closeout-ready task.get to be blocked")
+	}
+	if !strings.Contains(reason, focusTaskID.String()) || !strings.Contains(reason, "closeout-ready state for the same deliverable") {
+		t.Fatalf("reason = %q, want focused closeout-ready guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksCloseoutReadyTaskListWithoutExplicitAllowance(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Your last continuation turn confirmed this focused parent is already closeout-ready for the same deliverable.",
+			"Current focus parent: task 245 (Write planning/sambot-tech-architecture.md) id=" + focusTaskID.String() + ".",
+			"Do not call task.get, project.list, file.list, file.read, or any other broad rediscovery tool before acting.",
+			"Your next assistant action must advance or close task 245 (Write planning/sambot-tech-architecture.md) directly now.",
+		}, " "),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, "task.list", map[string]any{
+		"parent_task_id": focusTaskID.String(),
+	})
+	if !blocked {
+		t.Fatal("expected closeout-ready parent-scoped task.list to be blocked when the prompt did not explicitly allow it")
+	}
+	if !strings.Contains(reason, "task.list") || !strings.Contains(reason, "closeout-ready state for the same deliverable") {
+		t.Fatalf("reason = %q, want closeout-ready task.list guidance", reason)
 	}
 }
 
