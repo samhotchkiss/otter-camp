@@ -6233,6 +6233,11 @@ func buildProjectExecutionContinuationReplacementChildRetryPrompt(
 		retryPrompt.WriteString(" Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.")
 		retryPrompt.WriteString(fmt.Sprintf(" Do not queue parent task %s again from the project lane.", focusLabel))
 		retryPrompt.WriteString(" Do not inspect or mention other draft parents until this handoff is advanced.")
+		if strings.Contains(repairLine, "child_tasks=") {
+			retryPrompt.WriteString(" The preferred same-deliverable draft named above is itself an orchestration parent with child lanes. Do not queue that named repair draft directly from the project lane.")
+			retryPrompt.WriteString(" Your next assistant action must create or queue the smallest bounded direct child beneath that named repair draft, or block/consolidate its weaker descendants if no usable child remains.")
+			return retryPrompt.String()
+		}
 		retryPrompt.WriteString(" Your next assistant action must repair and queue the preferred existing same-deliverable child draft named above with one narrow task.update, or block/consolidate the weaker duplicate siblings if that preferred child is no longer usable.")
 		return retryPrompt.String()
 	}
@@ -35834,6 +35839,19 @@ func buildProjectContinuationFocusedDraftMalformedSameDeliverableChildGuardError
 	return fmt.Sprintf("project continuation already has malformed same-deliverable direct child draft task(s) beneath focused draft task %s: %s. Do not create another child beneath %s from the project lane; pick the best existing same-deliverable child draft such as %s, queue or repair that draft if it is still usable, and block or consolidate the duplicate siblings before attempting any new replacement.", label, strings.Join(childLabels, ", "), label, preferredLabel)
 }
 
+func buildProjectContinuationDescendantDraftReplacementGuardError(targetTask, focusTask repo.ProjectTask, activity projectContinuationChildActivity) string {
+	targetLabel := projectBootstrapTaskLabel(targetTask)
+	focusLabel := projectBootstrapTaskLabel(focusTask)
+	switch {
+	case activity.malformedChildTaskCount > 0:
+		return fmt.Sprintf("project continuation already knows preferred repair draft %s beneath focused draft %s still has %d malformed child lane(s). Do not queue %s directly from the project lane; create or queue the smallest bounded direct child beneath %s instead, or block/consolidate the malformed descendants if no usable child remains.", targetLabel, focusLabel, activity.malformedChildTaskCount, targetLabel, targetLabel)
+	case activity.replaceableBlockedChildTaskCount > 0:
+		return fmt.Sprintf("project continuation already knows preferred repair draft %s beneath focused draft %s only has terminally blocked child lane(s). Do not queue %s directly from the project lane; create or queue the smallest bounded direct child beneath %s instead.", targetLabel, focusLabel, targetLabel, targetLabel)
+	default:
+		return fmt.Sprintf("project continuation already knows preferred repair draft %s beneath focused draft %s is still an orchestration parent with child lanes. Do not queue %s directly from the project lane; create or queue the smallest bounded direct child beneath %s instead.", targetLabel, focusLabel, targetLabel, targetLabel)
+	}
+}
+
 func projectContinuationPreferredSameDeliverableDraftChild(tasks []repo.ProjectTask) repo.ProjectTask {
 	if len(tasks) == 0 {
 		return repo.ProjectTask{}
@@ -36003,6 +36021,9 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 	}
 	focusTaskID := projectContinuationFocusedTaskID(strings.TrimSpace(rt.initialMessageText))
 	if focusTaskID == uuid.Nil {
+		focusTaskID = projectContinuationPromptCurrentFocusParentTaskID(strings.TrimSpace(rt.initialMessageText))
+	}
+	if focusTaskID == uuid.Nil {
 		return false, ""
 	}
 	projectID := resolveProjectID(ctx, rt.session, e.tasks)
@@ -36054,6 +36075,7 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 	if !ok {
 		return false, ""
 	}
+	targetActivity := childActivity[targetTaskID]
 	if _, malformed := malformedChildTaskIDs[targetTaskID]; malformed {
 		malformedSameDeliverableDraftChildren := projectContinuationMalformedSameDeliverableDraftChildren(projectTasks, focusTask, malformedChildTaskIDs)
 		if len(malformedSameDeliverableDraftChildren) > 0 {
@@ -36061,6 +36083,9 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 			if preferredTask.ID == targetTaskID &&
 				strings.EqualFold(strings.TrimSpace(targetTask.WorkStatus), "draft") &&
 				(nextStatus == "queued" || nextStatus == "in_progress" || nextStatus == "review") {
+				if targetActivity.childTaskCount > 0 || targetActivity.malformedChildTaskCount > 0 {
+					return true, buildProjectContinuationDescendantDraftReplacementGuardError(targetTask, focusTask, targetActivity)
+				}
 				return false, ""
 			}
 			for _, task := range malformedSameDeliverableDraftChildren {
@@ -36070,6 +36095,12 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 			}
 		}
 		return true, buildProjectContinuationMalformedChildMutationGuardError(targetTask, focusTask)
+	}
+	if strings.EqualFold(strings.TrimSpace(targetTask.WorkStatus), "draft") &&
+		projectContinuationTaskIsAncestor(tasksByID, focusTaskID, targetTaskID) &&
+		(targetActivity.childTaskCount > 0 || targetActivity.malformedChildTaskCount > 0) &&
+		(nextStatus == "queued" || nextStatus == "in_progress" || nextStatus == "review") {
+		return true, buildProjectContinuationDescendantDraftReplacementGuardError(targetTask, focusTask, targetActivity)
 	}
 	if strings.EqualFold(strings.TrimSpace(targetTask.WorkStatus), "draft") &&
 		projectContinuationTaskIsAncestor(tasksByID, targetTaskID, focusTaskID) {

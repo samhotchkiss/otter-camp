@@ -1848,3 +1848,15 @@
   - impact:
     - PM can burn one or more retry turns re-listing the same child set even when the preferred repair target is already explicit in the prompt
     - this slows same-deliverable child consolidation and prolongs replacement-child recovery churn
+- 2026-03-30 15:31 MDT - PM still treated a preferred repair draft as directly queueable even when that repair draft already had child lanes of its own.
+  - fresh live evidence:
+    - after the parent-scoped `task.list` rediscovery block landed, PM immediately targeted `OC-303` instead of relisting children
+    - the next tool results showed:
+      - direct promotion of `OC-303` hit the runtime orchestration-parent guard
+      - rereading the same blocked deliverable path from the project lane hit the task-owned deliverable guard
+  - bug:
+    - the replacement-child retry prompt always said to “repair and queue the preferred existing same-deliverable child draft” once that draft was named
+    - `shouldBlockProjectContinuationFocusedDraftMutationTool(...)` allowed the preferred same-deliverable malformed draft through even when that draft itself already had child lanes / malformed descendants
+  - impact:
+    - PM can waste another retry turn trying to activate an orchestration-only repair draft instead of dropping into the smallest bounded child beneath it
+    - this leaves the level-3 shared-doc chain stuck one layer higher than necessary

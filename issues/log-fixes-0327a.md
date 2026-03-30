@@ -5156,3 +5156,15 @@
     - added `TestShouldBlockProjectContinuationSnapshotRediscoveryToolForParentScopedTaskListWhenRepairDraftNamed`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(Should(Block|NotBlock)ProjectContinuationSnapshotRediscoveryToolForParentScopedTaskList(WhenRepairDraftNamed)?|BuildProjectExecutionContinuationReplacementChildRetryPromptPrefersRepairOfMalformedSameDeliverableDraftChild)$' -count=1`
+- 2026-03-30 15:31 MDT - Prevented direct promotion of repair drafts that are themselves orchestration parents.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - replacement-child retry prompts now detect when the preferred same-deliverable repair draft already has `child_tasks=...` and switch guidance from “queue that draft” to “create or queue the smallest bounded direct child beneath that repair draft”
+    - `shouldBlockProjectContinuationFocusedDraftMutationTool(...)` now:
+      - falls back to `Current focus parent:` for replacement-child retry prompts
+      - blocks direct promotion of a descendant repair draft when it already has child lanes or malformed descendants
+    - added `buildProjectContinuationDescendantDraftReplacementGuardError(...)`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestBuildProjectExecutionContinuationReplacementChildRetryPromptCreatesBoundedChildUnderRepairDraftParent`
+    - added `TestShouldBlockProjectContinuationFocusedDraftMutationForDescendantRepairDraftParentPromotion`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationFocusedDraftMutationForDescendantRepairDraftParentPromotion|BuildProjectExecutionContinuationReplacementChildRetryPrompt(CreatesBoundedChildUnderRepairDraftParent|PrefersRepairOfMalformedSameDeliverableDraftChild)|Should(Block|NotBlock)ProjectContinuationSnapshotRediscoveryToolForParentScopedTaskList(WhenRepairDraftNamed)?)$' -count=1`

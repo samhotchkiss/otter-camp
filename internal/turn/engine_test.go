@@ -27389,6 +27389,82 @@ func TestShouldBlockProjectContinuationFocusedDraftMutationForAncestorPromotion(
 	}
 }
 
+func TestShouldBlockProjectContinuationFocusedDraftMutationForDescendantRepairDraftParentPromotion(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	focusTaskID := uuid.New()
+	repairTaskID := uuid.New()
+	repairChildID := uuid.New()
+	focusDescription := "Deliver planning/sambot-prompts/test-conversations-level3.md as a single shared markdown file."
+	repairDescription := "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot dialogues."
+	repairChildDescription := "Produce the file planning/sambot-prompts/test-conversations-level3.md."
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			focusTaskID: {
+				ID:          focusTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  297,
+				Title:       "Write planning/sambot-prompts/test-conversations-level3.md",
+				Description: &focusDescription,
+				WorkStatus:  "draft",
+			},
+			repairTaskID: {
+				ID:          repairTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  303,
+				Title:       "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot dialogues",
+				Description: &repairDescription,
+				WorkStatus:  "draft",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, focusTaskID.String())),
+			},
+			repairChildID: {
+				ID:          repairChildID,
+				ProjectID:   projectID,
+				TaskNumber:  323,
+				Title:       "Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn SamBot test conversations.",
+				Description: &repairChildDescription,
+				WorkStatus:  "blocked",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, repairTaskID.String())),
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: buildProjectExecutionContinuationReplacementChildRetryPrompt(
+			repo.ProjectTask{TaskNumber: 286, Title: "Write test conversations demonstrating SamBot adaptive complexity"},
+			1,
+			projectExecutionContinuationSnapshot{
+				ProjectLine:     "Active project id: " + projectID.String(),
+				RepairDraftLine: `Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 303 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot dialogues) id=` + repairTaskID.String() + ` title="Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot dialogues" work_status=draft child_tasks=1 replaceable_blocked_child_tasks=1`,
+				FocusTaskLine:   `Current focus parent: task 297 (Write planning/sambot-prompts/test-conversations-level3.md) id=` + focusTaskID.String() + ` work_status=draft malformed_child_tasks=5`,
+			},
+			repo.ProjectTask{ID: focusTaskID, TaskNumber: 297, Title: "Write planning/sambot-prompts/test-conversations-level3.md"},
+			projectContinuationChildActivity{malformedChildTaskCount: 5},
+			projectContinuationTaskHints{DeliverablePath: "planning/sambot-prompts/test-conversations-level3.md"},
+		),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftMutationTool(context.Background(), rt, "task.update", map[string]any{
+		"task_id":     repairTaskID.String(),
+		"work_status": "queued",
+	})
+	if !blocked {
+		t.Fatal("expected descendant repair draft parent promotion to be blocked")
+	}
+	if !strings.Contains(reason, "task 303") {
+		t.Fatalf("reason = %q, want repair draft label", reason)
+	}
+	if !strings.Contains(reason, "smallest bounded direct child beneath") {
+		t.Fatalf("reason = %q, want bounded child-beneath-repair-draft guidance", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationFocusedDraftMutationAllowsSatisfiedCloseoutReadyParent(t *testing.T) {
 	t.Parallel()
 
@@ -28301,6 +28377,40 @@ func TestBuildProjectExecutionContinuationReplacementChildRetryPromptPrefersRepa
 	}
 	if strings.Contains(prompt, "If you must inspect child lanes first") {
 		t.Fatalf("prompt = %q, should not keep child-inspection fallback once repair guidance exists", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationReplacementChildRetryPromptCreatesBoundedChildUnderRepairDraftParent(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	repairTaskID := uuid.New()
+	focusTask := repo.ProjectTask{
+		ID:         focusTaskID,
+		TaskNumber: 297,
+		Title:      "Write planning/sambot-prompts/test-conversations-level3.md",
+	}
+	prompt := buildProjectExecutionContinuationReplacementChildRetryPrompt(
+		repo.ProjectTask{TaskNumber: 286, Title: "Write test conversations demonstrating SamBot adaptive complexity"},
+		1,
+		projectExecutionContinuationSnapshot{
+			ProjectLine:     "Active project id: a6dbd331-7205-42d9-b0df-10105d5b5330",
+			RepairDraftLine: `Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 303 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot dialogues) id=` + repairTaskID.String() + ` title="Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot dialogues" work_status=draft child_tasks=10 malformed_child_tasks=10`,
+			FocusTaskLine:   `Current focus parent: task 297 (Write planning/sambot-prompts/test-conversations-level3.md) id=` + focusTaskID.String() + ` work_status=draft malformed_child_tasks=5`,
+		},
+		focusTask,
+		projectContinuationChildActivity{malformedChildTaskCount: 5},
+		projectContinuationTaskHints{DeliverablePath: "planning/sambot-prompts/test-conversations-level3.md"},
+	)
+
+	if !strings.Contains(prompt, "is itself an orchestration parent with child lanes") {
+		t.Fatalf("prompt = %q, want orchestration-parent repair guidance", prompt)
+	}
+	if !strings.Contains(prompt, "create or queue the smallest bounded direct child beneath that named repair draft") {
+		t.Fatalf("prompt = %q, want bounded child-beneath-repair-draft guidance", prompt)
+	}
+	if strings.Contains(prompt, "repair and queue the preferred existing same-deliverable child draft named above with one narrow task.update") {
+		t.Fatalf("prompt = %q, should not tell the model to queue the repair draft directly once child lanes are already present", prompt)
 	}
 }
 
