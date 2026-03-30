@@ -25373,6 +25373,9 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	if looksLikeDeliverableCompletionSummaryWithoutBody(path, trimmed) {
 		return fmt.Sprintf("assistant draft for %s wrote a completion summary about deliverables/review readiness instead of the actual file body", path)
 	}
+	if looksLikePromptConversationTaskBriefPlaceholder(path, trimmed) {
+		return fmt.Sprintf("assistant draft for %s copied a prompt-conversation task scaffold instead of actual dialogue content", path)
+	}
 	if looksLikeTaskBriefEchoPlaceholder(path, trimmed) {
 		return fmt.Sprintf("assistant draft for %s copied the task brief/instruction scaffold instead of the actual file body", path)
 	}
@@ -26185,6 +26188,66 @@ func looksLikeTaskBriefEchoPlaceholder(targetPath, content string) bool {
 		"each step includes:",
 		"what to produce",
 	)
+}
+
+func looksLikePromptConversationTaskBriefPlaceholder(targetPath, content string) bool {
+	path := strings.ToLower(strings.TrimSpace(targetPath))
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || len(trimmed) > 16000 {
+		return false
+	}
+	if !looksLikePromptConversationCorpusTarget(path) {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if conversationDialogueLabelCount(lower) >= 2 {
+		return false
+	}
+	if !containsAny(lower,
+		"conversation",
+		"user and sambot",
+		"user:/sambot:",
+		"user: / sambot:",
+	) {
+		return false
+	}
+	sectionHits := 0
+	for _, marker := range []string{
+		"## objective",
+		"**deliverable:**",
+		"**topic:**",
+		"**format:**",
+		"## validation criteria",
+		"## evidence expectations",
+	} {
+		if strings.Contains(lower, marker) {
+			sectionHits++
+		}
+	}
+	if sectionHits < 3 {
+		return false
+	}
+	return containsAny(lower,
+		"append the block to",
+		"append one deeply technical",
+		"multi-turn conversation",
+		"6-10 exchanges",
+		"6-8 turns",
+		"deeply technical",
+	)
+}
+
+func conversationDialogueLabelCount(lower string) int {
+	count := 0
+	for _, marker := range []string{
+		"\nuser:",
+		"\nsambot:",
+		"user:",
+		"sambot:",
+	} {
+		count += strings.Count(lower, marker)
+	}
+	return count
 }
 
 func looksLikeRuntimeOwnedCommitHandoffPlaceholder(content string) bool {

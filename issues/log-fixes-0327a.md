@@ -5062,3 +5062,23 @@
     - added `TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsRootPromptConversationCorpusTask`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(InferredTaskDeliverableDraft(BuildsExplicitMarkdownStarter|SkipsSourceBackedContentPostsTask|SkipsPromptConversationCorpusTask|SkipsRootPromptConversationCorpusTask)|MaybeSynthesizeTaskExecutionFileWriteToolCalls(UsesExplicitMarkdownDeliverableDraft|SkipsSourceBackedContentPostsTask|SkipsPromptConversationCorpusTask|SkipsRootPromptConversationCorpusTask))$' -count=1`
+- 2026-03-30 14:15 MDT - Classified prompt-conversation scaffolds as placeholders across recovery, file.read, and file.write.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `looksLikePromptConversationTaskBriefPlaceholder(...)`
+    - added `conversationDialogueLabelCount(...)`
+    - recovery draft rejection now treats prompt-conversation scaffolds with no real `User:` / `SamBot:` dialogue as non-substantive
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - added native equivalents of the prompt-conversation placeholder helpers
+    - `file.write` now rejects those scaffolds with `non_substantive_content`
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `file.read` now returns `placeholder_deliverable` for the same prompt-conversation scaffold family
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+      - added `TestRecoveryFileWriteDraftRejectReasonRejectsPromptConversationPlaceholder`
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go):
+      - added `TestFileReadRejectsPromptConversationPlaceholderAtRootConversationCorpusPath`
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go):
+      - added `TestFileWriteRejectsPromptConversationPlaceholderInConversationCorpusPath`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(RecoveryFileWriteDraftRejectReasonRejectsPromptConversationPlaceholder|InferredTaskDeliverableDraft(BuildsExplicitMarkdownStarter|SkipsSourceBackedContentPostsTask|SkipsPromptConversationCorpusTask|SkipsRootPromptConversationCorpusTask)|MaybeSynthesizeTaskExecutionFileWriteToolCalls(UsesExplicitMarkdownDeliverableDraft|SkipsSourceBackedContentPostsTask|SkipsPromptConversationCorpusTask|SkipsRootPromptConversationCorpusTask))$' -count=1`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(File(ReadRejectsPromptConversationPlaceholderAtRootConversationCorpusPath|WriteRejectsPromptConversationPlaceholderInConversationCorpusPath)|WriteRejectsTaskBriefEchoPlaceholderInPlanningDeliverable|ReadRejectsTaskBriefEchoPlaceholderAtInProgressPlanningDeliverablePath|WriteRejectsNarratedTaskPlaceholderContent)$' -count=1`

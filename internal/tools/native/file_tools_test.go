@@ -2197,6 +2197,70 @@ A Markdown document covering:
 	}
 }
 
+func TestFileReadRejectsPromptConversationPlaceholderAtRootConversationCorpusPath(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "test-conversations-level3.md"
+
+	placeholder := `# Append deeply technical state machines conversation to test-conversations-level3.md
+
+## Objective
+**Deliverable:** Append one deeply technical (Level 3) test conversation to ` + "`planning/sambot-prompts/test-conversations-level3.md`" + `.
+
+**Topic:** State machines in distributed orchestration systems.
+
+**Format:** Multi-turn conversation (6-10 exchanges) between a User and SamBot. The user is a senior engineer asking deeply technical questions about state machine design patterns in distributed systems.
+
+## Validation Criteria
+- Define explicit pass/fail checks for each relevant stage.
+
+## Evidence Expectations
+- Reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.
+`
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+
+	description := "**Deliverable:** Append one deeply technical (Level 3) test conversation to `planning/sambot-prompts/test-conversations-level3.md`. **Format:** Multi-turn conversation (6-10 exchanges) between a User and SamBot."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Append deeply technical state machines conversation to test-conversations-level3.md",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{{
+			SessionID: sessionID,
+			Role:      "user",
+			Content:   "Start work on task: Append deeply technical state machines conversation to test-conversations-level3.md",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+	if got := out["deliverable_path"]; got != targetPath {
+		t.Fatalf("deliverable_path = %v, want %q", got, targetPath)
+	}
+}
+
 func TestFileReadRejectsContentMigrationStatusPlaceholderAtInProgressDeliverablePath(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

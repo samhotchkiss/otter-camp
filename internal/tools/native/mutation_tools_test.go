@@ -172,6 +172,7 @@ func TestFileWriteRejectsNarratedTaskPlaceholderContent(t *testing.T) {
 	taskID := uuid.New()
 	sessionID := uuid.New()
 	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+	description := "**Deliverable:** Append one deeply technical (Level 3) test conversation to `planning/sambot-prompts/test-conversations-level3.md`. **Format:** Multi-turn conversation (6-10 exchanges) between a User and SamBot."
 
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
 	executor.tasks = &mockTaskRepo{
@@ -179,6 +180,8 @@ func TestFileWriteRejectsNarratedTaskPlaceholderContent(t *testing.T) {
 			ID:             taskID,
 			OrganizationID: orgID,
 			ProjectID:      projectID,
+			Title:          "Append deeply technical state machines conversation to test-conversations-level3.md",
+			Description:    &description,
 			WorkStatus:     "in_progress",
 		},
 	}
@@ -1323,6 +1326,71 @@ A Markdown document covering:
 
 ## DO NOT
 - Write the file to ` + "`planning/sambot-mvp-spec.md`" + ` using file_write or python3 via cli_execute.
+
+## Validation Criteria
+- Define explicit pass/fail checks for each relevant stage.
+
+## Evidence Expectations
+- Reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.
+`,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsPromptConversationPlaceholderInConversationCorpusPath(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("8a8a8a8a-8a8a-8a8a-8a8a-8a8a8a8a8a8a")
+	description := "**Deliverable:** Append one deeply technical (Level 3) test conversation to `planning/sambot-prompts/test-conversations-level3.md`. **Format:** Multi-turn conversation (6-10 exchanges) between a User and SamBot."
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Append deeply technical state machines conversation to test-conversations-level3.md",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "test-conversations-level3.md",
+		"content": `# Append deeply technical state machines conversation to test-conversations-level3.md
+
+## Objective
+**Deliverable:** Append one deeply technical (Level 3) test conversation to ` + "`planning/sambot-prompts/test-conversations-level3.md`" + `.
+
+**Topic:** State machines in distributed orchestration systems.
+
+**Format:** Multi-turn conversation (6-10 exchanges) between a User and SamBot. The user is a senior engineer asking deeply technical questions about state machine design patterns in distributed systems.
 
 ## Validation Criteria
 - Define explicit pass/fail checks for each relevant stage.

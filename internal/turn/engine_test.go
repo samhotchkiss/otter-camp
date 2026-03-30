@@ -6723,10 +6723,10 @@ func TestInferredTaskDeliverableDraftSkipsPromptConversationCorpusTask(t *testin
 }
 
 func TestInferredTaskDeliverableDraftSkipsRootPromptConversationCorpusTask(t *testing.T) {
-	description := "Write a fresh deeply-technical SamBot demo conversation about state machines applied to AI orchestration. Format as markdown with User:/SamBot: labels, 6-8 turns. Append the block to test-conversations-level3.md without overwriting existing content."
+	description := "**Deliverable:** Append one deeply technical (Level 3) test conversation to `planning/sambot-prompts/test-conversations-level3.md`.\n\n**Topic:** State machines in distributed orchestration systems.\n\n**Format:** Multi-turn conversation (6-10 exchanges) between a User and SamBot. The user is a senior engineer asking deeply technical questions about state machine design patterns in distributed systems."
 	taskRecord := repo.ProjectTask{
 		TaskNumber:  318,
-		Title:       "v4 - Draft and append state-machine conversation to level-3 test file",
+		Title:       "Append deeply technical state machines conversation to test-conversations-level3.md",
 		Description: &description,
 	}
 
@@ -33782,7 +33782,7 @@ func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsRootPromptConversati
 
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
-	description := "Write a fresh deeply-technical SamBot demo conversation about state machines applied to AI orchestration. Format as markdown with User:/SamBot: labels, 6-8 turns. Append the block to test-conversations-level3.md without overwriting existing content."
+	description := "**Deliverable:** Append one deeply technical (Level 3) test conversation to `planning/sambot-prompts/test-conversations-level3.md`.\n\n**Topic:** State machines in distributed orchestration systems.\n\n**Format:** Multi-turn conversation (6-10 exchanges) between a User and SamBot. The user is a senior engineer asking deeply technical questions about state machine design patterns in distributed systems."
 
 	fixture.session.ScopeType = "project_task"
 	fixture.session.ScopeID = taskID
@@ -33797,7 +33797,7 @@ func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsRootPromptConversati
 		ID:             taskID,
 		OrganizationID: fixture.session.OrganizationID,
 		TaskNumber:     318,
-		Title:          "v4 - Draft and append state-machine conversation to level-3 test file",
+		Title:          "Append deeply technical state machines conversation to test-conversations-level3.md",
 		WorkStatus:     "in_progress",
 		Description:    &description,
 	}
@@ -46749,6 +46749,30 @@ A Markdown document covering:
 	got := recoveryFileWriteDraftRejectReason(content, "planning/sambot-mvp-spec.md")
 	if !strings.Contains(got, "copied the task brief/instruction scaffold") {
 		t.Fatalf("reason = %q, want task-brief-echo rejection", got)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsPromptConversationPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	content := `# Append deeply technical state machines conversation to test-conversations-level3.md
+
+## Objective
+**Deliverable:** Append one deeply technical (Level 3) test conversation to ` + "`planning/sambot-prompts/test-conversations-level3.md`" + `.
+
+**Topic:** State machines in distributed orchestration systems.
+
+**Format:** Multi-turn conversation (6-10 exchanges) between a User and SamBot. The user is a senior engineer asking deeply technical questions about state machine design patterns in distributed systems.
+
+## Validation Criteria
+- Define explicit pass/fail checks for each relevant stage.
+
+## Evidence Expectations
+- Reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.
+`
+	got := recoveryFileWriteDraftRejectReason(content, "test-conversations-level3.md")
+	if !strings.Contains(got, "prompt-conversation task scaffold") {
+		t.Fatalf("reason = %q, want prompt-conversation placeholder rejection", got)
 	}
 }
 

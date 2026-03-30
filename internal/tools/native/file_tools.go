@@ -200,6 +200,7 @@ func (e *NativeToolExecutor) rejectPlaceholderDeliverableRead(ctx context.Contex
 	}
 	if !looksLikeRejectedDeliverablePlaceholder(content) &&
 		!looksLikeDeliverableCompletionSummaryWithoutBody(normalizedPath, content) &&
+		!looksLikePromptConversationTaskBriefPlaceholder(normalizedPath, content) &&
 		!looksLikeTaskBriefEchoPlaceholder(normalizedPath, content) {
 		return nil, false, nil
 	}

@@ -1015,6 +1015,74 @@ func looksLikeTaskBriefEchoPlaceholder(path, content string) bool {
 	)
 }
 
+func looksLikePromptConversationCorpusTarget(path string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(normalizeWorkspacePath(path)))
+	if strings.HasPrefix(normalized, "planning/sambot-prompts/") {
+		return true
+	}
+	base := filepath.Base(normalized)
+	return strings.HasPrefix(base, "test-conversations-") && strings.HasSuffix(base, ".md")
+}
+
+func looksLikePromptConversationTaskBriefPlaceholder(path, content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || len(trimmed) > 16000 {
+		return false
+	}
+	if !looksLikePromptConversationCorpusTarget(path) {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if conversationDialogueLabelCount(lower) >= 2 {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"conversation",
+		"user and sambot",
+		"user:/sambot:",
+		"user: / sambot:",
+	) {
+		return false
+	}
+	sectionHits := 0
+	for _, marker := range []string{
+		"## objective",
+		"**deliverable:**",
+		"**topic:**",
+		"**format:**",
+		"## validation criteria",
+		"## evidence expectations",
+	} {
+		if strings.Contains(lower, marker) {
+			sectionHits++
+		}
+	}
+	if sectionHits < 3 {
+		return false
+	}
+	return containsAnySubstring(lower,
+		"append the block to",
+		"append one deeply technical",
+		"multi-turn conversation",
+		"6-10 exchanges",
+		"6-8 turns",
+		"deeply technical",
+	)
+}
+
+func conversationDialogueLabelCount(lower string) int {
+	count := 0
+	for _, marker := range []string{
+		"\nuser:",
+		"\nsambot:",
+		"user:",
+		"sambot:",
+	} {
+		count += strings.Count(lower, marker)
+	}
+	return count
+}
+
 func taskDraftSemanticallyMismatchesScope(taskRecord repo.ProjectTask, content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
@@ -2302,6 +2370,12 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 		return map[string]any{
 			"error":   "non_substantive_content",
 			"message": "file.write content appears to be a copied task brief or instruction scaffold, not the concrete deliverable body itself. Write the actual produced document or artifact contents directly.",
+		}, nil
+	}
+	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikePromptConversationTaskBriefPlaceholder(renderedPath, content) {
+		return map[string]any{
+			"error":   "non_substantive_content",
+			"message": "file.write content appears to be a prompt-conversation task scaffold, not actual User/SamBot dialogue content. Write the concrete conversation block directly.",
 		}, nil
 	}
 	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikeExecutionSpecCompletionMemoWithoutArtifacts(renderedPath, content) {

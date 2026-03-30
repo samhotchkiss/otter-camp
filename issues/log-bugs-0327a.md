@@ -1759,3 +1759,22 @@
       - `6-8 turns`
   - impact:
     - the same placeholder-write / repeated-review-reject family survives on root conversation files even after the first path-specific fix
+- 2026-03-30 14:15 MDT - Prompt-conversation placeholders were still being treated as substantive drafts during recovery and native file reads/writes.
+  - fresh live evidence:
+    - task `319` recovery prompt quoted the placeholder body from `test-conversations-level3.md` as an `Existing target file draft`
+    - the next recovery turn wrote another placeholder body back to the same file
+    - review/file reads on that same file returned raw content instead of an immediate `placeholder_deliverable` classification
+  - bug:
+    - the placeholder classifiers only recognized:
+      - generic rejected placeholder narration
+      - broad task-brief echoes
+      - completion/status summaries
+    - they did not recognize prompt-conversation scaffolds with:
+      - `## Objective`
+      - `**Deliverable:**`
+      - `**Topic:**`
+      - `**Format:**`
+      - no actual `User:` / `SamBot:` dialogue
+  - impact:
+    - recovery keeps reviving the same conversation placeholder as a “durable draft”
+    - file.read/file.write do not short-circuit on this family, so the lane can still churn across recovery and review
