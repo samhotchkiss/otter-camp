@@ -2675,6 +2675,9 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 	var latestConsumedMatchingRepoVersion string
 	var latestConsumedSameCompletedTaskMessageID uuid.UUID
 	var latestConsumedSameCompletedTaskRepoVersion string
+	var latestConsumedProjectContinuationMessageID uuid.UUID
+	var latestConsumedProjectContinuationContent string
+	var latestConsumedProjectContinuationRepoVersion string
 	if source == "project_execution_continuation" && expectedCompletedTaskID != "" {
 		err := lockConn.QueryRow(ctx, `
 			SELECT cm.id,
@@ -2695,6 +2698,28 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		`, sessionID, source, expectedCompletedTaskID).Scan(&latestConsumedSameCompletedTaskMessageID, &latestConsumedSameCompletedTaskRepoVersion)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, false, fmt.Errorf("query latest consumed same-completed-task project continuation message: %w", err)
+		}
+	}
+	if source == "project_execution_continuation" {
+		err := lockConn.QueryRow(ctx, `
+			SELECT cm.id,
+			       cm.content,
+			       COALESCE(cm.metadata->>'repo_version', '')
+			FROM chat_message cm
+			WHERE cm.session_id = $1
+			  AND cm.role = 'user'
+			  AND COALESCE(cm.metadata->>'source', '') = $2
+			  AND EXISTS (
+			        SELECT 1
+			        FROM chat_turn ct
+			        WHERE ct.trigger_message_id = cm.id
+			          AND ct.status IN ('completed', 'failed', 'cancelled')
+			  )
+			ORDER BY cm.created_at DESC, cm.id DESC
+			LIMIT 1
+		`, sessionID, source).Scan(&latestConsumedProjectContinuationMessageID, &latestConsumedProjectContinuationContent, &latestConsumedProjectContinuationRepoVersion)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, fmt.Errorf("query latest consumed project continuation message: %w", err)
 		}
 	}
 	if source == "project_execution_continuation" && expectedCompletedTaskID != "" && expectedSnapshotFingerprint != "" {
@@ -2720,13 +2745,23 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			return uuid.Nil, false, fmt.Errorf("query latest consumed matching project continuation message: %w", err)
 		}
 	}
-	if source == "project_execution_continuation" && completedTaskID != uuid.Nil && latestConsumedSameCompletedTaskMessageID != uuid.Nil {
-		closeoutReadyRetry, retryErr := w.projectContinuationTurnEndedWithCloseoutReadyParentStop(ctx, latestConsumedSameCompletedTaskMessageID)
-		if retryErr != nil {
-			return uuid.Nil, false, fmt.Errorf("check latest consumed closeout-ready project continuation: %w", retryErr)
+	if source == "project_execution_continuation" && completedTaskID != uuid.Nil {
+		closeoutReadyReferenceMessageID := latestConsumedSameCompletedTaskMessageID
+		if latestConsumedProjectContinuationMessageID != uuid.Nil &&
+			latestConsumedProjectContinuationMessageID != latestConsumedSameCompletedTaskMessageID {
+			closeoutReadyReferenceMessageID = latestConsumedProjectContinuationMessageID
+		}
+
+		closeoutReadyRetry := false
+		if closeoutReadyReferenceMessageID != uuid.Nil {
+			var retryErr error
+			closeoutReadyRetry, retryErr = w.projectContinuationTurnEndedWithCloseoutReadyParentStop(ctx, closeoutReadyReferenceMessageID)
+			if retryErr != nil {
+				return uuid.Nil, false, fmt.Errorf("check latest consumed closeout-ready project continuation: %w", retryErr)
+			}
 		}
 		if closeoutReadyRetry {
-			focusLabelOverride, labelErr := w.projectContinuationTurnCloseoutReadyTaskLabel(ctx, latestConsumedSameCompletedTaskMessageID)
+			focusLabelOverride, labelErr := w.projectContinuationTurnCloseoutReadyTaskLabel(ctx, closeoutReadyReferenceMessageID)
 			if labelErr != nil {
 				return uuid.Nil, false, fmt.Errorf("load latest consumed closeout-ready task label: %w", labelErr)
 			}
@@ -2850,6 +2885,11 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 	}
 	if !sameProjectContinuationRepoVersion(currentRepoVersion, latestConsumedSameCompletedTaskRepoVersion) {
 		latestConsumedSameCompletedTaskMessageID = uuid.Nil
+	}
+	if strings.TrimSpace(latestConsumedProjectContinuationRepoVersion) != "" &&
+		!sameProjectContinuationRepoVersion(currentRepoVersion, latestConsumedProjectContinuationRepoVersion) {
+		latestConsumedProjectContinuationMessageID = uuid.Nil
+		latestConsumedProjectContinuationContent = ""
 	}
 
 	if source == "project_execution_continuation" && latestConsumedMatchingMessageID != uuid.Nil {
@@ -2994,10 +3034,11 @@ func (w *Worker) projectContinuationTurnEndedWithCloseoutReadyParentStop(ctx con
 			FROM latest_turn lt
 			JOIN chat_message tm
 			  ON tm.turn_id = lt.id
-			 AND tm.role = 'tool_result'
+			 AND tm.role = 'system'
 			WHERE tm.content LIKE $2
+			   OR tm.content LIKE $3
 		)
-	`, referenceMessageID, `%in a closeout-ready state for the same deliverable%`).Scan(&matched); err != nil {
+	`, referenceMessageID, `%focused parent is already closeout-ready%`, `%closeout-ready parent still needs parent_orchestration evidence%`).Scan(&matched); err != nil {
 		return false, err
 	}
 	return matched, nil
@@ -5184,6 +5225,23 @@ func projectContinuationFirstTaskRefFromLineForWorker(line string) (string, stri
 		line = strings.TrimSpace(line[:idx])
 	}
 	return projectContinuationFocusRefFromLineForWorker(line)
+}
+
+func projectContinuationPromptCurrentFocusParentTaskIDForWorker(content string) uuid.UUID {
+	const marker = "Current focus parent:"
+	idx := strings.Index(content, marker)
+	if idx < 0 {
+		return uuid.Nil
+	}
+	match := projectContinuationTaskRefIDPatternForWorker.FindStringSubmatch(content[idx:])
+	if len(match) != 2 {
+		return uuid.Nil
+	}
+	taskID, err := uuid.Parse(strings.TrimSpace(match[1]))
+	if err != nil {
+		return uuid.Nil
+	}
+	return taskID
 }
 
 func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot projectExecutionContinuationSnapshotForWorker) []string {

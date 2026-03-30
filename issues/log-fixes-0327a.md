@@ -4610,3 +4610,13 @@
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurnRetriesReplacementHandoffStopWithFreshMessage$|TestShouldNotSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop(ViaTriggerMessageID)?$|TestBuildProjectContinuationActionPromptAddsReplacementChildGuidanceFor(Blocked|Malformed)Children$' -count=1`
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(JobWorkerEnsureProjectContinuationMessage(AllowsRepeatedConsumedReplacementHandoffContinuation|AllowsStalePendingReplacementHandoffDuplicateRefresh|RequeuesAfterBlockedReviewChildReplacementHandoff)|BuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker)$' -count=1`
+- 2026-03-31 05:00 MDT - Corrected the worker-side closeout-ready retry detector to follow the real runtime stop and the freshest consumed PM continuation.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `projectContinuationTurnEndedWithCloseoutReadyParentStop(...)` now recognizes the runtime's `system` stop messages for both:
+      - `focused parent is already closeout-ready`
+      - `closeout-ready parent still needs parent_orchestration evidence`
+    - the worker now falls back to the freshest consumed `project_execution_continuation` message when carrying a closeout-ready stop forward, instead of requiring the same `completed_task_id`
+    - blank historical `repo_version` metadata no longer causes that freshest-consumed closeout-ready reference to be discarded outright
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(JobWorkerEnsureProjectContinuationMessage(AllowsRepeatedConsumedReplacementHandoffContinuation|AllowsStalePendingReplacementHandoffDuplicateRefresh)|BuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurnRetriesReplacementHandoffStopWithFreshMessage$|TestShouldNotSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop(ViaTriggerMessageID)?$|TestBuildProjectContinuationActionPromptAddsReplacementChildGuidanceFor(Blocked|Malformed)Children$' -count=1`

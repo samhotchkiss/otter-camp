@@ -1269,3 +1269,11 @@
     - stale/generic pending continuation content could therefore survive and keep steering the PM lane back into child creation instead of direct parent advance
   - impact:
     - closeout-ready draft parents can keep splitting into redundant replacement children instead of recording the required `parent_orchestration` metadata and advancing through their own flow
+- 2026-03-31 05:00 MDT - The first worker-side closeout-ready retry patch still missed the actual live stop shape.
+  - fresh live evidence:
+    - new continuation message `12162` on `86ed4280` still came back as a replacement-child handoff prompt even though the previous consumed PM turn had already emitted the closeout-ready system stop
+  - bug:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) was checking closeout-ready retries against `tool_result` content, but the runtime emits that stop in a `system` message
+    - the same path was also tied too tightly to `latestConsumedSameCompletedTaskMessageID`, so once the PM lane's latest completed task rolled from task `259` to task `84`, the closeout-ready stop was no longer considered
+  - impact:
+    - worker recovery can still author the wrong PM continuation immediately after deploy/restart, even though the runtime already proved the focused parent should be advanced directly

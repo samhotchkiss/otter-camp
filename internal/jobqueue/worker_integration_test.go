@@ -25370,7 +25370,7 @@ func TestBuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(t *t
 		"Verify and close out templates/template-08-replace.html (Dark Mode Editorial layout)",
 		1,
 		projectExecutionContinuationSnapshotForWorker{
-			ProjectLine: "Active project id: a6dbd331-7205-42d9-b0df-10105d5b5330",
+			ProjectLine:   "Active project id: a6dbd331-7205-42d9-b0df-10105d5b5330",
 			FocusTaskLine: `Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 245 (Write planning/sambot-tech-architecture.md — SamBot technical architecture document (replacement for blocked OC-230/OC-235)) id=77a2d4fa-b9e9-45b9-9ba9-b251052d5011 title="Write planning/sambot-tech-architecture.md — SamBot technical architecture document (replacement for blocked OC-230/OC-235)" work_status=draft deliverable_path=planning/sambot-tech-architecture.md assigned_agent_id=61b10b32-cdc2-4d75-a84a-6c3bcf25b5ed flow_template_id=9a60dfee-1fc7-4e3a-bd05-f9da1bb97552 child_tasks=2 replaceable_blocked_child_tasks=2 malformed_child_tasks=1`,
 		},
 		"",
