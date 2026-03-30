@@ -26641,6 +26641,135 @@ func TestShouldBlockProjectContinuationFocusedDraftMutationForMalformedDuplicate
 	}
 }
 
+func TestShouldBlockProjectContinuationFocusedDraftMutationAllowsPreferredMalformedSameDeliverableDraftChild(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentTaskID := uuid.New()
+	childDraftAID := uuid.New()
+	childDraftBID := uuid.New()
+	parentDescription := "Deliver planning/sambot-prompts/test-conversations-level3.md as a single shared markdown file."
+	childDescriptionA := "Produce the file planning/sambot-prompts/test-conversations-level3.md."
+	childDescriptionB := "Create the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical SamBot test conversations with expert-depth exchanges."
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentTaskID: {
+				ID:          parentTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  297,
+				Title:       "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+			},
+			childDraftAID: {
+				ID:          childDraftAID,
+				ProjectID:   projectID,
+				TaskNumber:  302,
+				Title:       "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations",
+				Description: &childDescriptionA,
+				WorkStatus:  "draft",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTaskID.String())),
+			},
+			childDraftBID: {
+				ID:          childDraftBID,
+				ProjectID:   projectID,
+				TaskNumber:  303,
+				Title:       "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot dialogues",
+				Description: &childDescriptionB,
+				WorkStatus:  "draft",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTaskID.String())),
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: recover the blocked level-3 SamBot dialogue file", projectExecutionContinuationSnapshot{
+			ProjectLine:          "Active project id: " + projectID.String(),
+			ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 297 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations) id=" + parentTaskID.String() + " title=\"Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations\" work_status=draft child_tasks=3 malformed_child_tasks=3",
+			FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 297 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations) id=" + parentTaskID.String() + " title=\"Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations\" work_status=draft child_tasks=3 malformed_child_tasks=3",
+		}),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftMutationTool(context.Background(), rt, "task.update", map[string]any{
+		"task_id":     childDraftBID.String(),
+		"work_status": "queued",
+	})
+	if blocked {
+		t.Fatalf("reason = %q, want preferred malformed same-deliverable draft child to stay repairable/queueable", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftMutationBlocksNonPreferredMalformedSameDeliverableDraftChild(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentTaskID := uuid.New()
+	childDraftAID := uuid.New()
+	childDraftBID := uuid.New()
+	parentDescription := "Deliver planning/sambot-prompts/test-conversations-level3.md as a single shared markdown file."
+	childDescriptionA := "Produce the file planning/sambot-prompts/test-conversations-level3.md."
+	childDescriptionB := "Create the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical SamBot test conversations with expert-depth exchanges."
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentTaskID: {
+				ID:          parentTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  297,
+				Title:       "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+			},
+			childDraftAID: {
+				ID:          childDraftAID,
+				ProjectID:   projectID,
+				TaskNumber:  302,
+				Title:       "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations",
+				Description: &childDescriptionA,
+				WorkStatus:  "draft",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTaskID.String())),
+			},
+			childDraftBID: {
+				ID:          childDraftBID,
+				ProjectID:   projectID,
+				TaskNumber:  303,
+				Title:       "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot dialogues",
+				Description: &childDescriptionB,
+				WorkStatus:  "draft",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTaskID.String())),
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: recover the blocked level-3 SamBot dialogue file", projectExecutionContinuationSnapshot{
+			ProjectLine:          "Active project id: " + projectID.String(),
+			ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 297 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations) id=" + parentTaskID.String() + " title=\"Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations\" work_status=draft child_tasks=3 malformed_child_tasks=3",
+			FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 297 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations) id=" + parentTaskID.String() + " title=\"Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations\" work_status=draft child_tasks=3 malformed_child_tasks=3",
+		}),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftMutationTool(context.Background(), rt, "task.update", map[string]any{
+		"task_id":     childDraftAID.String(),
+		"work_status": "queued",
+	})
+	if !blocked {
+		t.Fatal("expected non-preferred malformed same-deliverable draft child to stay blocked")
+	}
+	if !strings.Contains(reason, "duplicate malformed same-deliverable child") || !strings.Contains(reason, "task 303") {
+		t.Fatalf("reason = %q, want preferred-child repair guidance", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationFocusedDraftTaskCreateForCloseoutReadyParent(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

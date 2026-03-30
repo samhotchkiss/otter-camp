@@ -35464,6 +35464,13 @@ func buildProjectContinuationMalformedChildMutationGuardError(targetTask, focusT
 	return fmt.Sprintf("project continuation already knows %s is a malformed child artifact beneath focused draft %s. Do not re-queue or promote %s from the project lane; advance a legitimate sibling task or create the smallest fresh bounded replacement child beneath %s instead.", targetLabel, focusLabel, targetLabel, focusLabel)
 }
 
+func buildProjectContinuationMalformedSameDeliverableDuplicateChildMutationGuardError(targetTask, preferredTask, focusTask repo.ProjectTask) string {
+	targetLabel := projectBootstrapTaskLabel(targetTask)
+	focusLabel := projectBootstrapTaskLabel(focusTask)
+	preferredLabel := projectBootstrapTaskLabel(preferredTask)
+	return fmt.Sprintf("project continuation already knows %s is a duplicate malformed same-deliverable child beneath focused draft %s. Do not promote %s from the project lane. Repair and queue the preferred existing same-deliverable child %s instead, and consolidate or block the duplicate siblings before creating any new replacement work.", targetLabel, focusLabel, targetLabel, preferredLabel)
+}
+
 func buildProjectContinuationFocusedDraftCloseoutTaskCreateGuardError(focusTask repo.ProjectTask) string {
 	label := projectBootstrapTaskLabel(focusTask)
 	return fmt.Sprintf("project continuation already has focused draft task %s in a closeout-ready state for the same deliverable. Do not create another replacement child beneath %s from the project lane; advance or close %s directly instead.", label, label, label)
@@ -35521,6 +35528,27 @@ func projectContinuationPreferredSameDeliverableDraftChild(tasks []repo.ProjectT
 		}
 	}
 	return best
+}
+
+func projectContinuationMalformedSameDeliverableDraftChildren(tasks []repo.ProjectTask, focusTask repo.ProjectTask, malformedChildTaskIDs map[uuid.UUID]struct{}) []repo.ProjectTask {
+	if len(tasks) == 0 || focusTask.ID == uuid.Nil {
+		return nil
+	}
+	draftChildren := projectContinuationDirectDraftChildTasks(tasks, focusTask.ID)
+	if len(draftChildren) == 0 {
+		return nil
+	}
+	malformed := make([]repo.ProjectTask, 0, len(draftChildren))
+	for _, task := range draftChildren {
+		if _, ok := malformedChildTaskIDs[task.ID]; !ok {
+			continue
+		}
+		if projectContinuationMalformedDuplicateSharedFileChild(task, focusTask) ||
+			projectContinuationMalformedConflictingDeliverableChildForParent(task, focusTask) {
+			malformed = append(malformed, task)
+		}
+	}
+	return malformed
 }
 
 func buildProjectContinuationFocusedDraftCloseoutMetadataGuardError(focusTask repo.ProjectTask, requiredChildLabels []string) string {
@@ -35701,6 +35729,20 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 		return false, ""
 	}
 	if _, malformed := malformedChildTaskIDs[targetTaskID]; malformed {
+		malformedSameDeliverableDraftChildren := projectContinuationMalformedSameDeliverableDraftChildren(projectTasks, focusTask, malformedChildTaskIDs)
+		if len(malformedSameDeliverableDraftChildren) > 0 {
+			preferredTask := projectContinuationPreferredSameDeliverableDraftChild(malformedSameDeliverableDraftChildren)
+			if preferredTask.ID == targetTaskID &&
+				strings.EqualFold(strings.TrimSpace(targetTask.WorkStatus), "draft") &&
+				(nextStatus == "queued" || nextStatus == "in_progress" || nextStatus == "review") {
+				return false, ""
+			}
+			for _, task := range malformedSameDeliverableDraftChildren {
+				if task.ID == targetTaskID {
+					return true, buildProjectContinuationMalformedSameDeliverableDuplicateChildMutationGuardError(targetTask, preferredTask, focusTask)
+				}
+			}
+		}
 		return true, buildProjectContinuationMalformedChildMutationGuardError(targetTask, focusTask)
 	}
 	if strings.EqualFold(strings.TrimSpace(targetTask.WorkStatus), "draft") &&

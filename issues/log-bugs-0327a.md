@@ -1649,3 +1649,20 @@
     - as a result, the PM lane treated `298/302/303` as if no blocking child drafts existed at all
   - impact:
     - project continuations can keep trying to create a fresh replacement child for the same shared file, paying more bounded-size stops and never consolidating the already-present same-file draft set
+- 2026-03-30 13:25 MDT - PM malformed-child `task.update` guard contradicted the new same-deliverable duplicate-child `task.create` guard.
+  - fresh live evidence:
+    - after the new `task.create` guard fired, PM correctly pivoted to the preferred existing draft child `303`
+    - the next `task.update` then failed with:
+      - `project continuation already knows task 303 ... is a malformed child artifact ... Do not re-queue or promote task 303 ... create the smallest fresh bounded replacement child`
+    - the next continuation repeated the same pattern, then the session drained with no pending continuation even though focused parent `297` was still actionable
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) in `shouldBlockProjectContinuationFocusedDraftMutationTool(...)` still blocked **all** malformed child promotions uniformly
+    - that was no longer valid once `shouldBlockProjectContinuationFocusedDraftTaskCreateTool(...)` started requiring PM to reuse the best existing same-file draft child instead of creating a new one
+    - the code had no carve-out for:
+      - a preferred malformed same-deliverable **draft** child that PM should be allowed to repair/queue
+      - non-preferred duplicate same-file drafts that should still stay blocked
+  - impact:
+    - PM continuations can become logically deadlocked:
+      - fresh replacement child creation is blocked
+      - repairing the best existing same-file child is also blocked
+    - the worker then eventually suppresses/retires the repeated continuation attempts, leaving the project session idle on still-actionable draft work

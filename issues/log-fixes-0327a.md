@@ -4978,3 +4978,15 @@
     - added `TestShouldBlockProjectContinuationFocusedDraftTaskCreateForMalformedSameDeliverableDraftChildren`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'TestShouldBlockProjectContinuationFocusedDraftTaskCreate(AllowsFreshReplacementWhenDirectChildDraftsAreMalformedForDifferentDeliverables|ForMalformedSameDeliverableDraftChildren)$|TestBuildProjectContinuationFocusedDraftExistingChildGuardErrorIncludesChildLabels$' -count=1`
+- 2026-03-30 13:25 MDT - Allowed PM to repair/queue the preferred malformed same-deliverable draft child after duplicate-child creation is blocked.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `projectContinuationMalformedSameDeliverableDraftChildren(...)` to collect malformed direct draft children that conflict on the focused parent deliverable
+    - `shouldBlockProjectContinuationFocusedDraftMutationTool(...)` now allows `task.update` promotion for the preferred same-deliverable malformed **draft** child when PM is trying to queue/advance it
+    - non-preferred duplicate same-deliverable draft children remain blocked and now return explicit `repair task 303 instead` style guidance
+    - older malformed blocked-child and generic malformed-artifact cases remain blocked
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldBlockProjectContinuationFocusedDraftMutationAllowsPreferredMalformedSameDeliverableDraftChild`
+    - added `TestShouldBlockProjectContinuationFocusedDraftMutationBlocksNonPreferredMalformedSameDeliverableDraftChild`
+    - preserved the older malformed duplicate blocked-child guard coverage
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShouldBlockProjectContinuationFocusedDraftMutation(ForMalformedDuplicateChild|AllowsPreferredMalformedSameDeliverableDraftChild|BlocksNonPreferredMalformedSameDeliverableDraftChild)$|TestShouldBlockProjectContinuationFocusedDraftTaskCreate(AllowsFreshReplacementWhenDirectChildDraftsAreMalformedForDifferentDeliverables|ForMalformedSameDeliverableDraftChildren)$|TestBuildProjectContinuationFocusedDraftExistingChildGuardErrorIncludesChildLabels$' -count=1`
