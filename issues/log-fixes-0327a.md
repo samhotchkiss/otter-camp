@@ -4459,3 +4459,27 @@
     - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` immediately got a new continuation message (`d5d32c8e-fe05-4d52-b36a-eb551cffc208`) instead of staying blocked-only idle
     - that prompt now surfaces the previously hidden replacement/personality drafts instead of claiming no actionable draft work remained
     - the next PM turn queued task `250` and repaired task `245` with the correct agent/template, proving the hidden-draft recovery path is working live
+- 2026-03-30 03:02 MDT - Scoped PM bounded-size split hints to the actual focus task and widened replacement-parent reread blocking to the general continuation prompt.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `projectContinuationBoundedSizeSuggestedChildTitles(...)` now accepts `focusTaskID` and matches bounded-size tool results back to the assistant `task.update` call that actually targeted that task
+    - `projectContinuationReplacementChildHandoffActive(...)` now also recognizes ordinary focus-parent continuation prompts when the snapshot already says to create the smallest fresh replacement child under a focus parent with blocked/malformed child lanes
+    - `shouldBlockProjectContinuationFocusedDraftReadTool(...)` now activates for that general focus-parent prompt family and falls back from `Current focus parent:` ids to the ordinary snapshot focus-task id
+    - added `projectContinuationFocusedDraftReadGuardActive(...)`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - widened `TestProjectContinuationBoundedSizeSuggestedChildTitles`
+    - added `TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksGeneralFocusPromptFileRead`
+    - added `TestShouldBlockProjectContinuationFocusedDraftReadToolAllowsParentScopedTaskListForGeneralFocusPrompt`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationFocusedDraftReadTool(BlocksFileRead|AllowsParentScopedTaskList|BlocksTaskListWithoutParent|BlocksGeneralFocusPromptFileRead|AllowsParentScopedTaskListForGeneralFocusPrompt)|ProjectContinuationBoundedSizeSuggestedChildTitles|ProjectExecutionContinuationSnapshot(KeepsReplacementDraftWhenBlockedSamePathTaskRemains|IgnoresSupersededSatisfiedOutcomeDrafts)|ClassifyRepeatedReadOnlyDiscoveryRoundChurnStopsRecoveryAfterReadingTargetThenBroadRediscovery|HandleToolValidationResults(StopsRecoveryTurnAfterReadingTargetThenBroadRediscovery|StopsAsyncTaskTurnAfterThirdReadOnlyDiscoveryRoundInSameTurn|IgnoresReadOnlyDiscoveryRoundChurnAfterMutationInSameTurn))$' -count=1`
+  - live proof after redeploy on `repo_version=3676`:
+    - the task-`240` / task-`245` bounded-size hint contamination disappeared from the next PM continuation
+    - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` hit the new general-focus reread guard on `planning/sambot-tech-architecture.md` / `planning/sambot-personality-spec.md` and ended with the focused replacement-parent handoff stop instead of rereading the docs to completion
+- 2026-03-30 03:05 MDT - Coalesced duplicate same-batch PM focused-read blocks down to a single blocked tool result.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `dispatchTools(...)` now records the first focused replacement-parent read block in a batch and suppresses redundant follow-on blocked `file.read` / `file.list` / `task.get` results from the same assistant response
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestDispatchToolsCoalescesFocusedDraftReadGuardInSingleBatch`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationFocusedDraftReadTool(BlocksFileRead|AllowsParentScopedTaskList|BlocksTaskListWithoutParent|BlocksGeneralFocusPromptFileRead|AllowsParentScopedTaskListForGeneralFocusPrompt)|DispatchToolsCoalescesFocusedDraftReadGuardInSingleBatch|ProjectContinuationBoundedSizeSuggestedChildTitles|ProjectExecutionContinuationSnapshot(KeepsReplacementDraftWhenBlockedSamePathTaskRemains|IgnoresSupersededSatisfiedOutcomeDrafts)|ClassifyRepeatedReadOnlyDiscoveryRoundChurnStopsRecoveryAfterReadingTargetThenBroadRediscovery|HandleToolValidationResults(StopsRecoveryTurnAfterReadingTargetThenBroadRediscovery|StopsAsyncTaskTurnAfterThirdReadOnlyDiscoveryRoundInSameTurn|IgnoresReadOnlyDiscoveryRoundChurnAfterMutationInSameTurn))$' -count=1`
+  - live proof after redeploy on `repo_version=3677`:
+    - the next PM continuation around task `246` produced only one blocked `file.read` result (`11636`) before the focused handoff stop, instead of the paired duplicate blocked reads seen on `repo_version=3676`

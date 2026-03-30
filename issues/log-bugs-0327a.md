@@ -1122,3 +1122,27 @@
   - impact:
     - the PM lane can conclude “all remaining work is blocked” and suppress/retry continuations even though a fresh replacement draft is actually available
     - that strands the project in a false blocked-only state until an unrelated deploy or recovery path reopens the continuation
+- 2026-03-30 03:02 MDT - PM bounded-size retry prompts could carry child-title split hints from the wrong task when one turn touched multiple draft parents.
+  - fresh live evidence:
+    - PM message `11457` said task `245` still violated bounded size
+    - that same retry prompt then reused template-08 child titles that actually came from task `240`’s bounded-size `task.update` result later in the same turn
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) scanned bounded-size `task.update` / `task.create` tool results by turn only, without matching the result back to the focused `task_id`
+  - impact:
+    - the PM lane could get an internally inconsistent retry prompt, splitting the wrong task with the wrong child titles and reopening unrelated churn
+- 2026-03-30 03:02 MDT - Ordinary PM focus-parent prompts with blocked/malformed child lanes still allowed project-lane rereads of on-disk shared deliverables.
+  - fresh live evidence:
+    - PM continuations around draft parents `245` / `246` repeatedly reread `planning/sambot-tech-architecture.md` and `planning/sambot-personality-spec.md`
+    - the prompt already named `replaceable_blocked_child_tasks=...` and `workspace_deliverable_present=true`, but the PM lane still tried to inspect the shared docs instead of creating the fresh replacement child
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) only activated `shouldBlockProjectContinuationFocusedDraftReadTool(...)` for the explicit bounded-size retry prompt form (`Current focus parent: ... Do not call task.list without parent_task_id...`)
+    - the ordinary continuation summary prompt used a different focus format, so the same replacement-parent handoff was not recognized as read-blocking
+  - impact:
+    - PM turns kept paying for repeated blocked `file.read` attempts on shared planning deliverables instead of moving directly into the replacement-child handoff
+- 2026-03-30 03:05 MDT - Even after the PM focused-draft read guard started firing, the parser still emitted duplicate blocked tool results for multiple same-batch rereads.
+  - fresh live evidence:
+    - session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` produced paired blocked `file.read` results (`11611` + `11612`, then `11631` + `11632`) before the stop message
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) appended one blocked `ToolResult` per guarded call even when the same assistant batch had already hit the focused replacement-parent read guard
+  - impact:
+    - the PM lane still paid for duplicated blocked tool-result churn inside a single assistant batch before the same stop message ended the turn

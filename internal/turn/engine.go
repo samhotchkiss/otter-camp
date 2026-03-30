@@ -5526,7 +5526,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForBoundedSizeStop(
 		focusTask,
 		childActivity[focusTask.ID],
 		taskHintsByTask[focusTask.ID],
-		projectContinuationBoundedSizeSuggestedChildTitles(messages, latestCompleted.ID),
+		projectContinuationBoundedSizeSuggestedChildTitles(messages, latestCompleted.ID, focusTask.ID),
 	)
 	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
 	if err != nil {
@@ -6124,11 +6124,13 @@ func buildProjectExecutionContinuationBoundedSizeMissingDeliverableRetryPrompt(
 	return retryPrompt
 }
 
-func projectContinuationBoundedSizeSuggestedChildTitles(messages []repo.ChatMessage, turnID uuid.UUID) []string {
+func projectContinuationBoundedSizeSuggestedChildTitles(messages []repo.ChatMessage, turnID, focusTaskID uuid.UUID) []string {
 	if turnID == uuid.Nil || len(messages) == 0 {
 		return nil
 	}
-	for _, message := range messages {
+	turnMessages := messagesForTurn(messages, turnID)
+	assistantCalls := parseTurnAssistantToolCalls(turnMessages)
+	for _, message := range turnMessages {
 		if message.TurnID == nil || *message.TurnID != turnID {
 			continue
 		}
@@ -6151,6 +6153,20 @@ func projectContinuationBoundedSizeSuggestedChildTitles(messages []repo.ChatMess
 		titles := anyStrings(suggested["child_titles"])
 		if len(titles) == 0 {
 			continue
+		}
+		if focusTaskID != uuid.Nil {
+			if message.ToolCallID == nil {
+				continue
+			}
+			toolCallID := strings.TrimSpace(*message.ToolCallID)
+			call, ok := assistantCalls[toolCallID]
+			if !ok || !strings.EqualFold(strings.TrimSpace(call.Name), "task.update") {
+				continue
+			}
+			taskID, _ := parseUUIDAny(call.Arguments["task_id"])
+			if taskID != focusTaskID {
+				continue
+			}
 		}
 		return titles
 	}
@@ -15184,6 +15200,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 	toolCalls := make([]ToolCall, 0, len(calls))
 	blockedCalls := make([]ToolResult, 0)
 	blockedBootstrapRecoveryReread := false
+	blockedFocusedDraftRead := false
 	staffingDiscoveryCalls := 0
 	for i, call := range calls {
 		id := strings.TrimSpace(call.ID)
@@ -15324,6 +15341,10 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			continue
 		}
 		if blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, name, arguments); blocked {
+			if blockedFocusedDraftRead {
+				continue
+			}
+			blockedFocusedDraftRead = true
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
 				Name:       name,
@@ -30432,6 +30453,10 @@ func projectContinuationReplacementChildHandoffActive(rt *turnRuntime) bool {
 		strings.Contains(initial, "fresh replacement child task beneath") {
 		return true
 	}
+	if strings.Contains(initial, "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step:") &&
+		projectContinuationFocusedDraftReadGuardActive(initial) {
+		return true
+	}
 	if strings.Contains(initial, "prerequisite artifact `") &&
 		strings.Contains(initial, "Your next assistant action must create, queue, or advance the smallest bounded") {
 		return true
@@ -33952,6 +33977,23 @@ func buildProjectContinuationFocusedDraftReadGuardError(focusTaskID uuid.UUID, t
 	return fmt.Sprintf("project continuation already has a focused draft parent and the prompt already required a direct replacement-child handoff. Do not call %s from the project lane now; create the smallest fresh replacement child beneath the current focus parent instead.", strings.TrimSpace(toolName))
 }
 
+func projectContinuationFocusedDraftReadGuardActive(initial string) bool {
+	initial = strings.TrimSpace(initial)
+	if initial == "" {
+		return false
+	}
+	if strings.Contains(initial, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.") {
+		return true
+	}
+	if strings.Contains(initial, "Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.") {
+		return true
+	}
+	if strings.Contains(initial, "Because that focus parent only has malformed or stale child artifact lanes, do not queue the parent again from the project lane. Create the smallest fresh replacement child task under it now instead.") {
+		return true
+	}
+	return false
+}
+
 func shouldBlockProjectContinuationFocusedDraftReadTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
 	if rt == nil || rt.session == nil {
 		return false, ""
@@ -33964,10 +34006,13 @@ func shouldBlockProjectContinuationFocusedDraftReadTool(rt *turnRuntime, toolNam
 		return false, ""
 	}
 	initial := strings.TrimSpace(rt.initialMessageText)
-	if !strings.Contains(initial, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.") {
+	if !projectContinuationFocusedDraftReadGuardActive(initial) {
 		return false, ""
 	}
 	focusTaskID := projectContinuationPromptCurrentFocusParentTaskID(initial)
+	if focusTaskID == uuid.Nil {
+		focusTaskID = projectContinuationPromptFocusTaskID(initial)
+	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "file.read", "file.list", "task.get":
 		return true, buildProjectContinuationFocusedDraftReadGuardError(focusTaskID, toolName)

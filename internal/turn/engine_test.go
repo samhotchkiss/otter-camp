@@ -13147,11 +13147,52 @@ func TestProjectContinuationBoundedSizeSuggestedChildTitles(t *testing.T) {
 	t.Parallel()
 
 	turnID := uuid.New()
+	focusTaskID := uuid.New()
+	otherTaskID := uuid.New()
+	otherCallID := "call-other"
+	focusCallID := "call-focus"
 	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
 	messages := []repo.ChatMessage{
 		{
-			Role:   "tool_result",
+			Role:   "assistant",
 			TurnID: uuidPtr(turnID),
+			Metadata: mustJSONRaw(map[string]any{
+				"tool_calls": []map[string]any{
+					{
+						"id":   otherCallID,
+						"name": "task.update",
+						"arguments": map[string]any{
+							"task_id": otherTaskID.String(),
+						},
+					},
+					{
+						"id":   focusCallID,
+						"name": "task.update",
+						"arguments": map[string]any{
+							"task_id": focusTaskID.String(),
+						},
+					},
+				},
+			}),
+		},
+		{
+			Role:       "tool_result",
+			TurnID:     uuidPtr(turnID),
+			ToolCallID: &otherCallID,
+			Content: string(mustJSONRaw(map[string]any{
+				"tool_name": "task.update",
+				"output": map[string]any{
+					"error": "task exceeds bounded size policy (estimated 75 minutes > 60 minute limit): split the work into smaller reviewable tasks before queueing",
+					"suggested_decomposition": map[string]any{
+						"child_titles": []string{"Template shell", "Navigation", "Footer"},
+					},
+				},
+			})),
+		},
+		{
+			Role:       "tool_result",
+			TurnID:     uuidPtr(turnID),
+			ToolCallID: &focusCallID,
 			Content: string(mustJSONRaw(map[string]any{
 				"tool_name": "task.update",
 				"output": map[string]any{
@@ -13164,12 +13205,25 @@ func TestProjectContinuationBoundedSizeSuggestedChildTitles(t *testing.T) {
 		},
 	}
 
-	titles := projectContinuationBoundedSizeSuggestedChildTitles(messages, turnID)
+	titles := projectContinuationBoundedSizeSuggestedChildTitles(messages, turnID, focusTaskID)
 	if len(titles) != 3 {
 		t.Fatalf("len(titles) = %d, want 3", len(titles))
 	}
 	if titles[0] != "Overview" || titles[1] != "Architecture" || titles[2] != "Operations" {
 		t.Fatalf("titles = %#v, want suggested decomposition titles", titles)
+	}
+
+	otherTitles := projectContinuationBoundedSizeSuggestedChildTitles(messages, turnID, otherTaskID)
+	if len(otherTitles) != 3 {
+		t.Fatalf("len(otherTitles) = %d, want 3", len(otherTitles))
+	}
+	if otherTitles[0] != "Template shell" || otherTitles[1] != "Navigation" || otherTitles[2] != "Footer" {
+		t.Fatalf("otherTitles = %#v, want other task titles", otherTitles)
+	}
+
+	missingTaskTitles := projectContinuationBoundedSizeSuggestedChildTitles(messages, turnID, uuid.New())
+	if missingTaskTitles != nil {
+		t.Fatalf("missingTaskTitles = %#v, want nil for non-matching task", missingTaskTitles)
 	}
 }
 
@@ -26022,6 +26076,140 @@ func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksTaskListWithout
 	}
 	if !strings.Contains(reason, "task.list") || !strings.Contains(reason, focusTaskID.String()) {
 		t.Fatalf("reason = %q, want focused parent task.list guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksGeneralFocusPromptFileRead(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 245 (Write planning/sambot-tech-architecture.md) id=" + focusTaskID.String() + " work_status=draft deliverable_path=planning/sambot-tech-architecture.md workspace_deliverable_present=true replaceable_blocked_child_tasks=2.",
+			"Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.",
+		}, " "),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, "file.read", map[string]any{
+		"path": "planning/sambot-tech-architecture.md",
+	})
+	if !blocked {
+		t.Fatal("expected general focus-prompt file.read to be blocked")
+	}
+	if !strings.Contains(reason, focusTaskID.String()) || !strings.Contains(reason, "file.read") {
+		t.Fatalf("reason = %q, want focused parent handoff guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftReadToolAllowsParentScopedTaskListForGeneralFocusPrompt(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 245 (Write planning/sambot-tech-architecture.md) id=" + focusTaskID.String() + " work_status=draft deliverable_path=planning/sambot-tech-architecture.md workspace_deliverable_present=true replaceable_blocked_child_tasks=2.",
+			"Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.",
+		}, " "),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, "task.list", map[string]any{
+		"parent_task_id": focusTaskID.String(),
+	})
+	if blocked {
+		t.Fatalf("expected parent-scoped task.list to remain allowed, got %q", reason)
+	}
+}
+
+func TestDispatchToolsCoalescesFocusedDraftReadGuardInSingleBatch(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	focusTaskID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.session.Mode = "async"
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.chat.session.Mode = fixture.session.Mode
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		agent: repo.Agent{
+			ID:             assignedID,
+			OrganizationID: fixture.session.OrganizationID,
+		},
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		startedAt:            time.Now(),
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 245 (Write planning/sambot-tech-architecture.md) id=" + focusTaskID.String() + " work_status=draft deliverable_path=planning/sambot-tech-architecture.md workspace_deliverable_present=true replaceable_blocked_child_tasks=2.",
+			"Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.",
+		}, " "),
+		toolSet: []tools.ToolDescriptor{
+			{Name: "file.read", APIName: "file.read", Tier: "tier1"},
+		},
+	}
+
+	stop, err := fixture.engine.dispatchTools(context.Background(), rt, []ModelToolCall{
+		{
+			ID:   "read-tech",
+			Name: "file.read",
+			Tier: "tier1",
+			Arguments: map[string]any{
+				"path": "planning/sambot-tech-architecture.md",
+			},
+		},
+		{
+			ID:   "read-personality",
+			Name: "file.read",
+			Tier: "tier1",
+			Arguments: map[string]any{
+				"path": "planning/sambot-personality-spec.md",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dispatchTools: %v", err)
+	}
+	if !stop {
+		t.Fatal("expected dispatchTools to stop after focused-draft read guard")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	toolResults := 0
+	for _, msg := range messages {
+		if msg.TurnID == nil || *msg.TurnID != rt.turn.ID || !strings.EqualFold(msg.Role, "tool_result") {
+			continue
+		}
+		toolResults++
+	}
+	if toolResults != 1 {
+		t.Fatalf("tool_results in turn = %d, want 1", toolResults)
+	}
+	if !fixture.messages.containsContentSubstring("focused replacement-parent handoff") {
+		t.Fatal("expected focused replacement-parent stop message")
 	}
 }
 
