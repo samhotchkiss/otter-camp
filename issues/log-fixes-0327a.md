@@ -4514,3 +4514,15 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurn(RetriesParentCompletionStopWithLiveOpenChild|RetriesAfterPrerequisiteOnlyMutation|RetriesRediscoveryStopWithFocusedMessage|RetriesMissingDependencyStopWithFreshMessage|RetriesFocusedPrerequisiteRepairStopWithFreshMessage)|BuildProjectContinuationActionPromptPrioritizesMissingFocusPrerequisites|ProjectExecutionBlockedMutationStopMessageOnFocusedPrerequisiteRepairGuard|ShouldStopAfterSuccessfulProjectExecutionHandoffMutationForFocusPrerequisiteRepair|ShouldBlockProjectContinuationFocusedDraftReadToolBlocksPrerequisiteRepairFocusFileRead)$' -count=1`
   - deploy / proof target:
     - after a parent-completion stop on task `246`, the next continuation should point at live child `249` instead of issuing another parent closeout retry
+- 2026-03-30 21:54 MDT - Suppressed repeated focused replacement-parent continuation loops in worker recovery.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - added `projectContinuationReplacementHandoffPrefix`
+    - widened `suppressRepeatedIdenticalPendingProjectContinuation(...)` so `validation_loop_blocked` turns that end with the focused replacement-parent handoff stop now suppress identical rearmed continuations with the same fingerprint
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedReplacementHandoffContinuation`
+    - added `TestJobWorkerEnsureProjectContinuationMessageSuppressesStalePendingReplacementHandoffDuplicate`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerEnsureProjectContinuationMessageSuppresses(RepeatedConsumedReplacementHandoffContinuation|StalePendingReplacementHandoffDuplicate)$' -count=1`
+  - caveat:
+    - an adjacent broader worker suppression fixture is still red and remains separate from this slice:
+      - `TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedReviewLaneResumeContinuation`

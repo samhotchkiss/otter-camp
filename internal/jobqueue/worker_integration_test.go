@@ -23871,7 +23871,7 @@ func TestJobWorkerEnsureProjectContinuationMessageRequeuesAfterBlockedReviewChil
 		SessionID: session.ID,
 		Role:      "user",
 		Content:   "Continue the active project execution now.",
-		Status:    "failed",
+		Status:    "pending",
 		Metadata:  metadata,
 	})
 	if err != nil {
@@ -24724,6 +24724,450 @@ func TestJobWorkerEnsureProjectContinuationMessageSuppressesStalePendingBoundedS
 	}
 	if !strings.Contains(errorMessage, "suppressed repeated identical project continuation") {
 		t.Fatalf("stale pending continuation error = %q, want repeated bounded-size suppression", errorMessage)
+	}
+}
+
+func TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedReplacementHandoffContinuation(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "ensure-project-continuation-suppresses-replacement-handoff",
+		DisplayName: "Ensure Project Continuation Suppresses Replacement Handoff",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "ensure-project-continuation-suppresses-replacement-handoff-project",
+		DisplayName:    "Ensure Project Continuation Suppresses Replacement Handoff Project",
+		Description:    "Project for repeated continuation replacement-handoff suppression coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "ensure-project-continuation-suppresses-replacement-handoff-template",
+		DisplayName:    "Ensure Project Continuation Suppresses Replacement Handoff Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	doneTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     47,
+		Title:          "Build replacement template proof",
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     84,
+		Title:          "Build HTML layout template 8 replacement parent",
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent draft task: %v", err)
+	}
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	childTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     85,
+		Title:          "Blocked replacement child lane",
+		WorkStatus:     "blocked",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata:      childMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create blocked replacement child task: %v", err)
+	}
+	blockedPayload, err := json.Marshal(map[string]any{"blocked_reason": "flow rejection max visits exceeded"})
+	if err != nil {
+		t.Fatalf("marshal blocked replacement payload: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO project_task_event (task_id, project_id, event_type, actor_type, payload)
+		VALUES ($1, $2, 'flow.rejected', 'system', $3::jsonb)
+	`, childTask.ID, project.ID, blockedPayload); err != nil {
+		t.Fatalf("insert blocked flow rejection event: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "Build HTML layout template 8 replacement parent") {
+		t.Fatalf("ReplacementDraftLine = %q, want replacement parent", snapshot.ReplacementDraftLine)
+	}
+	remainingDrafts, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	fingerprint := projectExecutionContinuationFingerprintForWorker(doneTask.ID, remainingDrafts, snapshot)
+	metadata, err := json.Marshal(map[string]any{
+		"source":                 "project_execution_continuation",
+		"auto_continue":          true,
+		"synthetic_user_message": true,
+		"completed_task_id":      doneTask.ID.String(),
+		projectContinuationSnapshotFingerprintKey: fingerprint,
+	})
+	if err != nil {
+		t.Fatalf("marshal continuation metadata: %v", err)
+	}
+	staleMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "failed",
+		Metadata:  metadata,
+	})
+	if err != nil {
+		t.Fatalf("create consumed continuation message: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	completedTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StopReason:       &stopReason,
+		TriggerMessageID: &staleMessage.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create completed continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &completedTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation already has a focused replacement-parent handoff. Do not reread sibling artifacts from the project lane; create the fresh replacement child now or use only task.list(parent_task_id=...) if child-lane verification is still required.]",
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create replacement handoff stop message: %v", err)
+	}
+
+	messageID, suppressed, err := worker.ensureProjectContinuationMessageDecision(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ensureProjectContinuationMessageDecision: %v", err)
+	}
+	if !suppressed {
+		t.Fatal("suppressed = false, want true")
+	}
+	if messageID != uuid.Nil {
+		t.Fatalf("messageID = %s, want nil when repeated replacement-handoff continuation is suppressed", messageID)
+	}
+
+	var pendingCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_message
+		WHERE session_id = $1
+		  AND role = 'user'
+		  AND status = 'pending'
+		  AND COALESCE(metadata->>'source', '') = 'project_execution_continuation'
+	`, session.ID).Scan(&pendingCount); err != nil {
+		t.Fatalf("count pending continuation messages: %v", err)
+	}
+	if pendingCount != 0 {
+		t.Fatalf("pending continuation messages = %d, want 0 after suppression", pendingCount)
+	}
+}
+
+func TestJobWorkerEnsureProjectContinuationMessageSuppressesStalePendingReplacementHandoffDuplicate(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "ensure-project-continuation-suppresses-stale-pending-replacement-handoff",
+		DisplayName: "Ensure Project Continuation Suppresses Stale Pending Replacement Handoff",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "ensure-project-continuation-suppresses-stale-pending-replacement-handoff-project",
+		DisplayName:    "Ensure Project Continuation Suppresses Stale Pending Replacement Handoff Project",
+		Description:    "Project for stale pending replacement-handoff suppression coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "ensure-project-continuation-suppresses-stale-pending-replacement-handoff-template",
+		DisplayName:    "Ensure Project Continuation Suppresses Stale Pending Replacement Handoff Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	doneTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     47,
+		Title:          "Build replacement template proof",
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     84,
+		Title:          "Build HTML layout template 8 replacement parent",
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent draft task: %v", err)
+	}
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	childTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     85,
+		Title:          "Blocked replacement child lane",
+		WorkStatus:     "blocked",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata:      childMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create blocked replacement child task: %v", err)
+	}
+	blockedPayload, err := json.Marshal(map[string]any{"blocked_reason": "flow rejection max visits exceeded"})
+	if err != nil {
+		t.Fatalf("marshal blocked replacement payload: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO project_task_event (task_id, project_id, event_type, actor_type, payload)
+		VALUES ($1, $2, 'flow.rejected', 'system', $3::jsonb)
+	`, childTask.ID, project.ID, blockedPayload); err != nil {
+		t.Fatalf("insert blocked flow rejection event: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	remainingDrafts, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	fingerprint := projectExecutionContinuationFingerprintForWorker(doneTask.ID, remainingDrafts, snapshot)
+	metadata, err := json.Marshal(map[string]any{
+		"source":                 "project_execution_continuation",
+		"auto_continue":          true,
+		"synthetic_user_message": true,
+		"completed_task_id":      doneTask.ID.String(),
+		projectContinuationSnapshotFingerprintKey: fingerprint,
+	})
+	if err != nil {
+		t.Fatalf("marshal continuation metadata: %v", err)
+	}
+	consumedMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "failed",
+		Metadata:  metadata,
+	})
+	if err != nil {
+		t.Fatalf("create consumed continuation message: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	completedTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StopReason:       &stopReason,
+		TriggerMessageID: &consumedMessage.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create completed continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &completedTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation already has a focused replacement-parent handoff. Do not reread sibling artifacts from the project lane; create the fresh replacement child now or use only task.list(parent_task_id=...) if child-lane verification is still required.]",
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create replacement handoff stop message: %v", err)
+	}
+	stalePendingMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "pending",
+		Metadata:  metadata,
+	})
+	if err != nil {
+		t.Fatalf("create stale pending continuation message: %v", err)
+	}
+
+	messageID, suppressed, err := worker.ensureProjectContinuationMessageDecision(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ensureProjectContinuationMessageDecision: %v", err)
+	}
+	if !suppressed {
+		t.Fatal("suppressed = false, want true")
+	}
+	if messageID != uuid.Nil {
+		t.Fatalf("messageID = %s, want nil when stale pending replacement-handoff duplicate is suppressed", messageID)
+	}
+
+	var (
+		status       string
+		errorMessage string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, stalePendingMessage.ID).Scan(&status, &errorMessage); err != nil {
+		t.Fatalf("query stale pending continuation message: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("stale pending continuation status = %q, want failed", status)
+	}
+	if !strings.Contains(errorMessage, "suppressed repeated identical project continuation") {
+		t.Fatalf("stale pending continuation error = %q, want repeated replacement-handoff suppression", errorMessage)
 	}
 }
 

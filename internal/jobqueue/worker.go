@@ -63,18 +63,19 @@ const (
 	legacyRateLimitJitterMax        = 30 * time.Second
 	maxInFlightProjectContinuations = 4
 
-	projectContinuationSnapshotFingerprintKey  = "continuation_snapshot_fingerprint"
-	projectContinuationRediscoveryGuardPrefix  = "[Project continuation rediscovery guard blocked only broad rereads."
-	projectContinuationActiveReplacementPrefix = "[Project continuation found that prerequisite artifact `"
-	projectContinuationActiveReplacementMarker = "already has active replacement work in the tree:"
-	projectContinuationSuccessfulHandoffPrefix = "[Project continuation successfully handed off the focused replacement child work."
-	projectContinuationReviewLaneResumePrefix  = "[Project continuation resumed blocked review lane "
-	projectContinuationTaskLaneBoundaryPrefix  = "[Project continuation found that task-owned active lane work must stay inside its project_task session."
-	projectContinuationBoundedSizePrefix       = "[Project continuation found that the remaining draft work still violates the bounded size policy."
-	projectContinuationDraftBoundedSizePrefix  = "[Project continuation found remaining draft "
-	projectContinuationBoundedSizeMarker       = "violates the bounded size policy:"
-	projectContinuationSuppressedErrorMessage  = "suppressed repeated identical project continuation after repeated validation block"
-	taskRecoveryResumeSuppressedErrorMessage   = "suppressed repeated identical task recovery resume after terminal blocked recovery stop"
+	projectContinuationSnapshotFingerprintKey   = "continuation_snapshot_fingerprint"
+	projectContinuationRediscoveryGuardPrefix   = "[Project continuation rediscovery guard blocked only broad rereads."
+	projectContinuationActiveReplacementPrefix  = "[Project continuation found that prerequisite artifact `"
+	projectContinuationActiveReplacementMarker  = "already has active replacement work in the tree:"
+	projectContinuationReplacementHandoffPrefix = "[Project continuation already has a focused replacement-parent handoff."
+	projectContinuationSuccessfulHandoffPrefix  = "[Project continuation successfully handed off the focused replacement child work."
+	projectContinuationReviewLaneResumePrefix   = "[Project continuation resumed blocked review lane "
+	projectContinuationTaskLaneBoundaryPrefix   = "[Project continuation found that task-owned active lane work must stay inside its project_task session."
+	projectContinuationBoundedSizePrefix        = "[Project continuation found that the remaining draft work still violates the bounded size policy."
+	projectContinuationDraftBoundedSizePrefix   = "[Project continuation found remaining draft "
+	projectContinuationBoundedSizeMarker        = "violates the bounded size policy:"
+	projectContinuationSuppressedErrorMessage   = "suppressed repeated identical project continuation after repeated validation block"
+	taskRecoveryResumeSuppressedErrorMessage    = "suppressed repeated identical task recovery resume after terminal blocked recovery stop"
 
 	recoverySharedDeliverableGuardPrefix      = "[Recovery shared-deliverable guard:"
 	taskSiblingResponsibilityGuardPrefix      = "[Task sibling-responsibility guard blocked a discovery-only child lane from mutating the shared deliverable."
@@ -3018,6 +3019,7 @@ func (w *Worker) suppressRepeatedIdenticalPendingProjectContinuation(ctx context
 			         OR sm.content LIKE $4
 			         OR (sm.content LIKE $5 AND sm.content LIKE $6)
 			         OR sm.content LIKE $7
+			         OR sm.content LIKE $10
 			       )
 			  )
 			   OR (
@@ -3034,6 +3036,7 @@ func (w *Worker) suppressRepeatedIdenticalPendingProjectContinuation(ctx context
 		projectContinuationTaskLaneBoundaryPrefix+"%",
 		allowSuccessfulHandoffSuppression,
 		projectContinuationSuccessfulHandoffPrefix+"%",
+		projectContinuationReplacementHandoffPrefix+"%",
 	).Scan(&blocked); err != nil {
 		return false, err
 	}

@@ -743,3 +743,16 @@ They need sharper stopping rules than ordinary execution lanes.
     - task session `39ab4358-2265-4670-afb8-791a48daefed` is `closed`
     - checkpoint target is now correctly `planning/template-08-css-foundation.txt`
     - halt message `28343d0f-66da-4c75-8817-16895082e062` rejected the intent-only draft against that planning output instead of bouncing on the parent HTML file
+- 2026-03-30 21:54 MDT - Picked up another supervisory stop-condition family: repeated focused replacement-parent handoff loops.
+  - fresh live evidence:
+    - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` kept emitting the same project continuation fingerprint `3adc01e09b368649`
+    - each retry ended `validation_loop_blocked` on:
+      - `[Project continuation already has a focused replacement-parent handoff. Do not reread sibling artifacts from the project lane; create the fresh replacement child now ...]`
+    - worker recovery still rearmed the same continuation family instead of draining it
+  - landed fix:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now treats that focused replacement-parent stop as a suppressible repeated continuation family
+    - added focused integration coverage in [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go) for both repeated-consumed and stale-pending duplicate variants
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerEnsureProjectContinuationMessageSuppresses(RepeatedConsumedReplacementHandoffContinuation|StalePendingReplacementHandoffDuplicate)$' -count=1`
+  - next live proof target:
+    - after redeploy, the PM session should stop rearming identical focused replacement-parent continuations with the same fingerprint

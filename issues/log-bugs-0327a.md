@@ -1168,3 +1168,13 @@
   - impact:
     - the PM lane can loop on `task.list(parent)` plus another doomed `task.update` closeout attempt
     - that hides the real next bounded action, which is to advance or replace the still-open child lane instead of retrying parent closeout
+- 2026-03-30 21:54 MDT - Worker recovery kept rearming identical focused replacement-parent continuation loops.
+  - fresh live evidence:
+    - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` emitted `11820`, `11824`, `11828`, `11832`, and `11836` with the same completed task (`251`) and the same continuation fingerprint (`3adc01e09b368649`)
+    - each of those turns ended `validation_loop_blocked` on the same focused replacement-parent handoff stop after another blocked `file.read`
+    - worker recovery still created pending continuation `11840` instead of suppressing the repeated family
+  - bug:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) only recognized rediscovery, active-replacement, bounded-size, task-lane-boundary, and successful-handoff stop families when deciding whether to suppress repeated identical project continuations
+    - it did not include the focused replacement-parent handoff stop prefix, even though the stop reason and continuation fingerprint were already stable across retries
+  - impact:
+    - the PM lane can sit in a pure worker-driven rearm loop, paying for the same blocked `file.read` plus stop message indefinitely instead of draining the repeated continuation family
