@@ -4805,3 +4805,15 @@
     - added `TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnFocusedCloseoutReadyDraftDoneError`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'TestShouldStopAfterBlockedProjectExecutionBlockedMutationOn(FocusedCloseoutReadyDraftDoneError|CloseoutReadyDraftDoneError)$' -count=1`
+- 2026-03-30 12:52 MDT - Taught review-path inference to treat `Verify planning/...` titles as deliverable contracts.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - widened `leadingVerbDeliverablePathPattern` to recognize `verify` and `review`
+    - added `verify` / `review` to `explicitDeliverableActionWords` so the new verbs are handled consistently during explicit-path normalization
+    - this lets `explicitDeliverablePath(...)` and `sessionTaskDeliverablePath(...)` infer planning deliverables from review titles like `Verify planning/sambot-tech-architecture.md ...`
+    - the existing task-record fallback in `shouldBlockTaskReviewCompanionPlanningArtifactTool(...)` can now keep the real planning deliverable readable even without an explicit prompt target line
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestExplicitDeliverablePathDetectsVerifyPathFromReviewTitle`
+    - added `TestShouldNotBlockTaskReviewCompanionPlanningArtifactToolForImplicitPlanningDeliverable`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShould(BlockTaskReviewCompanionPlanningArtifactToolWithoutExplicitContract|NotBlockTaskReviewCompanionPlanningArtifactToolForPlanningDeliverableTarget|NotBlockTaskReviewCompanionPlanningArtifactToolForImplicitPlanningDeliverable)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(SessionTaskDeliverablePath(IgnoresBareDirectoryCheckpointAndInheritsParentMarkdownDeliverable|IgnoresHistoricalAuxiliaryTestArtifactForBackendTaskReferencingFeatureSpec|PrefersExplicitFileLabelOverHistoricalPlanningTarget)|ExplicitDeliverablePathDetectsVerifyPathFromReviewTitle)$' -count=1`

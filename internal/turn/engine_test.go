@@ -19138,6 +19138,7 @@ func TestShouldBlockTaskReviewPreferredDeliverableFirstTool(t *testing.T) {
 }
 
 func TestShouldBlockTaskReviewCompanionPlanningArtifactToolWithoutExplicitContract(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
 	rt := &turnRuntime{
 		session: &chat.ChatSession{
 			ScopeType: "project_task",
@@ -19149,7 +19150,7 @@ func TestShouldBlockTaskReviewCompanionPlanningArtifactToolWithoutExplicitContra
 			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
 	}
 
-	blocked, reason := shouldBlockTaskReviewCompanionPlanningArtifactTool(rt, "file.read", map[string]any{"path": "planning/prd-spec/oc-34-prd.md"})
+	blocked, reason := fixture.engine.shouldBlockTaskReviewCompanionPlanningArtifactTool(context.Background(), rt, "file.read", map[string]any{"path": "planning/prd-spec/oc-34-prd.md"})
 	if !blocked {
 		t.Fatal("expected no-contract review to block planning artifact file.read")
 	}
@@ -19160,12 +19161,13 @@ func TestShouldBlockTaskReviewCompanionPlanningArtifactToolWithoutExplicitContra
 		t.Fatalf("guard reason = %q, want review-decision guidance", reason)
 	}
 
-	if blocked, _ := shouldBlockTaskReviewCompanionPlanningArtifactTool(rt, "file.read", map[string]any{"path": "content/posts/2025-07-29-hello-world.md"}); blocked {
+	if blocked, _ := fixture.engine.shouldBlockTaskReviewCompanionPlanningArtifactTool(context.Background(), rt, "file.read", map[string]any{"path": "content/posts/2025-07-29-hello-world.md"}); blocked {
 		t.Fatal("expected real deliverable read to remain allowed")
 	}
 }
 
 func TestShouldNotBlockTaskReviewCompanionPlanningArtifactToolForPlanningDeliverableTarget(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
 	rt := &turnRuntime{
 		session: &chat.ChatSession{
 			ScopeType: "project_task",
@@ -19179,8 +19181,42 @@ func TestShouldNotBlockTaskReviewCompanionPlanningArtifactToolForPlanningDeliver
 			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
 	}
 
-	if blocked, reason := shouldBlockTaskReviewCompanionPlanningArtifactTool(rt, "file.read", map[string]any{"path": "planning/sambot-feature-spec.md"}); blocked {
+	if blocked, reason := fixture.engine.shouldBlockTaskReviewCompanionPlanningArtifactTool(context.Background(), rt, "file.read", map[string]any{"path": "planning/sambot-feature-spec.md"}); blocked {
 		t.Fatalf("expected named planning deliverable to remain allowed, reason = %q", reason)
+	}
+}
+
+func TestShouldNotBlockTaskReviewCompanionPlanningArtifactToolForImplicitPlanningDeliverable(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        uuid.New(),
+			ScopeType: "project_task",
+			Mode:      "async",
+			ScopeID:   taskID,
+		},
+		initialMessageText: "Review only.\n" +
+			"Do not continue implementation, do not write deliverable files, and do not summarize what you plan to review.\n" +
+			"Do not invent companion planning-artifact requirements from neighboring tasks, generic playbook assumptions, or filenames alone. If the current task metadata does not carry an explicit artifact contract, review the actual deliverable files against this task's title and description only.\n" +
+			"Use flow_node_execution_id " + uuid.NewString() + " in flow.review_decision.",
+	}
+	description := "Read `planning/sambot-tech-architecture.md` and confirm it satisfies all acceptance criteria."
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				ProjectID:   uuid.New(),
+				TaskNumber:  281,
+				Title:       "Verify planning/sambot-tech-architecture.md satisfies PRD acceptance criteria",
+				Description: &description,
+				WorkStatus:  "review",
+			},
+		},
+	}
+
+	if blocked, reason := fixture.engine.shouldBlockTaskReviewCompanionPlanningArtifactTool(context.Background(), rt, "file.read", map[string]any{"path": "planning/sambot-tech-architecture.md"}); blocked {
+		t.Fatalf("expected implicit planning deliverable to remain allowed, reason = %q", reason)
 	}
 }
 
@@ -43640,6 +43676,21 @@ func TestExplicitDeliverablePathDetectsWriteTheFilePath(t *testing.T) {
 
 	if got := explicitDeliverablePath(taskRecord); got != "planning/sambot-prompts/test-conversations-technical.md" {
 		t.Fatalf("explicitDeliverablePath(...) = %q, want %q", got, "planning/sambot-prompts/test-conversations-technical.md")
+	}
+}
+
+func TestExplicitDeliverablePathDetectsVerifyPathFromReviewTitle(t *testing.T) {
+	t.Parallel()
+
+	description := "Read `planning/sambot-tech-architecture.md` and confirm it satisfies all acceptance criteria."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  281,
+		Title:       "Verify planning/sambot-tech-architecture.md satisfies PRD acceptance criteria",
+		Description: &description,
+	}
+
+	if got := explicitDeliverablePath(taskRecord); got != "planning/sambot-tech-architecture.md" {
+		t.Fatalf("explicitDeliverablePath(...) = %q, want %q", got, "planning/sambot-tech-architecture.md")
 	}
 }
 

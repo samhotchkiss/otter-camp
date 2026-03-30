@@ -1488,3 +1488,13 @@
     - it did not match the live wording `focused parent is already closeout-ready for the same deliverable`
   - impact:
     - closeout-ready PM retries can pay an unnecessary extra tool/model hop after the first flow-owned `draft -> done` rejection instead of ending immediately with the queued-parent guidance
+- 2026-03-30 12:52 MDT - Task-review companion-planning guards could block the real planning deliverable when the prompt omitted a preferred-target line.
+  - fresh live evidence:
+    - task `281` review turn `5cb889ad-c992-4f76-88b7-7e3ab80a0e88` blocked `file.read planning/sambot-tech-architecture.md` with the companion planning-artifact guard
+    - task `281` itself is the verification lane for `planning/sambot-tech-architecture.md`
+    - the prompt contained the generic `Do not invent companion planning-artifact requirements...` warning but no explicit preferred-target line to exempt the real deliverable
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) in `shouldBlockTaskReviewCompanionPlanningArtifactTool(...)` only exempted `taskReviewPreferredDeliverableTarget(rt)`
+    - `sessionTaskDeliverablePath(...)` could not infer a path from review titles like `Verify planning/sambot-tech-architecture.md satisfies ...`, so the fallback task-record lookup stayed empty too
+  - impact:
+    - review lanes for planning deliverables can misclassify the actual target file as a forbidden companion artifact, preventing the first real review read and forcing the turn into blocked discovery churn

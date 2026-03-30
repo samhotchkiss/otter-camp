@@ -197,7 +197,7 @@ var explicitDeliverablePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:append|add|update)\b[^.;:\n]{0,120}?\s+(?:to|into)\s+(?:the\s+existing\s+)?([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\bsave\s+as\s+([^\s,;]+)`),
 }
-var leadingVerbDeliverablePathPattern = regexp.MustCompile(`(?i)^\s*(?:write|create|produce|append|add|update)\s+([^\s,;]+)`)
+var leadingVerbDeliverablePathPattern = regexp.MustCompile(`(?i)^\s*(?:write|create|produce|append|add|update|verify|review)\s+([^\s,;]+)`)
 var leadingExplicitDeliverablePathPattern = regexp.MustCompile(`^\s*([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)\s*(?:\([^)\n]*\)|[-—:])`)
 var parenthesizedDeliverableOptionPathPattern = regexp.MustCompile(`\(([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)\s+or\s+[^)\n]+\)`)
 var explicitDeliverableActionWords = map[string]struct{}{
@@ -208,7 +208,9 @@ var explicitDeliverableActionWords = map[string]struct{}{
 	"draft":    {},
 	"generate": {},
 	"produce":  {},
+	"review":   {},
 	"update":   {},
+	"verify":   {},
 	"write":    {},
 }
 var bareExplicitDeliverableFileNames = map[string]struct{}{
@@ -16309,7 +16311,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
-		if blocked, reason := shouldBlockTaskReviewCompanionPlanningArtifactTool(rt, name, arguments); blocked {
+		if blocked, reason := e.shouldBlockTaskReviewCompanionPlanningArtifactTool(ctx, rt, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
 				Name:       name,
@@ -33877,7 +33879,7 @@ func parseReviewPromptRepeatedCheckpointOutputPaths(content string) []string {
 	return nil
 }
 
-func shouldBlockTaskReviewCompanionPlanningArtifactTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+func (e *TurnEngine) shouldBlockTaskReviewCompanionPlanningArtifactTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
 	if !taskReviewCompanionPlanningArtifactBlockApplies(rt) {
 		return false, ""
 	}
@@ -33892,6 +33894,11 @@ func shouldBlockTaskReviewCompanionPlanningArtifactTool(rt *turnRuntime, toolNam
 		return false, ""
 	}
 	targetPath := taskReviewPreferredDeliverableTarget(rt)
+	if targetPath == "" && e != nil && rt != nil && rt.session != nil {
+		if taskRecord, ok := e.reviewPromptTaskRecord(ctx, rt.session); ok {
+			targetPath = strings.TrimSpace(e.sessionTaskDeliverablePath(ctx, rt.session.ID, taskRecord))
+		}
+	}
 	if targetPath != "" && sameWorkspaceRelativePath(path, targetPath) {
 		return false, ""
 	}
