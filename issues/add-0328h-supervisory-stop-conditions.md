@@ -815,3 +815,12 @@ They need sharper stopping rules than ordinary execution lanes.
       - `TestJobWorkerEnsureProjectContinuationMessageTreatsWorkspaceDeliverableParentAsCloseout`
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(JobWorkerProjectExecutionContinuationSnapshotTreats(WorkspaceDeliverableParentAsActionableDraft|CloseoutReadyParentAsActionableDraft)|JobWorkerEnsureProjectContinuationMessageTreatsWorkspaceDeliverableParentAsCloseout|BuildProjectExecutionContinuationPromptForWorkerTreatsWorkspaceDeliverableAsCloseout|ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|ProjectContinuationTurnCloseoutReadyTaskLabelFallsBackToPromptFocusParent)$' -count=1`
+- 2026-03-30 10:18 MDT - Added the blocked-tail direct-wake gap to the same supervisory family.
+  - fresh live evidence:
+    - after task `283` completed, the PM lane did not wake until the worker's stale-scan repair loop synthesized new continuations about `60s` later
+    - the remaining sibling tail was already `blocked`, not active actionable work
+  - landed fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now ignores `blocked` task executions and `blocked` async task sessions when deciding whether to wake the PM lane after task completion
+    - widened `TestMaybeContinueProjectExecutionAfterTaskCompletionIgnoresBlockedTasksForWakeup` in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) to include an active blocked task session
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(MaybeContinueProjectExecutionAfterTaskCompletionIgnoresBlockedTasksForWakeup|MaybeContinueProjectExecutionAfterTaskCompletionUsesLatestCompletedTaskForBlockedTail|HandleTaskStatusChangedEventBlockedWakesProjectContinuation)$' -count=1`

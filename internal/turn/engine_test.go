@@ -17672,6 +17672,17 @@ func TestMaybeContinueProjectExecutionAfterTaskCompletionIgnoresBlockedTasksForW
 			t.Fatalf("insert project_task %s: %v", task.ID, err)
 		}
 	}
+	if _, err := repo.NewChatSessionRepo(fixture.engine.pool).Create(context.Background(), repo.ChatSession{
+		OrganizationID: fixture.session.OrganizationID,
+		ScopeType:      "project_task",
+		ScopeID:        blockedTaskID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	}); err != nil {
+		t.Fatalf("create blocked task session: %v", err)
+	}
 
 	if err := fixture.engine.maybeContinueProjectExecutionAfterTaskCompletion(context.Background(), projectID, taskRepo.items[completedTaskID]); err != nil {
 		t.Fatalf("maybeContinueProjectExecutionAfterTaskCompletion: %v", err)

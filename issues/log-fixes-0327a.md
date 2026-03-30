@@ -4754,3 +4754,10 @@
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(EnsureProjectContinuationMessage(RefreshesRepeatedConsumedNamedBoundedSizeContinuation|DropsStaleMalformedNamedBoundedSizeFocus|RefreshesStalePendingNamedBoundedSizeDuplicate)|RequeueActiveProjectSessionsWithoutTurnsRefreshesRepeatedFailedNamedBoundedSizeContinuation|ProjectExecutionContinuationSnapshotIgnoresMalformedConflictingDeliverableChildren)$' -count=1`
     - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationMalformedConflictingDeliverableChildKickoffPreflightBlocksBeforeModelCall$' -count=1`
+- 2026-03-30 10:18 MDT - Stopped blocked sibling tails from suppressing direct PM wakeups.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `maybeContinueProjectExecutionAfterTaskCompletion(...)` now excludes `blocked` task executions and `blocked` async task sessions when deciding whether live child work still exists
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - widened `TestMaybeContinueProjectExecutionAfterTaskCompletionIgnoresBlockedTasksForWakeup` so it includes an active async session on the blocked sibling task
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(MaybeContinueProjectExecutionAfterTaskCompletionIgnoresBlockedTasksForWakeup|MaybeContinueProjectExecutionAfterTaskCompletionUsesLatestCompletedTaskForBlockedTail|HandleTaskStatusChangedEventBlockedWakesProjectContinuation)$' -count=1`

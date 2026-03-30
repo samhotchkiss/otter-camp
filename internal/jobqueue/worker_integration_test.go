@@ -26391,6 +26391,32 @@ func TestBuildProjectExecutionContinuationReplacementChildRetryPromptForWorkerTr
 	}
 }
 
+func TestBuildProjectExecutionContinuationBoundedSizeRetryPromptForWorkerTreatsWorkspaceDeliverableAsCloseout(t *testing.T) {
+	prompt := buildProjectExecutionContinuationBoundedSizeRetryPromptForWorker(
+		245,
+		"Write planning/sambot-tech-architecture.md",
+		1,
+		projectExecutionContinuationSnapshotForWorker{
+			ProjectLine:   "Active project id: a6dbd331-7205-42d9-b0df-10105d5b5330",
+			DraftTaskLine: `Actionable draft tasks already in the tree: task 283 (This file already exists in the workspace — review it, improve if needed, or rewrite to meet the above criteria.) id=4019cbf5-41c6-47b6-883b-73c36ba350e6 title="This file already exists in the workspace — review it, improve if needed, or rewrite to meet the above criteria." work_status=draft deliverable_path=planning/sambot-example-conversations.md assigned_agent_id=acd65fcc-0a14-4492-89ea-f7e286628166 flow_template_id=508b159f-986d-4f1d-ba51-667a7439f1ed workspace_deliverable_present=true`,
+		},
+		"task 283",
+	)
+
+	if !strings.Contains(prompt, "deliverable body is already on disk") {
+		t.Fatalf("prompt = %q, want workspace-deliverable closeout guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Current focus parent: task 283") {
+		t.Fatalf("prompt = %q, want focused parent reference", prompt)
+	}
+	if !strings.Contains(prompt, "create the smallest closeout/verification child task beneath task 283") {
+		t.Fatalf("prompt = %q, want closeout/verification child guidance", prompt)
+	}
+	if strings.Contains(prompt, "still too broad to queue as-is") {
+		t.Fatalf("prompt = %q, should not keep bounded-size split guidance once deliverable is already present", prompt)
+	}
+}
+
 func TestProjectContinuationDraftTaskReadyForParentClosureForWorkerRejectsSatisfiedOutcomeWithOnlyReplaceableBlockedChildren(t *testing.T) {
 	t.Parallel()
 

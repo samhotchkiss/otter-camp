@@ -1425,3 +1425,15 @@
     - the same block also depended on exact snapshot-label equality, so older bounded-size stops that only named `task N` could miss the current snapshot label `task N (Title) ...`
   - impact:
     - worker-authored PM bounded-size retries can lose both the active project line and the focus parent, falling back into generic PM rediscovery even after the stale malformed child has been filtered out
+- 2026-03-30 10:18 MDT - Direct PM wakeups still counted blocked tails as active work.
+  - fresh live evidence:
+    - after task `283` completed, the PM session did not append a continuation immediately
+    - recovery only happened when the worker stale-scan fired about `60s` later and synthesized replacement continuation messages
+    - blocked sibling task `281` had already settled, so the idle gap was caused by terminal blocked tail state still tripping the direct wake gate
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) in `maybeContinueProjectExecutionAfterTaskCompletion(...)` excluded `blocked` from neither:
+      - active `flow_node_execution` rows
+      - active async `project_task` sessions
+    - so a stale active blocked tail could prevent the PM lane from waking even though all actionable child work was finished
+  - impact:
+    - PM wakeups after real child completion can be delayed until the worker repair loop, adding a full stale-scan interval of avoidable latency

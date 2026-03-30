@@ -5951,6 +5951,27 @@ func projectContinuationRefByLabelFromSnapshotForWorker(snapshot projectExecutio
 	return "", "", ""
 }
 
+func projectContinuationSnapshotLineForRefForWorker(snapshot projectExecutionContinuationSnapshotForWorker, focusRef, focusTaskID string) string {
+	for _, line := range []string{
+		snapshot.FocusTaskLine,
+		snapshot.DraftTaskLine,
+		snapshot.ReplacementDraftLine,
+		snapshot.ChildActiveDraftLine,
+	} {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if focusTaskID != "" && strings.Contains(trimmed, "id="+focusTaskID) {
+			return trimmed
+		}
+		if focusRef != "" && strings.Contains(trimmed, focusRef) {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 func (w *Worker) projectContinuationRefByLabelFromMessageHistoryForWorker(ctx context.Context, messageIDs []uuid.UUID, focusLabel string) (string, string, string, error) {
 	if w == nil || w.pool == nil || strings.TrimSpace(focusLabel) == "" {
 		return "", "", "", nil
@@ -6233,7 +6254,14 @@ func buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(compl
 		laneSource = strings.TrimSpace(snapshot.ReplacementDraftLine)
 	}
 	if focusRef == "" {
+		focusLabel, focusRef, focusTaskID = projectContinuationFirstTaskRefFromLineForWorker(snapshot.DraftTaskLine)
+		laneSource = strings.TrimSpace(snapshot.DraftTaskLine)
+	}
+	if focusRef == "" {
 		return strings.Join(lines, " ")
+	}
+	if line := projectContinuationSnapshotLineForRefForWorker(snapshot, focusRef, focusTaskID); line != "" {
+		laneSource = line
 	}
 	if strings.Contains(laneSource, "workspace_deliverable_present=true") {
 		lines = append(lines,
@@ -6291,6 +6319,7 @@ func buildProjectExecutionContinuationBoundedSizeRetryPromptForWorker(completedT
 		lines = append(lines, projectLine)
 	}
 	focusLabel, focusRef, focusTaskID := projectContinuationFocusRefFromLineForWorker(snapshot.FocusTaskLine)
+	laneSource := strings.TrimSpace(snapshot.FocusTaskLine)
 	if focusRef == "" && strings.TrimSpace(focusLabelOverride) != "" {
 		if label, ref, taskID := projectContinuationFocusRefFromLineForWorker(focusLabelOverride); ref != "" {
 			focusLabel, focusRef, focusTaskID = label, ref, taskID
@@ -6303,12 +6332,20 @@ func buildProjectExecutionContinuationBoundedSizeRetryPromptForWorker(completedT
 	}
 	if focusRef == "" {
 		focusLabel, focusRef, focusTaskID = projectContinuationFirstTaskRefFromLineForWorker(snapshot.ReplacementDraftLine)
+		laneSource = strings.TrimSpace(snapshot.ReplacementDraftLine)
 	}
 	if focusRef == "" {
 		focusLabel, focusRef, focusTaskID = projectContinuationFirstTaskRefFromLineForWorker(snapshot.DraftTaskLine)
+		laneSource = strings.TrimSpace(snapshot.DraftTaskLine)
 	}
 	if focusRef == "" {
 		return strings.Join(lines, " ")
+	}
+	if line := projectContinuationSnapshotLineForRefForWorker(snapshot, focusRef, focusTaskID); line != "" {
+		laneSource = line
+	}
+	if strings.Contains(laneSource, "workspace_deliverable_present=true") {
+		return buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNumber, completedTaskTitle, remainingDraftTasks, snapshot)
 	}
 	lines = append(lines,
 		"Your last continuation turn proved that this focused draft is still too broad to queue as-is.",
@@ -6361,6 +6398,9 @@ func buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(complete
 	}
 	if focusRef == "" {
 		return strings.Join(lines, " ")
+	}
+	if line := projectContinuationSnapshotLineForRefForWorker(snapshot, focusRef, focusTaskID); line != "" {
+		laneSource = line
 	}
 	if strings.Contains(laneSource, "workspace_deliverable_present=true") &&
 		!strings.Contains(laneSource, "completed_closeout_child_tasks=") &&
@@ -6428,6 +6468,9 @@ func buildProjectExecutionContinuationParentQueueRetryPromptForWorker(completedT
 	}
 	if focusRef == "" {
 		return strings.Join(lines, " ")
+	}
+	if line := projectContinuationSnapshotLineForRefForWorker(snapshot, focusRef, focusTaskID); line != "" {
+		laneSource = line
 	}
 	if strings.Contains(laneSource, "workspace_deliverable_present=true") &&
 		!strings.Contains(laneSource, "completed_closeout_child_tasks=") &&
