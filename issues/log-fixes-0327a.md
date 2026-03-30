@@ -5016,3 +5016,17 @@
     - added `TestLoadRecoveryResumeStatePrefersRetargetedChildDeliverableOverHistoricalInheritedParentFile`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(LoadRecoveryResumeStatePrefersTaskExplicitDeliverableOverWrongCheckpointTarget|LoadRecoveryResumeStatePrefersRetargetedChildDeliverableOverHistoricalInheritedParentFile|RecoveryTargetPathForSessionPrefersParentExplicitDeliverableOverWrongCheckpointTarget)$' -count=1`
+- 2026-03-30 13:52 MDT - Aligned focused replacement-parent retry prompts with the preferred-child repair guidance.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `buildProjectExecutionContinuationReplacementChildRetryPrompt(...)` now checks `snapshot.RepairDraftLine`
+    - when a preferred same-deliverable draft child is already named, the retry prompt no longer offers fresh-child creation or child inspection fallback
+    - it now explicitly tells PM to repair and queue the named draft child with one narrow `task.update`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - worker retry prompts now mirror the same repair-child wording and suppress the old inspection fallback
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestBuildProjectExecutionContinuationReplacementChildRetryPromptPrefersRepairOfMalformedSameDeliverableDraftChild`
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestBuildProjectExecutionContinuationReplacementChildRetryPromptForWorkerPrefersRepairOfMalformedSameDeliverableDraftChild`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestBuildProjectExecutionContinuationReplacementChildRetryPromptPrefersRepairOfMalformedSameDeliverableDraftChild$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestBuildProjectExecutionContinuationReplacementChildRetryPromptForWorker(PrefersRepairOfMalformedSameDeliverableDraftChild|TreatsWorkspaceDeliverableAsVerification|AdvancesParentAfterVerificationChild)$' -count=1`

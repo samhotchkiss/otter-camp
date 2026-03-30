@@ -1697,3 +1697,20 @@
   - impact:
     - child-specific recovery keeps reopening the wrong parent-file blocker instead of resuming the new bounded output
     - PM retargeting fixes are partially neutralized because the recovery lane continues to inherit stale shared-file context
+- 2026-03-30 13:52 MDT - Focused replacement-parent retry prompts still fell back to child inspection / fresh-child wording even when the snapshot already named a preferred same-deliverable draft child to repair.
+  - fresh live evidence:
+    - PM retry prompts for focus parent `297` told the model:
+      - create a fresh replacement child, or
+      - queue an existing direct child draft if one fits unchanged, and
+      - use `task.list(parent_task_id=...)` if child inspection is required
+    - live assistant turns followed that path exactly:
+      - `task.list(parent_task_id=297)` succeeded
+      - assistant recognized `303` as the correct draft child
+      - then it still attempted `task.get` to verify the child and hit the focused replacement-parent guard again
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) retry prompt builder for replacement-parent loops did not reuse `snapshot.RepairDraftLine`
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) had the same stale retry wording
+    - the base continuation prompt knew how to say “repair the preferred child now,” but the retry path degraded back to “inspect first / maybe create another child”
+  - impact:
+    - PM spends extra turns rediscovering the already-named draft child instead of issuing the one narrow `task.update`
+    - the focused replacement-parent loop keeps rearming even though the runtime already knows the correct bounded child to repair

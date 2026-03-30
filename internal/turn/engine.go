@@ -6226,6 +6226,16 @@ func buildProjectExecutionContinuationReplacementChildRetryPrompt(
 	if deliverableRoot := strings.TrimSpace(focusHints.DeliverableRoot); deliverableRoot != "" {
 		retryPrompt.WriteString(fmt.Sprintf(" Keep the replacement child scoped to deliverable root `%s`.", deliverableRoot))
 	}
+	if repairLine := strings.TrimSpace(snapshot.RepairDraftLine); repairLine != "" {
+		retryPrompt.WriteByte(' ')
+		retryPrompt.WriteString(repairLine)
+		retryPrompt.WriteString(" Do not create another replacement child while that preferred same-deliverable draft still exists.")
+		retryPrompt.WriteString(" Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.")
+		retryPrompt.WriteString(fmt.Sprintf(" Do not queue parent task %s again from the project lane.", focusLabel))
+		retryPrompt.WriteString(" Do not inspect or mention other draft parents until this handoff is advanced.")
+		retryPrompt.WriteString(" Your next assistant action must repair and queue the preferred existing same-deliverable child draft named above with one narrow task.update, or block/consolidate the weaker duplicate siblings if that preferred child is no longer usable.")
+		return retryPrompt.String()
+	}
 	retryPrompt.WriteString(" Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.")
 	retryPrompt.WriteString(fmt.Sprintf(" Do not queue parent task %s again from the project lane.", focusLabel))
 	retryPrompt.WriteString(" Do not inspect or mention other draft parents until this handoff is advanced.")

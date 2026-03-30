@@ -6478,6 +6478,19 @@ func buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(compl
 		"Your last continuation turn was blocked after broad rediscovery even though the next bounded work was already named.",
 		fmt.Sprintf("Current focus parent: %s.", focusRef),
 		fmt.Sprintf("That draft parent only has %s.", laneReason),
+	)
+	if repairLine := strings.TrimSpace(snapshot.RepairDraftLine); repairLine != "" {
+		lines = append(lines,
+			repairLine,
+			"Do not create another replacement child while that preferred same-deliverable draft still exists.",
+			"Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.",
+			fmt.Sprintf("Do not queue parent task %s again from the project lane.", focusLabel),
+			"Do not inspect or mention other draft parents until this handoff is advanced.",
+			"Your next assistant action must repair and queue the preferred existing same-deliverable child draft named above with one narrow task.update, or block/consolidate the weaker duplicate siblings if that preferred child is no longer usable.",
+		)
+		return strings.Join(lines, " ")
+	}
+	lines = append(lines,
 		"Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.",
 		fmt.Sprintf("Do not queue parent task %s again from the project lane.", focusLabel),
 		"Do not inspect or mention other draft parents until this handoff is advanced.",

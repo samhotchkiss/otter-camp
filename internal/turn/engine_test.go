@@ -28141,6 +28141,42 @@ func TestShouldNotSuppressRepeatedProjectExecutionContinuationForReplacementHand
 	}
 }
 
+func TestBuildProjectExecutionContinuationReplacementChildRetryPromptPrefersRepairOfMalformedSameDeliverableDraftChild(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	focusTask := repo.ProjectTask{
+		ID:         focusTaskID,
+		TaskNumber: 297,
+		Title:      "Write planning/sambot-prompts/test-conversations-level3.md",
+	}
+	prompt := buildProjectExecutionContinuationReplacementChildRetryPrompt(
+		repo.ProjectTask{TaskNumber: 286, Title: "Write test conversations demonstrating SamBot adaptive complexity"},
+		1,
+		projectExecutionContinuationSnapshot{
+			ProjectLine:     "Active project id: a6dbd331-7205-42d9-b0df-10105d5b5330",
+			RepairDraftLine: `Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 303 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot dialogues) id=4ef23f93-58a9-4421-ab1d-f909e182dc95 title="Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot dialogues" work_status=draft`,
+			FocusTaskLine:   `Current focus parent: task 297 (Write planning/sambot-prompts/test-conversations-level3.md) id=` + focusTaskID.String() + ` work_status=draft malformed_child_tasks=5`,
+		},
+		focusTask,
+		projectContinuationChildActivity{malformedChildTaskCount: 5},
+		projectContinuationTaskHints{DeliverablePath: "planning/sambot-prompts/test-conversations-level3.md"},
+	)
+
+	if !strings.Contains(prompt, "Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 303") {
+		t.Fatalf("prompt = %q, want preferred repair draft line", prompt)
+	}
+	if !strings.Contains(prompt, "repair and queue the preferred existing same-deliverable child draft named above with one narrow task.update") {
+		t.Fatalf("prompt = %q, want direct repair task.update guidance", prompt)
+	}
+	if strings.Contains(prompt, "create the smallest fresh replacement child task beneath task 297") {
+		t.Fatalf("prompt = %q, should not keep fresh replacement-child wording", prompt)
+	}
+	if strings.Contains(prompt, "If you must inspect child lanes first") {
+		t.Fatalf("prompt = %q, should not keep child-inspection fallback once repair guidance exists", prompt)
+	}
+}
+
 func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksFileRead(t *testing.T) {
 	t.Parallel()
 
