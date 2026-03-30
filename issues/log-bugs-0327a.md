@@ -1714,3 +1714,24 @@
   - impact:
     - PM spends extra turns rediscovering the already-named draft child instead of issuing the one narrow `task.update`
     - the focused replacement-parent loop keeps rearming even though the runtime already knows the correct bounded child to repair
+- 2026-03-30 14:03 MDT - Child lanes that inherit a missing shared parent file still reached the model even when they had no bounded owned section to edit.
+  - fresh live evidence:
+    - task `314` started as:
+      - `Write deeply technical test conversation 1: failure recovery)`
+    - its inherited target was the parent's shared file:
+      - `planning/sambot-prompts/test-conversations-level3.md`
+    - that file was still missing, so the lane could not succeed
+    - but the runtime still let the model spend turns on `task.get`, `file.list`, and `file.read` before the lane finally stopped on discovery churn
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) had preflights for:
+      - no-decompose children
+      - procedural children
+      - duplicate shared-file children
+      - conflicting-deliverable children
+    - but it had no kickoff preflight for the narrower case where:
+      - the child inherits the parent's explicit single-file deliverable
+      - the shared file is still missing
+      - the child does not name a bounded owned section
+  - impact:
+    - malformed shared-file fragment children pay at least one model round of guaranteed discovery churn
+    - PM gets delayed feedback about structurally impossible child lanes that should have been blocked immediately

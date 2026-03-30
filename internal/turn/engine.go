@@ -10375,6 +10375,11 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	} else if handled {
 		return nil
 	}
+	if handled, handleErr := e.handleMissingSharedParentFileChildTaskPreflight(ctx, runtime); handleErr != nil {
+		return handleErr
+	} else if handled {
+		return nil
+	}
 	if handled, handleErr := e.handleMalformedConflictingDeliverableChildTaskPreflight(ctx, runtime); handleErr != nil {
 		return handleErr
 	} else if handled {
@@ -11348,6 +11353,27 @@ func buildMalformedDuplicateSharedFileChildTaskSystemMessage(taskRecord, parentT
 	return strings.Join(lines, " ")
 }
 
+func buildMissingSharedParentFileChildTaskBlockedReason(taskRecord, parentTask repo.ProjectTask, sharedPath string) string {
+	reason := fmt.Sprintf("%s was created as a child of %s but still depends on the missing shared parent deliverable instead of owning a bounded section or replacement artifact; resume the shared file from the parent task or create a write-owning replacement lane before reopening this child", buildTaskLabel(taskRecord), buildTaskLabel(parentTask))
+	if sharedPath = strings.TrimSpace(sharedPath); sharedPath != "" {
+		reason += fmt.Sprintf(" (shared deliverable: %s)", sharedPath)
+	}
+	return reason
+}
+
+func buildMissingSharedParentFileChildTaskSystemMessage(taskRecord, parentTask repo.ProjectTask, sharedPath string) string {
+	lines := []string{
+		fmt.Sprintf("[Task lane halted: %s inherits the missing shared parent file owned by %s.", buildTaskLabel(taskRecord), buildTaskLabel(parentTask)),
+		"This child does not name a bounded owned section or replacement artifact, so it cannot bootstrap the parent's missing single-file deliverable from its own lane.",
+	}
+	if sharedPath = strings.TrimSpace(sharedPath); sharedPath != "" {
+		lines = append(lines, fmt.Sprintf("Resume the shared-file creation from the parent task or create a write-owning replacement child for `%s` before reopening this lane.]", sharedPath))
+	} else {
+		lines = append(lines, "Resume the shared-file creation from the parent task or create a write-owning replacement child before reopening this lane.]")
+	}
+	return strings.Join(lines, " ")
+}
+
 func taskClaimsWholeSharedFileOwnership(taskRecord repo.ProjectTask, sharedPath string) bool {
 	sharedPath = strings.ToLower(strings.TrimSpace(normalizeWorkspaceRelativePath(sharedPath)))
 	if sharedPath == "" || !strings.Contains(filepath.Base(sharedPath), ".") {
@@ -11399,6 +11425,31 @@ func taskClaimsWholeSharedFileOwnership(taskRecord repo.ProjectTask, sharedPath 
 		}
 	}
 	return false
+}
+
+func (e *TurnEngine) missingSharedParentFileParentTaskForChild(ctx context.Context, rt *turnRuntime, taskRecord repo.ProjectTask) (repo.ProjectTask, string, bool, error) {
+	if e == nil {
+		return repo.ProjectTask{}, "", false, nil
+	}
+	sharedPath := normalizeWorkspaceRelativePath(e.inheritedSharedSingleFileDeliverablePath(ctx, taskRecord))
+	if sharedPath == "" {
+		return repo.ProjectTask{}, "", false, nil
+	}
+	if recoveryResumeSharedSectionTarget(taskRecord, sharedPath) != "" {
+		return repo.ProjectTask{}, "", false, nil
+	}
+	parentTask, ok := e.decompositionParentTask(ctx, taskRecord)
+	if !ok {
+		return repo.ProjectTask{}, "", false, nil
+	}
+	roots, err := e.recoveryWorkspaceRoots(ctx, rt)
+	if err != nil {
+		return repo.ProjectTask{}, "", false, nil
+	}
+	if recoveryWorkspaceFileExists(roots, sharedPath) {
+		return repo.ProjectTask{}, "", false, nil
+	}
+	return parentTask, sharedPath, true, nil
 }
 
 func containsStandaloneActionWord(text, action string) bool {
@@ -11538,6 +11589,59 @@ func (e *TurnEngine) handleMalformedDuplicateSharedFileChildTaskPreflight(ctx co
 
 	reason := buildMalformedDuplicateSharedFileChildTaskBlockedReason(taskRecord, parentTask, sharedPath)
 	systemMessage := buildMalformedDuplicateSharedFileChildTaskSystemMessage(taskRecord, parentTask, sharedPath)
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, systemMessage); err != nil {
+		return true, err
+	}
+	if e.taskTransitions == nil {
+		return true, fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
+		if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
+			var transitionErr tasksvc.ErrInvalidStatusTransition
+			if errors.As(err, &transitionErr) {
+				refreshed, refreshErr := e.tasks.GetByID(ctx, taskRecord.ID)
+				if refreshErr == nil {
+					nextStatus := strings.ToLower(strings.TrimSpace(refreshed.WorkStatus))
+					if nextStatus != "blocked" && nextStatus != "done" && nextStatus != "cancelled" {
+						return true, err
+					}
+				} else {
+					return true, err
+				}
+			} else {
+				return true, err
+			}
+		}
+	}
+	rt.stopReason = stopReasonValidationBlocked
+	if err := e.completeTurn(ctx, rt); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) handleMissingSharedParentFileChildTaskPreflight(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if e == nil || e.tasks == nil || rt == nil || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
+
+	taskRecord, err := e.tasks.GetByID(ctx, rt.session.ScopeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return true, err
+	}
+	parentTask, sharedPath, malformed, err := e.missingSharedParentFileParentTaskForChild(ctx, rt, taskRecord)
+	if err != nil || !malformed {
+		return malformed, err
+	}
+
+	reason := buildMissingSharedParentFileChildTaskBlockedReason(taskRecord, parentTask, sharedPath)
+	systemMessage := buildMissingSharedParentFileChildTaskSystemMessage(taskRecord, parentTask, sharedPath)
 	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, systemMessage); err != nil {
 		return true, err
 	}

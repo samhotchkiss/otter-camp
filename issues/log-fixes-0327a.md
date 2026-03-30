@@ -5030,3 +5030,13 @@
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'TestBuildProjectExecutionContinuationReplacementChildRetryPromptPrefersRepairOfMalformedSameDeliverableDraftChild$' -count=1`
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestBuildProjectExecutionContinuationReplacementChildRetryPromptForWorker(PrefersRepairOfMalformedSameDeliverableDraftChild|TreatsWorkspaceDeliverableAsVerification|AdvancesParentAfterVerificationChild)$' -count=1`
+- 2026-03-30 14:03 MDT - Blocked inherited-shared child lanes before model call when the parent file is still missing.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `handleMissingSharedParentFileChildTaskPreflight(...)`
+    - added `missingSharedParentFileParentTaskForChild(...)`
+    - async task turns now halt early when a decomposed child inherits a parent's explicit single-file deliverable, the shared file is missing from workspace roots, and the child does not own a bounded section
+    - added explicit blocked reason / system message builders for this structural case
+  - changed [`internal/turn/engine_integration_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_integration_test.go):
+    - added `TestTurnEngineIntegrationMissingSharedParentFileChildKickoffPreflightBlocksBeforeModelCall`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegration(MissingSharedParentFileChildKickoffPreflightBlocksBeforeModelCall|MalformedDuplicateSharedFileChildKickoffPreflightBlocksBeforeModelCall|MalformedConflictingDeliverableChildKickoffPreflightBlocksBeforeModelCall)$' -count=1`
