@@ -1972,3 +1972,14 @@
       - worker-generated broad continuation
       - blocked rediscovery
     - even after the engine-side focused executable-contract retry was fixed
+- 2026-03-30 18:32 MDT - Worker requeue always downgraded consumed focused PM resumes into broad generic continuations.
+  - fresh live evidence:
+    - live PM history showed a correct focused resume at `18312` followed by broad generic synthetic continuations `18323`, `18339`, and `18344`
+    - code inspection showed `RequeueActiveProjectSessionsWithoutTurns(...)` always retired consumed `project_continuation_resume` messages and then called `ensureProjectContinuationMessageDecision(...)`, regardless of whether the consumed resume still contained the correct focused parent context
+  - bug:
+    - worker requeue did not distinguish between:
+      - weak summary-only `project_continuation_resume` prompts that should downgrade to generic continuation
+      - structured focused resumes that should be preserved across retries when no progress was made
+  - impact:
+    - even correctly focused PM recovery prompts could survive only one turn before being replaced by generic `project_execution_continuation`
+    - the PM lane kept losing `Current focus parent: ...` context between retries

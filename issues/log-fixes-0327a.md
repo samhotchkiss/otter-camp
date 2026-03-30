@@ -5286,3 +5286,14 @@
     - kept the adjacent stale-pending replacement-handoff refresh canary green alongside the new executable-contract case
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerEnsureProjectContinuationMessage(RefreshesFailedExecutableContractContinuation|AllowsStalePendingReplacementHandoffDuplicateRefresh)$' -count=1`
+- 2026-03-30 18:32 MDT - Preserved structured focused PM resumes across worker requeue.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - added `projectContinuationResumeMessageHasStructuredContextForWorker(...)`
+    - added `refreshConsumedProjectContinuationResumeMessage(...)`
+    - `RequeueActiveProjectSessionsWithoutTurns(...)` now refreshes structured consumed `project_continuation_resume` messages as another focused resume when the prior turn showed no proof of progress, instead of always downgrading through the generic continuation generator
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - kept `TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsRefreshesConsumedProjectContinuationResume` for weak summary-only resumes
+    - added `TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsKeepsStructuredConsumedProjectContinuationResume`
+    - combined those with the executable-contract worker canaries in a focused integration slice
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(EnsureProjectContinuationMessage(RefreshesFailedExecutableContractContinuation|AllowsStalePendingReplacementHandoffDuplicateRefresh)|RequeueActiveProjectSessionsWithoutTurns(RefreshesConsumedProjectContinuationResume|KeepsStructuredConsumedProjectContinuationResume))$' -count=1`

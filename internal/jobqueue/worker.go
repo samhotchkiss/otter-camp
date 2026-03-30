@@ -1680,6 +1680,103 @@ func (w *Worker) failPendingProjectContinuationResumeMessages(ctx context.Contex
 	return err
 }
 
+func projectContinuationResumeMessageHasStructuredContextForWorker(content string) bool {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return false
+	}
+	return strings.Contains(content, "Current focus parent:") ||
+		strings.Contains(content, "Current focus task:") ||
+		strings.Contains(content, "Actionable draft tasks already in the tree:") ||
+		strings.Contains(content, "Preferred existing same-deliverable malformed child draft to repair before any new replacement work:")
+}
+
+func (w *Worker) refreshConsumedProjectContinuationResumeMessage(ctx context.Context, sessionID, messageID uuid.UUID) (uuid.UUID, bool, error) {
+	if w == nil || w.pool == nil || sessionID == uuid.Nil || messageID == uuid.Nil {
+		return uuid.Nil, false, nil
+	}
+
+	var (
+		content  string
+		metadata []byte
+	)
+	if err := w.pool.QueryRow(ctx, `
+		SELECT content, metadata
+		FROM chat_message
+		WHERE id = $1
+		  AND session_id = $2
+		  AND role = 'user'
+		  AND COALESCE(metadata->>'source', '') = 'project_continuation_resume'
+	`, messageID, sessionID).Scan(&content, &metadata); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, nil
+		}
+		return uuid.Nil, false, err
+	}
+	if !projectContinuationResumeMessageHasStructuredContextForWorker(content) {
+		return uuid.Nil, false, nil
+	}
+	progress, err := w.projectContinuationTurnShowsProgress(ctx, messageID)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	if progress {
+		return uuid.Nil, false, nil
+	}
+
+	if err := w.failPendingProjectContinuationResumeMessages(ctx, sessionID, uuid.Nil, "superseded after prior continuation resume turn completed"); err != nil {
+		return uuid.Nil, false, err
+	}
+
+	payload := map[string]any{
+		"source":                 "project_continuation_resume",
+		"auto_continue":          true,
+		"synthetic_user_message": true,
+		"repo_version":           strings.TrimSpace(versionpkg.RepoVersion),
+	}
+	if len(metadata) != 0 && json.Valid(metadata) {
+		var prior map[string]any
+		if err := json.Unmarshal(metadata, &prior); err == nil {
+			for _, key := range []string{"completed_task_id", projectContinuationSnapshotFingerprintKey} {
+				if value, ok := prior[key]; ok && strings.TrimSpace(fmt.Sprintf("%v", value)) != "" {
+					payload[key] = value
+				}
+			}
+		}
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+
+	var sequenceNumber int64
+	if err := w.pool.QueryRow(ctx, `
+		SELECT COALESCE(MAX(sequence_number), 0) + 1
+		FROM chat_message
+		WHERE session_id = $1
+	`, sessionID).Scan(&sequenceNumber); err != nil {
+		return uuid.Nil, false, err
+	}
+
+	var refreshedMessageID uuid.UUID
+	if err := w.pool.QueryRow(ctx, `
+		INSERT INTO chat_message (
+			session_id,
+			sequence_number,
+			role,
+			content,
+			content_format,
+			status,
+			metadata
+		)
+		VALUES ($1, $2, 'user', $3, 'text', 'pending', $4::jsonb)
+		RETURNING id
+	`, sessionID, sequenceNumber, strings.TrimSpace(content), encoded).Scan(&refreshedMessageID); err != nil {
+		return uuid.Nil, false, err
+	}
+	return refreshedMessageID, true, nil
+}
+
 func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context) (int64, error) {
 	limit := w.maxExecutionSessionRecoveryBatch()
 	rows, err := w.pool.Query(ctx, `
@@ -2380,22 +2477,32 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 		}
 		if strings.EqualFold(trimmedSource, "project_continuation_resume") {
 			if retryCount > 0 {
-				if err := w.failPendingProjectContinuationResumeMessages(ctx, sessionID, uuid.Nil, "superseded after prior continuation resume turn completed"); err != nil {
-					return repaired, fmt.Errorf("retire consumed project continuation resume messages for session %s: %w", sessionID, err)
-				}
-				synthMessageID, suppressed, err := w.ensureProjectContinuationMessageDecision(ctx, sessionID)
+				refreshedResumeID, refreshedResume, err := w.refreshConsumedProjectContinuationResumeMessage(ctx, sessionID, messageID)
 				if err != nil {
-					return repaired, fmt.Errorf("refresh project continuation after resume for session %s: %w", sessionID, err)
+					return repaired, fmt.Errorf("refresh consumed project continuation resume message for session %s: %w", sessionID, err)
 				}
-				if suppressed {
-					continue
+				if refreshedResume {
+					messageID = refreshedResumeID
+					retryCount = 0
+					trimmedSource = "project_continuation_resume"
+				} else {
+					if err := w.failPendingProjectContinuationResumeMessages(ctx, sessionID, uuid.Nil, "superseded after prior continuation resume turn completed"); err != nil {
+						return repaired, fmt.Errorf("retire consumed project continuation resume messages for session %s: %w", sessionID, err)
+					}
+					synthMessageID, suppressed, err := w.ensureProjectContinuationMessageDecision(ctx, sessionID)
+					if err != nil {
+						return repaired, fmt.Errorf("refresh project continuation after resume for session %s: %w", sessionID, err)
+					}
+					if suppressed {
+						continue
+					}
+					if synthMessageID == uuid.Nil {
+						continue
+					}
+					messageID = synthMessageID
+					retryCount = 0
+					trimmedSource = "project_execution_continuation"
 				}
-				if synthMessageID == uuid.Nil {
-					continue
-				}
-				messageID = synthMessageID
-				retryCount = 0
-				trimmedSource = "project_execution_continuation"
 			} else if err := w.failPendingProjectContinuationResumeMessages(ctx, sessionID, messageID, "superseded by newer project continuation resume"); err != nil {
 				return repaired, fmt.Errorf("collapse stale project continuation resume messages for session %s: %w", sessionID, err)
 			}
