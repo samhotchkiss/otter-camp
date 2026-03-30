@@ -16145,13 +16145,18 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return true, nil
 		}
 		if len(toolCalls) == 0 {
+			if shouldStopAfterFocusedCloseoutReadyBlockedProjectContinuationRediscovery(rt, blockedCalls) {
+				rt.stopReason = stopReasonValidationBlocked
+				_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectContinuationRediscoveryTurnStopSystemMessage())
+				return true, nil
+			}
 			stopRediscovery, stopErr := e.shouldStopAfterRepeatedBlockedProjectContinuationRediscovery(ctx, rt, blockedCalls)
 			if stopErr != nil {
 				return false, stopErr
 			}
 			if stopRediscovery {
 				rt.stopReason = stopReasonValidationBlocked
-				_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Project continuation rediscovery guard blocked only broad rereads. Ending this turn early so the next continuation can act directly on the named tasks instead of repeating blocked PM discovery.]")
+				_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectContinuationRediscoveryTurnStopSystemMessage())
 				return true, nil
 			}
 		}
@@ -16199,6 +16204,11 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			if message := projectExecutionBlockedMutationStopMessage(rt, results); message != "" {
 				_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, message)
 			}
+			return true, nil
+		}
+		if shouldStopAfterFocusedCloseoutReadyBlockedProjectContinuationRediscovery(rt, results) {
+			rt.stopReason = stopReasonValidationBlocked
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectContinuationRediscoveryTurnStopSystemMessage())
 			return true, nil
 		}
 		if shouldStopAfterBlockedTaskReviewPreferredTargetReread(rt, results) {
@@ -16396,6 +16406,11 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			if message := projectExecutionBlockedMutationStopMessage(rt, []ToolResult{result}); message != "" {
 				_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, message)
 			}
+			return true, nil
+		}
+		if shouldStopAfterFocusedCloseoutReadyBlockedProjectContinuationRediscovery(rt, []ToolResult{result}) {
+			rt.stopReason = stopReasonValidationBlocked
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectContinuationRediscoveryTurnStopSystemMessage())
 			return true, nil
 		}
 		if missingPath, ok := missingProjectContinuationDependencyArtifactPath(rt, []ToolCall{call}, []ToolResult{result}); ok {
@@ -31300,6 +31315,34 @@ func isBlockedProjectContinuationRediscoveryResult(result ToolResult) bool {
 	return false
 }
 
+func isReadOnlyProjectContinuationRediscoveryToolName(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "agent.list",
+		"file.list", "file.read", "file.search",
+		"flow.get_execution", "flow.list_templates",
+		"git.log", "git.status",
+		"inbox.list",
+		"project.get", "project.list",
+		"session.history", "session.list",
+		"task.get", "task.list":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldStopAfterFocusedCloseoutReadyBlockedProjectContinuationRediscovery(rt *turnRuntime, results []ToolResult) bool {
+	if !projectContinuationCloseoutReadyParentPromptActive(rt) || len(results) == 0 {
+		return false
+	}
+	for _, result := range results {
+		if !isBlockedProjectContinuationRediscoveryResult(result) || !isReadOnlyProjectContinuationRediscoveryToolName(result.Name) {
+			return false
+		}
+	}
+	return true
+}
+
 func shouldStopAfterBlockedProjectContinuationRediscovery(rt *turnRuntime, results []ToolResult) bool {
 	if rt == nil || rt.session == nil {
 		return false
@@ -31335,6 +31378,10 @@ func blockedProjectContinuationRediscoveryResultCount(turnMessages []repo.ChatMe
 		}
 	}
 	return count
+}
+
+func buildProjectContinuationRediscoveryTurnStopSystemMessage() string {
+	return "[Project continuation rediscovery guard blocked only broad rereads. Ending this turn early so the next continuation can act directly on the named tasks instead of repeating blocked PM discovery.]"
 }
 
 func (e *TurnEngine) shouldStopAfterRepeatedBlockedProjectContinuationRediscovery(ctx context.Context, rt *turnRuntime, results []ToolResult) (bool, error) {

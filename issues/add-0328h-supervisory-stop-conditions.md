@@ -778,3 +778,14 @@ They need sharper stopping rules than ordinary execution lanes.
       - `TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStopViaTriggerMessageID`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop|ShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStopViaTriggerMessageID|ShouldSuppressRepeatedProjectExecutionContinuationAfterChildLaneWaitState|HandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionStopWithLiveOpenChild|HandleCompletedProjectExecutionContinuationTurnRetriesFocusedPrerequisiteRepairStopWithFreshMessage)$' -count=1`
+- 2026-03-31 07:18 MDT - Added the closeout-ready single-reread stop to the supervisory stop family.
+  - fresh live evidence:
+    - PM retry turn `a7dcb789-c8c1-4ed5-872a-6bd93ca268ae` was already on the focused closeout-ready prompt for task `245`
+    - first tool result was a blocked `task.get` using the generic named-task snapshot guard
+    - the turn still remained alive and opened another assistant/model step instead of ending immediately
+  - landed fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now stops a closeout-ready PM continuation after the first blocked read-only rediscovery result
+    - the stop reuses the existing rediscovery-stop system message, so worker/engine retry classification stays in the same supervisory family
+    - added focused regression `TestDispatchToolsStopsAfterSingleBlockedFocusedCloseoutReadyProjectContinuationRediscovery` in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestDispatchToolsStopsAfter(SingleBlockedFocusedCloseoutReadyProjectContinuationRediscovery|SecondSingleBlockedProjectContinuationRediscoveryInSameTurn|PureBlockedProjectContinuationRediscoveryBatch|TrimsPureBlockedProjectContinuationRediscoveryBatch)$|TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksCloseoutReady(TaskGet|TaskListWithoutExplicitAllowance)$|TestHandleCompletedProjectExecutionContinuationTurnRetriesFocusedCloseoutReadyRediscoveryStop$' -count=1`

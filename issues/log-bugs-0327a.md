@@ -1372,3 +1372,14 @@
     - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) in `projectExecutionResultWorkStatus(...)` preferred `call.Arguments["work_status"]` over the returned `result.Output.task.work_status`
   - impact:
     - PM turns can falsely conclude that replacement or closeout work has been handed off even when the mutation was a no-op and the task never left `draft`
+- 2026-03-31 07:18 MDT - Closeout-ready PM rediscovery stops still allowed the same turn to reopen the model after a single blocked `task.get`.
+  - fresh live evidence:
+    - retry turn `a7dcb789-c8c1-4ed5-872a-6bd93ca268ae` began from the focused closeout-ready continuation for task `245`
+    - its first tool result was:
+      - `project continuation already named task id=77a2d4fa-b9e9-45b9-9ba9-b251052d5011 in the continuation prompt`
+    - despite that, the turn stayed `in_progress` and started another assistant/model step instead of ending with the rediscovery stop
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) only stopped project-continuation rediscovery immediately when a batch had at least two blocked results, or when later repeated same-turn counts reached the generic threshold
+    - the closeout-ready prompt family did not have a special-case stop for a single blocked read-only rediscovery result, even though the prompt already banned `task.get` / `task.list` / `file.read` as the first move
+  - impact:
+    - closeout-ready PM continuations can pay for an extra assistant/model step after the first blocked reread instead of draining immediately into the focused retry family

@@ -40218,6 +40218,63 @@ func TestDispatchToolsStopsAfterSecondSingleBlockedProjectContinuationRediscover
 	}
 }
 
+func TestDispatchToolsStopsAfterSingleBlockedFocusedCloseoutReadyProjectContinuationRediscovery(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	focusTaskID := uuid.New()
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.session.Mode = "async"
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:         turnID,
+			SessionID:  fixture.session.ID,
+			TurnNumber: 1,
+			Status:     "in_progress",
+		},
+		startedAt:            time.Now(),
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: finish planning/sambot-tech-architecture.md", projectExecutionContinuationSnapshot{
+			ProjectLine:   "Active project id: " + projectID.String(),
+			DraftTaskLine: "Actionable draft tasks already in the tree: task 245 (Write planning/sambot-tech-architecture.md) id=" + focusTaskID.String() + " title=\"Write planning/sambot-tech-architecture.md\" work_status=draft deliverable_path=planning/sambot-tech-architecture.md workspace_deliverable_present=true malformed_child_tasks=1",
+			FocusTaskLine: "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 245 (Write planning/sambot-tech-architecture.md) id=" + focusTaskID.String() + " title=\"Write planning/sambot-tech-architecture.md\" work_status=draft deliverable_path=planning/sambot-tech-architecture.md workspace_deliverable_present=true malformed_child_tasks=1",
+		}),
+	}
+	fixture.chat.turns[turnID] = rt.turn
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turnID)
+
+	stop, err := fixture.engine.dispatchTools(context.Background(), rt, []ModelToolCall{
+		{
+			ID:   "blocked-closeout-task-get",
+			Name: "task.get",
+			Arguments: map[string]any{
+				"task_id": focusTaskID.String(),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dispatchTools: %v", err)
+	}
+	if !stop {
+		t.Fatal("expected single blocked closeout-ready rediscovery call to stop the turn")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if !fixture.messages.containsContentSubstring("project continuation already named task id=" + focusTaskID.String()) {
+		t.Fatal("expected snapshot rediscovery guard tool result")
+	}
+	if !fixture.messages.containsContentSubstring("Project continuation rediscovery guard blocked only broad rereads") {
+		t.Fatal("expected project continuation rediscovery early-stop message")
+	}
+}
+
 func TestDispatchToolsStopsAfterPureBlockedTaskRecoveryDirectWriteBatch(t *testing.T) {
 	t.Parallel()
 

@@ -4707,3 +4707,13 @@
     - added `TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationRequiresObservedQueuedState`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation(ForMissingDependencyPrompt|ForFocusPrerequisiteRepair|ForDraftChildCreate|IgnoresAssignmentOnlyUpdate|RequiresObservedQueuedState|RequiresReplacementChildPrompt)$' -count=1`
+- 2026-03-31 07:18 MDT - Cut off same-turn closeout-ready PM reread loops after the first blocked rediscovery result.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `isReadOnlyProjectContinuationRediscoveryToolName(...)`
+    - added `shouldStopAfterFocusedCloseoutReadyBlockedProjectContinuationRediscovery(...)`
+    - `dispatchTools(...)` now ends the turn immediately when a closeout-ready PM continuation hits a single blocked read-only rediscovery result, both in pre-dispatch blocked batches and after dispatched tool results
+    - extracted `buildProjectContinuationRediscoveryTurnStopSystemMessage()` so the focused stop reuses the existing retry-family message
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestDispatchToolsStopsAfterSingleBlockedFocusedCloseoutReadyProjectContinuationRediscovery`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestDispatchToolsStopsAfter(SingleBlockedFocusedCloseoutReadyProjectContinuationRediscovery|SecondSingleBlockedProjectContinuationRediscoveryInSameTurn|PureBlockedProjectContinuationRediscoveryBatch|TrimsPureBlockedProjectContinuationRediscoveryBatch)$|TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksCloseoutReady(TaskGet|TaskListWithoutExplicitAllowance)$|TestHandleCompletedProjectExecutionContinuationTurnRetriesFocusedCloseoutReadyRediscoveryStop$' -count=1`
