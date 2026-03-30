@@ -4353,3 +4353,16 @@
     - added `TestValidateCompletionAllowsSupersedingOutputVerificationWhenNoExecutableChildRemains`
   - verified with:
     - `GOFLAGS='' go test ./internal/taskorchestration -run 'TestValidateCompletion(StillRequiresVerificationWhenNoCompletedDirectChildRemains|AllowsSupersedingOutputVerificationWhenNoExecutableChildRemains)$' -count=1`
+- 2026-03-30 00:58 MDT - Suppressed stale same-deliverable draft shells when a later replacement task is already complete through satisfied-outcome closeout, not just through a literal completed closeout child.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `projectContinuationDoneTaskSupersedesDraft(...)` now accepts a `doneTask` and treats `parent_orchestration.outcome_assessment.satisfied=true` or `workspaceDeliverablePresent` as sufficient proof that the done task supersedes older same-deliverable drafts
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `projectContinuationDoneTaskSupersedesDraftForWorker(...)` now accepts a `doneTask` and suppresses older same-deliverable drafts when the done task carries `parent_orchestration.outcome_assessment.satisfied=true`
+    - added `projectContinuationDraftTaskOutcomeSatisfiedForWorker(...)`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestProjectExecutionContinuationSnapshotIgnoresSupersededSatisfiedOutcomeDrafts`
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerRequeueActiveProjectSessionsMissingContinuationIgnoresSupersededSatisfiedOutcomeDrafts`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshotIgnoresSuperseded(Closeout|SatisfiedOutcome)Drafts$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRequeueActiveProjectSessionsMissingContinuationIgnoresSuperseded(Closeout|SatisfiedOutcome)Drafts$' -count=1`

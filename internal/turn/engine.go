@@ -22046,7 +22046,7 @@ func projectContinuationSupersededDraftTaskIDs(
 			if !strings.EqualFold(strings.TrimSpace(doneTask.WorkStatus), "done") {
 				continue
 			}
-			if !projectContinuationDoneTaskSupersedesDraft(draftHints, taskHintsByTask[doneTask.ID], childActivity[doneTask.ID]) {
+			if !projectContinuationDoneTaskSupersedesDraft(doneTask, draftHints, taskHintsByTask[doneTask.ID], childActivity[doneTask.ID]) {
 				continue
 			}
 			if superseded == nil {
@@ -22102,11 +22102,14 @@ func projectContinuationOpenTaskSupersedesDraft(
 }
 
 func projectContinuationDoneTaskSupersedesDraft(
+	doneTask repo.ProjectTask,
 	draftHints projectContinuationTaskHints,
 	doneHints projectContinuationTaskHints,
 	doneActivity projectContinuationChildActivity,
 ) bool {
-	if doneActivity.completedCloseoutChildTaskCount == 0 {
+	if doneActivity.completedCloseoutChildTaskCount == 0 &&
+		!projectContinuationDraftTaskOutcomeSatisfied(doneTask) &&
+		!doneActivity.workspaceDeliverablePresent {
 		return false
 	}
 	draftPath := normalizeWorkspaceRelativePath(draftHints.DeliverablePath)

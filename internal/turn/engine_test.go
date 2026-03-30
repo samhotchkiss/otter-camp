@@ -24682,6 +24682,66 @@ func TestProjectExecutionContinuationSnapshotIgnoresSupersededCloseoutDrafts(t *
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotIgnoresSupersededSatisfiedOutcomeDrafts(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	doneTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	doneDescription := "Write templates/template-08-replace.html as the final replacement template."
+	draftDescription := "Write templates/template-08-replace.html as a fresh replacement draft."
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			doneTaskID: {
+				ID:          doneTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  243,
+				Title:       "Write templates/template-08-replace.html - Dark Mode Editorial layout (final replacement)",
+				Description: &doneDescription,
+				WorkStatus:  "done",
+				Metadata: mustJSONRaw(map[string]any{
+					"parent_orchestration": map[string]any{
+						"outcome_assessment": map[string]any{
+							"satisfied": true,
+							"summary":   "templates/template-08-replace.html is already satisfied by the final replacement.",
+						},
+					},
+				}),
+			},
+			draftTaskID: {
+				ID:          draftTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  240,
+				Title:       "Write templates/template-08-replace.html - Dark Mode Editorial layout (standalone replacement)",
+				Description: &draftDescription,
+				WorkStatus:  "draft",
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshotForSummary(context.Background(), projectID, "template-08 replace")
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshotForSummary: %v", err)
+	}
+	label := "task 240 (Write templates/template-08-replace.html - Dark Mode Editorial layout (standalone replacement))"
+	if strings.Contains(snapshot.DraftTaskLine, label) || strings.Contains(snapshot.ReplacementDraftLine, label) || strings.Contains(snapshot.FocusTaskLine, label) {
+		t.Fatalf("snapshot = %+v, should ignore superseded satisfied-outcome draft %s", snapshot, label)
+	}
+
+	count, err := fixture.engine.countProjectDraftTasks(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("countProjectDraftTasks: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("countProjectDraftTasks = %d, want 0 after ignoring superseded satisfied-outcome drafts", count)
+	}
+}
+
 func TestShouldBlockProjectContinuationFocusedDraftMutationForMalformedChildParent(t *testing.T) {
 	t.Parallel()
 

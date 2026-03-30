@@ -26,6 +26,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
+	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 )
 
@@ -3593,7 +3594,7 @@ func projectContinuationSupersededDraftTaskIDsForWorker(
 			if !strings.EqualFold(strings.TrimSpace(doneTask.WorkStatus), "done") {
 				continue
 			}
-			if !projectContinuationDoneTaskSupersedesDraftForWorker(draftHints, taskHintsByTask[doneTask.ID], childActivity[doneTask.ID]) {
+			if !projectContinuationDoneTaskSupersedesDraftForWorker(doneTask, draftHints, taskHintsByTask[doneTask.ID], childActivity[doneTask.ID]) {
 				continue
 			}
 			if superseded == nil {
@@ -3607,11 +3608,13 @@ func projectContinuationSupersededDraftTaskIDsForWorker(
 }
 
 func projectContinuationDoneTaskSupersedesDraftForWorker(
+	doneTask repo.ProjectTask,
 	draftHints projectContinuationTaskHintsForWorker,
 	doneHints projectContinuationTaskHintsForWorker,
 	doneActivity projectContinuationChildActivityForWorker,
 ) bool {
-	if doneActivity.completedCloseoutChildTaskCount == 0 {
+	if doneActivity.completedCloseoutChildTaskCount == 0 &&
+		!projectContinuationDraftTaskOutcomeSatisfiedForWorker(doneTask) {
 		return false
 	}
 	draftPath := normalizeWorkspaceRelativePathForWorker(draftHints.DeliverablePath)
@@ -3622,6 +3625,11 @@ func projectContinuationDoneTaskSupersedesDraftForWorker(
 	draftRoot := normalizeWorkspaceRelativePathForWorker(draftHints.DeliverableRoot)
 	doneRoot := normalizeWorkspaceRelativePathForWorker(doneHints.DeliverableRoot)
 	return draftRoot != "" && doneRoot != "" && sameWorkspaceRelativePathForWorker(draftRoot, doneRoot)
+}
+
+func projectContinuationDraftTaskOutcomeSatisfiedForWorker(task repo.ProjectTask) bool {
+	state, ok := taskorchestration.Parse(task.Metadata)
+	return ok && state.OutcomeAssessment != nil && state.OutcomeAssessment.Satisfied
 }
 
 func projectContinuationTaskHasDeliverableIdentityForWorker(deliverablePath, deliverableRoot string) bool {

@@ -32324,6 +32324,175 @@ func TestJobWorkerRequeueActiveProjectSessionsMissingContinuationIgnoresSupersed
 	}
 }
 
+func TestJobWorkerRequeueActiveProjectSessionsMissingContinuationIgnoresSupersededSatisfiedOutcomeDrafts(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "worker-project-session-ignores-superseded-satisfied-outcome-drafts",
+		DisplayName: "Worker Project Session Ignores Superseded Satisfied Outcome Drafts",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "worker-project-session-ignores-superseded-satisfied-outcome-drafts-project",
+		DisplayName:    "Worker Project Session Ignores Superseded Satisfied Outcome Drafts Project",
+		Description:    "Project for superseded satisfied-outcome draft continuation suppression coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "worker-project-session-ignores-superseded-satisfied-outcome-drafts-template",
+		DisplayName:    "Worker Project Session Ignores Superseded Satisfied Outcome Drafts Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	doneDescription := "Write templates/template-08-replace.html as the final replacement template."
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     243,
+		Title:          "Write templates/template-08-replace.html - Dark Mode Editorial layout (final replacement)",
+		Description:    &doneDescription,
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata: json.RawMessage(`{
+			"parent_orchestration": {
+				"outcome_assessment": {
+					"satisfied": true,
+					"summary": "templates/template-08-replace.html is already satisfied by the final replacement."
+				}
+			}
+		}`),
+	}); err != nil {
+		t.Fatalf("create done satisfied-outcome task: %v", err)
+	}
+	draftDescription := "Write templates/template-08-replace.html as a fresh replacement draft."
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     240,
+		Title:          "Write templates/template-08-replace.html - Dark Mode Editorial layout (standalone replacement)",
+		Description:    &draftDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	}); err != nil {
+		t.Fatalf("create stale satisfied-outcome draft: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	label := "task 240 (Write templates/template-08-replace.html - Dark Mode Editorial layout (standalone replacement))"
+	if strings.Contains(snapshot.DraftTaskLine, label) || strings.Contains(snapshot.ReplacementDraftLine, label) || strings.Contains(snapshot.FocusTaskLine, label) {
+		t.Fatalf("snapshot = %+v, should ignore superseded satisfied-outcome draft %s", snapshot, label)
+	}
+
+	count, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("countActionableProjectDraftTasks = %d, want 0 after ignoring superseded satisfied-outcome drafts", count)
+	}
+
+	repaired, err := worker.RequeueActiveProjectSessionsMissingContinuation(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveProjectSessionsMissingContinuation: %v", err)
+	}
+	if repaired != 0 {
+		t.Fatalf("repaired = %d, want 0 when only superseded satisfied-outcome drafts remain", repaired)
+	}
+
+	var pendingMessages int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_message
+		WHERE session_id = $1
+		  AND role = 'user'
+		  AND status = 'pending'
+	`, session.ID).Scan(&pendingMessages); err != nil {
+		t.Fatalf("count pending continuation messages: %v", err)
+	}
+	if pendingMessages != 0 {
+		t.Fatalf("pending continuation messages = %d, want 0", pendingMessages)
+	}
+
+	var pendingJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status IN ('pending', 'claimed')
+		  AND (payload->>'session_id')::uuid = $1
+	`, session.ID).Scan(&pendingJobs); err != nil {
+		t.Fatalf("count pending jobs: %v", err)
+	}
+	if pendingJobs != 0 {
+		t.Fatalf("pending jobs = %d, want 0", pendingJobs)
+	}
+}
+
 func createOrgForJobQueue(t *testing.T, pool *pgxpool.Pool, slug string) repo.Organization {
 	t.Helper()
 

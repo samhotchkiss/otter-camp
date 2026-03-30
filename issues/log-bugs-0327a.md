@@ -1041,3 +1041,14 @@
   - impact:
     - closeout-ready parents like task `243` could not finish even after the runtime had the final delivered artifact plus explicit superseding-output verification
     - the PM lane kept looping on a structurally impossible validation requirement
+- 2026-03-30 00:58 MDT - PM and worker continuation snapshots still left stale same-deliverable draft shells visible after a later replacement task finished via satisfied parent outcome instead of a literal closeout child.
+  - fresh live evidence:
+    - task `243` is now `done`
+    - older template-08 draft shells for the same deliverable were still present in the project tree
+    - `projectContinuationDoneTaskSupersedesDraft(...)` and the worker twin still required `completedCloseoutChildTaskCount > 0` before treating a `done` task as superseding an older draft
+  - bug:
+    - superseded-draft cleanup did not reuse the same satisfied-outcome signal that now allows closeout-ready parents to finish
+    - the worker-side path also missed the newer workspace-deliverable-present signal used by the engine snapshot
+  - impact:
+    - PM continuations could keep surfacing stale draft shells for `templates/template-08-replace.html` even after the real replacement task was already complete
+    - worker recovery could keep treating those shells as actionable remaining draft work and enqueue unnecessary continuation traffic
