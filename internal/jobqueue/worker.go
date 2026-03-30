@@ -5513,6 +5513,9 @@ func projectExecutionSnapshotContainsBatchRangeForWorker(snapshot projectExecuti
 
 func buildProjectExecutionContinuationPromptForWorker(completedTaskNumber int, completedTaskTitle string, remainingDraftTasks int, snapshot projectExecutionContinuationSnapshotForWorker) string {
 	focusLine := strings.TrimSpace(snapshot.FocusTaskLine)
+	if focusLine != "" && strings.Contains(focusLine, "workspace_deliverable_present=true") {
+		return buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(completedTaskNumber, completedTaskTitle, remainingDraftTasks, snapshot, "")
+	}
 	if focusLine != "" &&
 		!strings.Contains(focusLine, "completed_closeout_child_tasks=") &&
 		(strings.Contains(focusLine, "replaceable_blocked_child_tasks=") || strings.Contains(focusLine, "malformed_child_tasks=")) {

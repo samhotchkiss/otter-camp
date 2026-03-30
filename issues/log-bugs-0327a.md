@@ -1394,3 +1394,13 @@
     - when the latest turn ended with the generic named-task rediscovery guard plus the closeout-ready system message, the label extractor returned empty and `buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(...)` returned early with only the generic header lines
   - impact:
     - worker-authored closeout retries can lose the exact focus parent after a generic rediscovery stop and fall back into broad PM rediscovery on the next turn
+- 2026-03-31 07:36 MDT - Worker default continuation routing still preferred replacement-handoff over closeout when the deliverable was already on disk.
+  - fresh live evidence:
+    - post-fix continuation `9a6abb7e-edf4-4860-894c-bf040ccfde50` now preserved the full focus parent line for task `245`
+    - but it still used replacement-handoff wording even though the focus line contained `workspace_deliverable_present=true`
+    - the next PM turn reopened with `I'll check the current child tasks under OC-245 first, then create a fresh replacement child.`
+  - bug:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) in `buildProjectExecutionContinuationPromptForWorker(...)` routed any focus line containing `replaceable_blocked_child_tasks=` or `malformed_child_tasks=` into `buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(...)`
+    - it did not give `workspace_deliverable_present=true` higher precedence at the top-level routing decision, even though the replacement-handoff sub-builder itself already knew that on-disk deliverables are closeout/verification work
+  - impact:
+    - worker-authored PM continuations can keep reopening replacement-child loops for an already-written deliverable even after the focus label is preserved

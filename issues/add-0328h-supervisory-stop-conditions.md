@@ -797,3 +797,11 @@ They need sharper stopping rules than ordinary execution lanes.
     - added focused regression `TestProjectContinuationTurnCloseoutReadyTaskLabelFallsBackToPromptFocusParent` in [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|BuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker|ProjectContinuationTurnCloseoutReadyTaskLabel(FallsBackToPromptFocusParent)?|JobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation)$' -count=1`
+- 2026-03-31 07:36 MDT - Fixed the remaining worker prompt-family misroute for on-disk deliverables.
+  - fresh live evidence:
+    - after the focus-label fallback landed, worker continuation `9a6abb7e-edf4-4860-894c-bf040ccfde50` still chose the replacement-handoff wording even though the same focus line already carried `workspace_deliverable_present=true`
+  - landed fix:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now gives `workspace_deliverable_present=true` precedence in `buildProjectExecutionContinuationPromptForWorker(...)`, so the default worker continuation path enters the parent-advance / closeout retry family instead of replacement handoff
+    - added focused regression `TestBuildProjectExecutionContinuationPromptForWorkerTreatsWorkspaceDeliverableAsCloseout` in [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(BuildProjectExecutionContinuation(PromptForWorkerTreatsWorkspaceDeliverableAsCloseout|ParentAdvanceRetryPromptForWorker)|ProjectContinuationTurnCloseoutReadyTaskLabel(FallsBackToPromptFocusParent)?|ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|JobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation)$' -count=1`

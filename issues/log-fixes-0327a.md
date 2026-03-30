@@ -4726,3 +4726,10 @@
     - added `TestProjectContinuationTurnCloseoutReadyTaskLabelFallsBackToPromptFocusParent`
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|BuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker|ProjectContinuationTurnCloseoutReadyTaskLabel(FallsBackToPromptFocusParent)?|JobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation)$' -count=1`
+- 2026-03-31 07:36 MDT - Gave worker default continuation routing the same on-disk-deliverable precedence.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `buildProjectExecutionContinuationPromptForWorker(...)` now routes any focus line with `workspace_deliverable_present=true` into `buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(...)` before the malformed/blocked child replacement-handoff branch
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestBuildProjectExecutionContinuationPromptForWorkerTreatsWorkspaceDeliverableAsCloseout`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(BuildProjectExecutionContinuation(PromptForWorkerTreatsWorkspaceDeliverableAsCloseout|ParentAdvanceRetryPromptForWorker)|ProjectContinuationTurnCloseoutReadyTaskLabel(FallsBackToPromptFocusParent)?|ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|JobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation)$' -count=1`
