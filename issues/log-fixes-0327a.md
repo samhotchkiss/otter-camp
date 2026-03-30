@@ -4817,3 +4817,20 @@
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'TestShould(BlockTaskReviewCompanionPlanningArtifactToolWithoutExplicitContract|NotBlockTaskReviewCompanionPlanningArtifactToolForPlanningDeliverableTarget|NotBlockTaskReviewCompanionPlanningArtifactToolForImplicitPlanningDeliverable)$' -count=1`
     - `GOFLAGS='' go test ./internal/turn -run 'Test(SessionTaskDeliverablePath(IgnoresBareDirectoryCheckpointAndInheritsParentMarkdownDeliverable|IgnoresHistoricalAuxiliaryTestArtifactForBackendTaskReferencingFeatureSpec|PrefersExplicitFileLabelOverHistoricalPlanningTarget)|ExplicitDeliverablePathDetectsVerifyPathFromReviewTitle)$' -count=1`
+- 2026-03-30 13:24 MDT - Hardened read-only verification work lanes so they stop rewriting the artifact under review.
+  - changed [`internal/controlplane/task_queue_processor.go`](/Users/sam/dev/otter-camp/internal/controlplane/task_queue_processor.go):
+    - added `readOnlyVerificationKickoffInstruction(...)`
+    - added `readOnlyVerificationTargetPath(...)`
+    - added `taskLooksReadOnlyVerification(...)`
+    - `buildQueueKickoffMessage(...)` now appends explicit read-only verification guidance for tasks that say to verify/checklist a named deliverable without rewriting it
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `taskExecutionLooksReadOnlyVerification(...)`
+    - added `buildTaskExecutionReadOnlyVerificationWriteGuardError(...)`
+    - added `shouldBlockTaskExecutionReadOnlyVerificationWriteTool(...)`
+    - `dispatchTools(...)` now blocks `file.write` / `file.edit` against the named deliverable for those read-only verification work lanes
+  - changed tests:
+    - [`internal/controlplane/task_queue_processor_test.go`](/Users/sam/dev/otter-camp/internal/controlplane/task_queue_processor_test.go): added `TestBuildQueueKickoffMessageForReadOnlyVerificationTask`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): added `TestShouldBlockTaskExecutionReadOnlyVerificationWriteTool`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/controlplane -run 'TestBuildQueueKickoffMessageFor(ReadOnlyVerificationTask|SinglePassCLIWriteTask|InheritedSharedDeliverableChild|OrchestrationOnlyParent)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShouldBlockTaskExecution(ReadOnlyVerificationWriteTool|InheritedSharedDeliverableWriteTool|CurrentTaskRediscoveryTool)$' -count=1`

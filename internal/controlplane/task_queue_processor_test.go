@@ -896,6 +896,25 @@ func TestBuildQueueKickoffMessageForSinglePassCLIWriteTask(t *testing.T) {
 	}
 }
 
+func TestBuildQueueKickoffMessageForReadOnlyVerificationTask(t *testing.T) {
+	description := "## Deliverable\n\nRead `planning/sambot-tech-architecture.md` and confirm it satisfies all acceptance criteria.\n\nThis is a READ-AND-VERIFY task. The architecture document already exists — do NOT rewrite it. Just verify it meets the acceptance criteria."
+	taskRecord := repo.ProjectTask{
+		Title:       "Verify planning/sambot-tech-architecture.md satisfies PRD acceptance criteria",
+		Description: &description,
+	}
+
+	message := buildQueueKickoffMessage(taskRecord)
+	if !strings.Contains(message, "read-only verification task for `planning/sambot-tech-architecture.md`") {
+		t.Fatalf("kickoff message = %q, want read-only verification note", message)
+	}
+	if !strings.Contains(message, "Do not use file.write or file.edit") {
+		t.Fatalf("kickoff message = %q, want write prohibition", message)
+	}
+	if !strings.Contains(message, "summarize the verification findings in your assistant response") {
+		t.Fatalf("kickoff message = %q, want verification-summary guidance", message)
+	}
+}
+
 func TestBuildFlowTransitionKickoffMessageForRejectedOrchestrationOnlyParent(t *testing.T) {
 	description := "Parent/orchestration task for wave gating validation. Validates that child tasks exercise the gating behavior correctly. Does not do execution work itself."
 	taskRecord := repo.ProjectTask{

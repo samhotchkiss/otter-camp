@@ -10562,6 +10562,47 @@ func TestShouldBlockTaskExecutionInheritedSharedDeliverableWriteTool(t *testing.
 	}
 }
 
+func TestShouldBlockTaskExecutionReadOnlyVerificationWriteTool(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "## Deliverable\n\nRead `planning/sambot-tech-architecture.md` and confirm it satisfies all acceptance criteria.\n\nThis is a READ-AND-VERIFY task. The architecture document already exists — do NOT rewrite it. Just verify it meets the acceptance criteria."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  281,
+				Title:       "Verify planning/sambot-tech-architecture.md satisfies PRD acceptance criteria",
+				Description: &description,
+				WorkStatus:  "in_progress",
+			},
+		},
+	}
+
+	rt := &turnRuntime{session: fixture.session}
+	blocked, reason := fixture.engine.shouldBlockTaskExecutionReadOnlyVerificationWriteTool(context.Background(), rt, "file.write", map[string]any{
+		"path": "planning/sambot-tech-architecture.md",
+	})
+	if !blocked {
+		t.Fatal("expected read-only verification file.write to be blocked")
+	}
+	if !strings.Contains(reason, "read-only verification task") {
+		t.Fatalf("reason = %q, want read-only verification guidance", reason)
+	}
+
+	blocked, _ = fixture.engine.shouldBlockTaskExecutionReadOnlyVerificationWriteTool(context.Background(), rt, "file.read", map[string]any{
+		"path": "planning/sambot-tech-architecture.md",
+	})
+	if blocked {
+		t.Fatal("did not expect file.read to be blocked for read-only verification task")
+	}
+}
+
 func TestShouldBlockOrchestrationParentReviewTaskListToolRequiresParentScopedList(t *testing.T) {
 	t.Parallel()
 

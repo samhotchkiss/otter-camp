@@ -36,6 +36,9 @@ const (
 	asyncDecisionPolicyName         = "async_forward_progress"
 )
 
+var readOnlyVerificationTargetPattern = regexp.MustCompile("(?i)^\\s*(?:verify|review)\\s+([^\\s,;]+)")
+var workspacePathInBackticksPattern = regexp.MustCompile("`([^`]+)`")
+
 type taskQueueEventSubscriber interface {
 	Subscribe(consumerName string, orgID *uuid.UUID, handler eventbus.EventHandler) eventbus.Subscription
 }
@@ -1277,6 +1280,9 @@ func buildQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 	if instruction := singlePassCLIWriteKickoffInstruction(taskRecord); instruction != "" {
 		base += "\n\nExecution instruction:\n" + instruction
 	}
+	if instruction := readOnlyVerificationKickoffInstruction(taskRecord); instruction != "" {
+		base += "\n\nExecution instruction:\n" + instruction
+	}
 	return base
 }
 
@@ -1338,6 +1344,59 @@ func singlePassCLIWriteKickoffInstruction(taskRecord repo.ProjectTask) string {
 		return ""
 	}
 	return fmt.Sprintf("This task already specifies a single-pass cli_execute write for `%s`. Do not begin with git.status, file.list, file.read, or readiness narration. Your next assistant message must contain one concrete non-empty cli.execute.command that writes `%s`, or one concrete blocker sentence if that exact write is impossible.", targetPath, targetPath)
+}
+
+func readOnlyVerificationKickoffInstruction(taskRecord repo.ProjectTask) string {
+	targetPath := strings.TrimSpace(readOnlyVerificationTargetPath(taskRecord))
+	if targetPath == "" || !taskLooksReadOnlyVerification(taskRecord) {
+		return ""
+	}
+	return fmt.Sprintf("This is a read-only verification task for `%s`. Do not use file.write or file.edit to rewrite `%s`. Read `%s` and any explicitly named acceptance-criteria or reference artifacts, keep the deliverable unchanged, and summarize the verification findings in your assistant response instead of mutating the file.", targetPath, targetPath, targetPath)
+}
+
+func readOnlyVerificationTargetPath(taskRecord repo.ProjectTask) string {
+	for _, candidate := range []string{strings.TrimSpace(taskRecord.Title), strings.TrimSpace(valueOrEmpty(taskRecord.Description))} {
+		if candidate == "" {
+			continue
+		}
+		if match := readOnlyVerificationTargetPattern.FindStringSubmatch(candidate); len(match) == 2 {
+			if path := strings.TrimSpace(strings.Trim(match[1], "`'\"")); strings.Contains(path, "/") || strings.Contains(path, ".") {
+				return path
+			}
+		}
+		for _, match := range workspacePathInBackticksPattern.FindAllStringSubmatch(candidate, -1) {
+			if len(match) != 2 {
+				continue
+			}
+			path := strings.TrimSpace(match[1])
+			if strings.Contains(path, "/") || strings.Contains(path, ".") {
+				return path
+			}
+		}
+	}
+	return ""
+}
+
+func taskLooksReadOnlyVerification(taskRecord repo.ProjectTask) bool {
+	text := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	if taskRecord.Description != nil {
+		text += "\n" + strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	if text == "" {
+		return false
+	}
+	return (containsAny(text, "verify ", "verification", "checklist verification", "read-and-verify", "read-and-check", "read-only checklist") ||
+		(strings.Contains(text, "acceptance criteria") && containsAny(text, "read ", "confirm ", "check "))) &&
+		containsAny(text, "do not rewrite", "do not edit", "keep the deliverable unchanged", "read-only", "just verify", "checklist")
+}
+
+func containsAny(text string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func taskQueueMetadataMap(metadata json.RawMessage) map[string]any {

@@ -1498,3 +1498,14 @@
     - `sessionTaskDeliverablePath(...)` could not infer a path from review titles like `Verify planning/sambot-tech-architecture.md satisfies ...`, so the fallback task-record lookup stayed empty too
   - impact:
     - review lanes for planning deliverables can misclassify the actual target file as a forbidden companion artifact, preventing the first real review read and forcing the turn into blocked discovery churn
+- 2026-03-30 13:24 MDT - Read-only verification tasks on the work node could still rewrite the deliverable they were supposed to inspect.
+  - fresh live evidence:
+    - task `281` session `3612be6c-6307-4e52-af19-79cc4a6551e5` resumed after the review-target fix
+    - its kickoff stayed `Start work on task: Verify planning/sambot-tech-architecture.md ...`
+    - assistant message `2` promised to read the architecture doc and acceptance criteria, but the first tool result was `file.write planning/sambot-tech-architecture.md`
+    - that reopened the same `work -> review -> work` oscillation until another `flow rejection max visits exceeded` block
+  - bug:
+    - [`internal/controlplane/task_queue_processor.go`](/Users/sam/dev/otter-camp/internal/controlplane/task_queue_processor.go) treated verification/checklist work lanes like ordinary write tasks and emitted only the generic kickoff
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) had no task-execution guard blocking `file.write` / `file.edit` against the named deliverable for read-only verification work lanes
+  - impact:
+    - verification tasks can mutate the artifact under review from the work node, invalidate the verification signal, and churn through repeated work/review cycles instead of staying read-only and advancing cleanly

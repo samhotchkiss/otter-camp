@@ -16191,6 +16191,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := e.shouldBlockTaskExecutionReadOnlyVerificationWriteTool(ctx, rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if blocked, reason := e.shouldBlockTaskExecutionCurrentTaskRediscoveryTool(ctx, rt, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -32658,6 +32666,62 @@ func (e *TurnEngine) shouldBlockTaskExecutionInheritedSharedDeliverableWriteTool
 		return false, ""
 	}
 	return true, buildTaskExecutionInheritedSharedDeliverableWriteGuardError(taskRecord, sharedPath)
+}
+
+func taskExecutionLooksReadOnlyVerification(taskRecord repo.ProjectTask) bool {
+	text := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	if taskRecord.Description != nil {
+		text += "\n" + strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	if text == "" {
+		return false
+	}
+	return (containsAny(text, "verify ", "verification", "checklist verification", "read-and-verify", "read-and-check", "read-only checklist") ||
+		(strings.Contains(text, "acceptance criteria") && containsAny(text, "read ", "confirm ", "check "))) &&
+		containsAny(text, "do not rewrite", "do not edit", "keep the deliverable unchanged", "read-only", "just verify", "checklist")
+}
+
+func buildTaskExecutionReadOnlyVerificationWriteGuardError(targetPath string) string {
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	if targetPath == "" {
+		return "this is a read-only verification task. Do not rewrite the deliverable from the work lane; inspect the named artifacts and summarize the verification findings without mutating the file."
+	}
+	return fmt.Sprintf("this is a read-only verification task for `%s`. Do not use file.write or file.edit to rewrite `%s` from the work lane. Read `%s` and the explicitly named acceptance-criteria/reference artifacts, keep the deliverable unchanged, and summarize the verification findings instead of mutating the file.", targetPath, targetPath, targetPath)
+}
+
+func (e *TurnEngine) shouldBlockTaskExecutionReadOnlyVerificationWriteTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, ""
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "file.write", "file_write", "file.edit", "file_edit":
+	default:
+		return false, ""
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return false, ""
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil || strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		return false, ""
+	}
+	if !taskExecutionLooksReadOnlyVerification(taskRecord) {
+		return false, ""
+	}
+	targetPath := normalizeWorkspaceRelativePath(e.sessionTaskDeliverablePath(ctx, rt.session.ID, taskRecord))
+	if targetPath == "" {
+		return false, ""
+	}
+	path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+	if path == "" || !sameWorkspaceRelativePath(path, targetPath) {
+		return false, ""
+	}
+	return true, buildTaskExecutionReadOnlyVerificationWriteGuardError(targetPath)
 }
 
 func (e *TurnEngine) taskExecutionSiblingTasks(ctx context.Context, taskRecord repo.ProjectTask) ([]repo.ProjectTask, error) {
