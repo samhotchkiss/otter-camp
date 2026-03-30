@@ -897,6 +897,353 @@ func TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionSkipsP
 	}
 }
 
+func TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionIgnoresPendingMemoryExtraction(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "close-blocked-task-session-ignore-memory-tail",
+		DisplayName: "Close Blocked Task Session Ignore Memory Tail",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "close-blocked-task-session-ignore-memory-" + uuid.NewString()[:8],
+		DisplayName:    "Close Blocked Task Session Ignore Memory Tail",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Blocked Session Memory Tail Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Handle stale blocked task session cleanup.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "close-blocked-task-session-ignore-memory-template",
+		DisplayName:    "Close Blocked Task Session Ignore Memory Tail Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Blocked task session with pending memory extraction",
+		WorkStatus:      "blocked",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+		Metadata:        json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE flow_node_execution
+		SET status = 'abandoned',
+		    completed_at = now(),
+		    runtime_substate = NULL
+		WHERE id = $1
+	`, execution.ID); err != nil {
+		t.Fatalf("abandon flow execution: %v", err)
+	}
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:      session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   agent.ID,
+		Status:         "completed",
+	})
+	if err != nil {
+		t.Fatalf("create completed turn: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET completed_at = now(),
+		    stop_reason = 'validation_loop_blocked'
+		WHERE id = $1
+	`, turn.ID); err != nil {
+		t.Fatalf("complete turn: %v", err)
+	}
+	if _, err := worker.Enqueue(ctx, nil, memoryExtractTurnJobType, 100, map[string]any{
+		"turn_id":         turn.ID.String(),
+		"session_id":      session.ID.String(),
+		"organization_id": org.ID.String(),
+	}, nil); err != nil {
+		t.Fatalf("enqueue memory_extract_turn: %v", err)
+	}
+
+	closed, err := worker.CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ctx)
+	if err != nil {
+		t.Fatalf("CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution: %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("closed sessions = %d, want 1", closed)
+	}
+
+	var sessionStatus string
+	if err := pool.QueryRow(ctx, `
+		SELECT status
+		FROM chat_session
+		WHERE id = $1
+	`, session.ID).Scan(&sessionStatus); err != nil {
+		t.Fatalf("query session: %v", err)
+	}
+	if sessionStatus != "closed" {
+		t.Fatalf("session status = %q, want closed", sessionStatus)
+	}
+
+	var (
+		jobStatus string
+		lastError *string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, last_error
+		FROM job_queue
+		WHERE job_type = $1
+		  AND (payload->>'session_id')::uuid = $2
+	`, memoryExtractTurnJobType, session.ID).Scan(&jobStatus, &lastError); err != nil {
+		t.Fatalf("query memory_extract_turn job: %v", err)
+	}
+	if jobStatus != "dead_letter" {
+		t.Fatalf("memory_extract_turn status = %q, want dead_letter", jobStatus)
+	}
+	if lastError == nil || *lastError != "session_closed" {
+		t.Fatalf("memory_extract_turn last_error = %v, want session_closed", lastError)
+	}
+}
+
+func TestJobWorkerLaunchPostAgentTurnRepairsClosesBlockedSessionWithMemoryTail(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "post-agent-turn-repair-close-blocked-tail",
+		DisplayName: "Post Agent Turn Repair Close Blocked Tail",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "post-agent-turn-repair-close-" + uuid.NewString()[:8],
+		DisplayName:    "Post Agent Turn Repair Close Blocked Tail",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Post Agent Turn Repair Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Handle post agent_turn repair.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "post-agent-turn-repair-close-template",
+		DisplayName:    "Post Agent Turn Repair Close Tail Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Blocked task session awaiting post-turn cleanup",
+		WorkStatus:      "blocked",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+		Metadata:        json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE flow_node_execution
+		SET status = 'abandoned',
+		    completed_at = now(),
+		    runtime_substate = NULL
+		WHERE id = $1
+	`, execution.ID); err != nil {
+		t.Fatalf("abandon flow execution: %v", err)
+	}
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:      session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   agent.ID,
+		Status:         "completed",
+	})
+	if err != nil {
+		t.Fatalf("create completed turn: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET completed_at = now(),
+		    stop_reason = 'validation_loop_blocked'
+		WHERE id = $1
+	`, turn.ID); err != nil {
+		t.Fatalf("complete turn: %v", err)
+	}
+	if _, err := worker.Enqueue(ctx, nil, memoryExtractTurnJobType, 100, map[string]any{
+		"turn_id":         turn.ID.String(),
+		"session_id":      session.ID.String(),
+		"organization_id": org.ID.String(),
+	}, nil); err != nil {
+		t.Fatalf("enqueue memory_extract_turn: %v", err)
+	}
+
+	worker.launchPostAgentTurnRepairs(uuid.New())
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var sessionStatus string
+		if err := pool.QueryRow(ctx, `
+			SELECT status
+			FROM chat_session
+			WHERE id = $1
+		`, session.ID).Scan(&sessionStatus); err != nil {
+			t.Fatalf("query session: %v", err)
+		}
+		if sessionStatus == "closed" {
+			var (
+				jobStatus string
+				lastError *string
+			)
+			if err := pool.QueryRow(ctx, `
+				SELECT status, last_error
+				FROM job_queue
+				WHERE job_type = $1
+				  AND (payload->>'session_id')::uuid = $2
+			`, memoryExtractTurnJobType, session.ID).Scan(&jobStatus, &lastError); err != nil {
+				t.Fatalf("query memory_extract_turn job: %v", err)
+			}
+			if jobStatus != "dead_letter" {
+				t.Fatalf("memory_extract_turn status = %q, want dead_letter", jobStatus)
+			}
+			if lastError == nil || *lastError != "session_closed" {
+				t.Fatalf("memory_extract_turn last_error = %v, want session_closed", lastError)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	t.Fatal("timed out waiting for post-agent-turn repairs to close blocked session")
+}
+
 func TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionClosesRejectedExecution(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

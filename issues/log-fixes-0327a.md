@@ -4147,3 +4147,25 @@
   - proof status:
     - directly driven by the live template-08 bounded-size retry family under `OC-84`, where stale blocked/malformed children remained visible after the split suggestion
     - deployed and waiting on the next PM bounded-size retry canary to show the lane following the suggested split instead of gravitating back to stale child artifacts
+- 2026-03-29 22:36 MDT - Let blocked task-session cleanup ignore non-turn tail jobs.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(...)` now dead-letters non-`agent_turn` pending/claimed jobs like `memory_extract_turn` with `last_error='session_closed'` before it evaluates blocked-session closure
+    - pending `agent_turn` dispatches still keep the session open, but post-turn tail jobs no longer prevent terminal blocked sessions from closing
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionIgnoresPendingMemoryExtraction`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(IgnoresPendingMemoryExtraction|SkipsPendingAgentTurn|FailsPendingMessagesForTerminalBlockedSession|AbandonsTerminalInheritedSharedExecution)$' -count=1`
+  - proof status:
+    - directly driven by live blocked task `212` / session `4f4a673a-2b9f-4957-8aeb-124633bb5a6a`, which remained active only because three `memory_extract_turn` jobs were still pending
+    - next rebuild/startup canary should show that session closing and those tail jobs dead-lettering instead of keeping the blocked lane alive
+- 2026-03-29 22:38 MDT - Moved blocked-session closeout into the post-`agent_turn` repair loop.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `launchPostAgentTurnRepairs(...)` now runs `CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(...)` before `RequeueActiveExecutionSessionsWithoutTurns(...)`
+    - this lets a blocked task session close immediately after its last stale `agent_turn` finishes instead of waiting for the hourly stale-scan pass
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerLaunchPostAgentTurnRepairsClosesBlockedSessionWithMemoryTail`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(IgnoresPendingMemoryExtraction|SkipsPendingAgentTurn|FailsPendingMessagesForTerminalBlockedSession|AbandonsTerminalInheritedSharedExecution)|LaunchPostAgentTurnRepairsClosesBlockedSessionWithMemoryTail)$' -count=1`
+  - live proof:
+    - after rebuild/restart, task `212` session `4f4a673a-2b9f-4957-8aeb-124633bb5a6a` closed at `2026-03-29 22:39:17 MDT`
+    - its three `memory_extract_turn` jobs are now `dead_letter`, confirming the blocked-tail cleanup now settles in the same recovery cycle

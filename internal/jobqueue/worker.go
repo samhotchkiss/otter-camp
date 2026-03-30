@@ -6715,6 +6715,53 @@ func (w *Worker) CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ctx co
 	}
 
 	if _, err := w.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    claimed_by = NULL,
+		    claimed_at = NULL,
+		    last_error = 'session_closed',
+		    updated_at = now()
+		WHERE jq.status IN ('pending', 'claimed')
+		  AND jq.job_type <> $1
+		  AND (jq.payload->>'session_id')::uuid IN (
+			SELECT cs.id
+			FROM chat_session cs
+			JOIN project_task pt ON pt.id = cs.scope_id
+			WHERE cs.status = 'active'
+			  AND cs.mode = 'async'
+			  AND cs.scope_type = 'project_task'
+			  AND pt.work_status = 'blocked'
+			  AND EXISTS (
+			    SELECT 1
+			    FROM flow_node_execution fne_terminal
+			    WHERE fne_terminal.session_id = cs.id
+			      AND fne_terminal.status IN ('abandoned', 'rejected')
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM flow_node_execution fne_active
+			    WHERE fne_active.session_id = cs.id
+			      AND fne_active.status = 'active'
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM chat_turn ct_live
+			    WHERE ct_live.session_id = cs.id
+			      AND ct_live.status IN ('pending', 'in_progress')
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM job_queue jq_live
+			    WHERE jq_live.job_type = $1
+			      AND jq_live.status IN ('pending', 'claimed')
+			      AND (jq_live.payload->>'session_id')::uuid = cs.id
+			  )
+		  )
+	`, agentTurnJobType); err != nil {
+		return 0, fmt.Errorf("dead-letter blocked project_task non-agent jobs without live execution: %w", err)
+	}
+
+	if _, err := w.pool.Exec(ctx, `
 		UPDATE chat_turn
 		SET status = 'cancelled',
 		    cancel_requested_at = now(),
@@ -7883,6 +7930,14 @@ func (w *Worker) launchPostAgentTurnRepairs(jobID uuid.UUID) {
 	go func() {
 		repairCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+
+		if repaired, repairErr := w.CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(repairCtx); repairErr != nil {
+			if repairCtx.Err() == nil {
+				w.logger.Warn("job queue: async blocked session cleanup failed", "job_id", jobID, "error", repairErr)
+			}
+		} else if repaired > 0 {
+			w.logger.Info("job queue: closed blocked project_task async sessions after agent_turn completion", "job_id", jobID, "count", repaired)
+		}
 
 		if requeued, repairErr := w.RequeueActiveExecutionSessionsWithoutTurns(repairCtx); repairErr != nil {
 			if repairCtx.Err() == nil {

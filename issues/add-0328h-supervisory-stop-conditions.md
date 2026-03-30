@@ -535,3 +535,27 @@ They need sharper stopping rules than ordinary execution lanes.
     - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurnRetriesBoundedSizeStopWithFresh(Message|SuggestedSplitMessage)$' -count=1`
   - proof status:
     - deployed and positioned for the next template-08 PM bounded-size retry on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`
+- 2026-03-29 22:36 MDT - Closed a blocked-tail supervisory leak outside the PM lane itself.
+  - fresh live evidence:
+    - blocked child task `212` still had an `active` async session (`4f4a673a-2b9f-4957-8aeb-124633bb5a6a`) with no current turn, because three `memory_extract_turn` jobs were still pending on that session
+    - this meant terminal blocked task lanes could continue to look “live” to higher-level recovery logic even after execution had already settled
+  - local fix:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now dead-letters non-`agent_turn` tail jobs before closing blocked project-task sessions without live execution
+    - pending `agent_turn` retries still keep a session open; passive tail jobs no longer do
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(IgnoresPendingMemoryExtraction|SkipsPendingAgentTurn|FailsPendingMessagesForTerminalBlockedSession|AbandonsTerminalInheritedSharedExecution)$' -count=1`
+  - proof status:
+    - directly targeted at live task `212` / session `4f4a673a-2b9f-4957-8aeb-124633bb5a6a`
+    - next startup/cleanup cycle should close that session and dead-letter the three memory tail jobs
+- 2026-03-29 22:38 MDT - Closed the same blocked-tail leak in the immediate post-turn path too.
+  - fresh live evidence:
+    - after the first patch, task `212` still stayed active if startup happened to run one last stale `agent_turn` before the blocked-session cleanup pass
+    - that left the session waiting for the next hourly stale-scan even though only memory-tail jobs remained
+  - local fix:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now runs blocked-session cleanup from `launchPostAgentTurnRepairs(...)` before requeueing active execution sessions
+    - this settles terminal blocked tails immediately after the final stale `agent_turn` completes
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(IgnoresPendingMemoryExtraction|SkipsPendingAgentTurn|FailsPendingMessagesForTerminalBlockedSession|AbandonsTerminalInheritedSharedExecution)|LaunchPostAgentTurnRepairsClosesBlockedSessionWithMemoryTail)$' -count=1`
+  - live proof:
+    - after rebuild/restart, task `212` session `4f4a673a-2b9f-4957-8aeb-124633bb5a6a` closed at `22:39 MDT`
+    - its three `memory_extract_turn` jobs are now `dead_letter`, so the blocked-tail supervisory stop now lands in the same recovery cycle instead of the next hourly cleanup
