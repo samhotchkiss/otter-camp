@@ -29458,6 +29458,60 @@ func TestInitialMessageTextWithContinuationSummaryPrependsRecentProjectSummary(t
 	}
 }
 
+func TestInitialMessageTextWithContinuationSummaryPrefersRecentStructuredContinuationPrompt(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	triggerID := uuid.New()
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.session.Mode = "async"
+	fixture.messages.create(repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		SequenceNumber: 10,
+		Role:           "system",
+		Status:         "final",
+		Content:        "[Continuation summary] Active project request: Continue the active project execution now.",
+	})
+	fixture.messages.create(repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		SequenceNumber: 11,
+		Role:           "user",
+		Status:         "failed",
+		Content:        "Continue the active project execution now from the continuation summary above. Already-active non-terminal tasks in the tree: task 310 ... Actionable draft tasks already in the tree: task 328 ... Current focus parent: task 297 ...",
+		Metadata: mustJSONRaw(map[string]any{
+			"source": "project_continuation_resume",
+		}),
+	})
+	trigger := repo.ChatMessage{
+		ID:             triggerID,
+		SessionID:      fixture.session.ID,
+		SequenceNumber: 12,
+		Role:           "user",
+		Status:         "pending",
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source": projectExecutionContinuationSource,
+		}),
+	}
+	fixture.messages.create(trigger)
+
+	merged := fixture.engine.initialMessageTextWithContinuationSummary(context.Background(), fixture.session.ID, trigger, trigger.Content)
+	if !strings.HasPrefix(merged, "Continue the active project execution now from the continuation summary above.") {
+		t.Fatalf("merged initial message = %q, want structured continuation prompt prepended", merged)
+	}
+	if !strings.Contains(merged, "Actionable draft tasks already in the tree: task 328") {
+		t.Fatalf("merged initial message = %q, want structured snapshot markers", merged)
+	}
+	if !strings.Contains(merged, "\n\nContinue the active project execution now.") {
+		t.Fatalf("merged initial message = %q, want original trigger prompt retained", merged)
+	}
+}
+
 func TestProjectExecutionContinuationFallbackSummary(t *testing.T) {
 	summary := projectExecutionContinuationFallbackSummary()
 

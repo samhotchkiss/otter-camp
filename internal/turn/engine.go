@@ -13628,9 +13628,15 @@ func (e *TurnEngine) initialMessageTextWithContinuationSummary(ctx context.Conte
 	if err != nil {
 		return initial
 	}
+	if contextPrompt := latestStructuredContinuationContext(messages, trigger.ID); contextPrompt != "" {
+		if initial == "" {
+			return contextPrompt
+		}
+		return strings.TrimSpace(contextPrompt + "\n\n" + initial)
+	}
 	var summary string
 	for _, message := range messages {
-		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+		if message.ID == trigger.ID || !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
 			continue
 		}
 		content := strings.TrimSpace(message.Content)
@@ -13646,6 +13652,39 @@ func (e *TurnEngine) initialMessageTextWithContinuationSummary(ctx context.Conte
 		return summary
 	}
 	return strings.TrimSpace(summary + "\n\n" + initial)
+}
+
+func latestStructuredContinuationContext(messages []repo.ChatMessage, excludeMessageID uuid.UUID) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if message.ID == excludeMessageID {
+			continue
+		}
+		content := strings.TrimSpace(message.Content)
+		if !continuationMessageContainsProjectSnapshot(content) {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(message.Role)) {
+		case "user":
+			return content
+		case "system":
+			if strings.HasPrefix(content, "[Continuation summary]") {
+				return content
+			}
+		}
+	}
+	return ""
+}
+
+func continuationMessageContainsProjectSnapshot(content string) bool {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return false
+	}
+	return strings.Contains(content, "Already-active non-terminal tasks in the tree:") ||
+		strings.Contains(content, "Actionable draft tasks already in the tree:") ||
+		strings.Contains(content, "Current focus parent:") ||
+		strings.Contains(content, "Preferred existing same-deliverable malformed child draft to repair before any new replacement work:")
 }
 
 func (e *TurnEngine) taskReviewContinuationActionPrompt(ctx context.Context, rt *turnRuntime, previousTurn *repo.ChatTurn) (string, json.RawMessage, bool, error) {

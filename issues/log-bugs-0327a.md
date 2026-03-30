@@ -1904,3 +1904,11 @@
     - PM retries could regress into whole-project rediscovery from short continuation prompts
     - same-parent child creation could stall or race instead of executing deterministically
     - stale descendant drafts could keep attracting PM focus even after the chain was logically resolved
+- 2026-03-30 17:19 MDT - Weak continuation summaries were still too shallow to arm the rediscovery guard on short PM retry prompts.
+  - fresh live evidence:
+    - sequence `17953` appended a new `[Continuation summary] ...` after restart, but the body was only `Active project request: ...`
+    - PM turn `97a331fc-...` still executed broad `task.list` calls because the carry-forward text still lacked `Actionable draft tasks already in the tree:` / `Current focus parent:`
+  - bug:
+    - `initialMessageTextWithContinuationSummary(...)` preferred the latest `[Continuation summary] ...` message even when that summary omitted the structured snapshot markers that the rediscovery guard requires
+  - impact:
+    - short `project_execution_continuation` retries could keep reopening broad project rediscovery even after the first carry-forward patch landed
