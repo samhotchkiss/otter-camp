@@ -5734,6 +5734,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForParentCompletionRequire
 	if !projectContinuationDraftTaskReadyForParentClosureForTask(focusTask, focusActivity) {
 		return false, nil
 	}
+	openChildTasks := projectContinuationOpenNonBlockedChildTasks(projectTasks, focusTask.ID)
 	if len(requiredChildLabels) == 0 {
 		requiredChildLabels = projectContinuationCompletedChildTaskLabels(projectTasks, focusTask.ID)
 	}
@@ -5746,15 +5747,28 @@ func (e *TurnEngine) retryProjectExecutionContinuationForParentCompletionRequire
 		return false, err
 	}
 	agentID := latestCompleted.RespondingID
-	retryPrompt := buildProjectExecutionContinuationParentCompletionRetryPrompt(
-		completedTask,
-		remainingDraftTasks,
-		snapshot,
-		focusTask,
-		focusActivity,
-		taskHintsByTask[focusTask.ID],
-		requiredChildLabels,
-	)
+	retryPrompt := ""
+	if len(openChildTasks) > 0 {
+		retryPrompt = buildProjectExecutionContinuationParentCompletionLiveChildRetryPrompt(
+			completedTask,
+			remainingDraftTasks,
+			snapshot,
+			focusTask,
+			focusActivity,
+			taskHintsByTask[focusTask.ID],
+			openChildTasks,
+		)
+	} else {
+		retryPrompt = buildProjectExecutionContinuationParentCompletionRetryPrompt(
+			completedTask,
+			remainingDraftTasks,
+			snapshot,
+			focusTask,
+			focusActivity,
+			taskHintsByTask[focusTask.ID],
+			requiredChildLabels,
+		)
+	}
 	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
 	if err != nil {
 		return false, err
@@ -6120,6 +6134,64 @@ func buildProjectExecutionContinuationParentCompletionRetryPrompt(
 	retryPrompt += fmt.Sprintf(" Your next assistant action must issue one narrow task.update for %s with child_output_verifications covering the concrete child or superseding outputs that already satisfy the deliverable, integration_check.status=passed, outcome_assessment.satisfied=true, and work_status=done.", focusLabel)
 	retryPrompt += " If the runtime still reports a missing child verification after that update, report that concrete missing child in one blocker sentence instead of rereading context again."
 	return retryPrompt
+}
+
+func buildProjectExecutionContinuationParentCompletionLiveChildRetryPrompt(
+	completedTask repo.ProjectTask,
+	remainingDraftTasks int,
+	snapshot projectExecutionContinuationSnapshot,
+	focusTask repo.ProjectTask,
+	focusActivity projectContinuationChildActivity,
+	focusHints projectContinuationTaskHints,
+	openChildTasks []repo.ProjectTask,
+) string {
+	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot)
+	focusLabel := projectBootstrapTaskLabel(focusTask)
+	focusRef := projectExecutionContinuationTaskRef(focusTask, focusActivity, focusHints)
+	childRefs := make([]string, 0, len(openChildTasks))
+	for _, task := range openChildTasks {
+		childRefs = append(childRefs, projectBootstrapTaskLabel(task))
+		if len(childRefs) == 4 {
+			break
+		}
+	}
+	retryPrompt += fmt.Sprintf(" Your last continuation turn tried to close %s, but direct child work is still live beneath %s.", focusRef, focusLabel)
+	if len(childRefs) > 0 {
+		retryPrompt += fmt.Sprintf(" Live child lanes still remain: %s.", strings.Join(childRefs, ", "))
+	}
+	retryPrompt += " Do not attempt parent closeout again yet."
+	retryPrompt += " Do not reread the deliverable file, sibling deliverables, or broader project tree first."
+	if focusTask.ID != uuid.Nil {
+		retryPrompt += fmt.Sprintf(" If child inspection is still required, use only task.list(parent_task_id=%s).", focusTask.ID.String())
+	}
+	retryPrompt += fmt.Sprintf(" Your next assistant action must advance the smallest still-open child beneath %s if it already matches the remaining bounded work, or block that stale child and create the smallest fresh replacement child under %s only if the prompt proves the existing child is malformed or unusable.", focusLabel, focusLabel)
+	retryPrompt += " If no child can be advanced safely, report one blocker sentence instead of trying parent closeout again."
+	return retryPrompt
+}
+
+func projectContinuationOpenNonBlockedChildTasks(projectTasks []repo.ProjectTask, parentID uuid.UUID) []repo.ProjectTask {
+	if parentID == uuid.Nil || len(projectTasks) == 0 {
+		return nil
+	}
+	openChildren := make([]repo.ProjectTask, 0, 4)
+	for _, task := range projectTasks {
+		metadata := messageMetadataMap(task.Metadata)
+		candidateParentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+		if !ok || candidateParentID != parentID {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(task.WorkStatus)) {
+		case "draft", "queued", "in_progress", "review":
+			openChildren = append(openChildren, task)
+		}
+	}
+	sort.SliceStable(openChildren, func(i, j int) bool {
+		if openChildren[i].TaskNumber == openChildren[j].TaskNumber {
+			return openChildren[i].ID.String() < openChildren[j].ID.String()
+		}
+		return openChildren[i].TaskNumber < openChildren[j].TaskNumber
+	})
+	return openChildren
 }
 
 func buildProjectExecutionContinuationBoundedSizeRetryPrompt(

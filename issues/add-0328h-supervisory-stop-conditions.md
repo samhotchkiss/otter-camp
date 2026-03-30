@@ -709,6 +709,22 @@ They need sharper stopping rules than ordinary execution lanes.
   - deploy / proof target:
     - the next PM continuation after this stop should not start with “Let me check what exists on disk...”
     - it should either update task `246` directly or emit one concrete blocker sentence
+- 2026-03-30 04:28 MDT - Parent-completion supervisory retries are now child-aware.
+  - fresh live evidence before the fix:
+    - after task `246` repaired its missing assignee/template fields, the PM lane moved into parent closeout
+    - runtime kept stopping it with `parent task requires child verification and passed integration before completion`
+    - the retry then immediately did `task.list(parent_task_id=246)`, saw child `249` still `draft`, and still tried the same parent closeout again
+  - local fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now redirects that supervisory retry when direct child work is still live
+    - the next retry prompt says:
+      - direct child work is still live beneath the parent
+      - do not attempt parent closeout again yet
+      - advance the still-open child first, or replace/block it only if it is actually malformed or unusable
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionStopWithLiveOpenChild$' -count=1`
+  - deploy / proof target:
+    - the next post-stop retry for task `246` should stop relisting child ids and retrying parent closeout
+    - it should pivot to child `249` or a child-level replacement decision
 - 2026-03-30 00:03 MDT - The next live blocker shifted from recovery command churn into deliverable-path inference for the bounded replacement child.
   - fresh live evidence on task `244`:
     - the task queue kickoff explicitly said `Output: Write the complete style block as planning/template-08-css-foundation.txt`

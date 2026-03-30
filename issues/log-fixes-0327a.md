@@ -4499,3 +4499,18 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectContinuationActionPrompt(PrioritizesMissingFocusPrerequisites|AddsReplacementChildGuidanceForBlockedParent|AddsReplacementChildGuidanceForMalformedChildren|AddsCompletedCloseoutGuidance)|ProjectExecutionBlockedMutationStopMessageOnFocused(PrerequisiteRepairGuard|DraftReadGuard)|ShouldStopAfterSuccessfulProjectExecutionHandoffMutation(ForMissingDependencyPrompt|ForFocusPrerequisiteRepair|ForDraftChildCreate|IgnoresAssignmentOnlyUpdate|RequiresReplacementChildPrompt)?|ShouldBlockProjectContinuationFocusedDraftReadTool(BlocksFileRead|AllowsParentScopedTaskList|BlocksTaskListWithoutParent|BlocksGeneralFocusPromptFileRead|AllowsParentScopedTaskListForGeneralFocusPrompt|BlocksPrerequisiteRepairFocusFileRead)|DispatchToolsCoalescesFocusedDraftReadGuardInSingleBatch|ProjectContinuationBoundedSizeSuggestedChildTitles|HandleCompletedProjectExecutionContinuationTurn(RetriesAfterPrerequisiteOnlyMutation|RetriesRediscoveryStopWithFocusedMessage|RetriesMissingDependencyStopWithFreshMessage|RetriesFocusedPrerequisiteRepairStopWithFreshMessage))$' -count=1`
   - deploy / proof target:
     - the next post-stop PM continuation for task `246` should carry the explicit repair-only retry prompt and convert into a narrow `task.update` instead of another generic rediscovery opener
+- 2026-03-30 04:28 MDT - Redirected parent-completion retries away from parent closeout when direct child work is still live.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `retryProjectExecutionContinuationForParentCompletionRequirements(...)` now checks for direct child tasks still in `draft`, `queued`, `in_progress`, or `review`
+    - added `projectContinuationOpenNonBlockedChildTasks(...)`
+    - added `buildProjectExecutionContinuationParentCompletionLiveChildRetryPrompt(...)`
+    - when live child work is still present, the retry prompt now:
+      - says direct child work is still live beneath the parent
+      - forbids parent closeout for that retry
+      - tells the PM lane to advance the smallest still-open child or replace/block it only if it is truly malformed/unusable
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionStopWithLiveOpenChild`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurn(RetriesParentCompletionStopWithLiveOpenChild|RetriesAfterPrerequisiteOnlyMutation|RetriesRediscoveryStopWithFocusedMessage|RetriesMissingDependencyStopWithFreshMessage|RetriesFocusedPrerequisiteRepairStopWithFreshMessage)|BuildProjectContinuationActionPromptPrioritizesMissingFocusPrerequisites|ProjectExecutionBlockedMutationStopMessageOnFocusedPrerequisiteRepairGuard|ShouldStopAfterSuccessfulProjectExecutionHandoffMutationForFocusPrerequisiteRepair|ShouldBlockProjectContinuationFocusedDraftReadToolBlocksPrerequisiteRepairFocusFileRead)$' -count=1`
+  - deploy / proof target:
+    - after a parent-completion stop on task `246`, the next continuation should point at live child `249` instead of issuing another parent closeout retry

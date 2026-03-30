@@ -1156,3 +1156,15 @@
   - impact:
     - the runtime can correctly stop the bad PM reread turn, but the very next continuation forgets the exact repair instruction and re-enters broad rediscovery language
     - that delays the actual `task.update` handoff on focus drafts whose only remaining problem is missing prerequisite ids
+- 2026-03-30 04:28 MDT - Parent-completion retries kept asking the PM lane to close a parent even when direct child work was still live beneath it.
+  - fresh live evidence:
+    - after task `246` prerequisite repair succeeded, the PM lane attempted parent closeout on `planning/sambot-personality-spec.md`
+    - runtime repeatedly rejected the `task.update` with:
+      - `parent task requires child verification and passed integration before completion...`
+    - each retry then did `task.list(parent_task_id=246)`, saw child `249` still in `draft`, and still tried parent closeout again
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) had a parent-completion retry prompt, but it assumed the parent was still the right focus as long as the earlier closeout-ready snapshot held
+    - it did not re-check whether direct child work was still open before telling the PM lane to try parent closeout again
+  - impact:
+    - the PM lane can loop on `task.list(parent)` plus another doomed `task.update` closeout attempt
+    - that hides the real next bounded action, which is to advance or replace the still-open child lane instead of retrying parent closeout
