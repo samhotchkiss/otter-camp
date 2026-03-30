@@ -1860,3 +1860,20 @@
   - impact:
     - PM can waste another retry turn trying to activate an orchestration-only repair draft instead of dropping into the smallest bounded child beneath it
     - this leaves the level-3 shared-doc chain stuck one layer higher than necessary
+- 2026-03-30 15:46 MDT - Decomposition still emitted conversation-quality notes, markdown headings, and snippet requirements as child lanes under the level-3 shared-doc file.
+  - fresh live evidence:
+    - replacement wave `328-335` contained only one real file-writing child
+    - the rest were support/heading fragments:
+      - `Four prior child tasks ... This attempt MUST be qualitatively different`
+      - `Show Sam's opinionated voice ...`
+      - `### Conversation 1 ...`
+      - `Include a code snippet ...`
+  - bug:
+    - `TaskLooksProceduralInstructionArtifact(...)` and `extractDeliverables(...)` still missed:
+      - prior-failure qualitative notes
+      - opinionated-voice checklist lines
+      - markdown conversation headings
+      - code-snippet requirement fragments
+  - impact:
+    - single-file prompt corpus tasks can still explode into quality-note and heading-only child lanes
+    - those stale rows then pollute PM continuation focus even though the real output is still one shared markdown file

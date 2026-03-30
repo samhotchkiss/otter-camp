@@ -45,6 +45,7 @@ var (
 	enumeratedActionCountPattern = regexp.MustCompile(`(?i)^(generate|create|draft|write|produce|compile|research|collect|design|build|fetch|scrape|crawl|import)\s+(?:all\s+)?(\d+)\s+(.+)$`)
 	actionVerbPattern            = regexp.MustCompile(`^(?:generate|create|draft|write|produce|compile|research|collect|design|build|fetch|scrape|crawl|import)\b`)
 	leadingTaskActionPattern     = regexp.MustCompile(`(?i)^(?:use|visit|navigate|discover|identify|build|rebuild|create|design|define|draft|write|produce|compile|research|collect|implement|migrate|import|validate|review|compare|synthesize|map|prepare|develop|generate|outline|audit|document|wire|configure|run|test|scrape|store|rewrite|establish|include)\b`)
+	conversationHeadingPattern   = regexp.MustCompile(`^(?:#+\s*)?conversation\s+\d+\b`)
 	labelledTaskPattern          = regexp.MustCompile(`(?i)^(?:ws\d+(?:\.\d+[a-z]?)?|template\s+\d+|option\s+\d+|phase\s+\d+|wave\s+\d+|task\s+\d+)[:\-]`)
 	timingOnlyPattern            = regexp.MustCompile(`(?i)^~?\s*\d+\s*(?:-|to\s+)?\d*\s*(?:min|mins|minute|minutes|hr|hrs|hour|hours)\b(?:[[:punct:]\s].*)?$`)
 	enumMarkerPattern            = regexp.MustCompile(`\(\d+\)`)
@@ -996,6 +997,9 @@ func TaskLooksProceduralInstructionArtifact(title string, description *string) b
 }
 
 func isInstructionOnlyDeliverable(normalized string) bool {
+	if conversationHeadingPattern.MatchString(normalized) && !containsWorkspaceArtifactReference(normalized) {
+		return true
+	}
 	for _, prefix := range []string{
 		"this is ",
 		"this task ",
@@ -1007,6 +1011,10 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 		"commit to repo",
 		"commit in ",
 		"must include ",
+		"include a code snippet",
+		"show sam's ",
+		"prior child tasks ",
+		"four prior child tasks ",
 		"save as ",
 		"save each as ",
 		"the file should ",
@@ -1110,6 +1118,10 @@ func looksLikeSupportOnlyRequirementFragment(normalized string) bool {
 		(strings.Contains(normalized, "writing voice") || strings.Contains(normalized, "voice")) {
 		return true
 	}
+	if strings.Contains(normalized, "prior child tasks") &&
+		(strings.Contains(normalized, "terminally rejected") || strings.Contains(normalized, "qualitatively different")) {
+		return true
+	}
 	return false
 }
 
@@ -1117,7 +1129,16 @@ func looksLikeConversationSupportFragment(normalized string) bool {
 	if normalized == "" || containsWorkspaceArtifactReference(normalized) {
 		return false
 	}
+	if conversationHeadingPattern.MatchString(normalized) {
+		return true
+	}
 	if strings.HasPrefix(normalized, "conversations should ") {
+		return true
+	}
+	if strings.HasPrefix(normalized, "show sam's ") && strings.Contains(normalized, "voice") {
+		return true
+	}
+	if strings.HasPrefix(normalized, "include a code snippet") {
 		return true
 	}
 	if strings.HasPrefix(normalized, "include realistic ") &&

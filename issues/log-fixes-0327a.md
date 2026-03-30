@@ -5168,3 +5168,23 @@
     - added `TestShouldBlockProjectContinuationFocusedDraftMutationForDescendantRepairDraftParentPromotion`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationFocusedDraftMutationForDescendantRepairDraftParentPromotion|BuildProjectExecutionContinuationReplacementChildRetryPrompt(CreatesBoundedChildUnderRepairDraftParent|PrefersRepairOfMalformedSameDeliverableDraftChild)|Should(Block|NotBlock)ProjectContinuationSnapshotRediscoveryToolForParentScopedTaskList(WhenRepairDraftNamed)?)$' -count=1`
+- 2026-03-30 15:46 MDT - Filtered level-3 conversation quality notes, markdown headings, and snippet requirements out of decomposition.
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+    - added `conversationHeadingPattern`
+    - `isInstructionOnlyDeliverable(...)` now treats:
+      - markdown conversation headings
+      - `Show Sam's ... voice`
+      - `Include a code snippet ...`
+      - `Four prior child tasks ...`
+      as instruction/support fragments
+    - `looksLikeSupportOnlyRequirementFragment(...)` and `looksLikeConversationSupportFragment(...)` now recognize the new level-3 quality-note variants
+  - changed [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go):
+    - added `TaskLooksProceduralInstructionArtifact` coverage for:
+      - opinionated-voice fragments
+      - code-snippet requirement fragments
+      - markdown conversation heading fragments
+      - prior-child qualitative-note fragments
+    - added `TestExtractDeliverablesIgnoresConversationHeadingAndQualityFragments`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(TaskLooksProceduralInstructionArtifact|ExtractDeliverablesIgnores(ProceduralChecklistFragments|ConversationRequirementFragments|SuggestedTopicSections|ConversationHeadingAndQualityFragments|InstructionOnlyRequirementLines))$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshotIgnoresMalformed(InheritedSharedFileTopicChildren|ChecklistFragmentChildren|ReferenceOnlyChildren|ProceduralChildren)$' -count=1`

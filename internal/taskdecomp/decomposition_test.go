@@ -178,6 +178,26 @@ func TestTaskLooksProceduralInstructionArtifact(t *testing.T) {
 	if !TaskLooksProceduralInstructionArtifact("If the file exists and has substantial content (50+ lines), document that in your work output and advance — no rewrite needed.", &ifFileExistsDescription) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for file-exists procedural fragment")
 	}
+
+	opinionatedVoiceDescription := "Show Sam's opinionated voice — he should disagree with mainstream approaches where appropriate and explain WHY with specific technical reasoning."
+	if !TaskLooksProceduralInstructionArtifact("Show Sam's opinionated voice — he should disagree with mainstream approaches where appropriate and explain WHY with specific technical reasoning.", &opinionatedVoiceDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for opinionated-voice support fragment")
+	}
+
+	codeSnippetDescription := "Include a code snippet showing a state transition table or a Python/TS enum + transition function."
+	if !TaskLooksProceduralInstructionArtifact("Include a code snippet showing a state transition table or a Python/TS enum + transition function.", &codeSnippetDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for code-snippet requirement fragment")
+	}
+
+	conversationHeadingDescription := "### Conversation 1 — State machines in AI agent orchestration"
+	if !TaskLooksProceduralInstructionArtifact("### Conversation 1 — State machines in AI agent orchestration", &conversationHeadingDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for markdown conversation heading fragment")
+	}
+
+	priorChildTasksDescription := "Four prior child tasks (OC-315, 316, 317, 318) were all terminally rejected because the conversations were surface-level — they described technologies conceptually instead of engaging with implementation details, tradeoffs, and code-level reasoning. This attempt MUST be qualitatively different."
+	if !TaskLooksProceduralInstructionArtifact("Four prior child tasks (OC-315, 316, 317, 318) were all terminally rejected because the conversations were surface-level — they described technologies conceptually instead of engaging with implementation details, tradeoffs, and code-level reasoning. This attempt MUST be qualitatively different.", &priorChildTasksDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for prior-child qualitative-note fragment")
+	}
 }
 
 func TestExtractDeliverablesIgnoresReferenceOnlyInstructionLines(t *testing.T) {
@@ -254,6 +274,22 @@ func TestExtractDeliverablesIgnoresSuggestedTopicSections(t *testing.T) {
 		"1. **AI Agent Orchestration Architecture** — multi-agent design, state management, failure recovery",
 		"2. **Ethics of AI in Content Moderation** — technical + ethical intersection, automated decision-making at scale",
 		"3. **Building Production ML Pipelines** — real-world MLOps challenges, model serving, monitoring",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	if len(items) != 1 || !strings.Contains(items[0], "planning/sambot-prompts/test-conversations-level3.md") {
+		t.Fatalf("extractDeliverables = %v, want only the primary deliverable item", items)
+	}
+}
+
+func TestExtractDeliverablesIgnoresConversationHeadingAndQualityFragments(t *testing.T) {
+	description := strings.Join([]string{
+		"Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations that exercise SamBot's ability to speak as Sam Hotchkiss on hard technical subjects.",
+		"",
+		"Four prior child tasks (OC-315, 316, 317, 318) were all terminally rejected because the conversations were surface-level — they described technologies conceptually instead of engaging with implementation details, tradeoffs, and code-level reasoning. This attempt MUST be qualitatively different.",
+		"Show Sam's opinionated voice — he should disagree with mainstream approaches where appropriate and explain WHY with specific technical reasoning.",
+		"### Conversation 1 — State machines in AI agent orchestration",
+		"Include a code snippet showing a state transition table or a Python/TS enum + transition function.",
 	}, "\n")
 
 	items := extractDeliverables(description)
