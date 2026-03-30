@@ -5117,6 +5117,9 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 		}
 		return false, nil
 	}
+	if projectContinuationResumeMessage(*latestUser) && assistantContent != "" && !turnHasAnyToolResult(messages, completedTurn.ID) {
+		return e.retryGenericProjectExecutionContinuation(ctx, session, completedTurn, latestUser)
+	}
 	preferredResumeTaskIDs := projectContinuationPromptNamedTaskIDs(strings.TrimSpace(latestUser.Content))
 	if handled, shouldStop, err := e.resumeBlockedProjectContinuationReviewLane(ctx, completedTurn.ID, session.ID, session.ScopeID, preferredResumeTaskIDs); err != nil {
 		return false, err
@@ -5292,16 +5295,24 @@ func (e *TurnEngine) retryGenericProjectExecutionContinuation(
 	if err != nil {
 		return false, err
 	}
-	snapshot, err := e.projectExecutionContinuationSnapshot(ctx, session.ScopeID)
-	if err != nil {
-		return false, err
-	}
 	agentID := latestCompleted.RespondingID
-	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot) +
-		" Your last continuation turn returned a generic non-action reply instead of advancing the project." +
-		" Do not ask which function to call, do not offer to format JSON or tool calls, and do not ask the user for more parameters." +
-		" Your next assistant action must either emit the concrete tool calls that advance the project or report one concrete blocker sentence."
-	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	retryPrompt := ""
+	if strings.EqualFold(strings.TrimSpace(stringValue(messageMetadataMap(latestUser.Metadata)["source"])), "project_continuation_resume") {
+		retryPrompt = strings.TrimSpace(latestUser.Content) +
+			" Your last continuation turn returned only generic narration instead of taking the focused project action already required above." +
+			" Do not answer with narration alone, do not restate project state, and do not fall back to broad rediscovery." +
+			" Your next assistant action must emit the concrete task.update, task.create, or explicitly allowed parent-scoped task.list needed by the focused handoff above, or report one concrete blocker sentence."
+	} else {
+		snapshot, err := e.projectExecutionContinuationSnapshot(ctx, session.ScopeID)
+		if err != nil {
+			return false, err
+		}
+		retryPrompt = buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot) +
+			" Your last continuation turn returned a generic non-action reply instead of advancing the project." +
+			" Do not ask which function to call, do not offer to format JSON or tool calls, and do not ask the user for more parameters." +
+			" Your next assistant action must either emit the concrete tool calls that advance the project or report one concrete blocker sentence."
+	}
+	retryMessage, err := e.appendProjectContinuationRetryMessage(ctx, session.ID, agentID, completedTaskID, latestUser, retryPrompt)
 	if err != nil {
 		return false, err
 	}
@@ -5359,7 +5370,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationAfterPrerequisiteRepair(
 		" Your last continuation repaired one project prerequisite with a direct mutation, but remaining draft work still needs advancement." +
 		" Do not stop with a status summary after a prerequisite-only task.update or task.create." +
 		" Continue immediately from the updated task tree and take the next bounded project action."
-	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	retryMessage, err := e.appendProjectContinuationRetryMessage(ctx, session.ID, agentID, completedTaskID, latestUser, retryPrompt)
 	if err != nil {
 		return false, err
 	}
@@ -5414,7 +5425,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForFocusedPrerequisiteRepa
 		" Your last continuation was blocked because the focus task still has explicit prerequisite fields missing." +
 		" Do not call file.read, file.list, task.get, agent.list, or flow.list_templates first." +
 		" Your next assistant action must issue one narrow task.update on the focus task that repairs the missing assigned_agent_id / flow_template_id fields using the already-named ids in this continuation prompt, or report one blocker sentence if the required values are still unknown."
-	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	retryMessage, err := e.appendProjectContinuationRetryMessage(ctx, session.ID, agentID, completedTaskID, latestUser, retryPrompt)
 	if err != nil {
 		return false, err
 	}
@@ -5501,7 +5512,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForMissingDependency(
 			focusHints,
 			missingPath,
 		)
-		retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+		retryMessage, err := e.appendProjectContinuationRetryMessage(ctx, session.ID, agentID, completedTaskID, latestUser, retryPrompt)
 		if err != nil {
 			return false, err
 		}
@@ -5586,7 +5597,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForMissingDependency(
 	}
 	agentID := latestCompleted.RespondingID
 	retryPrompt := buildProjectExecutionContinuationMissingDependencyRetryPrompt(completedTask, remainingDraftTasks, snapshot, missingPath)
-	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	retryMessage, err := e.appendProjectContinuationRetryMessage(ctx, session.ID, agentID, completedTaskID, latestUser, retryPrompt)
 	if err != nil {
 		return false, err
 	}
@@ -5666,7 +5677,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForBoundedSizeStop(
 		taskHintsByTask[focusTask.ID],
 		projectContinuationBoundedSizeSuggestedChildTitles(messages, latestCompleted.ID, focusTask.ID),
 	)
-	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	retryMessage, err := e.appendProjectContinuationRetryMessage(ctx, session.ID, agentID, completedTaskID, latestUser, retryPrompt)
 	if err != nil {
 		return false, err
 	}
@@ -5746,7 +5757,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForReplacementChildWork(
 		focusActivity,
 		taskHintsByTask[focusTask.ID],
 	)
-	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	retryMessage, err := e.appendProjectContinuationRetryMessage(ctx, session.ID, agentID, completedTaskID, latestUser, retryPrompt)
 	if err != nil {
 		return false, err
 	}
@@ -5933,7 +5944,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForFocusedCloseoutReadySto
 		requiredChildRefs,
 	)
 	agentID := latestCompleted.RespondingID
-	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	retryMessage, err := e.appendProjectContinuationRetryMessage(ctx, session.ID, agentID, completedTaskID, latestUser, retryPrompt)
 	if err != nil {
 		return false, err
 	}
@@ -6034,7 +6045,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForParentCompletionRequire
 			requiredChildRefs,
 		)
 	}
-	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	retryMessage, err := e.appendProjectContinuationRetryMessage(ctx, session.ID, agentID, completedTaskID, latestUser, retryPrompt)
 	if err != nil {
 		return false, err
 	}
@@ -6128,7 +6139,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForRediscoveryStop(
 		childActivity[blockedTask.ID],
 		taskHintsByTask[blockedTask.ID],
 	)
-	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	retryMessage, err := e.appendProjectContinuationRetryMessage(ctx, session.ID, agentID, completedTaskID, latestUser, retryPrompt)
 	if err != nil {
 		return false, err
 	}
@@ -6383,7 +6394,7 @@ func buildProjectExecutionContinuationReplacementChildRetryPrompt(
 		retryPrompt.WriteByte(' ')
 		retryPrompt.WriteString(repairLine)
 		retryPrompt.WriteString(" Do not create another replacement child while that preferred same-deliverable draft still exists.")
-		retryPrompt.WriteString(" Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.")
+		retryPrompt.WriteString(" Do not call task.list without parent_task_id, task.get, file.list, file.read, or file.search before acting.")
 		retryPrompt.WriteString(fmt.Sprintf(" Do not queue parent task %s again from the project lane.", focusLabel))
 		retryPrompt.WriteString(" Do not inspect or mention other draft parents until this handoff is advanced.")
 		if strings.Contains(repairLine, "child_tasks=") {
@@ -6394,7 +6405,7 @@ func buildProjectExecutionContinuationReplacementChildRetryPrompt(
 		retryPrompt.WriteString(" Your next assistant action must repair and queue the preferred existing same-deliverable child draft named above with one narrow task.update, or block/consolidate the weaker duplicate siblings if that preferred child is no longer usable.")
 		return retryPrompt.String()
 	}
-	retryPrompt.WriteString(" Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.")
+	retryPrompt.WriteString(" Do not call task.list without parent_task_id, task.get, file.list, file.read, or file.search before acting.")
 	retryPrompt.WriteString(fmt.Sprintf(" Do not queue parent task %s again from the project lane.", focusLabel))
 	retryPrompt.WriteString(" Do not inspect or mention other draft parents until this handoff is advanced.")
 	retryPrompt.WriteString(fmt.Sprintf(" Your next assistant action must create the smallest fresh replacement child task beneath %s now, or queue an existing direct child draft there if one already fits unchanged.", focusLabel))
@@ -6898,6 +6909,16 @@ func looksLikeProjectContinuationMetaDraft(title string, description *string) bo
 	}
 	if strings.Contains(normalized, "draft project task") &&
 		(strings.Contains(normalized, "inspect") || strings.Contains(normalized, "promote")) {
+		return true
+	}
+	return false
+}
+
+func turnHasAnyToolResult(messages []repo.ChatMessage, turnID uuid.UUID) bool {
+	for _, message := range messagesForTurn(messages, turnID) {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
 		return true
 	}
 	return false
@@ -8956,6 +8977,10 @@ func (e *TurnEngine) appendProjectBootstrapContinuationMessageWithContent(ctx co
 }
 
 func (e *TurnEngine) appendProjectExecutionContinuationMessage(ctx context.Context, sessionID, authorAgentID, completedTaskID uuid.UUID, content string) (*chat.ChatMessage, error) {
+	return e.appendProjectContinuationRetryMessage(ctx, sessionID, authorAgentID, completedTaskID, nil, content)
+}
+
+func (e *TurnEngine) appendProjectContinuationRetryMessage(ctx context.Context, sessionID, authorAgentID, completedTaskID uuid.UUID, latestUser *repo.ChatMessage, content string) (*chat.ChatMessage, error) {
 	if e == nil || sessionID == uuid.Nil {
 		return nil, repo.ErrNotFound
 	}
@@ -8966,8 +8991,12 @@ func (e *TurnEngine) appendProjectExecutionContinuationMessage(ctx context.Conte
 	} else if suppress {
 		return nil, nil
 	}
+	source := projectExecutionContinuationSource
+	if latestUser != nil && projectContinuationResumeMessage(*latestUser) {
+		source = "project_continuation_resume"
+	}
 	metadataMap := map[string]any{
-		"source":                            projectExecutionContinuationSource,
+		"source":                            source,
 		"auto_continue":                     true,
 		"continuation_snapshot_fingerprint": fingerprint,
 		"repo_version":                      strings.TrimSpace(versionpkg.RepoVersion),
@@ -32074,6 +32103,11 @@ func projectContinuationReplacementChildHandoffActive(rt *turnRuntime) bool {
 		strings.Contains(initial, "fresh replacement child task beneath") {
 		return true
 	}
+	if strings.Contains(initial, "Current focus parent:") &&
+		(strings.Contains(initial, "repair and queue the preferred existing same-deliverable child draft named above") ||
+			strings.Contains(initial, "create or queue the smallest bounded direct child beneath that named repair draft")) {
+		return true
+	}
 	if projectContinuationFocusedPrerequisiteRepairActive(initial) {
 		return true
 	}
@@ -35861,10 +35895,16 @@ func projectContinuationFocusedDraftReadGuardActive(initial string) bool {
 	if strings.Contains(initial, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.") {
 		return true
 	}
+	if strings.Contains(initial, "Do not call task.list without parent_task_id, task.get, file.list, file.read, or file.search before acting.") {
+		return true
+	}
 	if strings.Contains(initial, "Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.") {
 		return true
 	}
 	if strings.Contains(initial, "Because that focus parent only has malformed or stale child artifact lanes, do not queue the parent again from the project lane. Create the smallest fresh replacement child task under it now instead.") {
+		return true
+	}
+	if strings.Contains(initial, "Do not create another replacement child while that preferred same-deliverable draft still exists.") {
 		return true
 	}
 	return false
@@ -35926,7 +35966,7 @@ func shouldBlockProjectContinuationFocusedDraftReadTool(rt *turnRuntime, toolNam
 	}
 	focusTaskID := projectContinuationFocusedTaskID(initial)
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "file.read", "file.list", "task.get":
+	case "file.read", "file.list", "file.search", "task.get":
 		if closeoutReadyActive {
 			return true, buildProjectContinuationFocusedCloseoutReadyGuardError(focusTaskID, toolName)
 		}

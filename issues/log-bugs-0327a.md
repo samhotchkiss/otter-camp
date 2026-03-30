@@ -1,5 +1,16 @@
 # 0327a Bug Log
 
+## 2026-03-30 17:33 MDT
+
+- Bug: focused PM executable-contract retries still leaked out of their narrowed handoff state in two ways.
+- Shape:
+  - first, same-deliverable repair prompts banned `file.list` / `file.read` in text but did not actually activate the focused read guard, so `file.search` and exact-path `file.list` still slipped through
+  - second, when a focused `project_continuation_resume` either returned narration-only assistant text or hit the replacement-handoff rediscovery stop, the retry appenders regenerated a fresh generic `project_execution_continuation` row instead of preserving the focused resume source/prompt family
+- Live canary:
+  - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`
+  - repair prompt `18221` was specific, but earlier retries still leaked into filesystem rediscovery and later retries still downgraded into generic `project_execution_continuation` rows `18226+`
+- Impact: the PM lane kept losing the narrow executable-contract repair context for task `328` beneath parent `297`, reopening broad rediscovery loops instead of staying pinned to the same focused replacement-parent handoff.
+
 ## 2026-03-29 14:08 MDT
 
 - Bug: shared-file child recovery lanes were still allowed to loop on `file.read not_found` when the inherited parent file did not exist yet.

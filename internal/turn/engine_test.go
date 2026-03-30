@@ -14313,6 +14313,120 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesGenericReplyWithF
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnRetriesGenericFocusedResumeReplyWithFreshMessage(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	focusTaskID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 310,
+				Title:      "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations (replacement)",
+				WorkStatus: "done",
+			},
+			focusTaskID: {
+				ID:         focusTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 297,
+				Title:      "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations",
+				WorkStatus: "draft",
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	focusedPrompt := strings.Join([]string{
+		"Continue the active project execution now.",
+		"The latest completed task was task 310 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations (replacement)).",
+		"Current focus parent: task 297 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations) id=" + focusTaskID.String() + ".",
+		"Do not call task.list without parent_task_id, task.get, file.list, file.read, or file.search before acting.",
+		"Your next assistant action must repair and queue the preferred existing same-deliverable child draft named above with one narrow task.update, or block/consolidate the weaker duplicate siblings if that preferred child is no longer usable.",
+	}, " ")
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        focusedPrompt,
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            "project_continuation_resume",
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "I'll create a fresh replacement child task beneath OC-297 to deliver the level 3 test conversations file.",
+		SequenceNumber: 11,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   1,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected generic focused project continuation reply to enqueue a fresh retry message")
+	}
+
+	jobs := fixture.enqueuer.jobs
+	if len(jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1", len(jobs))
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var retryMessage *repo.ChatMessage
+	for i := range storedMessages {
+		msg := &storedMessages[i]
+		if msg.ID == jobs[0].payload.MessageID {
+			retryMessage = msg
+			break
+		}
+	}
+	if retryMessage == nil {
+		t.Fatal("missing appended retry continuation message")
+	}
+	if !strings.Contains(retryMessage.Content, "Current focus parent: task 297") {
+		t.Fatalf("retry message = %q, want focused parent context preserved", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "Do not answer with narration alone") {
+		t.Fatalf("retry message = %q, want focused generic-reply correction", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "repair and queue the preferred existing same-deliverable child draft named above") {
+		t.Fatalf("retry message = %q, want focused repair guidance preserved", retryMessage.Content)
+	}
+	if got := strings.TrimSpace(stringValue(messageMetadataMap(retryMessage.Metadata)["source"])); got != "project_continuation_resume" {
+		t.Fatalf("retry message source = %q, want project_continuation_resume", got)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnRetriesJordanGenericReplyWithFreshMessage(t *testing.T) {
 	t.Parallel()
 
@@ -15921,6 +16035,129 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesReplacementHandof
 	}
 	if !strings.Contains(retryMessage.Content, "Your next assistant action must create the smallest fresh replacement child task beneath task 245") {
 		t.Fatalf("retry message = %q, want direct replacement child instruction", retryMessage.Content)
+	}
+}
+
+func TestHandleCompletedProjectExecutionContinuationTurnRetriesReplacementHandoffStopWithFocusedResumeSource(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	focusTaskID := uuid.New()
+	malformedChildID := uuid.New()
+	turnID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	focusDescription := "Create the SamBot technical architecture document at planning/sambot-tech-architecture.md."
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 208,
+				Title:      "Recover SamBot planning continuation",
+				WorkStatus: "done",
+			},
+			focusTaskID: {
+				ID:          focusTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  245,
+				Title:       "Write planning/sambot-tech-architecture.md",
+				Description: &focusDescription,
+				WorkStatus:  "draft",
+			},
+			malformedChildID: {
+				ID:         malformedChildID,
+				ProjectID:  projectID,
+				TaskNumber: 257,
+				Title:      "Require statements: capture the key architecture decisions in planning/sambot-tech-architecture.md",
+				WorkStatus: "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition_parent_task_id": focusTaskID.String(),
+				}),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Current focus parent: task 245 (Write planning/sambot-tech-architecture.md) id=" + focusTaskID.String() + " work_status=draft deliverable_path=planning/sambot-tech-architecture.md malformed_child_tasks=1.",
+			"Do not call task.list without parent_task_id, task.get, file.list, file.read, or file.search before acting.",
+			"Your next assistant action must create the smallest fresh replacement child task beneath task 245 (Write planning/sambot-tech-architecture.md) now, or queue an existing direct child draft there if one already fits unchanged.",
+		}, " "),
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            "project_continuation_resume",
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "Let me reread the planning doc before I decide what replacement child to create.",
+		SequenceNumber: 11,
+	}
+	systemMessage := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "system",
+		Status:         "final",
+		Content:        projectContinuationReplacementHandoffPrefix + " Do not reread sibling artifacts from the project lane; create the fresh replacement child now or use only task.list(parent_task_id=...) if child-lane verification is still required.]",
+		SequenceNumber: 12,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant, *systemMessage}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected focused resume replacement-handoff stop to enqueue a fresh retry message")
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var retryMessage *repo.ChatMessage
+	for i := range storedMessages {
+		msg := &storedMessages[i]
+		if msg.ID == fixture.enqueuer.jobs[0].payload.MessageID {
+			retryMessage = msg
+			break
+		}
+	}
+	if retryMessage == nil {
+		t.Fatal("missing appended replacement-handoff retry message")
+	}
+	if got := strings.TrimSpace(stringValue(messageMetadataMap(retryMessage.Metadata)["source"])); got != "project_continuation_resume" {
+		t.Fatalf("retry message source = %q, want project_continuation_resume", got)
+	}
+	if !strings.Contains(retryMessage.Content, "Current focus parent: task 245") {
+		t.Fatalf("retry message = %q, want focused parent task reference", retryMessage.Content)
 	}
 }
 
@@ -28859,6 +29096,9 @@ func TestBuildProjectExecutionContinuationReplacementChildRetryPromptPrefersRepa
 	if !strings.Contains(prompt, "repair and queue the preferred existing same-deliverable child draft named above with one narrow task.update") {
 		t.Fatalf("prompt = %q, want direct repair task.update guidance", prompt)
 	}
+	if !strings.Contains(prompt, "file.search before acting") {
+		t.Fatalf("prompt = %q, want file.search ban in repair guidance", prompt)
+	}
 	if strings.Contains(prompt, "create the smallest fresh replacement child task beneath task 297") {
 		t.Fatalf("prompt = %q, should not keep fresh replacement-child wording", prompt)
 	}
@@ -28926,6 +29166,37 @@ func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksFileRead(t *tes
 	}
 	if !strings.Contains(reason, focusTaskID.String()) || !strings.Contains(reason, "file.read") {
 		t.Fatalf("reason = %q, want focused parent handoff guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksRepairPromptFileSearch(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: "project_continuation_resume",
+		initialMessageText: strings.Join([]string{
+			"Current focus parent: task 297 (Write planning/sambot-prompts/test-conversations-level3.md) id=" + focusTaskID.String() + ".",
+			"Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 303 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot dialogues) id=" + uuid.New().String() + " work_status=draft.",
+			"Do not create another replacement child while that preferred same-deliverable draft still exists.",
+			"Do not call task.list without parent_task_id, task.get, file.list, file.read, or file.search before acting.",
+			"Your next assistant action must repair and queue the preferred existing same-deliverable child draft named above with one narrow task.update, or block/consolidate the weaker duplicate siblings if that preferred child is no longer usable.",
+		}, " "),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, "file.search", map[string]any{
+		"path":  "planning/sambot-prompts",
+		"query": "level-3",
+	})
+	if !blocked {
+		t.Fatal("expected repair-prompt file.search to be blocked")
+	}
+	if !strings.Contains(reason, focusTaskID.String()) || !strings.Contains(reason, "file.search") {
+		t.Fatalf("reason = %q, want focused repair handoff guidance", reason)
 	}
 }
 
@@ -29626,20 +29897,20 @@ func TestProjectExecutionContinuationSnapshotForSummaryFallsBackWhenPriorityFilt
 		tasks: &fakeTaskRepo{
 			items: map[uuid.UUID]repo.ProjectTask{
 				parentID: {
-					ID:           parentID,
-					ProjectID:    projectID,
-					TaskNumber:   297,
-					Title:        "Replacement parent",
-					Description:  stringPtr("Owns planning/sambot-prompts/test-conversations-level3.md"),
-					WorkStatus:   "draft",
+					ID:          parentID,
+					ProjectID:   projectID,
+					TaskNumber:  297,
+					Title:       "Replacement parent",
+					Description: stringPtr("Owns planning/sambot-prompts/test-conversations-level3.md"),
+					WorkStatus:  "draft",
 				},
 				childID: {
-					ID:           childID,
-					ProjectID:    projectID,
-					TaskNumber:   310,
-					Title:        "Completed replacement child",
-					Description:  stringPtr("Write planning/sambot-prompts/test-conversations-level3.md"),
-					WorkStatus:   "done",
+					ID:          childID,
+					ProjectID:   projectID,
+					TaskNumber:  310,
+					Title:       "Completed replacement child",
+					Description: stringPtr("Write planning/sambot-prompts/test-conversations-level3.md"),
+					WorkStatus:  "done",
 					Metadata: mustJSONRaw(map[string]any{
 						"decomposition_parent_task_id": parentID.String(),
 					}),

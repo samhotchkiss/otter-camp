@@ -1,5 +1,25 @@
 # 0327a Fix Log
 
+## 2026-03-30 17:33 MDT
+
+- `add-0328h` follow-on:
+  - `internal/turn/engine.go` now treats same-deliverable repair prompts as active focused replacement-handoff states
+  - those prompts now explicitly ban `file.search`, and the focused-draft read guard now blocks `file.search` alongside `file.read`, `file.list`, and `task.get`
+  - narration-only `project_continuation_resume` completions that emitted no tool results now retry immediately with the focused prompt instead of falling through to later auto-queue logic
+  - project continuation retry appenders now preserve `metadata.source=project_continuation_resume` whenever the triggering PM message was already a focused resume, instead of downgrading the follow-up into `project_execution_continuation`
+- Focused verification:
+  - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurnRetriesBoundedSizeStopWithFreshMessage|HandleCompletedProjectExecutionContinuationTurnRetriesGenericFocusedResumeReplyWithFreshMessage|HandleCompletedProjectExecutionContinuationTurnRetriesReplacementHandoffStopWithFocusedResumeSource|HandleCompletedProjectExecutionContinuationTurnRetriesReplacementHandoffStopWithFreshMessage|HandleCompletedProjectExecutionContinuationTurnRetriesAfterPrerequisiteOnlyMutation|BuildProjectExecutionContinuationReplacementChildRetryPromptPrefersRepairOfMalformedSameDeliverableDraftChild|ShouldBlockProjectContinuationFocusedDraftReadToolBlocksRepairPromptFileSearch)$' -count=1`
+- Live proof already landed for the first half:
+  - PM repair prompt `18221`
+  - no `file.list`, `file.search`, or `file.read` escaped from that focused retry
+  - blocked rediscovery stayed narrowed to `task.list` only at `18222-18224`
+- Remaining live-proof gap:
+  - the final source-preservation step still needs a clean post-restart focused retry, because the visible generic continuation rows `18226+` were already minted earlier in the same `3745` watch window before the last restart
+- Runtime:
+  - rebuilt `./bin/ottercamp`
+  - restarted tmux `codex-e2e-20260324`
+  - `./bin/ottercamp health --output json` returned `status=ok`
+
 ## 2026-03-29 15:34 MDT
 
 - `add-0328h` follow-on:
