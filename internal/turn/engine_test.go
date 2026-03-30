@@ -40451,6 +40451,30 @@ func TestBuildRecoveryResumeStateMessageIncludesStructuredReviewDecisionContext(
 	}
 }
 
+func TestBuildRecoveryResumeStateMessageIncludesTaskAcceptanceCriteriaFallback(t *testing.T) {
+	t.Parallel()
+
+	message := buildRecoveryResumeStateMessage(recoveryResumeState{
+		targetPath:             "planning/sambot-architecture.md",
+		failureReason:          "previous draft omitted required sections",
+		taskAcceptanceCriteria: []string{"planning/sambot-architecture.md exists", "Includes an Overview section", "Includes a monthly cost estimate table"},
+	})
+	actionPrompt := buildRecoveryResumeActionPrompt(recoveryResumeState{
+		targetPath:             "planning/sambot-architecture.md",
+		taskAcceptanceCriteria: []string{"planning/sambot-architecture.md exists", "Includes an Overview section", "Includes a monthly cost estimate table"},
+	})
+
+	if !strings.Contains(message, "Task acceptance criteria:") {
+		t.Fatalf("message = %q, want task acceptance criteria section", message)
+	}
+	if !strings.Contains(message, "- Includes a monthly cost estimate table") {
+		t.Fatalf("message = %q, want criteria content", message)
+	}
+	if !strings.Contains(actionPrompt, "Use the explicit task acceptance criteria above as the definition of done for this recovery turn.") {
+		t.Fatalf("actionPrompt = %q, want task acceptance criteria guidance", actionPrompt)
+	}
+}
+
 func TestBuildRecoveryResumeStateMessageIncludesInheritedSharedDeliverableHint(t *testing.T) {
 	t.Parallel()
 

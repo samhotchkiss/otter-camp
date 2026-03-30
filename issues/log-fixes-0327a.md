@@ -3868,3 +3868,13 @@
     - rebuilt/restarted on `repo_version=3641`
     - leaked inherited-shared child executions for tasks `160`, `180`, `182`, `189`, and `195` immediately flipped to `abandoned`
     - the remaining active session shells then closed on the next cleanup interval, which is the intended cleanup path once the completed turn is no longer transiently in-flight
+- 2026-03-29 18:57 MDT - Picked up the next `add-0328b` acceptance-gates reuse slice at the recovery-prompt layer.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `recoveryResumeState` now carries `taskAcceptanceCriteria`
+    - `loadRecoveryResumeState(...)` now fills that field from the task description's explicit `Acceptance criteria:` block
+    - `buildRecoveryResumeStateMessage(...)` now shows `Task acceptance criteria:` when there is no prior structured review criteria set
+    - `buildRecoveryResumeActionPrompt(...)` now tells the lane to use those explicit task acceptance criteria as the definition of done for the recovery turn
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestBuildRecoveryResumeStateMessageIncludesTaskAcceptanceCriteriaFallback`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildRecoveryResumeStateMessageIncludes(TaskAcceptanceCriteriaFallback|StructuredReviewDecisionContext)|BuildTaskReviewActionPromptIncludesPreferredDeliverableTarget)$' -count=1`

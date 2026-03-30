@@ -19603,6 +19603,7 @@ type recoveryResumeState struct {
 	reviewDecisionSummary       string
 	reviewDecisionCriteria      []string
 	reviewDecisionEvidenceRefs  []string
+	taskAcceptanceCriteria      []string
 	inferredSummaryDraft        bool
 }
 
@@ -19782,6 +19783,7 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 		priorFailureReasons: append([]string(nil), checkpoint.PriorFailureReasons...),
 	}
 	if haveTaskRecord {
+		state.taskAcceptanceCriteria = reviewPromptAcceptanceCriteria(taskRecord)
 		state.inheritedSharedPath = e.recoveryResumeInheritedSharedDeliverablePath(taskRecord, *checkpoint)
 		if decision, ok := e.flowExecutionReviewDecisionForSession(ctx, rt.session); ok {
 			state.reviewDecisionSummary, state.reviewDecisionCriteria, state.reviewDecisionEvidenceRefs = structuredReviewDecisionPromptContext(decision)
@@ -20311,6 +20313,11 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 		for _, criterion := range state.reviewDecisionCriteria {
 			lines = append(lines, "- "+criterion)
 		}
+	} else if len(state.taskAcceptanceCriteria) != 0 {
+		lines = append(lines, "Task acceptance criteria:")
+		for _, criterion := range state.taskAcceptanceCriteria {
+			lines = append(lines, "- "+criterion)
+		}
 	}
 	if len(state.reviewDecisionEvidenceRefs) != 0 {
 		lines = append(lines, "Prior structured evidence refs: "+joinQuotedPaths(state.reviewDecisionEvidenceRefs))
@@ -20358,6 +20365,11 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 		} else {
 			lines = append(lines, "Treat "+target+" as the target file for this recovery turn.")
 		}
+	}
+	if len(state.reviewDecisionCriteria) != 0 {
+		lines = append(lines, "Use the structured acceptance criteria above as the definition of done for this recovery turn.")
+	} else if len(state.taskAcceptanceCriteria) != 0 {
+		lines = append(lines, "Use the explicit task acceptance criteria above as the definition of done for this recovery turn.")
 	}
 	if sharedPath := strings.TrimSpace(state.inheritedSharedPath); sharedPath != "" {
 		lines = append(lines,
