@@ -1303,7 +1303,15 @@ func estimateTaskMinutes(title string, description *string, parentScoped bool) (
 	isBoundedSectionDraft := strings.HasPrefix(strings.ToLower(strings.TrimSpace(title)), "draft ") &&
 		strings.Contains(strings.ToLower(strings.TrimSpace(title)), " section for the brief")
 	deliverables := extractDeliverables(rawDescription)
+	readOnlyVerificationResultsTask := looksLikeReadOnlyVerificationResultsTask(title, rawDescription, deliverables)
 	singleConcreteFileDeliverable := looksLikeSingleConcreteFileDeliverable(title, rawDescription, deliverables)
+	if readOnlyVerificationResultsTask {
+		estimatedMinutes := 25
+		if len(rawDescription) >= 900 {
+			estimatedMinutes = 30
+		}
+		return estimatedMinutes, defaultMaxTaskMinutes
+	}
 
 	maxMinutes := defaultMaxTaskMinutes
 	if containsAny(text, toolHeavySignals) || containsAny(text, externalBoundSignals) {
@@ -1367,6 +1375,40 @@ func looksLikeSingleConcreteFileDeliverable(title, rawDescription string, delive
 	}
 	paths := extractWorkspaceFilePaths(title + "\n" + rawDescription)
 	return len(paths) == 1
+}
+
+func looksLikeReadOnlyVerificationResultsTask(title, rawDescription string, deliverables []string) bool {
+	if titleSuggestsCompoundBoundedWork(title) {
+		return false
+	}
+	if len(deliverables) > 1 {
+		return false
+	}
+	normalizedText := strings.ToLower(strings.TrimSpace(strings.Join([]string{title, rawDescription}, " ")))
+	if normalizedText == "" {
+		return false
+	}
+	if !containsAny(normalizedText, []string{"verification", "verify ", "pass/fail", "checklist"}) {
+		return false
+	}
+	if !containsAny(normalizedText, []string{"read-only", "do not modify the source", "do not rewrite", "only produce the verification results file"}) {
+		return false
+	}
+
+	paths := extractWorkspaceFilePaths(title + "\n" + rawDescription)
+	if len(paths) != 2 {
+		return false
+	}
+	resultPaths := 0
+	sourcePaths := 0
+	for _, path := range paths {
+		if strings.HasPrefix(path, "results/") {
+			resultPaths++
+			continue
+		}
+		sourcePaths++
+	}
+	return resultPaths == 1 && sourcePaths == 1
 }
 
 func extractWorkspaceFilePaths(text string) []string {

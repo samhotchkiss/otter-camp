@@ -4834,3 +4834,25 @@
   - verified with:
     - `GOFLAGS='' go test ./internal/controlplane -run 'TestBuildQueueKickoffMessageFor(ReadOnlyVerificationTask|SinglePassCLIWriteTask|InheritedSharedDeliverableChild|OrchestrationOnlyParent)$' -count=1`
     - `GOFLAGS='' go test ./internal/turn -run 'TestShouldBlockTaskExecution(ReadOnlyVerificationWriteTool|InheritedSharedDeliverableWriteTool|CurrentTaskRediscoveryTool)$' -count=1`
+- 2026-03-30 11:53 MDT - Let closeout-ready execution-first parents clear the satisfied-draft contract guard when an explicit override already records that planning is intentionally skipped.
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - `satisfiedDraftCompletionConflict(...)` now exits early when the parsed plan already carries a recorded planning override reason
+    - the same helper now normalizes artifact-evidence slugs before comparing them to artifact-contract slugs, eliminating false misses from equivalent slug spellings
+  - changed [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go):
+    - added `TestTaskUpdateAutoCompletesSatisfiedDraftTaskWithPlanningOverride`
+    - kept `TestTaskUpdateRejectsSatisfiedDraftTaskWithIncompletePlanningContract` green to prove ordinary incomplete drafts still reject
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'TestTaskUpdate(RejectsSatisfiedDraftTaskWithIncompletePlanningContract|AutoCompletesSatisfiedDraftTaskWithPlanningOverride)$' -count=1`
+  - live proof:
+    - after restart on the new binary, task `246` (`Write planning/sambot-personality-spec.md — SamBot personality & tone specification`) advanced to `done` instead of stalling on `draft_completion_contract_incomplete`
+- 2026-03-30 11:53 MDT - Let focused replacement parents create a fresh child when every existing direct child draft is already a malformed artifact lane.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `shouldBlockProjectContinuationFocusedDraftTaskCreateTool(...)` now filters malformed direct child drafts out of the duplicate-child `task.create` blocker
+    - if no reusable direct child drafts remain under the focused parent, the PM lane may create the fresh replacement child instead of being trapped by stale malformed drafts
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - replaced the old structurally-invalid “focused parent with reusable direct child drafts” engine guard test with direct existing-child guard-message coverage
+    - added `TestShouldBlockProjectContinuationFocusedDraftTaskCreateAllowsFreshReplacementWhenDirectChildDraftsAreMalformed`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectContinuationFocusedDraftExistingChildGuardErrorIncludesChildLabels|ShouldBlockProjectContinuationFocusedDraftTaskCreate(AllowsFreshReplacementWhenDirectChildDraftsAreMalformed|ForCloseoutReadyParent|ForWorkspaceDeliverableCloseoutParent))$' -count=1`
+  - deploy / proof target:
+    - after a fresh repo-version build, the next PM continuation for task `286` should be able to create a new replacement child instead of looping on malformed drafts `290/291/292`

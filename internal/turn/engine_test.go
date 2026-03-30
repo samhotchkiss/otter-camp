@@ -10603,6 +10603,96 @@ func TestShouldBlockTaskExecutionReadOnlyVerificationWriteTool(t *testing.T) {
 	}
 }
 
+func TestShouldBlockTaskExecutionReadOnlyVerificationWriteToolAllowsSeparateResultsOutput(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "**Read-only verification task — do NOT rewrite the deliverable.**\n\nThe file `planning/sambot-personality-spec.md` already exists on disk.\n\n**Deliverable:** Write `results/sambot-personality-spec-verification.md` with a pass/fail table for each checklist item plus an overall PASS/FAIL verdict.\n\nDo NOT modify the source spec file. Only produce the verification results file."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  294,
+				Title:       "Verify planning/sambot-personality-spec.md completeness — read-only checklist verification",
+				Description: &description,
+				WorkStatus:  "in_progress",
+			},
+		},
+	}
+
+	rt := &turnRuntime{session: fixture.session}
+	blocked, reason := fixture.engine.shouldBlockTaskExecutionReadOnlyVerificationWriteTool(context.Background(), rt, "file.write", map[string]any{
+		"path": "planning/sambot-personality-spec.md",
+	})
+	if !blocked {
+		t.Fatal("expected source-file rewrite to be blocked")
+	}
+	if !strings.Contains(reason, "results/sambot-personality-spec-verification.md") {
+		t.Fatalf("reason = %q, want separate verification output guidance", reason)
+	}
+
+	blocked, _ = fixture.engine.shouldBlockTaskExecutionReadOnlyVerificationWriteTool(context.Background(), rt, "file.write", map[string]any{
+		"path": "results/sambot-personality-spec-verification.md",
+	})
+	if blocked {
+		t.Fatal("did not expect verification results output write to be blocked")
+	}
+}
+
+func TestExplicitDeliverablePathPrefersResultsOutputFromVerificationDescription(t *testing.T) {
+	t.Parallel()
+
+	description := "**Read-only verification task — do NOT rewrite the deliverable.**\n\nThe file `planning/sambot-personality-spec.md` already exists on disk.\n\n**Deliverable:** Write `results/sambot-personality-spec-verification.md` with a pass/fail table.\n\nDo NOT modify the source spec file."
+	task := repo.ProjectTask{
+		Title:       "Verify planning/sambot-personality-spec.md completeness — read-only checklist verification",
+		Description: &description,
+	}
+
+	if got := explicitDeliverablePath(task); got != "results/sambot-personality-spec-verification.md" {
+		t.Fatalf("explicitDeliverablePath = %q, want results/sambot-personality-spec-verification.md", got)
+	}
+}
+
+func TestProjectContinuationDraftTaskReadyForParentClosureRequiresExplicitOutputPresence(t *testing.T) {
+	t.Parallel()
+
+	description := "**Read-only verification task — do NOT rewrite the deliverable.**\n\nThe file `planning/sambot-personality-spec.md` already exists on disk.\n\n**Deliverable:** Write `results/sambot-personality-spec-verification.md` with a pass/fail table.\n\nDo NOT modify the source spec file."
+	task := repo.ProjectTask{
+		Title:       "Verify planning/sambot-personality-spec.md completeness — read-only checklist verification",
+		Description: &description,
+		Metadata:    json.RawMessage(`{"parent_orchestration":{"outcome_assessment":{"satisfied":true}}}`),
+	}
+	if projectContinuationDraftTaskReadyForParentClosureForTask(task, projectContinuationChildActivity{}) {
+		t.Fatal("did not expect explicit single-file verification parent without workspace output to be closeout-ready")
+	}
+	if !projectContinuationDraftTaskReadyForParentClosureForTask(task, projectContinuationChildActivity{workspaceDeliverablePresent: true}) {
+		t.Fatal("expected explicit single-file verification parent with workspace output to be closeout-ready")
+	}
+}
+
+func TestProjectExecutionContinuationTaskRefHidesOutcomeSatisfiedWithoutExplicitOutputPresence(t *testing.T) {
+	t.Parallel()
+
+	description := "**Read-only verification task — do NOT rewrite the deliverable.**\n\nThe file `planning/sambot-personality-spec.md` already exists on disk.\n\n**Deliverable:** Write `results/sambot-personality-spec-verification.md` with a pass/fail table.\n\nDo NOT modify the source spec file."
+	task := repo.ProjectTask{
+		ID:          uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+		TaskNumber:  294,
+		Title:       "Verify planning/sambot-personality-spec.md completeness — read-only checklist verification",
+		Description: &description,
+		WorkStatus:  "draft",
+		Metadata:    json.RawMessage(`{"parent_orchestration":{"outcome_assessment":{"satisfied":true}}}`),
+	}
+	ref := projectExecutionContinuationTaskRef(task, projectContinuationChildActivity{}, projectContinuationTaskHints{DeliverablePath: "results/sambot-personality-spec-verification.md"})
+	if strings.Contains(ref, "outcome_satisfied=true") {
+		t.Fatalf("ref = %q, did not want stale outcome_satisfied marker without explicit output presence", ref)
+	}
+}
+
 func TestShouldBlockOrchestrationParentReviewTaskListToolRequiresParentScopedList(t *testing.T) {
 	t.Parallel()
 
@@ -25907,6 +25997,72 @@ func TestProjectExecutionContinuationSnapshotTreatsMarkParentCompleteTitleAsClos
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotTreatsVerificationEvidenceChildAsCloseoutProof(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	description := "**Read-only verification task — do NOT rewrite the deliverable.**\n\nThe file `planning/sambot-personality-spec.md` already exists on disk.\n\n**Deliverable:** Write `results/sambot-personality-spec-verification.md` with a pass/fail table.\n\nDo NOT modify the source spec file."
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	childMetadata := func(parentID uuid.UUID) json.RawMessage {
+		return mustJSONRaw(map[string]any{
+			"decomposition_parent_task_id": parentID.String(),
+			"parent_orchestration": map[string]any{
+				"integration_check": map[string]any{
+					"status": "passed",
+				},
+				"outcome_assessment": map[string]any{
+					"satisfied": true,
+				},
+			},
+		})
+	}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:         parentDraftID,
+				ProjectID:  projectID,
+				TaskNumber: 246,
+				Title:      "Write planning/sambot-personality-spec.md — SamBot personality & tone specification (replacement for blocked OC-190)",
+				Description: func() *string {
+					value := "Create the SamBot personality and tone specification at planning/sambot-personality-spec.md."
+					return &value
+				}(),
+				WorkStatus: "draft",
+			},
+			uuid.New(): {
+				ID:          uuid.New(),
+				ProjectID:   projectID,
+				TaskNumber:  294,
+				Title:       "Verify planning/sambot-personality-spec.md completeness — read-only checklist verification",
+				Description: &description,
+				WorkStatus:  "done",
+				Metadata:    childMetadata(parentDraftID),
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshotForSummary(context.Background(), projectID, "planning/sambot-personality-spec.md")
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshotForSummary: %v", err)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "task 246") {
+		t.Fatalf("DraftTaskLine = %q, want parent 246 restored as actionable draft", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "completed_closeout_child_tasks=1") {
+		t.Fatalf("DraftTaskLine = %q, want verification-evidence child to count as closeout proof", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "task 246") {
+		t.Fatalf("FocusTaskLine = %q, want focus to stay on parent 246", snapshot.FocusTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "completed_closeout_child_tasks=1") {
+		t.Fatalf("FocusTaskLine = %q, want closeout marker from verification-evidence child", snapshot.FocusTaskLine)
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotIgnoresSupersededCloseoutDrafts(t *testing.T) {
 	t.Parallel()
 
@@ -26514,7 +26670,30 @@ func TestShouldBlockProjectContinuationFocusedDraftTaskCreateForWorkspaceDeliver
 	}
 }
 
-func TestShouldBlockProjectContinuationFocusedDraftTaskCreateWhenDirectChildDraftsAlreadyExist(t *testing.T) {
+func TestBuildProjectContinuationFocusedDraftExistingChildGuardErrorIncludesChildLabels(t *testing.T) {
+	t.Parallel()
+
+	parentTaskID := uuid.New()
+	childDraftAID := uuid.New()
+	childDraftBID := uuid.New()
+	parentTask := repo.ProjectTask{
+		ID:         parentTaskID,
+		TaskNumber: 286,
+		Title:      "Build split technical prompt assets for SamBot",
+		WorkStatus: "draft",
+	}
+	draftChildren := []repo.ProjectTask{
+		{ID: childDraftAID, TaskNumber: 290, Title: "Write planning/sambot-prompts/test-conversations-technical-l2.md", WorkStatus: "draft"},
+		{ID: childDraftBID, TaskNumber: 291, Title: "Write planning/sambot-prompts/test-conversations-technical-l3.md", WorkStatus: "draft"},
+	}
+
+	reason := buildProjectContinuationFocusedDraftExistingChildGuardError(parentTask, draftChildren)
+	if !strings.Contains(reason, "direct child draft task(s)") || !strings.Contains(reason, "task 290") || !strings.Contains(reason, "task 291") {
+		t.Fatalf("reason = %q, want existing child draft guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftTaskCreateAllowsFreshReplacementWhenDirectChildDraftsAreMalformed(t *testing.T) {
 	t.Parallel()
 
 	projectID := uuid.New()
@@ -26570,13 +26749,10 @@ func TestShouldBlockProjectContinuationFocusedDraftTaskCreateWhenDirectChildDraf
 	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftTaskCreateTool(context.Background(), rt, "task.create", map[string]any{
 		"parent_task_id": parentTaskID.String(),
 		"title":          "Write planning/sambot-prompts/test-conversations-technical.md with level-2 and level-3 test conversations",
-		"description":    "Duplicate replacement child beneath OC-286.",
+		"description":    "Fresh replacement child beneath OC-286 after malformed child drafts blocked.",
 	})
-	if !blocked {
-		t.Fatal("expected project continuation to block duplicate task.create when direct child drafts already exist")
-	}
-	if !strings.Contains(reason, "direct child draft task(s)") || !strings.Contains(reason, "task 290") || !strings.Contains(reason, "task 291") {
-		t.Fatalf("reason = %q, want existing child draft guidance", reason)
+	if blocked {
+		t.Fatalf("reason = %q, want malformed direct child drafts to allow a fresh replacement child", reason)
 	}
 }
 
@@ -26831,6 +27007,46 @@ func TestShouldBlockProjectContinuationFocusedDraftMutationIgnoresCancelledPromp
 	})
 	if blocked {
 		t.Fatalf("blocked = true, reason = %q; want stale cancelled focus to stop blocking ancestor promotion", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftMutationForCurrentFocusParentQueueRequiredDoneUpdate(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	focusTaskID := uuid.New()
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			focusTaskID: {
+				ID:         focusTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 294,
+				Title:      "Verify planning/sambot-personality-spec.md completeness",
+				WorkStatus: "draft",
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session:            fixture.session,
+		initialMessageText: "Continue the active project execution now. Your last continuation turn confirmed this focused parent is already closeout-ready for the same deliverable. Current focus parent: task 294 (Verify planning/sambot-personality-spec.md completeness) id=" + focusTaskID.String() + " work_status=draft deliverable_path=planning/sambot-personality-spec.md",
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftMutationTool(context.Background(), rt, "task.update", map[string]any{
+		"task_id":     focusTaskID.String(),
+		"work_status": "done",
+	})
+	if !blocked {
+		t.Fatal("expected current-focus-parent done update to be blocked before dispatch")
+	}
+	if !strings.Contains(reason, "cannot jump straight from draft to done") {
+		t.Fatalf("reason = %q, want draft-to-done guidance", reason)
+	}
+	if !strings.Contains(reason, "work_status=queued") {
+		t.Fatalf("reason = %q, want queue guidance", reason)
 	}
 }
 

@@ -6295,6 +6295,64 @@ func TestTaskUpdateRejectsSatisfiedDraftTaskWithIncompletePlanningContract(t *te
 	}
 }
 
+func TestTaskUpdateAutoCompletesSatisfiedDraftTaskWithPlanningOverride(t *testing.T) {
+	taskID := uuid.New()
+	description := "Write the recovered SamBot feature specification to planning/sambot-feature-spec.md."
+	plan := taskplan.Analyze("Write SamBot feature specification", &description)
+	metadata := taskplan.ApplyMetadata(json.RawMessage(`{}`), plan)
+	overrideReason := "The deliverable already exists on disk; this is closeout of completed execution rather than new planning."
+	var err error
+	metadata, _, _, err = taskplan.ApplyProcessUpdate(metadata, taskplan.ProcessUpdate{
+		HasArtifactChanges: true,
+		Artifacts: []taskplan.ArtifactEvidence{
+			{
+				Slug:     "prd",
+				Summary:  "planning/sambot-feature-spec.md already exists and covers the intended scope.",
+				Sections: []string{"goals"},
+			},
+		},
+		OverrideReason: &overrideReason,
+	})
+	if err != nil {
+		t.Fatalf("ApplyProcessUpdate: %v", err)
+	}
+	metadata, err = taskorchestration.Apply(metadata, taskorchestration.Update{
+		OutcomeAssessment: taskorchestration.NewOutcomeAssessment(true, "planning/sambot-feature-spec.md is already complete and ready to keep.", time.Now().UTC()),
+	})
+	if err != nil {
+		t.Fatalf("taskorchestration.Apply: %v", err)
+	}
+
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:          taskID,
+			Title:       "Write SamBot feature specification",
+			Description: &description,
+			WorkStatus:  "draft",
+			Metadata:    metadata,
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id": taskID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("task.update error = %v, want nil", out["error"])
+	}
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if taskOut["work_status"] != "done" {
+		t.Fatalf("work_status = %v, want done", taskOut["work_status"])
+	}
+}
+
 func TestTaskUpdateDoesNotAutoCompleteBroadSatisfiedDraftTask(t *testing.T) {
 	taskID := uuid.New()
 	description := strings.Join([]string{

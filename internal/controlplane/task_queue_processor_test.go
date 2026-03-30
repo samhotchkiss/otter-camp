@@ -915,6 +915,22 @@ func TestBuildQueueKickoffMessageForReadOnlyVerificationTask(t *testing.T) {
 	}
 }
 
+func TestBuildQueueKickoffMessageForReadOnlyVerificationTaskWithSeparateResultsOutput(t *testing.T) {
+	description := "**Read-only verification task — do NOT rewrite the deliverable.**\n\nThe file `planning/sambot-personality-spec.md` already exists on disk.\n\n**Deliverable:** Write `results/sambot-personality-spec-verification.md` with a pass/fail table for each item above plus an overall PASS/FAIL verdict.\n\nDo NOT modify the source spec file. Only produce the verification results file."
+	taskRecord := repo.ProjectTask{
+		Title:       "Verify planning/sambot-personality-spec.md completeness — read-only checklist verification",
+		Description: &description,
+	}
+
+	message := buildQueueKickoffMessage(taskRecord)
+	if !strings.Contains(message, "verification task for `planning/sambot-personality-spec.md` with output `results/sambot-personality-spec-verification.md`") {
+		t.Fatalf("kickoff message = %q, want explicit source/output verification guidance", message)
+	}
+	if !strings.Contains(message, "write the verification findings only to `results/sambot-personality-spec-verification.md`") {
+		t.Fatalf("kickoff message = %q, want results-only write guidance", message)
+	}
+}
+
 func TestBuildFlowTransitionKickoffMessageForRejectedOrchestrationOnlyParent(t *testing.T) {
 	description := "Parent/orchestration task for wave gating validation. Validates that child tasks exercise the gating behavior correctly. Does not do execution work itself."
 	taskRecord := repo.ProjectTask{

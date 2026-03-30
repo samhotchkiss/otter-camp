@@ -38,6 +38,7 @@ const (
 
 var readOnlyVerificationTargetPattern = regexp.MustCompile("(?i)^\\s*(?:verify|review)\\s+([^\\s,;]+)")
 var workspacePathInBackticksPattern = regexp.MustCompile("`([^`]+)`")
+var readOnlyVerificationOutputPathPattern = regexp.MustCompile("(?i)\\b(?:deliverable|output|file)\\b(?:[*_]+)?\\s*:\\s*(?:[*_]+)?\\s*(?:write|create|produce|append|add|update)\\b[^.;:\\n]{0,160}?[`\"']?([A-Za-z0-9._/-]+)[`\"']?")
 
 type taskQueueEventSubscriber interface {
 	Subscribe(consumerName string, orgID *uuid.UUID, handler eventbus.EventHandler) eventbus.Subscription
@@ -1351,7 +1352,25 @@ func readOnlyVerificationKickoffInstruction(taskRecord repo.ProjectTask) string 
 	if targetPath == "" || !taskLooksReadOnlyVerification(taskRecord) {
 		return ""
 	}
+	outputPath := strings.TrimSpace(readOnlyVerificationOutputPath(taskRecord))
+	if outputPath != "" && !strings.EqualFold(strings.TrimSpace(outputPath), strings.TrimSpace(targetPath)) {
+		return fmt.Sprintf("This is a verification task for `%s` with output `%s`. Do not use file.write or file.edit to rewrite `%s`. Read `%s` and any explicitly named acceptance-criteria or reference artifacts, then write the verification findings only to `%s`.", targetPath, outputPath, targetPath, targetPath, outputPath)
+	}
 	return fmt.Sprintf("This is a read-only verification task for `%s`. Do not use file.write or file.edit to rewrite `%s`. Read `%s` and any explicitly named acceptance-criteria or reference artifacts, keep the deliverable unchanged, and summarize the verification findings in your assistant response instead of mutating the file.", targetPath, targetPath, targetPath)
+}
+
+func readOnlyVerificationOutputPath(taskRecord repo.ProjectTask) string {
+	description := strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+	if description == "" {
+		return ""
+	}
+	if matches := readOnlyVerificationOutputPathPattern.FindStringSubmatch(description); len(matches) >= 2 {
+		path := strings.TrimSpace(strings.Trim(matches[1], "`'\""))
+		if strings.Contains(path, "/") || strings.Contains(path, ".") {
+			return path
+		}
+	}
+	return ""
 }
 
 func readOnlyVerificationTargetPath(taskRecord repo.ProjectTask) string {

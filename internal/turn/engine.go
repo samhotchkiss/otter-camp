@@ -187,9 +187,11 @@ var projectContinuationBoundedSizeStopTaskPattern = regexp.MustCompile(`remainin
 var projectContinuationPromptAssignedAgentIDPattern = regexp.MustCompile(`assigned_agent_id=([^\s;]+)`)
 var promptFlowNodeExecutionPattern = regexp.MustCompile(`(?i)flow node execution:\s*([0-9a-fA-F-]{36})`)
 var workspacePathInBackticksPattern = regexp.MustCompile("`([^`]+)`")
+var readOnlyVerificationTargetPattern = regexp.MustCompile("(?i)^\\s*(?:verify|review)\\s+([^\\s,;]+)")
 var acceptanceCriteriaListItemPattern = regexp.MustCompile(`^\d+[.)]\s+(.+)$`)
 var explicitDeliverablePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:deliverable|output|file)\b(?:[*_]+)?\s*:\s*(?:[*_]+)?\s*([^\s,;]+)`),
+	regexp.MustCompile("(?i)\\b(?:deliverable|output|file)\\b(?:[*_]+)?\\s*:\\s*(?:[*_]+)?\\s*(?:write|create|produce|append|add|update)\\b[^.;:\\n]{0,160}?[`\"']?([A-Za-z0-9._/-]+)[`\"']?"),
 	regexp.MustCompile(`(?i)\b(?:deliverable|output|file)\b(?:[*_]+)?\s*:\s*(?:[*_]+)?\s*(?:write|create|produce|append|add|update)\b[^.;:\n]{0,240}?\s+as\s+([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\b(?:write|create|produce)\b[^.;:\n]{0,240}?\s+(?:at|to)\s+([^\s,;]+)`),
@@ -22701,6 +22703,11 @@ func projectContinuationDraftTaskReadyForParentClosureForTask(task repo.ProjectT
 	if activity.activeChildTaskCount != 0 {
 		return false
 	}
+	if explicit := strings.TrimSpace(explicitDeliverablePath(task)); explicit != "" &&
+		!activity.workspaceDeliverablePresent &&
+		activity.completedCloseoutChildTaskCount == 0 {
+		return false
+	}
 	if activity.childTaskCount > 0 &&
 		activity.replaceableBlockedChildTaskCount > 0 &&
 		activity.replaceableBlockedChildTaskCount == activity.childTaskCount &&
@@ -22740,7 +22747,8 @@ func projectContinuationChildTaskClosesParent(
 			text += "\n" + description
 		}
 	}
-	if !containsAny(text,
+	recordedVerificationCloseout := projectContinuationVerificationChildHasRecordedCloseoutProof(childTask, text)
+	hasClosureSignal := containsAny(text,
 		"close parent",
 		"close out parent",
 		"close out oc-",
@@ -22753,8 +22761,12 @@ func projectContinuationChildTaskClosesParent(
 		"confirms the parent",
 		"mark done immediately",
 		"delivered",
-	) {
+	)
+	if !hasClosureSignal && !recordedVerificationCloseout {
 		return false
+	}
+	if recordedVerificationCloseout {
+		return true
 	}
 	parentDeliverablePath := normalizeWorkspaceRelativePath(parentHints.DeliverablePath)
 	childDeliverablePath := normalizeWorkspaceRelativePath(childHints.DeliverablePath)
@@ -22778,6 +22790,20 @@ func projectContinuationChildTaskClosesParent(
 	}
 	return strings.Contains(text, fmt.Sprintf("oc-%d", parentTask.TaskNumber)) ||
 		strings.Contains(text, fmt.Sprintf("parent %d", parentTask.TaskNumber))
+}
+
+func projectContinuationVerificationChildHasRecordedCloseoutProof(task repo.ProjectTask, lowerText string) bool {
+	if !containsAny(lowerText, "verify ", "verification", "checklist", "pass/fail", "read-only") {
+		return false
+	}
+	state, ok := taskorchestration.Parse(task.Metadata)
+	if !ok {
+		return false
+	}
+	hasPassedIntegration := state.IntegrationCheck != nil &&
+		strings.EqualFold(strings.TrimSpace(state.IntegrationCheck.Status), "passed")
+	hasSatisfiedOutcome := state.OutcomeAssessment != nil && state.OutcomeAssessment.Satisfied
+	return hasPassedIntegration || hasSatisfiedOutcome
 }
 
 func projectContinuationMalformedChildTaskIDs(tasks []repo.ProjectTask) map[uuid.UUID]struct{} {
@@ -23177,7 +23203,9 @@ func projectExecutionContinuationTaskRef(task repo.ProjectTask, activity project
 	if task.RequiresHumanReview {
 		parts = append(parts, "requires_human_review=true")
 	}
-	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") && projectContinuationDraftTaskOutcomeSatisfied(task) {
+	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") &&
+		projectContinuationDraftTaskOutcomeSatisfied(task) &&
+		projectContinuationDraftTaskOutcomeSatisfiedMarkerAllowed(task, activity) {
 		parts = append(parts, "outcome_satisfied=true")
 	}
 	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") && activity.workspaceDeliverablePresent {
@@ -23206,6 +23234,15 @@ func projectExecutionContinuationTaskRef(task repo.ProjectTask, activity project
 		parts = append(parts, "completed_closeout_child_tasks="+strconv.Itoa(activity.completedCloseoutChildTaskCount))
 	}
 	return strings.Join(parts, " ")
+}
+
+func projectContinuationDraftTaskOutcomeSatisfiedMarkerAllowed(task repo.ProjectTask, activity projectContinuationChildActivity) bool {
+	if explicit := strings.TrimSpace(explicitDeliverablePath(task)); explicit != "" &&
+		!activity.workspaceDeliverablePresent &&
+		activity.completedCloseoutChildTaskCount == 0 {
+		return false
+	}
+	return true
 }
 
 func projectContinuationBlockedReasonExcerpt(reason string) string {
@@ -32681,12 +32718,43 @@ func taskExecutionLooksReadOnlyVerification(taskRecord repo.ProjectTask) bool {
 		containsAny(text, "do not rewrite", "do not edit", "keep the deliverable unchanged", "read-only", "just verify", "checklist")
 }
 
-func buildTaskExecutionReadOnlyVerificationWriteGuardError(targetPath string) string {
-	targetPath = normalizeWorkspaceRelativePath(targetPath)
-	if targetPath == "" {
+func taskExecutionReadOnlyVerificationSourcePath(taskRecord repo.ProjectTask) string {
+	description := ""
+	if taskRecord.Description != nil {
+		description = strings.TrimSpace(*taskRecord.Description)
+	}
+	for _, candidate := range []string{strings.TrimSpace(taskRecord.Title), description} {
+		if candidate == "" {
+			continue
+		}
+		if match := readOnlyVerificationTargetPattern.FindStringSubmatch(candidate); len(match) == 2 {
+			if path := strings.TrimSpace(strings.Trim(match[1], "`'\"")); strings.Contains(path, "/") || strings.Contains(path, ".") {
+				return normalizeWorkspaceRelativePath(path)
+			}
+		}
+		for _, match := range workspacePathInBackticksPattern.FindAllStringSubmatch(candidate, -1) {
+			if len(match) != 2 {
+				continue
+			}
+			path := strings.TrimSpace(match[1])
+			if strings.Contains(path, "/") || strings.Contains(path, ".") {
+				return normalizeWorkspaceRelativePath(path)
+			}
+		}
+	}
+	return ""
+}
+
+func buildTaskExecutionReadOnlyVerificationWriteGuardError(sourcePath, outputPath string) string {
+	sourcePath = normalizeWorkspaceRelativePath(sourcePath)
+	outputPath = normalizeWorkspaceRelativePath(outputPath)
+	if sourcePath == "" {
 		return "this is a read-only verification task. Do not rewrite the deliverable from the work lane; inspect the named artifacts and summarize the verification findings without mutating the file."
 	}
-	return fmt.Sprintf("this is a read-only verification task for `%s`. Do not use file.write or file.edit to rewrite `%s` from the work lane. Read `%s` and the explicitly named acceptance-criteria/reference artifacts, keep the deliverable unchanged, and summarize the verification findings instead of mutating the file.", targetPath, targetPath, targetPath)
+	if outputPath != "" && !sameWorkspaceRelativePath(outputPath, sourcePath) {
+		return fmt.Sprintf("this is a verification task for `%s` with output `%s`. Do not use file.write or file.edit to rewrite `%s` from the work lane. Read `%s` and the explicitly named acceptance-criteria/reference artifacts, then write the verification findings only to `%s`.", sourcePath, outputPath, sourcePath, sourcePath, outputPath)
+	}
+	return fmt.Sprintf("this is a read-only verification task for `%s`. Do not use file.write or file.edit to rewrite `%s` from the work lane. Read `%s` and the explicitly named acceptance-criteria/reference artifacts, keep the deliverable unchanged, and summarize the verification findings instead of mutating the file.", sourcePath, sourcePath, sourcePath)
 }
 
 func (e *TurnEngine) shouldBlockTaskExecutionReadOnlyVerificationWriteTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
@@ -32713,15 +32781,16 @@ func (e *TurnEngine) shouldBlockTaskExecutionReadOnlyVerificationWriteTool(ctx c
 	if !taskExecutionLooksReadOnlyVerification(taskRecord) {
 		return false, ""
 	}
-	targetPath := normalizeWorkspaceRelativePath(e.sessionTaskDeliverablePath(ctx, rt.session.ID, taskRecord))
-	if targetPath == "" {
+	sourcePath := taskExecutionReadOnlyVerificationSourcePath(taskRecord)
+	if sourcePath == "" {
 		return false, ""
 	}
 	path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
-	if path == "" || !sameWorkspaceRelativePath(path, targetPath) {
+	if path == "" || !sameWorkspaceRelativePath(path, sourcePath) {
 		return false, ""
 	}
-	return true, buildTaskExecutionReadOnlyVerificationWriteGuardError(targetPath)
+	outputPath := normalizeWorkspaceRelativePath(e.sessionTaskDeliverablePath(ctx, rt.session.ID, taskRecord))
+	return true, buildTaskExecutionReadOnlyVerificationWriteGuardError(sourcePath, outputPath)
 }
 
 func (e *TurnEngine) taskExecutionSiblingTasks(ctx context.Context, taskRecord repo.ProjectTask) ([]repo.ProjectTask, error) {
@@ -35350,6 +35419,11 @@ func buildProjectContinuationFocusedDraftCloseoutMetadataGuardError(focusTask re
 	return message
 }
 
+func buildProjectContinuationFocusedDraftQueueRequiredGuardError(focusTask repo.ProjectTask) string {
+	label := projectBootstrapTaskLabel(focusTask)
+	return fmt.Sprintf("project continuation already proved that closeout-ready parent %s cannot jump straight from draft to done from the project lane. Do not set work_status=done on %s here; use one narrow task.update with work_status=queued instead, and include any missing parent_orchestration.child_verifications, parent_orchestration.integration_check.status=passed, and parent_orchestration.outcome_assessment.satisfied=true in that same update when needed.", label, label)
+}
+
 func projectContinuationDoneUpdateIncludesParentCompletionEvidence(arguments map[string]any) bool {
 	if len(arguments) == 0 {
 		return false
@@ -35457,7 +35531,7 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 	if !ok || targetTaskID == uuid.Nil {
 		return false, ""
 	}
-	focusTaskID := projectContinuationPromptFocusTaskID(strings.TrimSpace(rt.initialMessageText))
+	focusTaskID := projectContinuationFocusedTaskID(strings.TrimSpace(rt.initialMessageText))
 	if focusTaskID == uuid.Nil {
 		return false, ""
 	}
@@ -35483,12 +35557,20 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 		return false, ""
 	}
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
-	focusTask, ok := projectContinuationCurrentFocusTaskWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths)
-	if !ok {
-		return false, ""
+	focusTask, ok := tasksByID[focusTaskID]
+	if !ok || strings.EqualFold(strings.TrimSpace(focusTask.WorkStatus), "cancelled") {
+		focusTask, ok = projectContinuationCurrentFocusTaskWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths)
+		if !ok {
+			return false, ""
+		}
 	}
 	focusTaskID = focusTask.ID
 	focusActivity := childActivity[focusTaskID]
+	if targetTaskID == focusTaskID &&
+		nextStatus == "done" &&
+		projectContinuationCloseoutReadyParentPromptActive(rt) {
+		return true, buildProjectContinuationFocusedDraftQueueRequiredGuardError(focusTask)
+	}
 	if targetTaskID == focusTaskID &&
 		nextStatus == "done" &&
 		projectContinuationDraftTaskReadyForParentClosureForTask(focusTask, focusActivity) &&
@@ -35542,6 +35624,7 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 	if err != nil {
 		return false, ""
 	}
+	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
 	focusTask, ok := projectContinuationCurrentFocusTaskWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths)
 	if !ok || focusTask.ID == uuid.Nil || focusTask.ID != parentTaskID {
 		return false, ""
@@ -35552,7 +35635,16 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 	}
 	if !projectContinuationDraftTaskReadyForParentClosureForTask(focusTask, focusActivity) {
 		if draftChildren := projectContinuationDirectDraftChildTasks(projectTasks, focusTask.ID); len(draftChildren) > 0 {
-			return true, buildProjectContinuationFocusedDraftExistingChildGuardError(focusTask, draftChildren)
+			reusableDraftChildren := make([]repo.ProjectTask, 0, len(draftChildren))
+			for _, task := range draftChildren {
+				if _, malformed := malformedChildTaskIDs[task.ID]; malformed {
+					continue
+				}
+				reusableDraftChildren = append(reusableDraftChildren, task)
+			}
+			if len(reusableDraftChildren) > 0 {
+				return true, buildProjectContinuationFocusedDraftExistingChildGuardError(focusTask, reusableDraftChildren)
+			}
 		}
 		return false, ""
 	}

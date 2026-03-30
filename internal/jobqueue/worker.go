@@ -92,6 +92,7 @@ var projectContinuationBoundedSizeStopTaskPatternForWorker = regexp.MustCompile(
 
 var explicitDeliverablePathPatternsForWorker = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:deliverable|output|file)\b(?:[*_]+)?\s*:\s*(?:[*_]+)?\s*([^\s,;]+)`),
+	regexp.MustCompile("(?i)\\b(?:deliverable|output|file)\\b(?:[*_]+)?\\s*:\\s*(?:[*_]+)?\\s*(?:write|create|produce|append|add|update)\\b[^.;:\\n]{0,160}?[`\"']?([A-Za-z0-9._/-]+)[`\"']?"),
 	regexp.MustCompile(`(?i)\b(?:deliverable|output|file)\b(?:[*_]+)?\s*:\s*(?:[*_]+)?\s*(?:write|create|produce|append|add|update)\b[^.;:\n]{0,240}?\s+as\s+([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\b(?:write|create|produce)\b[^.;:\n]{0,240}?\s+(?:at|to)\s+([^\s,;]+)`),
@@ -2831,11 +2832,13 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			} else if focusRef != "" {
 				focusLabelOverride = focusRef
 			}
-			content = buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, focusLabelOverride)
-			expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
-			metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
-			latestConsumedMatchingMessageID = uuid.Nil
-			latestConsumedMatchingRepoVersion = ""
+			if projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusLabelOverride) {
+				content = buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, focusLabelOverride)
+				expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
+				metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+				latestConsumedMatchingMessageID = uuid.Nil
+				latestConsumedMatchingRepoVersion = ""
+			}
 		}
 		if focusedCloseoutReadyRetry {
 			focusLabelOverride, labelErr := w.projectContinuationTurnCloseoutReadyTaskLabel(ctx, focusedCloseoutReadyReferenceMessageID)
@@ -2851,11 +2854,13 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			} else if focusRef != "" {
 				focusLabelOverride = focusRef
 			}
-			content = buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, focusLabelOverride)
-			expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
-			metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
-			latestConsumedMatchingMessageID = uuid.Nil
-			latestConsumedMatchingRepoVersion = ""
+			if projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusLabelOverride) {
+				content = buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, focusLabelOverride)
+				expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
+				metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+				latestConsumedMatchingMessageID = uuid.Nil
+				latestConsumedMatchingRepoVersion = ""
+			}
 		}
 		if closeoutReadyQueueRetry {
 			focusLabelOverride, labelErr := w.projectContinuationTurnCloseoutReadyTaskLabel(ctx, closeoutReadyQueueReferenceMessageID)
@@ -2871,11 +2876,13 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			} else if focusRef != "" {
 				focusLabelOverride = focusRef
 			}
-			content = buildProjectExecutionContinuationParentQueueRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, focusLabelOverride)
-			expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
-			metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
-			latestConsumedMatchingMessageID = uuid.Nil
-			latestConsumedMatchingRepoVersion = ""
+			if projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusLabelOverride) {
+				content = buildProjectExecutionContinuationParentQueueRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, focusLabelOverride)
+				expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
+				metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+				latestConsumedMatchingMessageID = uuid.Nil
+				latestConsumedMatchingRepoVersion = ""
+			}
 		}
 		boundedSizeRetry := false
 		boundedSizeReferenceMessageID := uuid.Nil
@@ -4121,6 +4128,11 @@ func projectContinuationDraftTaskReadyForParentClosureForWorkerTask(task repo.Pr
 	if activity.activeChildTaskCount != 0 {
 		return false
 	}
+	if explicit := strings.TrimSpace(explicitDeliverablePathForWorker(task)); explicit != "" &&
+		!activity.workspaceDeliverablePresent &&
+		activity.completedCloseoutChildTaskCount == 0 {
+		return false
+	}
 	if activity.childTaskCount > 0 &&
 		activity.replaceableBlockedChildTaskCount > 0 &&
 		activity.replaceableBlockedChildTaskCount == activity.childTaskCount &&
@@ -5095,6 +5107,7 @@ func projectContinuationChildTaskClosesParentForWorker(
 			text += "\n" + description
 		}
 	}
+	recordedVerificationCloseout := projectContinuationVerificationChildHasRecordedCloseoutProofForWorker(childTask, text)
 	hasClosureSignal := strings.Contains(text, "close parent") ||
 		strings.Contains(text, "close out parent") ||
 		strings.Contains(text, "close out oc-") ||
@@ -5107,8 +5120,11 @@ func projectContinuationChildTaskClosesParentForWorker(
 		strings.Contains(text, "confirms the parent") ||
 		strings.Contains(text, "mark done immediately") ||
 		strings.Contains(text, "delivered")
-	if !hasClosureSignal {
+	if !hasClosureSignal && !recordedVerificationCloseout {
 		return false
+	}
+	if recordedVerificationCloseout {
+		return true
 	}
 	parentDeliverablePath := normalizeWorkspaceRelativePathForWorker(parentHints.DeliverablePath)
 	childDeliverablePath := normalizeWorkspaceRelativePathForWorker(childHints.DeliverablePath)
@@ -5132,6 +5148,27 @@ func projectContinuationChildTaskClosesParentForWorker(
 	}
 	return strings.Contains(text, fmt.Sprintf("oc-%d", parentTask.TaskNumber)) ||
 		strings.Contains(text, fmt.Sprintf("parent %d", parentTask.TaskNumber))
+}
+
+func projectContinuationVerificationChildHasRecordedCloseoutProofForWorker(task repo.ProjectTask, lowerText string) bool {
+	hasVerificationSignal := false
+	for _, needle := range []string{"verify ", "verification", "checklist", "pass/fail", "read-only"} {
+		if strings.Contains(lowerText, needle) {
+			hasVerificationSignal = true
+			break
+		}
+	}
+	if !hasVerificationSignal {
+		return false
+	}
+	state, ok := taskorchestration.Parse(task.Metadata)
+	if !ok {
+		return false
+	}
+	hasPassedIntegration := state.IntegrationCheck != nil &&
+		strings.EqualFold(strings.TrimSpace(state.IntegrationCheck.Status), "passed")
+	hasSatisfiedOutcome := state.OutcomeAssessment != nil && state.OutcomeAssessment.Satisfied
+	return hasPassedIntegration || hasSatisfiedOutcome
 }
 
 func projectContinuationMalformedChildTaskIDsForWorker(tasks []repo.ProjectTask) map[uuid.UUID]struct{} {
@@ -5427,7 +5464,9 @@ func projectExecutionContinuationTaskRefForWorker(task repo.ProjectTask, activit
 	if task.RequiresHumanReview {
 		parts = append(parts, "requires_human_review=true")
 	}
-	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") && projectContinuationDraftTaskOutcomeSatisfiedForWorker(task) {
+	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") &&
+		projectContinuationDraftTaskOutcomeSatisfiedForWorker(task) &&
+		projectContinuationDraftTaskOutcomeSatisfiedMarkerAllowedForWorker(task, activity) {
 		parts = append(parts, "outcome_satisfied=true")
 	}
 	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") && activity.workspaceDeliverablePresent {
@@ -5456,6 +5495,15 @@ func projectExecutionContinuationTaskRefForWorker(task repo.ProjectTask, activit
 		parts = append(parts, "completed_closeout_child_tasks="+strconv.Itoa(activity.completedCloseoutChildTaskCount))
 	}
 	return strings.Join(parts, " ")
+}
+
+func projectContinuationDraftTaskOutcomeSatisfiedMarkerAllowedForWorker(task repo.ProjectTask, activity projectContinuationChildActivityForWorker) bool {
+	if explicit := strings.TrimSpace(explicitDeliverablePathForWorker(task)); explicit != "" &&
+		!activity.workspaceDeliverablePresent &&
+		activity.completedCloseoutChildTaskCount == 0 {
+		return false
+	}
+	return true
 }
 
 func projectContinuationBlockedReasonExcerptForWorker(reason string) string {
@@ -5602,6 +5650,8 @@ func explicitDeliverablePathForWorker(task repo.ProjectTask) string {
 			}
 			return candidate
 		}
+	}
+	for _, description := range taskContractDescriptionCandidatesForWorker(task) {
 		for _, rawPath := range projectContinuationWorkspacePathPatternForWorker.FindAllString(description, -1) {
 			candidate := normalizeWorkspaceRelativePathForWorker(rawPath)
 			if looksLikePreferredDeliverableRootPathForWorker(candidate) {
@@ -5972,6 +6022,25 @@ func projectContinuationSnapshotLineForRefForWorker(snapshot projectExecutionCon
 	return ""
 }
 
+func projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot projectExecutionContinuationSnapshotForWorker, focusLabelOverride string) bool {
+	_, focusRef, focusTaskID := projectContinuationFocusRefFromLineForWorker(snapshot.FocusTaskLine)
+	if focusRef == "" && strings.TrimSpace(focusLabelOverride) != "" {
+		if label, ref, taskID := projectContinuationRefByLabelFromSnapshotForWorker(snapshot, focusLabelOverride); ref != "" {
+			_, focusRef, focusTaskID = label, ref, taskID
+		}
+	}
+	line := projectContinuationSnapshotLineForRefForWorker(snapshot, focusRef, focusTaskID)
+	if line == "" {
+		line = strings.TrimSpace(snapshot.FocusTaskLine)
+	}
+	if line == "" {
+		return false
+	}
+	return strings.Contains(line, "workspace_deliverable_present=true") ||
+		strings.Contains(line, "completed_closeout_child_tasks=") ||
+		strings.Contains(line, "outcome_satisfied=true")
+}
+
 func (w *Worker) projectContinuationRefByLabelFromMessageHistoryForWorker(ctx context.Context, messageIDs []uuid.UUID, focusLabel string) (string, string, string, error) {
 	if w == nil || w.pool == nil || strings.TrimSpace(focusLabel) == "" {
 		return "", "", "", nil
@@ -6264,6 +6333,27 @@ func buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(compl
 		laneSource = line
 	}
 	if strings.Contains(laneSource, "workspace_deliverable_present=true") {
+		if projectContinuationCompletedTaskLooksLikeVerification(completedTaskTitle) {
+			lines = append(lines,
+				"Your latest completed child already performed verification/closeout work for this deliverable.",
+				fmt.Sprintf("Current focus parent: %s.", focusRef),
+				"Do not create another closeout or replacement child from the project lane now.",
+				"Do not call task.list, task.get, file.list, or file.read before acting.",
+				fmt.Sprintf("Do not inspect or mention other draft parents until %s is advanced.", focusLabel),
+			)
+			if focusTaskID != "" {
+				lines = append(lines,
+					fmt.Sprintf("Your next assistant action must be one narrow task.update on task_id=%s for %s. No other tool call is allowed in that turn.", focusTaskID, focusLabel),
+					fmt.Sprintf("Use that single task.update to advance %s directly, or record any still-missing parent_orchestration closeout metadata before queueing it.", focusLabel),
+				)
+			} else {
+				lines = append(lines,
+					fmt.Sprintf("Your next assistant action must be one narrow task.update for %s. No other tool call is allowed in that turn.", focusLabel),
+					fmt.Sprintf("Use that single task.update to advance %s directly, or record any still-missing parent_orchestration closeout metadata before queueing it.", focusLabel),
+				)
+			}
+			return strings.Join(lines, " ")
+		}
 		lines = append(lines,
 			"Your last continuation turn was blocked after broad rediscovery even though the deliverable body is already on disk.",
 			fmt.Sprintf("Current focus parent: %s.", focusRef),
@@ -6404,7 +6494,8 @@ func buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(complete
 	}
 	if strings.Contains(laneSource, "workspace_deliverable_present=true") &&
 		!strings.Contains(laneSource, "completed_closeout_child_tasks=") &&
-		(strings.Contains(laneSource, "malformed_child_tasks=") || strings.Contains(laneSource, "replaceable_blocked_child_tasks=")) {
+		(strings.Contains(laneSource, "malformed_child_tasks=") || strings.Contains(laneSource, "replaceable_blocked_child_tasks=")) &&
+		!projectContinuationCompletedTaskLooksLikeVerification(completedTaskTitle) {
 		return buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNumber, completedTaskTitle, remainingDraftTasks, snapshot)
 	}
 	lines = append(lines,
@@ -6474,7 +6565,8 @@ func buildProjectExecutionContinuationParentQueueRetryPromptForWorker(completedT
 	}
 	if strings.Contains(laneSource, "workspace_deliverable_present=true") &&
 		!strings.Contains(laneSource, "completed_closeout_child_tasks=") &&
-		(strings.Contains(laneSource, "malformed_child_tasks=") || strings.Contains(laneSource, "replaceable_blocked_child_tasks=")) {
+		(strings.Contains(laneSource, "malformed_child_tasks=") || strings.Contains(laneSource, "replaceable_blocked_child_tasks=")) &&
+		!projectContinuationCompletedTaskLooksLikeVerification(completedTaskTitle) {
 		return buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNumber, completedTaskTitle, remainingDraftTasks, snapshot)
 	}
 	lines = append(lines,
@@ -6490,6 +6582,7 @@ func buildProjectExecutionContinuationParentQueueRetryPromptForWorker(completedT
 		lines = append(lines, fmt.Sprintf("Your next assistant action must be one narrow task.update for %s. No other tool call is allowed in that turn.", focusLabel))
 	}
 	lines = append(lines,
+		fmt.Sprintf("Never set work_status=done on %s from the project lane.", focusLabel),
 		fmt.Sprintf("If the parent_orchestration evidence is already recorded on %s, set work_status=queued so that same parent can finish through its own flow.", focusLabel),
 		fmt.Sprintf("If the evidence is still missing, include parent_orchestration.child_verifications, parent_orchestration.integration_check.status=passed, parent_orchestration.outcome_assessment.satisfied=true, and work_status=queued in that same task.update when possible; otherwise record the missing evidence first and queue %s on the next retry.", focusLabel),
 	)
@@ -6532,6 +6625,14 @@ func projectContinuationSnapshotOnlyHasNonActionableBlockedWorkForWorker(snapsho
 		}
 	}
 	return blockedCount > 0
+}
+
+func projectContinuationCompletedTaskLooksLikeVerification(title string) bool {
+	lower := strings.ToLower(strings.TrimSpace(title))
+	return strings.Contains(lower, "verify ") ||
+		strings.Contains(lower, "verification") ||
+		strings.Contains(lower, "checklist") ||
+		strings.Contains(lower, "close out")
 }
 
 func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {

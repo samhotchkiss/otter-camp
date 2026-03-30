@@ -152,13 +152,16 @@ func satisfiedDraftCompletionConflict(taskRecord repo.ProjectTask) ([]string, bo
 	if !ok || state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied {
 		return nil, false
 	}
+	if plan.Override != nil && strings.TrimSpace(plan.Override.Reason) != "" {
+		return nil, false
+	}
 	contracts := taskplan.ArtifactContractForPlan(plan)
 	if len(contracts) == 0 {
 		return nil, false
 	}
 	evidenceBySlug := make(map[string]taskplan.ArtifactEvidence, len(plan.ArtifactEvidence))
 	for _, evidence := range plan.ArtifactEvidence {
-		slug := strings.TrimSpace(evidence.Slug)
+		slug := normalizePlanningArtifactSlug(evidence.Slug)
 		if slug == "" {
 			continue
 		}
@@ -166,7 +169,7 @@ func satisfiedDraftCompletionConflict(taskRecord repo.ProjectTask) ([]string, bo
 	}
 	missing := make([]string, 0)
 	for _, contract := range contracts {
-		evidence, ok := evidenceBySlug[strings.TrimSpace(contract.Slug)]
+		evidence, ok := evidenceBySlug[normalizePlanningArtifactSlug(contract.Slug)]
 		if !ok {
 			missing = append(missing, contract.Title+" artifact evidence is missing")
 			continue
@@ -184,6 +187,16 @@ func satisfiedDraftCompletionConflict(taskRecord repo.ProjectTask) ([]string, bo
 		return nil, false
 	}
 	return missing, true
+}
+
+func normalizePlanningArtifactSlug(value string) string {
+	trimmed := strings.TrimSpace(strings.ToLower(value))
+	trimmed = strings.ReplaceAll(trimmed, "_", "-")
+	trimmed = strings.ReplaceAll(trimmed, " ", "-")
+	for strings.Contains(trimmed, "--") {
+		trimmed = strings.ReplaceAll(trimmed, "--", "-")
+	}
+	return strings.Trim(trimmed, "-")
 }
 
 func derefString(value *string) string {

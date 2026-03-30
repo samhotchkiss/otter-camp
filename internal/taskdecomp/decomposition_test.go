@@ -838,6 +838,32 @@ func TestValidateBoundedTaskSizeAllowsSingleConcreteTemplateWithRequirements(t *
 	}
 }
 
+func TestValidateBoundedTaskSizeAllowsReadOnlyVerificationResultsTask(t *testing.T) {
+	title := "Verify planning/sambot-personality-spec.md completeness — read-only checklist verification"
+	description := strings.Join([]string{
+		"**Read-only verification task — do NOT rewrite the deliverable.**",
+		"",
+		"The file `planning/sambot-personality-spec.md` already exists on disk. Read the file and verify it meets the following acceptance criteria:",
+		"",
+		"**Verification checklist:**",
+		"1. File exists at `planning/sambot-personality-spec.md`",
+		"2. Contains SamBot personality definition",
+		"3. Contains persona boundaries",
+		"",
+		"**Deliverable:** Write `results/sambot-personality-spec-verification.md` with a pass/fail table for each item above plus an overall PASS/FAIL verdict.",
+		"",
+		"Do NOT modify the source spec file. Only produce the verification results file.",
+	}, "\n")
+
+	if !looksLikeReadOnlyVerificationResultsTask(title, description, extractDeliverables(description)) {
+		t.Fatal("looksLikeReadOnlyVerificationResultsTask = false, want true for bounded read-only verification results task")
+	}
+
+	if err := validateBoundedTaskSize(title, &description, false); err != nil {
+		t.Fatalf("validateBoundedTaskSize err = %v, want nil for bounded read-only verification results task", err)
+	}
+}
+
 func TestPrepareQueueDecompositionAutoAppliesForPhotographyArchiveWorkstream(t *testing.T) {
 	description := strings.Join([]string{
 		"ORCHESTRATION PARENT - do not execute directly.",

@@ -26264,6 +26264,9 @@ func TestJobWorkerEnsureProjectContinuationMessageFallsBackToEarlierCloseoutQueu
 	if !strings.Contains(content, "work_status=queued") {
 		t.Fatalf("fresh continuation content = %q, want queue-required retry guidance from earlier closeout stop", content)
 	}
+	if !strings.Contains(content, "Never set work_status=done") {
+		t.Fatalf("fresh continuation content = %q, want explicit anti-done guidance", content)
+	}
 	if strings.Contains(content, "Already-active non-terminal tasks in the tree:") {
 		t.Fatalf("fresh continuation content = %q, want narrowed retry prompt instead of generic snapshot", content)
 	}
@@ -26313,14 +26316,14 @@ func TestBuildProjectExecutionContinuationParentQueueRetryPromptForWorker(t *tes
 		"",
 	)
 
-	if !strings.Contains(prompt, "deliverable body is already on disk") {
-		t.Fatalf("prompt = %q, want on-disk deliverable guidance", prompt)
+	if !strings.Contains(prompt, "already closeout-ready") {
+		t.Fatalf("prompt = %q, want closeout-ready guidance", prompt)
 	}
-	if !strings.Contains(prompt, "create the smallest closeout/verification child task beneath task 245") {
-		t.Fatalf("prompt = %q, want verification-child routing", prompt)
+	if !strings.Contains(prompt, "task.update on task_id=77a2d4fa-b9e9-45b9-9ba9-b251052d5011") {
+		t.Fatalf("prompt = %q, want direct parent task.update guidance after verification child completion", prompt)
 	}
-	if strings.Contains(prompt, "task.update on task_id=77a2d4fa-b9e9-45b9-9ba9-b251052d5011") {
-		t.Fatalf("prompt = %q, should not keep direct parent task.update guidance for workspace-deliverable verification work", prompt)
+	if strings.Contains(prompt, "create the smallest closeout/verification child task beneath task 245") {
+		t.Fatalf("prompt = %q, should not ask for another verification child after verification already completed", prompt)
 	}
 }
 
@@ -26338,6 +26341,97 @@ func TestBuildProjectExecutionContinuationParentAdvanceRetryPromptForWorkerRecov
 
 	if !strings.Contains(prompt, "task.update on task_id=77a2d4fa-b9e9-45b9-9ba9-b251052d5011") {
 		t.Fatalf("prompt = %q, want recovered task_id from draft snapshot line", prompt)
+	}
+}
+
+func TestExplicitDeliverablePathForWorkerPrefersResultsOutputFromVerificationDescription(t *testing.T) {
+	t.Parallel()
+
+	description := "**Read-only verification task — do NOT rewrite the deliverable.**\n\nThe file `planning/sambot-personality-spec.md` already exists on disk.\n\n**Deliverable:** Write `results/sambot-personality-spec-verification.md` with a pass/fail table.\n\nDo NOT modify the source spec file."
+	task := repo.ProjectTask{
+		Title:       "Verify planning/sambot-personality-spec.md completeness — read-only checklist verification",
+		Description: &description,
+	}
+
+	if got := explicitDeliverablePathForWorker(task); got != "results/sambot-personality-spec-verification.md" {
+		t.Fatalf("explicitDeliverablePathForWorker = %q, want results/sambot-personality-spec-verification.md", got)
+	}
+}
+
+func TestProjectContinuationDraftTaskReadyForParentClosureForWorkerRequiresExplicitOutputPresence(t *testing.T) {
+	t.Parallel()
+
+	description := "**Read-only verification task — do NOT rewrite the deliverable.**\n\nThe file `planning/sambot-personality-spec.md` already exists on disk.\n\n**Deliverable:** Write `results/sambot-personality-spec-verification.md` with a pass/fail table.\n\nDo NOT modify the source spec file."
+	task := repo.ProjectTask{
+		Title:       "Verify planning/sambot-personality-spec.md completeness — read-only checklist verification",
+		Description: &description,
+		Metadata:    json.RawMessage(`{"parent_orchestration":{"outcome_assessment":{"satisfied":true}}}`),
+	}
+	if projectContinuationDraftTaskReadyForParentClosureForWorkerTask(task, projectContinuationChildActivityForWorker{}) {
+		t.Fatal("did not expect explicit single-file verification parent without workspace output to be closeout-ready")
+	}
+	if !projectContinuationDraftTaskReadyForParentClosureForWorkerTask(task, projectContinuationChildActivityForWorker{workspaceDeliverablePresent: true}) {
+		t.Fatal("expected explicit single-file verification parent with workspace output to be closeout-ready")
+	}
+}
+
+func TestProjectExecutionContinuationTaskRefForWorkerHidesOutcomeSatisfiedWithoutExplicitOutputPresence(t *testing.T) {
+	t.Parallel()
+
+	description := "**Read-only verification task — do NOT rewrite the deliverable.**\n\nThe file `planning/sambot-personality-spec.md` already exists on disk.\n\n**Deliverable:** Write `results/sambot-personality-spec-verification.md` with a pass/fail table.\n\nDo NOT modify the source spec file."
+	task := repo.ProjectTask{
+		ID:          uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+		TaskNumber:  294,
+		Title:       "Verify planning/sambot-personality-spec.md completeness — read-only checklist verification",
+		Description: &description,
+		WorkStatus:  "draft",
+		Metadata:    json.RawMessage(`{"parent_orchestration":{"outcome_assessment":{"satisfied":true}}}`),
+	}
+	ref := projectExecutionContinuationTaskRefForWorker(task, projectContinuationChildActivityForWorker{}, projectContinuationTaskHintsForWorker{DeliverablePath: "results/sambot-personality-spec-verification.md"})
+	if strings.Contains(ref, "outcome_satisfied=true") {
+		t.Fatalf("ref = %q, did not want stale outcome_satisfied marker without explicit output presence", ref)
+	}
+}
+
+func TestProjectContinuationSnapshotStillCloseoutReadyForWorker(t *testing.T) {
+	t.Parallel()
+
+	snapshot := projectExecutionContinuationSnapshotForWorker{
+		FocusTaskLine: `Current focus parent: task 294 (Verify planning/sambot-personality-spec.md completeness — read-only checklist verification) id=focus work_status=draft deliverable_path=results/sambot-personality-spec-verification.md`,
+	}
+	if projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, "") {
+		t.Fatal("did not expect explicit-output focus without markers to count as closeout-ready")
+	}
+
+	snapshot.FocusTaskLine += " workspace_deliverable_present=true"
+	if !projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, "") {
+		t.Fatal("expected workspace-deliverable focus to count as closeout-ready")
+	}
+}
+
+func TestProjectContinuationChildTaskClosesParentForWorkerTreatsVerificationEvidenceAsCloseoutProof(t *testing.T) {
+	t.Parallel()
+
+	parent := repo.ProjectTask{
+		TaskNumber: 246,
+		Title:      "Write planning/sambot-personality-spec.md — SamBot personality & tone specification (replacement for blocked OC-190)",
+	}
+	description := "**Read-only verification task — do NOT rewrite the deliverable.**\n\nThe file `planning/sambot-personality-spec.md` already exists on disk.\n\n**Deliverable:** Write `results/sambot-personality-spec-verification.md` with a pass/fail table.\n\nDo NOT modify the source spec file."
+	child := repo.ProjectTask{
+		TaskNumber:  294,
+		Title:       "Verify planning/sambot-personality-spec.md completeness — read-only checklist verification",
+		Description: &description,
+		WorkStatus:  "done",
+		Metadata:    json.RawMessage(`{"parent_orchestration":{"integration_check":{"status":"passed"},"outcome_assessment":{"satisfied":true}}}`),
+	}
+
+	if !projectContinuationChildTaskClosesParentForWorker(
+		child,
+		parent,
+		projectContinuationTaskHintsForWorker{DeliverablePath: "results/sambot-personality-spec-verification.md"},
+		projectContinuationTaskHintsForWorker{DeliverablePath: "planning/sambot-personality-spec.md"},
+	) {
+		t.Fatal("expected verification child with recorded orchestration proof to count as parent-closeout evidence")
 	}
 }
 
@@ -26388,6 +26482,28 @@ func TestBuildProjectExecutionContinuationReplacementChildRetryPromptForWorkerTr
 	}
 	if strings.Contains(prompt, "If you must inspect child lanes first") {
 		t.Fatalf("prompt = %q, should not keep child-inspection fallback for on-disk deliverable focus", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationReplacementChildRetryPromptForWorkerAdvancesParentAfterVerificationChild(t *testing.T) {
+	prompt := buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(
+		294,
+		"Verify planning/sambot-personality-spec.md completeness — read-only checklist verification",
+		1,
+		projectExecutionContinuationSnapshotForWorker{
+			ProjectLine:   "Active project id: a6dbd331-7205-42d9-b0df-10105d5b5330",
+			FocusTaskLine: `Current focus parent: task 246 (Write planning/sambot-personality-spec.md — SamBot personality & tone specification (replacement for blocked OC-190)) id=116d264c-5e00-42bf-b1aa-63c88e2fd837 title="Write planning/sambot-personality-spec.md — SamBot personality & tone specification (replacement for blocked OC-190)" work_status=draft deliverable_path=planning/sambot-personality-spec.md assigned_agent_id=905eeded-9b26-4e0e-9e5c-53b43716c50e flow_template_id=9a60dfee-1fc7-4e3a-bd05-f9da1bb97552 workspace_deliverable_present=true malformed_child_tasks=1`,
+		},
+	)
+
+	if !strings.Contains(prompt, "latest completed child already performed verification/closeout work") {
+		t.Fatalf("prompt = %q, want verification-complete guidance", prompt)
+	}
+	if !strings.Contains(prompt, "task.update on task_id=116d264c-5e00-42bf-b1aa-63c88e2fd837") {
+		t.Fatalf("prompt = %q, want direct parent task.update instruction", prompt)
+	}
+	if strings.Contains(prompt, "create the smallest closeout/verification child task") {
+		t.Fatalf("prompt = %q, should not ask for another closeout child", prompt)
 	}
 }
 

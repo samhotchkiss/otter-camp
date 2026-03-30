@@ -1509,3 +1509,29 @@
     - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) had no task-execution guard blocking `file.write` / `file.edit` against the named deliverable for read-only verification work lanes
   - impact:
     - verification tasks can mutate the artifact under review from the work node, invalidate the verification signal, and churn through repeated work/review cycles instead of staying read-only and advancing cleanly
+- 2026-03-30 11:53 MDT - The native satisfied-draft contract guard ignored explicit planning overrides and compared artifact evidence by raw slug, blocking closeout-ready execution-first parents after proof was already recorded.
+  - fresh live evidence:
+    - PM continuation `f75f969c-9305-4d72-94d3-d626398506f1` correctly switched from “create another child” to “close out task 246 now”
+    - follow-on `task.update` calls for task `246` repeatedly returned `draft_completion_contract_incomplete`
+    - task `246` metadata already recorded:
+      - a planning override explaining the deliverable exists on disk and the task is a closeout wrapper
+      - artifact evidence for the same on-disk deliverable
+      - parent closeout proof from verification child `294`
+  - bug:
+    - [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go) in `satisfiedDraftCompletionConflict(...)` reimplemented planning-contract checks with:
+      - no override awareness
+      - raw slug matching against `plan.ArtifactEvidence`
+    - that bypassed the canonical override semantics and could misclassify equivalent artifact slugs as missing
+  - impact:
+    - execution-first closeout parents can get stuck at the exact moment the PM lane finally does the right thing, forcing more retries or fake PRD backfill instead of closing the parent task
+- 2026-03-30 11:53 MDT - The duplicate-child PM `task.create` guard treated malformed direct child drafts as reusable blockers, trapping replacement-parent recovery under task `286`.
+  - fresh live evidence:
+    - continuation `02a30277-1fec-4f2c-98ab-926851924dd8` explicitly focused task `286` and reported `replaceable_blocked_child_tasks=1 malformed_child_tasks=5`
+    - that same turn then hit:
+      - `task.create` tool result `296398cd-954d-49d4-8ec7-7cc54f009832`: direct child drafts `290/291/292` already exist, so do not create another child
+      - `task.update` tool result `df13108e-3600-44ed-be46-e01a7c646ebc`: child `290` is a malformed child artifact, so do not promote it
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) in `shouldBlockProjectContinuationFocusedDraftTaskCreateTool(...)` blocked `task.create` whenever any direct child drafts existed under the focused parent
+    - it did not exclude direct child drafts already classified as malformed artifact lanes, even when the PM prompt had already concluded that fresh replacement work was needed
+  - impact:
+    - the PM lane can get stuck in a contradiction where it is forbidden to create a new child because stale malformed drafts exist, but it is also forbidden to promote those same malformed drafts, leaving the replacement parent idle until a human or new code version intervenes
