@@ -21481,6 +21481,128 @@ func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateS
 	}
 }
 
+func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildrenUsingSingleFileWording(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "project-continuation-snapshot-ignores-malformed-duplicate-shared-file-children-single-file",
+		DisplayName: "Project Continuation Snapshot Ignores Malformed Duplicate Shared File Children Single File",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "project-continuation-snapshot-ignores-malformed-duplicate-shared-file-children-single-file-project",
+		DisplayName:    "Project Continuation Snapshot Ignores Malformed Duplicate Shared File Children Single File Project",
+		Description:    "Project for malformed duplicate shared-file child single-file wording coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "project-continuation-snapshot-ignores-malformed-duplicate-shared-file-children-single-file-template",
+		DisplayName:    "Project Continuation Snapshot Ignores Malformed Duplicate Shared File Children Single File Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentDescription := "Write a single file: `templates/template-08-replace.html`"
+	parentMetadata, err := json.Marshal(map[string]any{
+		"decomposition": map[string]any{
+			"applied":             true,
+			"mode":                "parallel_children",
+			"orchestration_only":  true,
+			"source_description":  parentDescription,
+			"primary_deliverable": "templates/template-08-replace.html",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal parent metadata: %v", err)
+	}
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     84,
+		Title:          "Build HTML layout template 8 of 10 (Editorial Longform) — replacement for blocked OC-43/OC-38",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+		Metadata:       parentMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	childDescription := "## Deliverable\nWrite a single file: `templates/template-08-replace.html`\n\nThis child should produce the full template."
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     220,
+		Title:          "Write templates/template-08-replace.html — Editorial Longform layout template (template 8 of 10)",
+		Description:    &childDescription,
+		WorkStatus:     "in_progress",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+		Metadata:       childMetadata,
+	}); err != nil {
+		t.Fatalf("create malformed duplicate shared-file child task: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "task 220") {
+		t.Fatalf("ActiveTaskLine = %q, should omit duplicate single-file child artifact", snapshot.ActiveTaskLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "Build HTML layout template 8 of 10 (Editorial Longform) — replacement for blocked OC-43/OC-38") {
+		t.Fatalf("ReplacementDraftLine = %q, want parent restored as replacement draft", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=1") {
+		t.Fatalf("ReplacementDraftLine = %q, want malformed child count", snapshot.ReplacementDraftLine)
+	}
+}
+
 func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresCancelledChildren(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

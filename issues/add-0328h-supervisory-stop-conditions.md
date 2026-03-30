@@ -465,3 +465,17 @@ They need sharper stopping rules than ordinary execution lanes.
   - live proof:
     - after rebuild to `repo_version=3652`, startup recovery minted fresh PM continuation messages `24458dcb-777e-4cc3-abe1-9378a7f28635` and `2bd2f949-5232-4dac-9cf4-4d63deb1b27a` for session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`
     - one completed and one is in-progress, both now anchored on latest completed task `208`, which confirms the PM lane is no longer stranded behind blocked child session `4f4a673a-2b9f-4957-8aeb-124633bb5a6a`
+- 2026-03-29 21:46 MDT - Picked up the next supervisory stop/handoff gap from the template-08 replacement chain.
+  - fresh live evidence:
+    - PM correctly created replacement child task `220` for missing deliverable `templates/template-08-replace.html`
+    - after that successful handoff, the continuation still spent one more PM step on broad rediscovery before the rediscovery guard stopped it
+    - the replacement child itself was malformed duplicate whole-file work, but the duplicate detector missed its `Write a single file: templates/template-08-replace.html` wording and let it churn through recovery
+  - local / deployed fix:
+    - widened [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so `shouldStopAfterSuccessfulProjectExecutionHandoffMutation(...)` also recognizes the missing-prerequisite handoff prompt form
+    - widened duplicate whole-file ownership detection in both [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) and [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) so malformed replacement children using direct-path / `single file` wording block before they reopen another supervisory recovery loop
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterSuccessfulProjectExecutionHandoffMutation(ForMissingDependencyPrompt|IgnoresAssignmentOnlyUpdate|RequiresReplacementChildPrompt)?|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren(UsingAtPathWording|UsingSingleFileWording)?|EnqueueTaskValidationBlockedContinuationPromptBlocksMalformedDuplicateSharedFileChild)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren(UsingSingleFileWording)?$' -count=1`
+  - proof status:
+    - diagnosis is directly live-backed by task `220` / session `a8ae127f-900e-4fb1-8985-5732d1540341`
+    - next post-redeploy canary should show task `220` blocking at preflight or disappearing from PM recovery focus instead of reopening another empty-`cli.execute` recovery chain

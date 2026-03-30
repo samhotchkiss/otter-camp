@@ -4251,6 +4251,22 @@ func taskClaimsWholeSharedFileOwnershipForWorker(taskRecord repo.ProjectTask, sh
 			return true
 		}
 	}
+	for _, action := range []string{"produce", "write", "draft", "create", "update", "replace"} {
+		if strings.Contains(text, action+" "+sharedPath) {
+			return true
+		}
+		if strings.Contains(text, action+" a single file") || strings.Contains(text, action+" single file") {
+			return true
+		}
+		if !strings.Contains(text, action+" ") {
+			continue
+		}
+		for _, connector := range []string{" at ", " to ", " into ", ": "} {
+			if strings.Contains(text, connector+sharedPath) {
+				return true
+			}
+		}
+	}
 	return false
 }
 

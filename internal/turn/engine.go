@@ -10767,10 +10767,16 @@ func taskClaimsWholeSharedFileOwnership(taskRecord repo.ProjectTask, sharedPath 
 		return false
 	}
 	for _, action := range []string{"produce", "write", "draft", "create", "update", "replace"} {
+		if strings.Contains(text, action+" "+sharedPath) {
+			return true
+		}
+		if strings.Contains(text, action+" a single file") || strings.Contains(text, action+" single file") {
+			return true
+		}
 		if !strings.Contains(text, action+" ") {
 			continue
 		}
-		for _, connector := range []string{" at ", " to ", " into "} {
+		for _, connector := range []string{" at ", " to ", " into ", ": "} {
 			if strings.Contains(text, action+" ") && strings.Contains(text, connector+sharedPath) {
 				return true
 			}
@@ -29810,8 +29816,15 @@ func projectContinuationReplacementChildHandoffActive(rt *turnRuntime) bool {
 		return false
 	}
 	initial := strings.TrimSpace(rt.initialMessageText)
-	return strings.Contains(initial, "Current focus parent:") &&
-		strings.Contains(initial, "fresh replacement child task beneath")
+	if strings.Contains(initial, "Current focus parent:") &&
+		strings.Contains(initial, "fresh replacement child task beneath") {
+		return true
+	}
+	if strings.Contains(initial, "prerequisite artifact `") &&
+		strings.Contains(initial, "Your next assistant action must create, queue, or advance the smallest bounded") {
+		return true
+	}
+	return false
 }
 
 func projectExecutionHandoffMutationSucceeded(call ToolCall, result ToolResult) bool {

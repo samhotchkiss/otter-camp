@@ -868,3 +868,21 @@
   - impact:
     - single-file implementation tasks could explode into malformed child lanes
     - those malformed children could still be auto-queued and burn runtime turns, which was the next direct blocker on the SamBot API slice
+- 2026-03-29 21:46 MDT - Duplicate whole-file child detection still missed `Write a single file: PATH` and direct `write PATH` wording.
+  - fresh live evidence:
+    - task `220` (`Write templates/template-08-replace.html — Editorial Longform layout template (template 8 of 10)`) shared parent `368da77a-a49f-4e8a-b211-5a19bb4b0e9d` with blocked task `85`
+    - both lanes targeted the same deliverable `templates/template-08-replace.html`
+    - the recovery/session transcript for `a8ae127f-900e-4fb1-8985-5732d1540341` showed the child repeatedly hitting sibling-write guard stops, empty `cli.execute` retries, and recovery resumes instead of being blocked as malformed duplicate work
+  - bug:
+    - `taskClaimsWholeSharedFileOwnership(...)` and the worker-side equivalent only matched whole-file claims phrased as `produce/write the file ...` or `write ... at|to|into PATH`
+    - they did not treat `Write a single file: PATH` or direct `Write PATH ...` wording as owning the full shared parent deliverable
+  - impact:
+    - malformed duplicate child lanes could survive preflight, keep showing up in PM snapshots, and reopen validation/recovery churn even though the parent already owned the same single-file deliverable
+- 2026-03-29 21:46 MDT - Missing-prerequisite PM handoff-stop was still too narrow.
+  - fresh live evidence:
+    - after the PM lane created/queued replacement child `220`, the continuation still spent another step on broad rediscovery (`task.list`, “Let me check the remaining draft tasks...”) before the rediscovery guard stopped it
+  - bug:
+    - `shouldStopAfterSuccessfulProjectExecutionHandoffMutation(...)` only recognized the older `Current focus parent ... fresh replacement child task beneath` prompt wording
+    - it did not treat the newer missing-prerequisite prompt form (`prerequisite artifact ... create, queue, or advance the smallest bounded ...`) as the same successful handoff condition
+  - impact:
+    - PM turns could still waste a post-handoff rediscovery step after already queueing the correct bounded replacement child

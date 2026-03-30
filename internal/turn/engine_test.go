@@ -15859,6 +15859,32 @@ func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation(t *testing.T) 
 	}
 }
 
+func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationForMissingDependencyPrompt(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText:   "Current focus task: task 84 (Produce templates/template-08-replace.html). That task depends on prerequisite artifact `templates/template-08-replace.html`. Your next assistant action must create, queue, or advance the smallest bounded task that restores `templates/template-08-replace.html`, or report one blocker sentence if no such handoff is possible.",
+	}
+
+	calls := []ToolCall{{
+		Name:      "task.update",
+		Arguments: map[string]any{"task_id": uuid.NewString(), "work_status": "queued"},
+	}}
+	results := []ToolResult{{
+		Name:   "task.update",
+		Output: map[string]any{"task_id": uuid.NewString(), "work_status": "queued"},
+	}}
+
+	if !shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
+		t.Fatal("expected successful missing-dependency handoff to stop the PM turn")
+	}
+}
+
 func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationIgnoresAssignmentOnlyUpdate(t *testing.T) {
 	t.Parallel()
 
@@ -23644,6 +23670,64 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFile
 		t.Fatalf("ActiveTaskLine = %q, should omit duplicate at-path shared-file child artifact", snapshot.ActiveTaskLine)
 	}
 	if !strings.Contains(snapshot.ReplacementDraftLine, "task 208") {
+		t.Fatalf("ReplacementDraftLine = %q, want parent restored as replacement draft", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=1") {
+		t.Fatalf("ReplacementDraftLine = %q, want malformed child count", snapshot.ReplacementDraftLine)
+	}
+}
+
+func TestProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildrenUsingSingleFileWording(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	parentDescription := "Write a single file: `templates/template-08-replace.html`"
+	childDescription := "## Deliverable\nWrite a single file: `templates/template-08-replace.html`\n\nThis child should produce the full template."
+	childID := uuid.New()
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:          parentDraftID,
+				ProjectID:   projectID,
+				TaskNumber:  84,
+				Title:       "Build HTML layout template 8 of 10 (Editorial Longform) — replacement for blocked OC-43/OC-38",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"applied":             true,
+						"mode":                "parallel_children",
+						"orchestration_only":  true,
+						"source_description":  parentDescription,
+						"primary_deliverable": "templates/template-08-replace.html",
+					},
+				}),
+			},
+			childID: {
+				ID:          childID,
+				ProjectID:   projectID,
+				TaskNumber:  220,
+				Title:       "Write templates/template-08-replace.html — Editorial Longform layout template (template 8 of 10)",
+				Description: &childDescription,
+				WorkStatus:  "in_progress",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+		},
+	}
+	parentTask := fixture.engine.tasks.(*fakeTaskRepo).items[parentDraftID]
+	childTask := fixture.engine.tasks.(*fakeTaskRepo).items[childID]
+	if !projectContinuationMalformedDuplicateSharedFileChild(childTask, parentTask) {
+		t.Fatalf("duplicate shared-file matcher = false; parentPath=%q childPath=%q", taskDuplicateSharedFileDeliverablePath(parentTask), taskDuplicateSharedFileDeliverablePath(childTask))
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "task 220") {
+		t.Fatalf("ActiveTaskLine = %q, should omit duplicate single-file child artifact", snapshot.ActiveTaskLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "task 84") {
 		t.Fatalf("ReplacementDraftLine = %q, want parent restored as replacement draft", snapshot.ReplacementDraftLine)
 	}
 	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=1") {

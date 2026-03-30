@@ -4058,3 +4058,20 @@
   - live proof:
     - on `repo_version=3653`, malformed child task `216` (`The file should be ~60-80 lines...`) moved to `blocked` and its session `983e42ad-b6bb-4309-b6f6-be58f80269ca` closed instead of remaining runnable
     - the parent-valid child `213` remains the real draft lane for `sambot/api.js`
+- 2026-03-29 21:46 MDT - Widened duplicate shared-file child detection to catch single-file and direct-path wording, and widened the PM handoff-stop matcher for missing-prerequisite continuations.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `projectContinuationReplacementChildHandoffActive(...)` now also recognizes the missing-prerequisite continuation prompt form (`prerequisite artifact ... create, queue, or advance the smallest bounded ...`) as a successful handoff prompt
+    - `taskClaimsWholeSharedFileOwnership(...)` now treats direct `write PATH`, `write a single file: PATH`, and `: PATH` phrasing as whole-file ownership of the parent deliverable
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - mirrored the same widened whole-file ownership detection in `taskClaimsWholeSharedFileOwnershipForWorker(...)` so worker-side PM snapshots suppress the same malformed duplicate child family
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationForMissingDependencyPrompt`
+    - added `TestProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildrenUsingSingleFileWording`
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildrenUsingSingleFileWording`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterSuccessfulProjectExecutionHandoffMutation(ForMissingDependencyPrompt|IgnoresAssignmentOnlyUpdate|RequiresReplacementChildPrompt)?|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren(UsingAtPathWording|UsingSingleFileWording)?|EnqueueTaskValidationBlockedContinuationPromptBlocksMalformedDuplicateSharedFileChild)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren(UsingSingleFileWording)?$' -count=1`
+  - proof status:
+    - this is immediately diagnosis-backed from live task `220`, whose active recovery session `a8ae127f-900e-4fb1-8985-5732d1540341` is still spending turns on sibling-write/empty-cli churn for the parent deliverable `templates/template-08-replace.html`
+    - after redeploy, the expected live canary is that task `220` blocks at preflight or disappears from PM snapshot focus instead of reopening another recovery resume
