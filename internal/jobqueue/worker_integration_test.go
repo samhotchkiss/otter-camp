@@ -25545,6 +25545,20 @@ func TestProjectContinuationTurnEndedWithCloseoutReadyParentStopRecognizesProved
 	}); err != nil {
 		t.Fatalf("create blocked child: %v", err)
 	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      249,
+		Title:           "Technical depth: Match the visitor's level",
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &agent.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	}); err != nil {
+		t.Fatalf("create secondary draft task: %v", err)
+	}
 
 	metadata, err := json.Marshal(map[string]any{
 		"source":                 "project_execution_continuation",
@@ -25612,6 +25626,204 @@ func TestProjectContinuationTurnEndedWithCloseoutReadyParentStopRecognizesProved
 	}
 	if label != "task 245 (Write planning/sambot-tech-architecture.md)" {
 		t.Fatalf("label = %q, want focused closeout-ready task label", label)
+	}
+}
+
+func TestProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "ensure-project-continuation-focused-closeout-rediscovery-retry",
+		DisplayName: "Ensure Project Continuation Focused Closeout Rediscovery Retry",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "ensure-project-continuation-focused-closeout-rediscovery-retry-project",
+		DisplayName:    "Ensure Project Continuation Focused Closeout Rediscovery Retry Project",
+		Description:    "Project for focused closeout rediscovery continuation recovery coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "ensure-project-continuation-focused-closeout-rediscovery-retry-template",
+		DisplayName:    "Ensure Project Continuation Focused Closeout Rediscovery Retry Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	doneTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     84,
+		Title:          "Build HTML layout template 8 of 10 (Editorial Longform)",
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	focusMetadata, err := json.Marshal(map[string]any{
+		"parent_orchestration": map[string]any{
+			"outcome_assessment": map[string]any{
+				"satisfied": true,
+				"summary":   "planning/sambot-tech-architecture.md is already complete.",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal focus metadata: %v", err)
+	}
+	focusTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      245,
+		Title:           "Write planning/sambot-tech-architecture.md",
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &agent.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		Metadata:        focusMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create focus task: %v", err)
+	}
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": focusTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     258,
+		Title:          "Blocked child",
+		WorkStatus:     "blocked",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+		Metadata:       childMetadata,
+	}); err != nil {
+		t.Fatalf("create blocked child: %v", err)
+	}
+
+	metadata, err := json.Marshal(map[string]any{
+		"source":                 "project_execution_continuation",
+		"auto_continue":          true,
+		"synthetic_user_message": true,
+		"completed_task_id":      doneTask.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal continuation metadata: %v", err)
+	}
+	consumedMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "failed",
+		Metadata:  metadata,
+	})
+	if err != nil {
+		t.Fatalf("create consumed continuation message: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	completedTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StopReason:       &stopReason,
+		TriggerMessageID: &consumedMessage.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create completed continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &completedTurn.ID,
+		Role:      "assistant",
+		Content:   "I'll close out task 245 now by recording the missing parent orchestration evidence. First, let me read the planning artifact and acceptance criteria.",
+		Status:    "final",
+	}); err != nil {
+		t.Fatalf("create assistant message: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &completedTurn.ID,
+		Role:      "tool_result",
+		Content:   `{"error":"project continuation already has a focused closeout-ready parent for the same deliverable. Do not call task.get from the project lane now; advance or close that same parent directly, and if parent_orchestration evidence is still missing record it in one narrow task.update first.","tool_name":"task.get"}`,
+		Status:    "final",
+	}); err != nil {
+		t.Fatalf("create closeout-ready tool result: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &completedTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation rediscovery guard blocked only broad rereads. Ending this turn early so the next continuation can act directly on the named tasks instead of repeating blocked PM discovery.]",
+		Status:    "final",
+	}); err != nil {
+		t.Fatalf("create rediscovery guard message: %v", err)
+	}
+
+	matched, err := worker.projectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStop(ctx, consumedMessage.ID)
+	if err != nil {
+		t.Fatalf("projectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStop: %v", err)
+	}
+	if !matched {
+		t.Fatal("matched = false, want focused closeout-ready rediscovery stop to be recognized")
 	}
 }
 

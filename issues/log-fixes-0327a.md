@@ -4685,3 +4685,12 @@
     - added `TestBuildProjectExecutionContinuationReplacementChildRetryPromptForWorkerTreatsWorkspaceDeliverableAsVerification`
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(BuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker|BuildProjectExecutionContinuationReplacementChildRetryPromptForWorkerTreatsWorkspaceDeliverableAsVerification|ProjectContinuationTurnEndedWithCloseoutReadyParentStopRecognizesProvedParentWording)$' -count=1`
+- 2026-03-31 06:46 MDT - Taught worker recovery to preserve the closeout-ready retry family after rediscovery-blocked PM turns.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - added `projectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStop(...)`
+    - `ensureProjectContinuationMessageDecision(...)` now upgrades those rediscovery-blocked turns into the same parent-advance retry family used for direct closeout-ready stops
+    - when a continuation is reclassified into closeout-ready or replacement-handoff retry content, it now clears stale `latestConsumedMatchingMessageID` / repo-version match state so the new prompt family is not suppressed using the old generic fingerprint
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|BuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker|BuildProjectExecutionContinuationReplacementChildRetryPromptForWorkerTreatsWorkspaceDeliverableAsVerification|ProjectContinuationTurnEndedWithCloseoutReadyParentStopRecognizesProvedParentWording|JobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation)$' -count=1`

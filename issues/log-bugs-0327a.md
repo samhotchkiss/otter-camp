@@ -1344,3 +1344,13 @@
     - it never promoted on-disk deliverables into a closeout/verification retry family
   - impact:
     - even after the engine prompt precedence is fixed, worker recovery can still reopen fresh replacement-child loops for an already-written deliverable
+- 2026-03-31 06:46 MDT - Worker suppression still swallowed closeout-ready PM retries after rediscovery-blocked turns.
+  - fresh live evidence:
+    - PM continuation `90d89277-753d-4c3c-80be-a4c63a869c08` already named task `245` as closeout-ready and told the lane to advance or close it directly
+    - the turn still ended `validation_loop_blocked` with closeout-ready `task.get` / `file.read` guard errors plus the generic rediscovery guard
+    - after that turn completed, session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` was idle with no pending continuation row even though draft tasks remained
+  - bug:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) only recognized direct closeout-ready stop messages when selecting a narrower retry family
+    - if the last turn ended with the generic rediscovery guard but the blocked tool results already proved the lane was in the closeout-ready family, `ensureProjectContinuationMessageDecision(...)` kept the old generic matching message id and suppressed the retry as “repeated identical project continuation”
+  - impact:
+    - the PM lane can stall after a single bad closeout-ready reread turn instead of emitting the tightened parent-advance retry that the engine already knows how to use

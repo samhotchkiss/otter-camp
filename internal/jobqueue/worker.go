@@ -2746,6 +2746,14 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		}
 	}
 	if source == "project_execution_continuation" && completedTaskID != uuid.Nil {
+		focusedCloseoutReadyRetry := false
+		if latestConsumedProjectContinuationMessageID != uuid.Nil {
+			var retryErr error
+			focusedCloseoutReadyRetry, retryErr = w.projectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStop(ctx, latestConsumedProjectContinuationMessageID)
+			if retryErr != nil {
+				return uuid.Nil, false, fmt.Errorf("check latest consumed focused closeout-ready rediscovery continuation: %w", retryErr)
+			}
+		}
 		closeoutReadyReferenceMessageID := latestConsumedSameCompletedTaskMessageID
 		if latestConsumedProjectContinuationMessageID != uuid.Nil &&
 			latestConsumedProjectContinuationMessageID != latestConsumedSameCompletedTaskMessageID {
@@ -2753,7 +2761,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		}
 
 		closeoutReadyRetry := false
-		if closeoutReadyReferenceMessageID != uuid.Nil {
+		if closeoutReadyReferenceMessageID != uuid.Nil && !focusedCloseoutReadyRetry {
 			var retryErr error
 			closeoutReadyRetry, retryErr = w.projectContinuationTurnEndedWithCloseoutReadyParentStop(ctx, closeoutReadyReferenceMessageID)
 			if retryErr != nil {
@@ -2768,15 +2776,30 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			content = buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, focusLabelOverride)
 			expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
 			metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+			latestConsumedMatchingMessageID = uuid.Nil
+			latestConsumedMatchingRepoVersion = ""
+		}
+		if focusedCloseoutReadyRetry {
+			focusLabelOverride, labelErr := w.projectContinuationTurnCloseoutReadyTaskLabel(ctx, latestConsumedProjectContinuationMessageID)
+			if labelErr != nil {
+				return uuid.Nil, false, fmt.Errorf("load latest consumed focused closeout-ready task label: %w", labelErr)
+			}
+			content = buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, focusLabelOverride)
+			expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
+			metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+			latestConsumedMatchingMessageID = uuid.Nil
+			latestConsumedMatchingRepoVersion = ""
 		}
 		replacementHandoffRetry, retryErr := w.projectContinuationTurnEndedWithReplacementHandoff(ctx, latestConsumedSameCompletedTaskMessageID)
 		if retryErr != nil {
 			return uuid.Nil, false, fmt.Errorf("check latest consumed replacement-handoff continuation: %w", retryErr)
 		}
-		if !closeoutReadyRetry && replacementHandoffRetry {
+		if !closeoutReadyRetry && !focusedCloseoutReadyRetry && replacementHandoffRetry {
 			content = buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot)
 			expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
 			metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+			latestConsumedMatchingMessageID = uuid.Nil
+			latestConsumedMatchingRepoVersion = ""
 		}
 	}
 
@@ -3040,6 +3063,69 @@ func (w *Worker) projectContinuationTurnEndedWithCloseoutReadyParentStop(ctx con
 			   OR tm.content LIKE $4
 		)
 	`, referenceMessageID, `%focused parent is already closeout-ready%`, `%already proved that the focused parent is closeout-ready%`, `%closeout-ready parent still needs parent_orchestration evidence%`).Scan(&matched); err != nil {
+		return false, err
+	}
+	return matched, nil
+}
+
+func (w *Worker) projectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStop(ctx context.Context, referenceMessageID uuid.UUID) (bool, error) {
+	if w == nil || w.pool == nil || referenceMessageID == uuid.Nil {
+		return false, nil
+	}
+
+	var matched bool
+	if err := w.pool.QueryRow(ctx, `
+		WITH latest_turn AS (
+			SELECT ct.id,
+			       COALESCE(ct.stop_reason, '') AS stop_reason
+			FROM chat_turn ct
+			WHERE ct.trigger_message_id = $1
+			  AND ct.status IN ('completed', 'failed', 'cancelled')
+			ORDER BY ct.retry_count DESC,
+			         COALESCE(ct.completed_at, ct.created_at) DESC,
+			         ct.id DESC
+			LIMIT 1
+		)
+		SELECT EXISTS (
+			SELECT 1
+			FROM latest_turn lt
+			WHERE lt.stop_reason = 'validation_loop_blocked'
+			  AND EXISTS (
+			    SELECT 1
+			    FROM chat_message sm
+			    WHERE sm.turn_id = lt.id
+			      AND sm.role = 'system'
+			      AND sm.content LIKE $2
+			  )
+			  AND EXISTS (
+			    SELECT 1
+			    FROM chat_message cm
+			    WHERE cm.turn_id = lt.id
+			      AND (
+			            (
+			              cm.role = 'tool_result'
+			          AND (
+			                 cm.content LIKE $3
+			              OR cm.content LIKE $4
+			          )
+			            )
+			         OR (
+			              cm.role = 'system'
+			          AND (
+			                 cm.content LIKE $5
+			              OR cm.content LIKE $6
+			          )
+			            )
+			      )
+			  )
+		)
+	`, referenceMessageID,
+		projectContinuationRediscoveryGuardPrefix+"%",
+		"%focused closeout-ready parent%",
+		"%closeout-ready state for the same deliverable%",
+		"%already proved that the focused parent is closeout-ready%",
+		"%closeout-ready parent still needs parent_orchestration evidence%",
+	).Scan(&matched); err != nil {
 		return false, err
 	}
 	return matched, nil
