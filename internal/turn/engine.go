@@ -6078,6 +6078,9 @@ func buildProjectExecutionContinuationBoundedSizeRetryPrompt(
 	if len(suggestedChildTitles) > 0 {
 		retryPrompt += fmt.Sprintf(" The last bounded-size tool result already suggested a concrete split: %s.", formatQuotedTitles(suggestedChildTitles))
 		retryPrompt += " Do not create one replacement child that still owns the whole deliverable; create multiple bounded child tasks that follow that split directly."
+		if focusActivity.malformedChildTaskCount > 0 || focusActivity.blockedChildTaskCount > 0 {
+			retryPrompt += " If older blocked or malformed child lanes already exist beneath that parent, treat them as stale evidence of the bad split, not as the fresh bounded split you just asked for. Do not re-queue malformed duplicate children from the project lane."
+		}
 	}
 	if focusTask.ID != uuid.Nil {
 		retryPrompt += fmt.Sprintf(" Your next assistant action must split %s into smaller reviewable child tasks now, or queue an already-bounded direct child if one already exists unchanged. If you must inspect child lanes first, use only task.list(parent_task_id=%s).", focusLabel, focusTask.ID.String())

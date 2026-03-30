@@ -13173,6 +13173,41 @@ func TestProjectContinuationBoundedSizeSuggestedChildTitles(t *testing.T) {
 	}
 }
 
+func TestBuildProjectExecutionContinuationBoundedSizeRetryPromptIgnoresStaleBlockedChildrenWhenSplitSuggested(t *testing.T) {
+	t.Parallel()
+
+	completedTask := repo.ProjectTask{TaskNumber: 219, Title: "Add POST /api/sambot/chat endpoint"}
+	focusTask := repo.ProjectTask{TaskNumber: 84, Title: "Build HTML layout template 8 of 10 (Editorial Longform) — replacement for blocked OC-43/OC-38"}
+	snapshot := projectExecutionContinuationSnapshot{
+		ProjectLine:          "Active project id: 123",
+		ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 84 (Build HTML layout template 8 of 10 (Editorial Longform) — replacement for blocked OC-43/OC-38) id=focus work_status=draft malformed_child_tasks=1 replaceable_blocked_child_tasks=1",
+		FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 84 (Build HTML layout template 8 of 10 (Editorial Longform) — replacement for blocked OC-43/OC-38) id=focus work_status=draft malformed_child_tasks=1 replaceable_blocked_child_tasks=1",
+	}
+	focusActivity := projectContinuationChildActivity{
+		childTaskCount:          1,
+		blockedChildTaskCount:   1,
+		malformedChildTaskCount: 1,
+	}
+	focusHints := projectContinuationTaskHints{DeliverablePath: "templates/template-08-replace.html"}
+
+	prompt := buildProjectExecutionContinuationBoundedSizeRetryPrompt(
+		completedTask,
+		2,
+		snapshot,
+		focusTask,
+		focusActivity,
+		focusHints,
+		[]string{"Shell and structure", "Article body and sidebar"},
+	)
+
+	if !strings.Contains(prompt, "treat them as stale evidence of the bad split") {
+		t.Fatalf("prompt = %q, want stale-child split warning", prompt)
+	}
+	if !strings.Contains(prompt, "Do not re-queue malformed duplicate children from the project lane") {
+		t.Fatalf("prompt = %q, want malformed-child requeue warning", prompt)
+	}
+}
+
 func TestProjectContinuationParentCompletionTaskLabelsDedupesTaskRefs(t *testing.T) {
 	t.Parallel()
 

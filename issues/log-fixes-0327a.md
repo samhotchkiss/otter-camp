@@ -4135,3 +4135,15 @@
   - proof status:
     - diagnosis is directly backed by the live PM continuation that queued malformed duplicate child `OC-220` beneath `OC-84`
     - the guard is now deployed; the next PM retry should block that exact malformed-child requeue path instead of handing it off again
+- 2026-03-29 22:24 MDT - Taught bounded-size PM retry prompts to ignore stale blocked/malformed children when a concrete split is already suggested.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `buildProjectExecutionContinuationBoundedSizeRetryPrompt(...)` now warns that older blocked or malformed child lanes beneath the focus parent are stale evidence of the bad split, not the fresh bounded split the PM lane should follow
+    - the bounded-size retry prompt now explicitly says not to re-queue malformed duplicate children from the project lane when suggested child titles are already present
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestBuildProjectExecutionContinuationBoundedSizeRetryPromptIgnoresStaleBlockedChildrenWhenSplitSuggested`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectExecutionContinuationBoundedSizeRetryPromptIgnoresStaleBlockedChildrenWhenSplitSuggested|ProjectContinuationBoundedSizeSuggestedChildTitles|ShouldBlockProjectContinuationFocusedDraftMutationForMalformedDuplicateChild)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurnRetriesBoundedSizeStopWithFresh(Message|SuggestedSplitMessage)$' -count=1`
+  - proof status:
+    - directly driven by the live template-08 bounded-size retry family under `OC-84`, where stale blocked/malformed children remained visible after the split suggestion
+    - deployed and waiting on the next PM bounded-size retry canary to show the lane following the suggested split instead of gravitating back to stale child artifacts

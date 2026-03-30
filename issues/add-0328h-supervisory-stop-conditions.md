@@ -523,3 +523,15 @@ They need sharper stopping rules than ordinary execution lanes.
   - proof status:
     - diagnosis is directly live-backed by the `OC-220` handoff transcript
     - the next PM retry should now reject that malformed-child requeue instead of handing it off again
+- 2026-03-29 22:24 MDT - Hardened the bounded-size supervisory retry prompt around stale bad splits.
+  - fresh live evidence:
+    - after the `OC-220` handoff leak was closed, the remaining template-08 PM risk was that older blocked/malformed child lanes still sat under `OC-84` while the bounded-size stop already carried a concrete suggested split
+    - without an explicit prompt nudge, the PM lane could still mistake those stale children for the “bounded split” it had just been told to follow
+  - local / deployed fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now adds a stale-child warning to bounded-size retry prompts whenever suggested child titles exist and the focus parent still has blocked/malformed child lanes
+    - the prompt now explicitly says those stale lanes are evidence of the bad split and must not be re-queued from the project lane
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectExecutionContinuationBoundedSizeRetryPromptIgnoresStaleBlockedChildrenWhenSplitSuggested|ProjectContinuationBoundedSizeSuggestedChildTitles|ShouldBlockProjectContinuationFocusedDraftMutationForMalformedDuplicateChild)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurnRetriesBoundedSizeStopWithFresh(Message|SuggestedSplitMessage)$' -count=1`
+  - proof status:
+    - deployed and positioned for the next template-08 PM bounded-size retry on session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`
