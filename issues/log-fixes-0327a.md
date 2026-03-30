@@ -4694,3 +4694,8 @@
     - added `TestProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery`
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|BuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker|BuildProjectExecutionContinuationReplacementChildRetryPromptForWorkerTreatsWorkspaceDeliverableAsVerification|ProjectContinuationTurnEndedWithCloseoutReadyParentStopRecognizesProvedParentWording|JobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation)$' -count=1`
+- 2026-03-31 06:55 MDT - Widened that detector to use the continuation prompt body itself as closeout-ready evidence.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `projectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStop(...)` now also matches when the consumed continuation prompt already says `already closeout-ready for the same deliverable` or carries `workspace_deliverable_present=true`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|BuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker|BuildProjectExecutionContinuationReplacementChildRetryPromptForWorkerTreatsWorkspaceDeliverableAsVerification|ProjectContinuationTurnEndedWithCloseoutReadyParentStopRecognizesProvedParentWording|JobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation)$' -count=1`

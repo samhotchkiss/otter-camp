@@ -3089,6 +3089,8 @@ func (w *Worker) projectContinuationTurnEndedWithFocusedCloseoutReadyRediscovery
 		SELECT EXISTS (
 			SELECT 1
 			FROM latest_turn lt
+			JOIN chat_message trigger_message
+			  ON trigger_message.id = $1
 			WHERE lt.stop_reason = 'validation_loop_blocked'
 			  AND EXISTS (
 			    SELECT 1
@@ -3097,30 +3099,36 @@ func (w *Worker) projectContinuationTurnEndedWithFocusedCloseoutReadyRediscovery
 			      AND sm.role = 'system'
 			      AND sm.content LIKE $2
 			  )
-			  AND EXISTS (
-			    SELECT 1
-			    FROM chat_message cm
-			    WHERE cm.turn_id = lt.id
-			      AND (
-			            (
-			              cm.role = 'tool_result'
-			          AND (
-			                 cm.content LIKE $3
-			              OR cm.content LIKE $4
-			          )
+			  AND (
+			        trigger_message.content LIKE $3
+			     OR trigger_message.content LIKE $4
+			     OR EXISTS (
+			          SELECT 1
+			          FROM chat_message cm
+			          WHERE cm.turn_id = lt.id
+			            AND (
+			                  (
+			                    cm.role = 'tool_result'
+			                AND (
+			                       cm.content LIKE $5
+			                    OR cm.content LIKE $6
+			                )
+			                  )
+			               OR (
+			                    cm.role = 'system'
+			                AND (
+			                       cm.content LIKE $7
+			                    OR cm.content LIKE $8
+			                )
+			                  )
 			            )
-			         OR (
-			              cm.role = 'system'
-			          AND (
-			                 cm.content LIKE $5
-			              OR cm.content LIKE $6
-			          )
-			            )
+			        )
 			      )
-			  )
 		)
 	`, referenceMessageID,
 		projectContinuationRediscoveryGuardPrefix+"%",
+		"%already closeout-ready for the same deliverable%",
+		"%workspace_deliverable_present=true%",
 		"%focused closeout-ready parent%",
 		"%closeout-ready state for the same deliverable%",
 		"%already proved that the focused parent is closeout-ready%",

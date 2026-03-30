@@ -1354,3 +1354,12 @@
     - if the last turn ended with the generic rediscovery guard but the blocked tool results already proved the lane was in the closeout-ready family, `ensureProjectContinuationMessageDecision(...)` kept the old generic matching message id and suppressed the retry as “repeated identical project continuation”
   - impact:
     - the PM lane can stall after a single bad closeout-ready reread turn instead of emitting the tightened parent-advance retry that the engine already knows how to use
+- 2026-03-31 06:55 MDT - The first worker detector for closeout-ready rediscovery was still too narrow for live prompt shapes.
+  - fresh live evidence:
+    - the last consumed continuation prompt already said the focused parent was closeout-ready and included `workspace_deliverable_present=true`
+    - the blocked tool results in that turn only mentioned the named `task.get` / `file.read` rediscovery guards, so the worker still fell back to the older replacement-handoff retry family
+  - bug:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) only looked for closeout-ready phrases in the latest turn messages themselves
+    - it did not use the consumed continuation prompt body as additional evidence that the turn belonged to the closeout-ready retry family
+  - impact:
+    - a live closeout-ready PM continuation can still regress into replacement-child wording even after the first closeout-ready suppression fix is deployed
