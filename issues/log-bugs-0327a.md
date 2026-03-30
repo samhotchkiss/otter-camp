@@ -1547,3 +1547,17 @@
     - it did not recognize the newer named-task and named-blocked-deliverable rediscovery guard strings that now appear after the same PM prompt narrowing
   - impact:
     - PM retries can be suppressed or reclassified like ordinary rediscovery churn even when the session has already narrowed to one direct replacement-child handoff, delaying the next bounded child queue action
+- 2026-03-30 12:28 MDT - Explicit deliverable inference was still missing two common path wordings, which kept both review recovery and PM closeout from recognizing the right file identity.
+  - fresh live evidence:
+    - task `290` review session `eb9affec-c2c2-4692-9fbd-11233cfb12cc` tried to read its own preferred target `planning/sambot-prompts/test-conversations-level3.md`
+    - native `file.read` redirected that read back to stale recovery target `planning/sambot-prompts/test-conversations-technical.md` with `recovery_target_focus_required`
+    - separately, PM continuation `2e821bb8-f805-4b62-a85e-34002811028c` saw child `296` as done but still kept parent `286` in the replacement-child loop because the completed child did not surface the same explicit deliverable identity as the parent/sibling draft
+  - bug:
+    - [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go), [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go), and [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) did not parse:
+      - `Write the file path ...`
+      - `Create \`path\` ...`
+      as explicit deliverable paths in all code paths
+    - [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go) therefore let stale recovery-target state override a task's own explicit deliverable path during review/file reads
+  - impact:
+    - review lanes can reject the wrong file as "missing"
+    - PM snapshots can miss that a completed child already satisfied or superseded the parent deliverable family, causing replacement-child churn after real work is already done

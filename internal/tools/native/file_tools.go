@@ -356,6 +356,22 @@ func (e *NativeToolExecutor) rejectRecoveryTargetReread(ctx context.Context, sco
 	if normalizedPath == "" || sameOrNestedWorkspacePath(normalizedPath, targetPath) {
 		return nil, false, nil
 	}
+	if e.tasks != nil {
+		taskRecord, err := e.tasks.GetByID(ctx, *scope.taskID)
+		if err != nil {
+			if !errors.Is(err, repo.ErrNotFound) {
+				return nil, false, err
+			}
+		} else {
+			explicitPath := e.taskExplicitDeliverablePath(ctx, taskRecord)
+			if explicitPath != "" &&
+				sameOrNestedWorkspacePath(normalizedPath, explicitPath) &&
+				!sameOrNestedWorkspacePath(targetPath, explicitPath) &&
+				!sameOrNestedWorkspacePath(explicitPath, targetPath) {
+				return nil, false, nil
+			}
+		}
+	}
 	if allow, allowErr := e.allowRecoveryDeliverableRootInspection(ctx, scope, normalizedPath, targetPath, recoveryState.reviewLane); allowErr != nil {
 		return nil, false, allowErr
 	} else if allow {

@@ -1836,6 +1836,28 @@ func TestParseExplicitDeliverablePathPrefersLongDescriptionPathOverBareTitleToke
 	}
 }
 
+func TestParseExplicitDeliverablePathDetectsWriteTheFilePath(t *testing.T) {
+	t.Parallel()
+
+	description := "Write the file planning/sambot-prompts/test-conversations-level3.md containing 3 deeply technical test conversations demonstrating SamBot's adaptive complexity."
+	taskRecord := repo.ProjectTask{Description: &description}
+
+	if got := parseExplicitDeliverablePath(taskRecord); got != "planning/sambot-prompts/test-conversations-level3.md" {
+		t.Fatalf("parseExplicitDeliverablePath() = %q, want %q", got, "planning/sambot-prompts/test-conversations-level3.md")
+	}
+}
+
+func TestParseExplicitDeliverablePathDetectsCreateBacktickedPath(t *testing.T) {
+	t.Parallel()
+
+	description := "## Deliverable\nCreate `planning/sambot-prompts/test-conversations-technical.md` and commit it."
+	taskRecord := repo.ProjectTask{Description: &description}
+
+	if got := parseExplicitDeliverablePath(taskRecord); got != "planning/sambot-prompts/test-conversations-technical.md" {
+		t.Fatalf("parseExplicitDeliverablePath() = %q, want %q", got, "planning/sambot-prompts/test-conversations-technical.md")
+	}
+}
+
 func TestParseExplicitDeliverablePathDetectsLeadingPathTitleWithAlternates(t *testing.T) {
 	t.Parallel()
 

@@ -26358,6 +26358,20 @@ func TestExplicitDeliverablePathForWorkerPrefersResultsOutputFromVerificationDes
 	}
 }
 
+func TestExplicitDeliverablePathForWorkerDetectsCreateBacktickedPath(t *testing.T) {
+	t.Parallel()
+
+	description := "## Deliverable\nCreate `planning/sambot-prompts/test-conversations-technical.md` and commit it."
+	task := repo.ProjectTask{
+		Title:       "Single-pass: write test-conversations-technical.md with 2 level-2 and 2 level-3 SamBot conversations, commit, push",
+		Description: &description,
+	}
+
+	if got := explicitDeliverablePathForWorker(task); got != "planning/sambot-prompts/test-conversations-technical.md" {
+		t.Fatalf("explicitDeliverablePathForWorker = %q, want planning/sambot-prompts/test-conversations-technical.md", got)
+	}
+}
+
 func TestProjectContinuationDraftTaskReadyForParentClosureForWorkerRequiresExplicitOutputPresence(t *testing.T) {
 	t.Parallel()
 

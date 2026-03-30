@@ -43973,6 +43973,21 @@ func TestExplicitDeliverablePathDetectsWriteTheFilePath(t *testing.T) {
 	}
 }
 
+func TestExplicitDeliverablePathDetectsCreateBacktickedPath(t *testing.T) {
+	t.Parallel()
+
+	description := "## Deliverable\nCreate `planning/sambot-prompts/test-conversations-technical.md` and commit it."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  296,
+		Title:       "Single-pass: write test-conversations-technical.md with 2 level-2 and 2 level-3 SamBot conversations, commit, push",
+		Description: &description,
+	}
+
+	if got := explicitDeliverablePath(taskRecord); got != "planning/sambot-prompts/test-conversations-technical.md" {
+		t.Fatalf("explicitDeliverablePath(...) = %q, want %q", got, "planning/sambot-prompts/test-conversations-technical.md")
+	}
+}
+
 func TestExplicitDeliverablePathDetectsVerifyPathFromReviewTitle(t *testing.T) {
 	t.Parallel()
 

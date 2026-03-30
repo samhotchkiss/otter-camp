@@ -95,7 +95,9 @@ var explicitDeliverablePathPatternsForWorker = []*regexp.Regexp{
 	regexp.MustCompile("(?i)\\b(?:deliverable|output|file)\\b(?:[*_]+)?\\s*:\\s*(?:[*_]+)?\\s*(?:write|create|produce|append|add|update)\\b[^.;:\\n]{0,160}?[`\"']?([A-Za-z0-9._/-]+)[`\"']?"),
 	regexp.MustCompile(`(?i)\b(?:deliverable|output|file)\b(?:[*_]+)?\s*:\s*(?:[*_]+)?\s*(?:write|create|produce|append|add|update)\b[^.;:\n]{0,240}?\s+as\s+([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
+	regexp.MustCompile("(?i)\\b(?:write|create|produce|append|add|update)\\b[^.;:\\n]{0,80}?`([^`]+)`"),
 	regexp.MustCompile(`(?i)\b(?:write|create|produce)\b[^.;:\n]{0,240}?\s+(?:at|to)\s+([^\s,;]+)`),
+	regexp.MustCompile("(?i)\\b(?:write|create|produce|append|add|update)\\b[^.;:\\n]{0,80}?\\b(?:the\\s+)?file\\s+[`\"']?([^\\s,;`\"']+)[`\"']?"),
 	regexp.MustCompile(`(?i)\b(?:append|add|update)\b[^.;:\n]{0,120}?\s+(?:to|into)\s+(?:the\s+existing\s+)?([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\bsave\s+as\s+([^\s,;]+)`),
 }

@@ -4869,3 +4869,21 @@
   - live proof:
     - after restart, fresh PM turn `0839998e-231f-45f0-9a22-8440550aa4e9` on task `286` no longer died on generic rediscovery
     - it absorbed one blocked `task.get` against already-named task `290`, then issued `task.update work_status=queued` for `290`, and ended with the replacement-child success handoff stop
+- 2026-03-30 12:28 MDT - Unified explicit deliverable-path parsing for `Write the file ...` and `Create \`path\`` wording, and let native review reads prefer the task's own explicit deliverable over stale sibling recovery targets.
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `rejectRecoveryTargetReread(...)` now allows a read to proceed when the task's explicit deliverable path matches the requested path and the inherited recovery target points at a different sibling file
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - `explicitDeliverablePathPatterns` now recognize:
+      - `Write the file planning/...`
+      - `Create \`planning/...\` ...`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) and [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - mirrored the same explicit deliverable-path regex widening so PM snapshots and worker retries see the same file identity as the native tools
+  - changed tests:
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go): added `TestFileReadAllowsExplicitReviewDeliverableWhenRecoveryTargetPointsAtSiblingSharedFile`
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go): added `TestParseExplicitDeliverablePathDetectsCreateBacktickedPath`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): added `TestExplicitDeliverablePathDetectsCreateBacktickedPath`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go): added `TestExplicitDeliverablePathForWorkerDetectsCreateBacktickedPath`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(ParseExplicitDeliverablePath(DetectsWriteTheFilePath|DetectsCreateBacktickedPath)|FileReadAllowsExplicitReviewDeliverableWhenRecoveryTargetPointsAtSiblingSharedFile)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestExplicitDeliverablePath(DetectsWriteTheFilePath|DetectsCreateBacktickedPath)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestExplicitDeliverablePathForWorker(DetectsCreateBacktickedPath|PrefersResultsOutputFromVerificationDescription)$' -count=1`
