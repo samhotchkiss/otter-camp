@@ -1983,3 +1983,13 @@
   - impact:
     - even correctly focused PM recovery prompts could survive only one turn before being replaced by generic `project_execution_continuation`
     - the PM lane kept losing `Current focus parent: ...` context between retries
+- 2026-03-30 19:03 MDT - Engine-built synthetic PM resumes still replaced focused resume bodies with the generic summary prompt.
+  - fresh live evidence:
+    - after the worker patch, sequence `18370` finally used `source=project_continuation_resume`
+    - the content was still the broad generic `Continue the active project execution now. The latest completed task was task 310 ...`
+    - the next assistant turn immediately fell back into broad rediscovery, proving the source fix alone was not enough
+  - bug:
+    - `buildProjectContinuationResumeActionPrompt(...)` only preserved focused context for bounded-size stop retries
+    - for ordinary synthetic resume rebuilds, it always regenerated `buildProjectContinuationActionPrompt(summary, snapshot)` even when the trigger message was already a structured focused `project_continuation_resume`
+  - impact:
+    - the PM lane could keep `source=project_continuation_resume` metadata and still lose the actual `Current focus parent / repair this child draft` instructions needed to avoid rediscovery churn

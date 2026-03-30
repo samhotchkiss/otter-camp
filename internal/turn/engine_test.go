@@ -14416,7 +14416,7 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesGenericFocusedRes
 	if !strings.Contains(retryMessage.Content, "Current focus parent: task 297") {
 		t.Fatalf("retry message = %q, want focused parent context preserved", retryMessage.Content)
 	}
-	if !strings.Contains(retryMessage.Content, "Do not answer with narration alone") {
+	if !strings.Contains(retryMessage.Content, "Do not restart with broad project-state reads") {
 		t.Fatalf("retry message = %q, want focused generic-reply correction", retryMessage.Content)
 	}
 	if !strings.Contains(retryMessage.Content, "repair and queue the preferred existing same-deliverable child draft named above") {
@@ -29789,6 +29789,91 @@ func TestAppendContinuationSummaryAndActionUsesFocusedBoundedSizeProjectResumePr
 	}
 	if !strings.Contains(message.Content, "split task 249 (Write planning/sambot-tech-architecture.md) into smaller reviewable child tasks now") {
 		t.Fatalf("historyStart content = %q, want bounded-size split instruction", message.Content)
+	}
+}
+
+func TestAppendContinuationSummaryAndActionPreservesStructuredProjectResumePrompt(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	triggerMessageID := uuid.New()
+	previousTurnID := uuid.New()
+	turn := &chat.ChatTurn{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnNumber:     2,
+		RespondingType: "agent",
+		RespondingID:   fixture.chat.participants[0].ParticipantID,
+		Status:         "in_progress",
+	}
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.session.Mode = "async"
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.chat.session.Mode = fixture.session.Mode
+	fixture.chat.turns[turn.ID] = turn
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turn.ID)
+	fixture.engine.tasks = &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{}}
+
+	fixture.messages.create(repo.ChatMessage{
+		ID:        triggerMessageID,
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Content: strings.TrimSpace(`Continue the active project execution now. The latest completed task was task 310.
+Current focus parent: task 297 (Write planning/sambot-prompts/test-conversations-level3.md).
+Actionable draft tasks already in the tree: task 328 (Write planning/sambot-prompts/test-conversations-level3.md).
+Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 328.
+Start from this existing actionable draft before broad rediscovery.`),
+		Metadata: mustJSONRaw(map[string]any{
+			"source":                 "project_continuation_resume",
+			"synthetic_user_message": true,
+			"auto_continue":          true,
+			"completed_task_id":      completedTaskID.String(),
+		}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		TurnID:    &previousTurnID,
+		Role:      "system",
+		Content:   "[Project continuation rediscovery guard blocked only broad rereads. Ending this turn early so the next continuation can act directly on the named tasks instead of repeating blocked PM discovery.]",
+	})
+	previousTurn := &repo.ChatTurn{
+		ID:               previousTurnID,
+		SessionID:        fixture.session.ID,
+		Status:           "completed",
+		TriggerMessageID: &triggerMessageID,
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn:    turn,
+	}
+
+	if err := fixture.engine.appendContinuationSummaryAndAction(context.Background(), rt, previousTurn, "Project execution is already underway."); err != nil {
+		t.Fatalf("appendContinuationSummaryAndAction: %v", err)
+	}
+	if rt.historyStartID == nil {
+		t.Fatal("historyStartID = nil, want focused project continuation resume prompt")
+	}
+	message, err := fixture.messages.GetByID(context.Background(), *rt.historyStartID)
+	if err != nil {
+		t.Fatalf("GetByID historyStartID: %v", err)
+	}
+	if got := strings.TrimSpace(stringValue(messageMetadataMap(message.Metadata)["source"])); got != "project_continuation_resume" {
+		t.Fatalf("historyStart source = %q, want project_continuation_resume", got)
+	}
+	if !strings.Contains(message.Content, "Current focus parent: task 297") {
+		t.Fatalf("historyStart content = %q, want preserved focused parent context", message.Content)
+	}
+	if !strings.Contains(message.Content, "Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 328") {
+		t.Fatalf("historyStart content = %q, want preserved repair draft context", message.Content)
+	}
+	if !strings.Contains(message.Content, "Do not restart with broad project-state reads") {
+		t.Fatalf("historyStart content = %q, want focused retry guidance", message.Content)
 	}
 }
 

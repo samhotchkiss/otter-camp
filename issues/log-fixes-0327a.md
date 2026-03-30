@@ -5297,3 +5297,13 @@
     - combined those with the executable-contract worker canaries in a focused integration slice
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(EnsureProjectContinuationMessage(RefreshesFailedExecutableContractContinuation|AllowsStalePendingReplacementHandoffDuplicateRefresh)|RequeueActiveProjectSessionsWithoutTurns(RefreshesConsumedProjectContinuationResume|KeepsStructuredConsumedProjectContinuationResume))$' -count=1`
+- 2026-03-30 19:03 MDT - Preserved structured PM resume bodies across engine-built synthetic retries.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `buildProjectContinuationFocusedResumeRetryPrompt(...)`
+    - `retryGenericProjectExecutionContinuation(...)` now uses that shared helper for focused `project_continuation_resume` retries
+    - `buildProjectContinuationResumeActionPrompt(...)` now reuses the triggering structured `project_continuation_resume` body whenever it already contains PM snapshot markers like `Current focus parent:` or `Actionable draft tasks already in the tree:`, instead of always regenerating the generic summary prompt
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestAppendContinuationSummaryAndActionPreservesStructuredProjectResumePrompt`
+    - updated the focused generic-reply retry assertion to the shared retry wording
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(AppendContinuationSummaryAndActionPreservesStructuredProjectResumePrompt|AppendContinuationSummaryAndActionUsesFocusedBoundedSizeProjectResumePrompt|HandleCompletedProjectExecutionContinuationTurnRetriesGenericFocusedResumeReplyWithFreshMessage)$' -count=1`

@@ -5298,10 +5298,7 @@ func (e *TurnEngine) retryGenericProjectExecutionContinuation(
 	agentID := latestCompleted.RespondingID
 	retryPrompt := ""
 	if strings.EqualFold(strings.TrimSpace(stringValue(messageMetadataMap(latestUser.Metadata)["source"])), "project_continuation_resume") {
-		retryPrompt = strings.TrimSpace(latestUser.Content) +
-			" Your last continuation turn returned only generic narration instead of taking the focused project action already required above." +
-			" Do not answer with narration alone, do not restate project state, and do not fall back to broad rediscovery." +
-			" Your next assistant action must emit the concrete task.update, task.create, or explicitly allowed parent-scoped task.list needed by the focused handoff above, or report one concrete blocker sentence."
+		retryPrompt = buildProjectContinuationFocusedResumeRetryPrompt(latestUser.Content)
 	} else {
 		snapshot, err := e.projectExecutionContinuationSnapshot(ctx, session.ScopeID)
 		if err != nil {
@@ -13674,11 +13671,28 @@ func (e *TurnEngine) buildProjectContinuationResumeActionPrompt(
 			return retryPrompt, e.syntheticContinuationActionMessageMetadataWithCarryForward(ctx, rt.session, "project_continuation_resume", triggerMetadata), nil
 		}
 	}
+	if triggerMessage != nil && projectContinuationResumeMessage(*triggerMessage) {
+		triggerContent := strings.TrimSpace(triggerMessage.Content)
+		if continuationMessageContainsProjectSnapshot(triggerContent) {
+			return buildProjectContinuationFocusedResumeRetryPrompt(triggerContent), e.syntheticContinuationActionMessageMetadataWithCarryForward(ctx, rt.session, "project_continuation_resume", triggerMetadata), nil
+		}
+	}
 	snapshot, err := e.projectExecutionContinuationSnapshotForSummary(ctx, rt.session.ScopeID, summary)
 	if err != nil {
 		return "", nil, err
 	}
 	return buildProjectContinuationActionPrompt(summary, snapshot), e.syntheticContinuationActionMessageMetadataWithCarryForward(ctx, rt.session, "project_continuation_resume", triggerMetadata), nil
+}
+
+func buildProjectContinuationFocusedResumeRetryPrompt(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	return content +
+		" Your last continuation turn did not complete the focused project action already required above." +
+		" Do not restart with broad project-state reads, do not fall back to generic narration, and do not rediscover the broader tree." +
+		" Your next assistant action must emit the direct task.update, task.create, or explicitly allowed parent-scoped task.list needed by the focused handoff above, or report one concrete blocker sentence."
 }
 
 func (e *TurnEngine) projectContinuationBoundedSizeResumeActionPrompt(
