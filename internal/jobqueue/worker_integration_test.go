@@ -35228,6 +35228,134 @@ func TestJobWorkerProjectExecutionContinuationSnapshotTreatsMarkParentCompleteTi
 	}
 }
 
+func TestJobWorkerProjectExecutionContinuationSnapshotTreatsDoneOrchestrationChildWithSameDeliverableAsCloseoutProof(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "worker-project-snapshot-orchestration-same-deliverable-closeout",
+		DisplayName: "Worker Project Snapshot Orchestration Same Deliverable Closeout",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "worker-project-snapshot-orchestration-same-deliverable-closeout-project",
+		DisplayName:    "Worker Project Snapshot Orchestration Same Deliverable Closeout Project",
+		Description:    "Project for orchestration closeout child coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "worker-project-snapshot-orchestration-same-deliverable-closeout-template",
+		DisplayName:    "Worker Project Snapshot Orchestration Same Deliverable Closeout Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentDescription := "Write planning/sambot-prompts/test-conversations-technical.md with level-2 SamBot test conversations."
+	parentMetadata, err := json.Marshal(map[string]any{
+		"decomposition": map[string]any{
+			"orchestration_only": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal parent metadata: %v", err)
+	}
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     286,
+		Title:          "Write test conversations demonstrating SamBot adaptive complexity at levels 2 (moderately technical) and 3 (deeply technical)",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata:      parentMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	childDescription := "Create `planning/sambot-prompts/test-conversations-technical.md` and commit it."
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     296,
+		Title:          "Write level-2 (moderately technical) test conversations in planning/sambot-prompts/test-conversations-technical.md",
+		Description:    &childDescription,
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata:      childMetadata,
+	}); err != nil {
+		t.Fatalf("create done child: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	parentLabel := fmt.Sprintf("task %d (Write test conversations demonstrating SamBot adaptive complexity at levels 2 (moderately technical) and 3 (deeply technical))", parentTask.TaskNumber)
+	if !strings.Contains(snapshot.DraftTaskLine, parentLabel) {
+		t.Fatalf("snapshot = %+v, want parent %d visible as actionable closeout draft", snapshot, parentTask.TaskNumber)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "completed_closeout_child_tasks=1") {
+		t.Fatalf("snapshot = %+v, want same-deliverable done child to count as closeout proof", snapshot)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, parentLabel) {
+		t.Fatalf("snapshot = %+v, want focus to stay on parent %d closeout", snapshot, parentTask.TaskNumber)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "completed_closeout_child_tasks=1") {
+		t.Fatalf("snapshot = %+v, want focus closeout marker", snapshot)
+	}
+}
+
 func TestJobWorkerRequeueActiveProjectSessionsMissingContinuationIgnoresSupersededCloseoutDrafts(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

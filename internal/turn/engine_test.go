@@ -26100,6 +26100,67 @@ func TestProjectExecutionContinuationSnapshotTreatsVerificationEvidenceChildAsCl
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotTreatsDoneOrchestrationChildWithSameDeliverableAsCloseoutProof(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	parentDescription := "Write planning/sambot-prompts/test-conversations-technical.md with level-2 SamBot test conversations."
+	childDescription := "Create `planning/sambot-prompts/test-conversations-technical.md` and commit it."
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	childMetadata := func(parentID uuid.UUID) json.RawMessage {
+		return mustJSONRaw(map[string]any{
+			"decomposition_parent_task_id": parentID.String(),
+		})
+	}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:          parentDraftID,
+				ProjectID:   projectID,
+				TaskNumber:  286,
+				Title:       "Write test conversations demonstrating SamBot adaptive complexity at levels 2 (moderately technical) and 3 (deeply technical)",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"orchestration_only": true,
+					},
+				}),
+			},
+			uuid.New(): {
+				ID:          uuid.New(),
+				ProjectID:   projectID,
+				TaskNumber:  296,
+				Title:       "Write level-2 (moderately technical) test conversations in planning/sambot-prompts/test-conversations-technical.md",
+				Description: &childDescription,
+				WorkStatus:  "done",
+				Metadata:    childMetadata(parentDraftID),
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshotForSummary(context.Background(), projectID, "planning/sambot-prompts/test-conversations-technical.md")
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshotForSummary: %v", err)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "task 286") {
+		t.Fatalf("DraftTaskLine = %q, want parent 286 restored as actionable draft", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "completed_closeout_child_tasks=1") {
+		t.Fatalf("DraftTaskLine = %q, want same-deliverable done child to count as closeout proof for orchestration parent", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "task 286") {
+		t.Fatalf("FocusTaskLine = %q, want focus to stay on parent 286", snapshot.FocusTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "completed_closeout_child_tasks=1") {
+		t.Fatalf("FocusTaskLine = %q, want focus closeout marker for parent 286", snapshot.FocusTaskLine)
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotIgnoresSupersededCloseoutDrafts(t *testing.T) {
 	t.Parallel()
 

@@ -1561,3 +1561,15 @@
   - impact:
     - review lanes can reject the wrong file as "missing"
     - PM snapshots can miss that a completed child already satisfied or superseded the parent deliverable family, causing replacement-child churn after real work is already done
+- 2026-03-30 13:06 MDT - The PM closeout detector still refused to count plain implementation children as parent-closeout proof for orchestration-only parents, even when the child was `done` on the same deliverable.
+  - fresh live evidence:
+    - parent task `286` remained absent from PM continuation `002dcd47-2a1d-4969-abb0-af21be1a487f` on `repo_version=3718`
+    - that prompt listed only blocked leaf tasks `293/291/290/288`, despite sibling child `296` already being `done` for `planning/sambot-prompts/test-conversations-technical.md`
+    - the resulting PM turn fell back into blocked `task.list` rediscovery and stopped again, because there was no closeout-ready parent surfaced to advance
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) in `projectContinuationChildTaskClosesParent(...)` and [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) in `projectContinuationChildTaskClosesParentForWorker(...)` returned `false` unless the child either:
+      - looked like verification work with recorded proof, or
+      - contained explicit closeout phrases like `close parent`, `mark parent complete`, or `delivered`
+    - they did not treat a plain implementation child as closeout proof even when it shared the exact same deliverable identity as an orchestration-only parent
+  - impact:
+    - orchestration parents can disappear from PM focus after real work is already done, leaving only blocked leaves in the continuation prompt and forcing another rediscovery/stop loop instead of parent closeout

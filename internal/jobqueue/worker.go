@@ -5122,34 +5122,58 @@ func projectContinuationChildTaskClosesParentForWorker(
 		strings.Contains(text, "confirms the parent") ||
 		strings.Contains(text, "mark done immediately") ||
 		strings.Contains(text, "delivered")
-	if !hasClosureSignal && !recordedVerificationCloseout {
-		return false
-	}
+	parentDeliverablePath := normalizeWorkspaceRelativePathForWorker(parentHints.DeliverablePath)
+	childDeliverablePath := normalizeWorkspaceRelativePathForWorker(childHints.DeliverablePath)
+	parentDeliverableRoot := normalizeWorkspaceRelativePathForWorker(parentHints.DeliverableRoot)
+	childDeliverableRoot := normalizeWorkspaceRelativePathForWorker(childHints.DeliverableRoot)
+	parentDependsOnPath := normalizeWorkspaceRelativePathForWorker(parentHints.DependsOnPath)
+	sharesDeliverableIdentity := projectContinuationChildMatchesParentDeliverableIdentityForWorker(
+		parentDeliverablePath,
+		parentDeliverableRoot,
+		parentDependsOnPath,
+		childDeliverablePath,
+		childDeliverableRoot,
+		normalizeWorkspaceRelativePathForWorker(childHints.DependsOnPath),
+	)
 	if recordedVerificationCloseout {
 		return true
 	}
-	parentDeliverablePath := normalizeWorkspaceRelativePathForWorker(parentHints.DeliverablePath)
-	childDeliverablePath := normalizeWorkspaceRelativePathForWorker(childHints.DeliverablePath)
+	if sharesDeliverableIdentity && recoveredTaskLooksLikeOrchestrationOnlyParent(parentTask) {
+		return true
+	}
+	if !hasClosureSignal {
+		return false
+	}
+	if sharesDeliverableIdentity {
+		return true
+	}
+	return strings.Contains(text, fmt.Sprintf("oc-%d", parentTask.TaskNumber)) ||
+		strings.Contains(text, fmt.Sprintf("parent %d", parentTask.TaskNumber))
+}
+
+func projectContinuationChildMatchesParentDeliverableIdentityForWorker(
+	parentDeliverablePath string,
+	parentDeliverableRoot string,
+	parentDependsOnPath string,
+	childDeliverablePath string,
+	childDeliverableRoot string,
+	childDependsOnPath string,
+) bool {
 	if parentDeliverablePath != "" && childDeliverablePath != "" && sameWorkspaceRelativePathForWorker(parentDeliverablePath, childDeliverablePath) {
 		return true
 	}
-	parentDeliverableRoot := normalizeWorkspaceRelativePathForWorker(parentHints.DeliverableRoot)
-	childDeliverableRoot := normalizeWorkspaceRelativePathForWorker(childHints.DeliverableRoot)
 	if parentDeliverableRoot != "" && childDeliverableRoot != "" && sameWorkspaceRelativePathForWorker(parentDeliverableRoot, childDeliverableRoot) {
 		return true
 	}
-	parentDependsOnPath := normalizeWorkspaceRelativePathForWorker(parentHints.DependsOnPath)
 	if parentDependsOnPath != "" {
 		if childDeliverablePath != "" && sameWorkspaceRelativePathForWorker(parentDependsOnPath, childDeliverablePath) {
 			return true
 		}
-		if childDependsOnPath := normalizeWorkspaceRelativePathForWorker(childHints.DependsOnPath); childDependsOnPath != "" &&
-			sameWorkspaceRelativePathForWorker(parentDependsOnPath, childDependsOnPath) {
+		if childDependsOnPath != "" && sameWorkspaceRelativePathForWorker(parentDependsOnPath, childDependsOnPath) {
 			return true
 		}
 	}
-	return strings.Contains(text, fmt.Sprintf("oc-%d", parentTask.TaskNumber)) ||
-		strings.Contains(text, fmt.Sprintf("parent %d", parentTask.TaskNumber))
+	return false
 }
 
 func projectContinuationVerificationChildHasRecordedCloseoutProofForWorker(task repo.ProjectTask, lowerText string) bool {

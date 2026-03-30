@@ -4887,3 +4887,19 @@
     - `GOFLAGS='' go test ./internal/tools/native -run 'Test(ParseExplicitDeliverablePath(DetectsWriteTheFilePath|DetectsCreateBacktickedPath)|FileReadAllowsExplicitReviewDeliverableWhenRecoveryTargetPointsAtSiblingSharedFile)$' -count=1`
     - `GOFLAGS='' go test ./internal/turn -run 'TestExplicitDeliverablePath(DetectsWriteTheFilePath|DetectsCreateBacktickedPath)$' -count=1`
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestExplicitDeliverablePathForWorker(DetectsCreateBacktickedPath|PrefersResultsOutputFromVerificationDescription)$' -count=1`
+- 2026-03-30 13:06 MDT - Counted same-deliverable implementation children as closeout proof for orchestration-only parents.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `projectContinuationChildTaskClosesParent(...)` now checks deliverable identity before requiring literal closeout phrasing
+    - if a `done` child shares deliverable identity with an orchestration-only parent, it now counts as closeout proof even without `close parent` text
+    - factored the shared deliverable matcher into `projectContinuationChildMatchesParentDeliverableIdentity(...)`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - mirrored the same logic in `projectContinuationChildTaskClosesParentForWorker(...)`
+    - factored the worker-side matcher into `projectContinuationChildMatchesParentDeliverableIdentityForWorker(...)`
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go): added `TestProjectExecutionContinuationSnapshotTreatsDoneOrchestrationChildWithSameDeliverableAsCloseoutProof`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go): added `TestJobWorkerProjectExecutionContinuationSnapshotTreatsDoneOrchestrationChildWithSameDeliverableAsCloseoutProof`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshot(TreatsDoneOrchestrationChildWithSameDeliverableAsCloseoutProof|TreatsVerificationEvidenceChildAsCloseoutProof|TreatsMarkParentCompleteTitleAsCloseoutProof)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(TreatsDoneOrchestrationChildWithSameDeliverableAsCloseoutProof|TreatsMarkParentCompleteTitleAsCloseoutProof)$' -count=1`
+  - deploy / proof target:
+    - after a fresh repo-version restart, PM continuation on parent `286` should restore the parent with `completed_closeout_child_tasks=1` instead of surfacing only blocked leaf children
