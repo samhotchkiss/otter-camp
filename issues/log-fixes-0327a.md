@@ -5115,3 +5115,12 @@
   - verified with:
     - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(ApplyChildSourceDescriptionSetsDecompositionSourceDescription|PrepareQueueDecompositionCarriesSourceDescriptionToPrimaryChild|TaskLooksProceduralInstructionArtifact|ExtractDeliverablesIgnores(ProceduralChecklistFragments|ConversationRequirementFragments|InstructionOnlyRequirementLines))$' -count=1`
     - `GOFLAGS='' go test ./internal/tools/native -run 'Test(FileRead(AllowsRecoveryDependencyArtifactReadNamedInTaskContract|RejectsRecovery(NotFoundRereadOutsideTarget|DirectoryRereadOutsideTarget)|ReadRejectsPromptConversationPlaceholderAtRootConversationCorpusPath)|FileWriteRejectsPromptConversationPlaceholderInConversationCorpusPath)$' -count=1`
+- 2026-03-30 14:46 MDT - Filtered file-exists procedural fragments and skipped suggested-topic sections during decomposition.
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+    - `isInstructionOnlyDeliverable(...)` now treats `If the file exists ...` guidance as procedural/non-executable
+    - `descriptionSectionHeading(...)` now classifies `... (suggested)` topic sections as note-style guidance, so they do not feed deliverable extraction
+  - changed [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go):
+    - added `TaskLooksProceduralInstructionArtifact` coverage for `If the file exists ... advance`
+    - added `TestExtractDeliverablesIgnoresSuggestedTopicSections`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(ApplyChildSourceDescriptionSetsDecompositionSourceDescription|PrepareQueueDecompositionCarriesSourceDescriptionToPrimaryChild|TaskLooksProceduralInstructionArtifact|ExtractDeliverablesIgnores(ProceduralChecklistFragments|ConversationRequirementFragments|InstructionOnlyRequirementLines|SuggestedTopicSections))$' -count=1`

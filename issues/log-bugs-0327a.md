@@ -1809,3 +1809,15 @@
   - impact:
     - legitimate bounded child lanes can become under-specified after decomposition
     - recovery blocks before the lane can read its own named source material, causing direct-write retries or immediate `terminal_keep_blocked` outcomes instead of usable execution
+- 2026-03-30 14:46 MDT - PM still treated procedural file-exists guidance and suggested topic lists as executable child tasks.
+  - fresh live evidence:
+    - replacement child set `323-327` contained:
+      - `324`: `If the file exists and has substantial content ... advance`
+      - `325-327`: bare conversation-topic labels from `## Conversation Topics (suggested)`
+    - these are not bounded workspace outputs, but they were still materialized as draft tasks
+  - bug:
+    - `TaskLooksProceduralInstructionArtifact(...)` did not recognize the `If the file exists ... no rewrite needed` family as an instruction-only fragment
+    - `extractDeliverables(...)` still treated `(... suggested)` topic headings as normal deliverable sections, so enumerated topic suggestions became child lanes
+  - impact:
+    - PM can still waste turns on policy/checklist fragments after the earlier conversation-requirement filter
+    - suggested topical guidance can spawn draft child tasks even though the real output is still a single shared file

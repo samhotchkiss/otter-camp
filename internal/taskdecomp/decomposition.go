@@ -906,6 +906,9 @@ func descriptionSectionHeading(raw string) (string, bool) {
 	case normalized == "rule" || normalized == "rules" ||
 		strings.HasSuffix(normalized, " rule") || strings.HasSuffix(normalized, " rules"):
 		return "rules", true
+	case strings.Contains(normalized, "suggested") &&
+		(strings.Contains(normalized, "topic") || strings.Contains(normalized, "topics")):
+		return "notes", true
 	case normalized == "note" || normalized == "notes" ||
 		strings.HasSuffix(normalized, " note") || strings.HasSuffix(normalized, " notes"):
 		return "notes", true
@@ -1000,6 +1003,7 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 		"deferred task",
 		"each is ",
 		"each should ",
+		"if the file exists ",
 		"commit to repo",
 		"commit in ",
 		"must include ",

@@ -173,6 +173,11 @@ func TestTaskLooksProceduralInstructionArtifact(t *testing.T) {
 	if !TaskLooksProceduralInstructionArtifact("Include realistic follow-up questions that push into edge cases or implementation specifics", &followupDescription) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for conversation follow-up requirement fragment")
 	}
+
+	ifFileExistsDescription := "If the file exists and has substantial content (50+ lines), document that in your work output and advance — no rewrite needed."
+	if !TaskLooksProceduralInstructionArtifact("If the file exists and has substantial content (50+ lines), document that in your work output and advance — no rewrite needed.", &ifFileExistsDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for file-exists procedural fragment")
+	}
 }
 
 func TestExtractDeliverablesIgnoresReferenceOnlyInstructionLines(t *testing.T) {
@@ -232,6 +237,23 @@ func TestExtractDeliverablesIgnoresConversationRequirementFragments(t *testing.T
 		"",
 		"- Conversations should demonstrate SamBot operating at deeply technical depth — referencing specific architectures, protocols, implementation details, tradeoffs, and advanced concepts",
 		"- Include realistic follow-up questions that push into edge cases or implementation specifics",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	if len(items) != 1 || !strings.Contains(items[0], "planning/sambot-prompts/test-conversations-level3.md") {
+		t.Fatalf("extractDeliverables = %v, want only the primary deliverable item", items)
+	}
+}
+
+func TestExtractDeliverablesIgnoresSuggestedTopicSections(t *testing.T) {
+	description := strings.Join([]string{
+		"## Deliverable",
+		"Write `planning/sambot-prompts/test-conversations-level3.md` containing exactly 3 deeply technical multi-turn SamBot test conversations.",
+		"",
+		"## Conversation Topics (suggested)",
+		"1. **AI Agent Orchestration Architecture** — multi-agent design, state management, failure recovery",
+		"2. **Ethics of AI in Content Moderation** — technical + ethical intersection, automated decision-making at scale",
+		"3. **Building Production ML Pipelines** — real-world MLOps challenges, model serving, monitoring",
 	}, "\n")
 
 	items := extractDeliverables(description)
