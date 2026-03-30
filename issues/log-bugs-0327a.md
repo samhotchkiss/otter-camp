@@ -1666,3 +1666,21 @@
       - fresh replacement child creation is blocked
       - repairing the best existing same-file child is also blocked
     - the worker then eventually suppresses/retires the repeated continuation attempts, leaving the project session idle on still-actionable draft work
+- 2026-03-30 13:32 MDT - PM continuation prompts still told the model to create a fresh replacement child even after the runtime switched to “repair preferred child 303” semantics.
+  - fresh live evidence:
+    - on the redeployed runtime, startup recovery recreated PM continuation `8c0acc01...`
+    - its first assistant message still opened with:
+      - `I'll create a fresh replacement child task under OC-297 ...`
+    - this happened before any tool-level guard fired, so the behavior was coming from the continuation prompt, not from the stale mutation guard
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) and [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) snapshots only carried:
+      - `ReplacementDraftLine`
+      - `FocusTaskLine`
+    - and the prompt builders interpreted any `malformed_child_tasks=` focus as:
+      - `create the smallest fresh replacement child task`
+    - the snapshot had no way to tell the model:
+      - which same-file malformed draft child was preferred
+      - that new-child creation should now be suppressed in favor of repairing that preferred child
+  - impact:
+    - even after the runtime guard logic is corrected, the PM lane still opens by planning the wrong mutation
+    - that guarantees another blocked `task.create` attempt before the model can ever try the now-allowed `task.update` on the preferred child

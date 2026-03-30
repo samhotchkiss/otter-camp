@@ -4990,3 +4990,20 @@
     - preserved the older malformed duplicate blocked-child guard coverage
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'TestShouldBlockProjectContinuationFocusedDraftMutation(ForMalformedDuplicateChild|AllowsPreferredMalformedSameDeliverableDraftChild|BlocksNonPreferredMalformedSameDeliverableDraftChild)$|TestShouldBlockProjectContinuationFocusedDraftTaskCreate(AllowsFreshReplacementWhenDirectChildDraftsAreMalformedForDifferentDeliverables|ForMalformedSameDeliverableDraftChildren)$|TestBuildProjectContinuationFocusedDraftExistingChildGuardErrorIncludesChildLabels$' -count=1`
+- 2026-03-30 13:32 MDT - Threaded preferred same-file child repair guidance into PM continuation snapshots and prompts.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `projectExecutionContinuationSnapshot` now carries `RepairDraftLine`
+    - snapshot building now emits `Preferred existing same-deliverable malformed child draft to repair before any new replacement work: ...` when the focused parent has malformed same-file direct draft children
+    - `appendProjectExecutionSnapshotGuidance(...)` now:
+      - tells PM not to create another replacement child while that preferred draft exists
+      - tells PM to repair/queue that exact child with one narrow `task.update`
+      - suppresses the older generic malformed-parent replacement-child guidance when the repair line is present
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - worker-owned snapshots now carry the same `RepairDraftLine`
+    - worker prompt guidance mirrors the engine wording
+    - `projectExecutionContinuationFingerprintForWorker(...)` now includes the repair line so deploys refresh the continuation message when this guidance changes
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestBuildProjectContinuationActionPromptPrefersRepairOfMalformedSameDeliverableDraftChild`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestBuildProjectContinuationActionPrompt(AddsReplacementChildGuidanceForMalformedChildren|PrefersRepairOfMalformedSameDeliverableDraftChild)$|TestShouldBlockProjectContinuationFocusedDraftMutation(ForMalformedDuplicateChild|AllowsPreferredMalformedSameDeliverableDraftChild|BlocksNonPreferredMalformedSameDeliverableDraftChild)$|TestShouldBlockProjectContinuationFocusedDraftTaskCreate(AllowsFreshReplacementWhenDirectChildDraftsAreMalformedForDifferentDeliverables|ForMalformedSameDeliverableDraftChildren)$|TestBuildProjectContinuationFocusedDraftExistingChildGuardErrorIncludesChildLabels$' -count=1`
+    - `GOFLAGS='' go test ./internal/jobqueue -run '^$' -count=1`

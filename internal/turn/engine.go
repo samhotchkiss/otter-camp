@@ -9244,6 +9244,11 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		lines = append(lines, "Those draft parents no longer have active child execution. Their existing child lanes are terminally blocked or malformed, so create or queue the smallest replacement child task under the correct parent now instead of broad rediscovery.")
 		lines = append(lines, "Do not browse broad workspace roots, task trees, or flow templates first when the replacement parent already names the dependency or deliverable path.")
 	}
+	if repairLine := strings.TrimSpace(snapshot.RepairDraftLine); repairLine != "" {
+		lines = append(lines, repairLine)
+		lines = append(lines, "Do not create another replacement child while that preferred same-deliverable draft still exists.")
+		lines = append(lines, "Your next assistant action should repair and queue that exact child with one narrow task.update, or block/consolidate the weaker duplicate siblings if that preferred child is no longer usable.")
+	}
 	if parentLine := strings.TrimSpace(snapshot.ChildActiveDraftLine); parentLine != "" {
 		lines = append(lines, parentLine)
 		lines = append(lines, "Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while those child tasks already exist. Let active child lanes continue, or inspect only that parent's direct children with parent_task_id if a concrete blocker must be verified.")
@@ -9280,9 +9285,15 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 			lines = append(lines, "Your next assistant action must create or queue the smallest fresh replacement child task beneath that focus parent now. If child inspection is strictly required first, use only task.list(parent_task_id=...).")
 		}
 		if strings.Contains(focusLine, "malformed_child_tasks=") && !focusHasCompletedCloseout {
-			lines = append(lines, "Because that focus parent only has malformed or stale child artifact lanes, do not queue the parent again from the project lane. Create the smallest fresh replacement child task under it now instead.")
-			lines = append(lines, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.")
-			lines = append(lines, "Your next assistant action must create or queue the smallest fresh replacement child task beneath that focus parent now. If child inspection is strictly required first, use only task.list(parent_task_id=...).")
+			if strings.TrimSpace(snapshot.RepairDraftLine) != "" {
+				lines = append(lines, "Because that focus parent already has malformed same-deliverable draft children in the tree, do not create another replacement child from the project lane.")
+				lines = append(lines, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.")
+				lines = append(lines, "Your next assistant action must repair and queue the preferred existing same-deliverable child draft named above with one narrow task.update, or block/consolidate the duplicate siblings if that preferred child is no longer usable.")
+			} else {
+				lines = append(lines, "Because that focus parent only has malformed or stale child artifact lanes, do not queue the parent again from the project lane. Create the smallest fresh replacement child task under it now instead.")
+				lines = append(lines, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.")
+				lines = append(lines, "Your next assistant action must create or queue the smallest fresh replacement child task beneath that focus parent now. If child inspection is strictly required first, use only task.list(parent_task_id=...).")
+			}
 		}
 	}
 	return lines
@@ -21795,6 +21806,7 @@ type projectExecutionContinuationSnapshot struct {
 	LeafActiveTaskLine   string
 	DraftTaskLine        string
 	ReplacementDraftLine string
+	RepairDraftLine      string
 	ChildActiveDraftLine string
 	FocusTaskLine        string
 	HasActionableBlocked bool
@@ -22030,6 +22042,7 @@ func buildProjectExecutionContinuationSnapshotWithActivity(
 	supersededDraftTaskIDs := projectContinuationSupersededDraftTaskIDs(projectTasks, taskHintsByTask, childActivity, malformedChildTaskIDs)
 	completedBatchFamilies := projectContinuationRelevantCompletedBatchFamilies(projectTasks, taskHintsByTask, priorityPaths, malformedChildTaskIDs)
 	focusTask := ""
+	var focusTaskRecord repo.ProjectTask
 	filterByPriority := len(priorityPaths) > 0
 	matchedPriority := false
 	for _, task := range projectTasks {
@@ -22073,6 +22086,7 @@ func buildProjectExecutionContinuationSnapshotWithActivity(
 				}
 				if focusTask == "" {
 					focusTask = taskRef
+					focusTaskRecord = task
 				}
 				continue
 			}
@@ -22083,6 +22097,7 @@ func buildProjectExecutionContinuationSnapshotWithActivity(
 					}
 					if focusTask == "" {
 						focusTask = taskRef
+						focusTaskRecord = task
 					}
 					continue
 				}
@@ -22096,6 +22111,7 @@ func buildProjectExecutionContinuationSnapshotWithActivity(
 			}
 			if focusTask == "" {
 				focusTask = taskRef
+				focusTaskRecord = task
 			}
 			continue
 		}
@@ -22123,6 +22139,12 @@ func buildProjectExecutionContinuationSnapshotWithActivity(
 	}
 	if len(replacementDraftTasks) > 0 {
 		snapshot.ReplacementDraftLine = "Draft parent tasks need fresh replacement child work: " + strings.Join(replacementDraftTasks, "; ")
+	}
+	if focusTaskRecord.ID != uuid.Nil {
+		if malformedRepairDrafts := projectContinuationMalformedSameDeliverableDraftChildren(projectTasks, focusTaskRecord, malformedChildTaskIDs); len(malformedRepairDrafts) > 0 {
+			preferred := projectContinuationPreferredSameDeliverableDraftChild(malformedRepairDrafts)
+			snapshot.RepairDraftLine = "Preferred existing same-deliverable malformed child draft to repair before any new replacement work: " + projectExecutionContinuationTaskRef(preferred, childActivity[preferred.ID], taskHintsByTask[preferred.ID])
+		}
 	}
 	if len(childActiveDraftTasks) > 0 {
 		snapshot.ChildActiveDraftLine = "Draft parent tasks already have child work: " + strings.Join(childActiveDraftTasks, "; ")

@@ -4063,6 +4063,7 @@ type projectExecutionContinuationSnapshotForWorker struct {
 	LeafActiveTaskLine   string
 	DraftTaskLine        string
 	ReplacementDraftLine string
+	RepairDraftLine      string
 	ChildActiveDraftLine string
 	FocusTaskLine        string
 	HasActionableBlocked bool
@@ -4434,6 +4435,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 	completedBatchFamilies := projectContinuationRelevantCompletedBatchFamiliesForWorker(projectTasks, taskHintsByTask, malformedChildTaskIDs)
 	supersededDraftTaskIDs := projectContinuationSupersededDraftTaskIDsForWorker(projectTasks, taskHintsByTask, childActivity, malformedChildTaskIDs)
 	focusTask := ""
+	var focusTaskRecord repo.ProjectTask
 	for _, task := range projectTasks {
 		if _, skip := malformedChildTaskIDs[task.ID]; skip {
 			continue
@@ -4467,6 +4469,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 				}
 				if focusTask == "" {
 					focusTask = taskRef
+					focusTaskRecord = task
 				}
 				continue
 			}
@@ -4477,6 +4480,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 					}
 					if focusTask == "" {
 						focusTask = taskRef
+						focusTaskRecord = task
 					}
 					continue
 				}
@@ -4490,6 +4494,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 			}
 			if focusTask == "" {
 				focusTask = taskRef
+				focusTaskRecord = task
 			}
 			continue
 		}
@@ -4517,6 +4522,12 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 	}
 	if len(replacementDraftTasks) > 0 {
 		snapshot.ReplacementDraftLine = "Draft parent tasks need fresh replacement child work: " + strings.Join(replacementDraftTasks, "; ")
+	}
+	if focusTaskRecord.ID != uuid.Nil {
+		if malformedRepairDrafts := projectContinuationMalformedSameDeliverableDraftChildrenForWorker(projectTasks, focusTaskRecord, malformedChildTaskIDs); len(malformedRepairDrafts) > 0 {
+			preferred := projectContinuationPreferredSameDeliverableDraftChildForWorker(malformedRepairDrafts)
+			snapshot.RepairDraftLine = "Preferred existing same-deliverable malformed child draft to repair before any new replacement work: " + projectExecutionContinuationTaskRefForWorker(preferred, childActivity[preferred.ID], taskHintsByTask[preferred.ID])
+		}
 	}
 	if len(childActiveDraftTasks) > 0 {
 		snapshot.ChildActiveDraftLine = "Draft parent tasks already have child work: " + strings.Join(childActiveDraftTasks, "; ")
@@ -5246,6 +5257,57 @@ func projectContinuationMalformedDuplicateSharedFileChildForWorker(task, parentT
 	return taskClaimsWholeSharedFileOwnershipForWorker(task, parentPath)
 }
 
+func projectContinuationPreferredSameDeliverableDraftChildForWorker(tasks []repo.ProjectTask) repo.ProjectTask {
+	if len(tasks) == 0 {
+		return repo.ProjectTask{}
+	}
+	descriptionText := func(value *string) string {
+		if value == nil {
+			return ""
+		}
+		return *value
+	}
+	best := tasks[0]
+	bestScore := len(strings.TrimSpace(best.Title)) + len(strings.TrimSpace(descriptionText(best.Description)))
+	for _, task := range tasks[1:] {
+		score := len(strings.TrimSpace(task.Title)) + len(strings.TrimSpace(descriptionText(task.Description)))
+		if score > bestScore || (score == bestScore && task.TaskNumber > best.TaskNumber) {
+			best = task
+			bestScore = score
+		}
+	}
+	return best
+}
+
+func projectContinuationMalformedSameDeliverableDraftChildrenForWorker(tasks []repo.ProjectTask, focusTask repo.ProjectTask, malformedChildTaskIDs map[uuid.UUID]struct{}) []repo.ProjectTask {
+	if len(tasks) == 0 || focusTask.ID == uuid.Nil {
+		return nil
+	}
+	malformed := make([]repo.ProjectTask, 0, len(tasks))
+	for _, task := range tasks {
+		if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+			continue
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(task.Metadata, &metadata); err != nil {
+			continue
+		}
+		parentIDText := strings.TrimSpace(fmt.Sprint(metadata["decomposition_parent_task_id"]))
+		parentID, err := uuid.Parse(parentIDText)
+		if err != nil || parentID != focusTask.ID {
+			continue
+		}
+		if _, ok := malformedChildTaskIDs[task.ID]; !ok {
+			continue
+		}
+		if projectContinuationMalformedDuplicateSharedFileChildForWorker(task, focusTask) ||
+			projectContinuationMalformedConflictingDeliverableChildForWorker(task, focusTask) {
+			malformed = append(malformed, task)
+		}
+	}
+	return malformed
+}
+
 func taskVisibleBriefDeliverablePathForWorker(taskRecord repo.ProjectTask) string {
 	description := ""
 	if taskRecord.Description != nil {
@@ -5860,6 +5922,7 @@ func projectExecutionContinuationFingerprintForWorker(completedTaskID uuid.UUID,
 		strings.TrimSpace(snapshot.ActiveTaskLine),
 		strings.TrimSpace(snapshot.DraftTaskLine),
 		strings.TrimSpace(snapshot.ReplacementDraftLine),
+		strings.TrimSpace(snapshot.RepairDraftLine),
 		strings.TrimSpace(snapshot.ChildActiveDraftLine),
 		strings.TrimSpace(snapshot.FocusTaskLine),
 	}
@@ -6212,6 +6275,11 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 		lines = append(lines, "Those draft parents no longer have active child execution. Their existing child lanes are terminally blocked or malformed, so create or queue the smallest replacement child task under the correct parent now instead of broad rediscovery.")
 		lines = append(lines, "Do not browse broad workspace roots, task trees, or flow templates first when the replacement parent already names the dependency or deliverable path.")
 	}
+	if repairLine := strings.TrimSpace(snapshot.RepairDraftLine); repairLine != "" {
+		lines = append(lines, repairLine)
+		lines = append(lines, "Do not create another replacement child while that preferred same-deliverable draft still exists.")
+		lines = append(lines, "Your next assistant action should repair and queue that exact child with one narrow task.update, or block/consolidate the weaker duplicate siblings if that preferred child is no longer usable.")
+	}
 	if parentLine := strings.TrimSpace(snapshot.ChildActiveDraftLine); parentLine != "" {
 		lines = append(lines, parentLine)
 		lines = append(lines, "Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while those child tasks already exist. Let active child lanes continue, or inspect only that parent's direct children with parent_task_id if a concrete blocker must be verified.")
@@ -6236,9 +6304,15 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 			lines = append(lines, "Your next assistant action must create or queue the smallest fresh replacement child task beneath that focus parent now. If child inspection is strictly required first, use only task.list(parent_task_id=...).")
 		}
 		if strings.Contains(focusLine, "malformed_child_tasks=") && !focusHasCompletedCloseout {
-			lines = append(lines, "Because that focus parent only has malformed or stale child artifact lanes, do not queue the parent again from the project lane. Create the smallest fresh replacement child task under it now instead.")
-			lines = append(lines, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.")
-			lines = append(lines, "Your next assistant action must create or queue the smallest fresh replacement child task beneath that focus parent now. If child inspection is strictly required first, use only task.list(parent_task_id=...).")
+			if strings.TrimSpace(snapshot.RepairDraftLine) != "" {
+				lines = append(lines, "Because that focus parent already has malformed same-deliverable draft children in the tree, do not create another replacement child from the project lane.")
+				lines = append(lines, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.")
+				lines = append(lines, "Your next assistant action must repair and queue the preferred existing same-deliverable child draft named above with one narrow task.update, or block/consolidate the duplicate siblings if that preferred child is no longer usable.")
+			} else {
+				lines = append(lines, "Because that focus parent only has malformed or stale child artifact lanes, do not queue the parent again from the project lane. Create the smallest fresh replacement child task under it now instead.")
+				lines = append(lines, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.")
+				lines = append(lines, "Your next assistant action must create or queue the smallest fresh replacement child task beneath that focus parent now. If child inspection is strictly required first, use only task.list(parent_task_id=...).")
+			}
 		}
 	}
 	return lines

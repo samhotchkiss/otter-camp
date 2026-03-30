@@ -24262,6 +24262,31 @@ func TestBuildProjectContinuationActionPromptAddsReplacementChildGuidanceForMalf
 	}
 }
 
+func TestBuildProjectContinuationActionPromptPrefersRepairOfMalformedSameDeliverableDraftChild(t *testing.T) {
+	prompt := buildProjectContinuationActionPrompt("Active project request: recover level-3 dialogue file", projectExecutionContinuationSnapshot{
+		ProjectLine:          "Active project id: 123",
+		ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 297 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations) id=bbb title=\"Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations\" work_status=draft child_tasks=3 malformed_child_tasks=3",
+		RepairDraftLine:      "Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 303 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot dialogues) id=ccc title=\"Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot dialogues\" work_status=draft",
+		FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 297 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations) id=bbb title=\"Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations\" work_status=draft child_tasks=3 malformed_child_tasks=3",
+	})
+
+	if !strings.Contains(prompt, "Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 303") {
+		t.Fatalf("prompt = %q, want preferred repair child line", prompt)
+	}
+	if !strings.Contains(prompt, "Do not create another replacement child while that preferred same-deliverable draft still exists.") {
+		t.Fatalf("prompt = %q, want anti-duplicate guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Your next assistant action should repair and queue that exact child with one narrow task.update") {
+		t.Fatalf("prompt = %q, want direct repair guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Your next assistant action must repair and queue the preferred existing same-deliverable child draft named above with one narrow task.update") {
+		t.Fatalf("prompt = %q, want focus-level repair guidance", prompt)
+	}
+	if strings.Contains(prompt, "Your next assistant action must create or queue the smallest fresh replacement child task beneath that focus parent now.") {
+		t.Fatalf("prompt = %q, should not keep generic replacement-child guidance once preferred repair child exists", prompt)
+	}
+}
+
 func TestBuildProjectContinuationActionPromptAddsCompletedCloseoutGuidance(t *testing.T) {
 	prompt := buildProjectContinuationActionPrompt("Active project request: finish technonymous index closure", projectExecutionContinuationSnapshot{
 		ProjectLine:   "Active project id: 123",
