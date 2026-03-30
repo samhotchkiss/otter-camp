@@ -23799,6 +23799,73 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFile
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildrenUsingSourceDescriptionOnly(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	parentDescription := "Produce the file `templates/template-08-replace.html` — a complete, standalone HTML layout template for Sam.blog."
+	childDescription := "Write the complete file in a single pass"
+	childSourceDescription := "Write the complete file templates/template-08-replace.html in a single pass using cli_execute with python3."
+	childID := uuid.New()
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:          parentDraftID,
+				ProjectID:   projectID,
+				TaskNumber:  84,
+				Title:       "Build HTML layout template 8 of 10 (Editorial Longform) — replacement for blocked OC-43/OC-38",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"applied":             true,
+						"mode":                "parallel_children",
+						"orchestration_only":  true,
+						"source_description":  parentDescription,
+						"primary_deliverable": "templates/template-08-replace.html",
+					},
+				}),
+			},
+			childID: {
+				ID:          childID,
+				ProjectID:   projectID,
+				TaskNumber:  225,
+				Title:       "Write the complete file in a single pass",
+				Description: &childDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition_parent_task_id": parentDraftID.String(),
+					"decomposition": map[string]any{
+						"source_description": childSourceDescription,
+					},
+				}),
+			},
+		},
+	}
+	parentTask := fixture.engine.tasks.(*fakeTaskRepo).items[parentDraftID]
+	childTask := fixture.engine.tasks.(*fakeTaskRepo).items[childID]
+	if !projectContinuationMalformedDuplicateSharedFileChild(childTask, parentTask) {
+		t.Fatalf("duplicate shared-file matcher = false; parentPath=%q childPath=%q", taskDuplicateSharedFileDeliverablePath(parentTask), taskDuplicateSharedFileDeliverablePath(childTask))
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.DraftTaskLine, "task 225") {
+		t.Fatalf("DraftTaskLine = %q, should omit source-description-only duplicate child artifact", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "task 84") {
+		t.Fatalf("ReplacementDraftLine = %q, want parent restored as replacement draft", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=1") {
+		t.Fatalf("ReplacementDraftLine = %q, want malformed child count", snapshot.ReplacementDraftLine)
+	}
+	if strings.Contains(snapshot.FocusTaskLine, "task 225") {
+		t.Fatalf("FocusTaskLine = %q, should not focus source-description-only duplicate child artifact", snapshot.FocusTaskLine)
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotTreatsWorkspaceDeliverableAsCloseoutReadyForMalformedDuplicateParent(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

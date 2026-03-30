@@ -925,3 +925,13 @@
     - `shouldBlockProjectContinuationFocusedDraftMutationTool(...)` blocked malformed parent re-queues and ancestor promotions, but did not block `task.update` when the target itself was a malformed child artifact beneath the focused draft parent
   - impact:
     - PM continuations could still waste handoff cycles by re-queuing malformed duplicate children that the snapshot code already knew should be ignored
+- 2026-03-29 23:13 MDT - Generic child drafts could escape malformed duplicate-child detection by hiding their real whole-file contract in metadata.
+  - fresh live evidence:
+    - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` kept focusing `OC-225` (`Write the complete file in a single pass`) and describing it as needing a fresh replacement child, even though `OC-225` is just a stale child under `OC-84`
+    - the same task family already had newer children `OC-228/232/233` naming `templates/template-08-replace.html`, but `OC-225` itself never got classified as malformed duplicate residue
+  - bug:
+    - duplicate shared-file detection only inspected visible title/description wording for whole-file ownership and explicit path extraction
+    - legacy generic child drafts like `OC-225` stored the real contract only in `metadata.decomposition.source_description`, so they slipped past malformed-child classification
+  - impact:
+    - PM focus could stay anchored on a stale intermediate child instead of collapsing back to the real parent replacement task
+    - the project lane could keep creating more children beneath that stale draft even though the whole subtree was already known-bad shared-file decomposition

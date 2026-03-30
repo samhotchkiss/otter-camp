@@ -10767,26 +10767,27 @@ func taskClaimsWholeSharedFileOwnership(taskRecord repo.ProjectTask, sharedPath 
 	if sharedPath == "" || !strings.Contains(filepath.Base(sharedPath), ".") {
 		return false
 	}
-	description := ""
-	if taskRecord.Description != nil {
-		description = *taskRecord.Description
-	}
-	for _, raw := range []string{strings.TrimSpace(taskRecord.Title), strings.TrimSpace(description)} {
+	for _, raw := range taskSharedFileOwnershipTexts(taskRecord) {
 		if recoveryResumeSharedSectionTargetFromText(raw, sharedPath) != "" {
 			return false
 		}
 	}
-	text := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(taskRecord.Title+" "+description)), " "))
+	text := strings.ToLower(strings.Join(strings.Fields(strings.Join(taskSharedFileOwnershipTexts(taskRecord), " ")), " "))
 	if text == "" {
 		return false
 	}
 	for _, prefix := range []string{
 		"produce the file ",
 		"write the file ",
+		"write the complete file ",
 		"draft the file ",
 		"create the file ",
 		"update the file ",
+		"update the complete file ",
 		"replace the file ",
+		"replace the complete file ",
+		"deliver the file ",
+		"deliver the complete file ",
 	} {
 		if strings.Contains(text, prefix+sharedPath) {
 			return true
@@ -10814,18 +10815,37 @@ func taskClaimsWholeSharedFileOwnership(taskRecord repo.ProjectTask, sharedPath 
 	return false
 }
 
-func taskDuplicateSharedFileDeliverablePath(taskRecord repo.ProjectTask) string {
-	description := ""
+func taskSharedFileOwnershipTexts(taskRecord repo.ProjectTask) []string {
+	texts := []string{strings.TrimSpace(taskRecord.Title)}
 	if taskRecord.Description != nil {
-		description = strings.TrimSpace(*taskRecord.Description)
+		texts = append(texts, strings.TrimSpace(*taskRecord.Description))
 	}
-	if explicit := normalizeWorkspaceRelativePath(projectContinuationExplicitDeliverablePathFromText(description)); explicit != "" {
-		return explicit
+	metadata := messageMetadataMap(taskRecord.Metadata)
+	if decomposition, _ := metadata["decomposition"].(map[string]any); decomposition != nil {
+		if sourceDescription := strings.TrimSpace(anyString(decomposition["source_description"])); sourceDescription != "" {
+			texts = append(texts, sourceDescription)
+		}
+	}
+	filtered := texts[:0]
+	for _, text := range texts {
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		filtered = append(filtered, text)
+	}
+	return filtered
+}
+
+func taskDuplicateSharedFileDeliverablePath(taskRecord repo.ProjectTask) string {
+	for _, text := range taskSharedFileOwnershipTexts(taskRecord) {
+		if explicit := normalizeWorkspaceRelativePath(projectContinuationExplicitDeliverablePathFromText(text)); explicit != "" {
+			return explicit
+		}
 	}
 	if explicit := normalizeWorkspaceRelativePath(explicitDeliverablePath(taskRecord)); explicit != "" && strings.Contains(filepath.Base(explicit), ".") {
 		return explicit
 	}
-	return normalizeWorkspaceRelativePath(projectContinuationExplicitDeliverablePathFromText(strings.TrimSpace(taskRecord.Title) + " " + description))
+	return normalizeWorkspaceRelativePath(projectContinuationExplicitDeliverablePathFromText(strings.Join(taskSharedFileOwnershipTexts(taskRecord), " ")))
 }
 
 func (e *TurnEngine) malformedDuplicateSharedFileParentTaskForChild(ctx context.Context, taskRecord repo.ProjectTask) (repo.ProjectTask, string, bool, error) {

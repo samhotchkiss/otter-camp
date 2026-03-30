@@ -4201,3 +4201,17 @@
     - rebuilt/restarted on local `repo_version=3661`
     - task `229` had already closed after deterministic `content_required` blocking before the new prompt could re-fire, so direct production proof for the `direct_write_only=true` continuation text is still pending the next exact-file canary
     - PM same-path supersession is likewise waiting on the next natural PM continuation after active review task `230` settles
+- 2026-03-29 23:13 MDT - Classified stale generic duplicate-child drafts using `decomposition.source_description`.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `taskSharedFileOwnershipTexts(...)` now includes `metadata.decomposition.source_description`
+    - `taskClaimsWholeSharedFileOwnership(...)` now evaluates that inherited source-description contract when deciding whether a child still claims the parent’s whole file
+    - `taskDuplicateSharedFileDeliverablePath(...)` now extracts explicit paths from the same source-description text, not just visible title/description
+    - widened whole-file ownership prefix matching to cover the live stale wording `write the complete file ...`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildrenUsingSourceDescriptionOnly`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren(UsingSingleFileWording|UsingSourceDescriptionOnly)?|BuildTaskContinuationActionPromptIncludesChildTaskSnapshotGuidance|TaskExecutionContinuationSnapshotIncludesParentContractAndSiblingHints|ProjectExecutionContinuationSnapshotIgnoresOlderDraftsSupersededByNewerOpenSamePathTask|ShouldStopAfterSuccessfulProjectExecutionHandoffMutation(ForMissingDependencyPrompt|IgnoresAssignmentOnlyUpdate|RequiresReplacementChildPrompt)?)$' -count=1`
+  - deploy / proof status:
+    - rebuilt/restarted on local `repo_version=3662`; runtime health is `ok`
+    - directly driven by live PM focus on stale draft `OC-225`
+    - the next expected canary is that `OC-225` no longer appears as actionable PM work and the lane moves back to the correct parent-level replacement path under `OC-84`

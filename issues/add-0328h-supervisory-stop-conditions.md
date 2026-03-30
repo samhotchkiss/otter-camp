@@ -571,3 +571,15 @@ They need sharper stopping rules than ordinary execution lanes.
   - live proof:
     - after rebuild/restart, task `212` session `4f4a673a-2b9f-4957-8aeb-124633bb5a6a` closed at `22:39 MDT`
     - its three `memory_extract_turn` jobs are now `dead_letter`, so the blocked-tail supervisory stop now lands in the same recovery cycle instead of the next hourly cleanup
+- 2026-03-29 23:13 MDT - Closed the stale generic-child escape hatch in duplicate shared-file detection.
+  - fresh live evidence:
+    - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` was still focusing stale draft `OC-225` (`Write the complete file in a single pass`) even after newer same-file drafts `OC-228/232/233` existed
+    - root cause: `OC-225` is itself a malformed duplicate whole-file child of `OC-84`, but that fact only exists in `metadata.decomposition.source_description`; the duplicate-child classifier was only looking at visible title/description wording
+  - local fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now feeds `decomposition.source_description` into both whole-file ownership detection and duplicate shared-file deliverable path extraction
+    - widened whole-file ownership phrase matching to catch the live stale wording `write the complete file ...`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren(UsingSingleFileWording|UsingSourceDescriptionOnly)?|BuildTaskContinuationActionPromptIncludesChildTaskSnapshotGuidance|TaskExecutionContinuationSnapshotIncludesParentContractAndSiblingHints|ProjectExecutionContinuationSnapshotIgnoresOlderDraftsSupersededByNewerOpenSamePathTask|ShouldStopAfterSuccessfulProjectExecutionHandoffMutation(ForMissingDependencyPrompt|IgnoresAssignmentOnlyUpdate|RequiresReplacementChildPrompt)?)$' -count=1`
+  - proof status:
+    - rebuilt/restarted on local `repo_version=3662` and runtime health is `ok`
+    - direct post-deploy PM proof is still pending the next natural template-08 continuation; the expected outcome is that `OC-225` disappears as a focus candidate and the lane escalates back to parent `OC-84` instead of creating more children beneath `OC-225`
