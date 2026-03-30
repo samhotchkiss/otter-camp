@@ -25827,6 +25827,118 @@ func TestProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopReco
 	}
 }
 
+func TestProjectContinuationTurnCloseoutReadyTaskLabelFallsBackToPromptFocusParent(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "closeout-ready-task-label-from-prompt",
+		DisplayName: "Closeout Ready Task Label From Prompt",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Prompt Label Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "closeout-ready-task-label-from-prompt-project",
+		DisplayName:    "Closeout Ready Task Label From Prompt Project",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	focusTaskID := uuid.New()
+	staleMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Your last continuation turn confirmed this focused parent is already closeout-ready for the same deliverable.",
+			"Current focus parent: task 245 (Write planning/sambot-tech-architecture.md) id=" + focusTaskID.String() + ".",
+			"Do not call task.get, project.list, file.list, file.read, or any other broad rediscovery tool before acting.",
+		}, " "),
+		Status:   "pending",
+		Metadata: json.RawMessage(`{"source":"project_execution_continuation"}`),
+	})
+	if err != nil {
+		t.Fatalf("create stale continuation message: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	completedTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StopReason:       &stopReason,
+		TriggerMessageID: &staleMessage.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create completed continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &completedTurn.ID,
+		Role:      "tool_result",
+		Content:   fmt.Sprintf(`{"error":"project continuation already named task id=%s in the continuation prompt. Do not reread that task record first. If the current deliverable or blocker evidence already makes the next step clear, issue the direct task.update or smallest bounded replacement-task action now; otherwise inspect only genuinely new narrower evidence.","tool_name":"task.get"}`, focusTaskID.String()),
+		Status:    "final",
+	}); err != nil {
+		t.Fatalf("create generic blocked rediscovery tool result: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &completedTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation already proved that the focused parent is closeout-ready for this deliverable. Do not rediscover sibling or child state from the project lane again. Advance or close that same parent directly, and if parent_orchestration evidence is still missing record it in one narrow task.update now.]",
+		Status:    "final",
+	}); err != nil {
+		t.Fatalf("create closeout-ready system message: %v", err)
+	}
+
+	label, err := worker.projectContinuationTurnCloseoutReadyTaskLabel(ctx, staleMessage.ID)
+	if err != nil {
+		t.Fatalf("projectContinuationTurnCloseoutReadyTaskLabel: %v", err)
+	}
+	if label != "task 245 (Write planning/sambot-tech-architecture.md)" {
+		t.Fatalf("label = %q, want focused closeout-ready task label from prompt", label)
+	}
+}
+
 func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

@@ -789,3 +789,11 @@ They need sharper stopping rules than ordinary execution lanes.
     - added focused regression `TestDispatchToolsStopsAfterSingleBlockedFocusedCloseoutReadyProjectContinuationRediscovery` in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'TestDispatchToolsStopsAfter(SingleBlockedFocusedCloseoutReadyProjectContinuationRediscovery|SecondSingleBlockedProjectContinuationRediscoveryInSameTurn|PureBlockedProjectContinuationRediscoveryBatch|TrimsPureBlockedProjectContinuationRediscoveryBatch)$|TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksCloseoutReady(TaskGet|TaskListWithoutExplicitAllowance)$|TestHandleCompletedProjectExecutionContinuationTurnRetriesFocusedCloseoutReadyRediscoveryStop$' -count=1`
+- 2026-03-31 07:27 MDT - Preserved the focused parent ref across the worker-side closeout retry after that stop.
+  - fresh live evidence:
+    - after turn `faca2672-2f8d-46f1-bd49-f0f0fe5de33f` stopped correctly on the first blocked `task.get`, worker continuation `5d5874d4-e871-4c24-bcbd-6c0886e66382` collapsed to the generic two-line header and dropped the focus parent entirely
+  - landed fix:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now extracts the focus label from the consumed continuation prompt body itself before falling back to tool-result wording
+    - added focused regression `TestProjectContinuationTurnCloseoutReadyTaskLabelFallsBackToPromptFocusParent` in [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|BuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker|ProjectContinuationTurnCloseoutReadyTaskLabel(FallsBackToPromptFocusParent)?|JobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation)$' -count=1`

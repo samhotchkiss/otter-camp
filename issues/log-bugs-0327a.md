@@ -1383,3 +1383,14 @@
     - the closeout-ready prompt family did not have a special-case stop for a single blocked read-only rediscovery result, even though the prompt already banned `task.get` / `task.list` / `file.read` as the first move
   - impact:
     - closeout-ready PM continuations can pay for an extra assistant/model step after the first blocked reread instead of draining immediately into the focused retry family
+- 2026-03-31 07:27 MDT - Worker closeout retry prompts could lose the focused parent label after the new single-reread stop.
+  - fresh live evidence:
+    - the worker did classify turn `faca2672-2f8d-46f1-bd49-f0f0fe5de33f` into the closeout retry family
+    - but the new continuation message `5d5874d4-e871-4c24-bcbd-6c0886e66382` collapsed to the generic header and omitted the focused parent line entirely
+    - the next PM turn therefore reopened with `I'll start by getting the current project state...`
+  - bug:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) in `projectContinuationTurnCloseoutReadyTaskLabel(...)` only extracted labels from a narrow tool-result phrase:
+      - `project continuation already has focused draft task ... in a closeout-ready state`
+    - when the latest turn ended with the generic named-task rediscovery guard plus the closeout-ready system message, the label extractor returned empty and `buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(...)` returned early with only the generic header lines
+  - impact:
+    - worker-authored closeout retries can lose the exact focus parent after a generic rediscovery stop and fall back into broad PM rediscovery on the next turn

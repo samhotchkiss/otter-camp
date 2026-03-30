@@ -3143,6 +3143,18 @@ func (w *Worker) projectContinuationTurnCloseoutReadyTaskLabel(ctx context.Conte
 	if w == nil || w.pool == nil || referenceMessageID == uuid.Nil {
 		return "", nil
 	}
+	var referenceContent string
+	if err := w.pool.QueryRow(ctx, `
+		SELECT content
+		FROM chat_message
+		WHERE id = $1
+	`, referenceMessageID).Scan(&referenceContent); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return "", err
+		}
+	} else if label := projectContinuationPromptFocusLabelForWorker(referenceContent); label != "" {
+		return label, nil
+	}
 
 	rows, err := w.pool.Query(ctx, `
 		WITH latest_turn AS (
@@ -5337,6 +5349,35 @@ func projectContinuationPromptCurrentFocusParentTaskIDForWorker(content string) 
 		return uuid.Nil
 	}
 	return taskID
+}
+
+func projectContinuationPromptFocusLabelForWorker(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	markers := []string{
+		"Current focus parent:",
+		"Start from this existing actionable draft before broad rediscovery if it is still the next bounded step:",
+		"Draft parent tasks need fresh replacement child work:",
+	}
+	for _, marker := range markers {
+		idx := strings.Index(content, marker)
+		if idx < 0 {
+			continue
+		}
+		line := strings.TrimSpace(content[idx+len(marker):])
+		match := projectContinuationTaskRefIDPatternForWorker.FindStringSubmatchIndex(line)
+		if len(match) != 4 {
+			continue
+		}
+		line = strings.TrimSpace(line[:match[3]])
+		label, _, _ := projectContinuationFocusRefFromLineForWorker(line)
+		if label != "" {
+			return label
+		}
+	}
+	return ""
 }
 
 func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot projectExecutionContinuationSnapshotForWorker) []string {

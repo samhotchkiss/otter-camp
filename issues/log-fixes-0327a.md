@@ -4717,3 +4717,12 @@
     - added `TestDispatchToolsStopsAfterSingleBlockedFocusedCloseoutReadyProjectContinuationRediscovery`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'TestDispatchToolsStopsAfter(SingleBlockedFocusedCloseoutReadyProjectContinuationRediscovery|SecondSingleBlockedProjectContinuationRediscoveryInSameTurn|PureBlockedProjectContinuationRediscoveryBatch|TrimsPureBlockedProjectContinuationRediscoveryBatch)$|TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksCloseoutReady(TaskGet|TaskListWithoutExplicitAllowance)$|TestHandleCompletedProjectExecutionContinuationTurnRetriesFocusedCloseoutReadyRediscoveryStop$' -count=1`
+- 2026-03-31 07:27 MDT - Preserved the focused parent label in worker closeout retries even when the last blocked tool was only the generic named-task guard.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - added `projectContinuationPromptFocusLabelForWorker(...)`
+    - `projectContinuationTurnCloseoutReadyTaskLabel(...)` now first extracts the focus label from the consumed continuation prompt body, then falls back to the older tool-result phrase matcher
+    - that keeps `buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(...)` from returning early with an empty focus parent when the last closeout-ready turn only emitted the generic named-task rediscovery guard
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestProjectContinuationTurnCloseoutReadyTaskLabelFallsBackToPromptFocusParent`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|BuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker|ProjectContinuationTurnCloseoutReadyTaskLabel(FallsBackToPromptFocusParent)?|JobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation)$' -count=1`
