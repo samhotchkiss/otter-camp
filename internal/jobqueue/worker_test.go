@@ -215,6 +215,32 @@ func TestBuildProjectContinuationTaskHintsForWorkerDetectsParenthesizedOptionPat
 	}
 }
 
+func TestProjectContinuationExplicitDeliverablePathFromTextForWorkerDetectsOutputWriteAsPath(t *testing.T) {
+	text := "Output: Write the complete style block as planning/template-08-css-foundation.txt"
+
+	if got := projectContinuationExplicitDeliverablePathFromTextForWorker(text); got != "planning/template-08-css-foundation.txt" {
+		t.Fatalf("deliverable path = %q, want planning/template-08-css-foundation.txt", got)
+	}
+}
+
+func TestBuildProjectContinuationTaskHintsForWorkerPrefersOutputWriteAsPathFromDescription(t *testing.T) {
+	description := "Produce the CSS foundation for the final template. Output: Write the complete style block as planning/template-08-css-foundation.txt"
+	tasks := []repo.ProjectTask{
+		{
+			ID:          uuid.New(),
+			TaskNumber:  244,
+			Title:       "Write Dark Mode Editorial CSS foundation",
+			Description: &description,
+			WorkStatus:  "blocked",
+		},
+	}
+
+	hints := buildProjectContinuationTaskHintsForWorker(tasks, nil)
+	if got := hints[tasks[0].ID].DeliverablePath; got != "planning/template-08-css-foundation.txt" {
+		t.Fatalf("deliverable path = %q, want planning/template-08-css-foundation.txt", got)
+	}
+}
+
 func TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompletedBatchSupersessionGuidance(t *testing.T) {
 	prompt := buildProjectExecutionContinuationPromptForWorker(
 		67,

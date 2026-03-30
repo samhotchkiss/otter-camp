@@ -4326,3 +4326,13 @@
     - checkpoint target is now `planning/template-08-css-foundation.txt`
     - halt message `28343d0f-66da-4c75-8817-16895082e062` rejected the intent-only draft for that planning artifact directly
     - the old `recovery_target_focus_required` churn against `templates/template-08-replace.html` did not recur after redeploy
+- 2026-03-30 00:19 MDT - Fixed the worker-side PM continuation snapshot to use the same bounded deliverable-path extraction family as the turn engine.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - widened `explicitDeliverablePathPatternsForWorker` to recognize `Deliverable/Output/File: Write ... as PATH`
+    - added append/update target-path extraction and direct leading-verb path fallback
+    - tightened `looksLikeExplicitDeliverablePathForWorker(...)` so bare action words like `Write` or `Dark` are rejected instead of emitted as `deliverable_path`
+  - changed [`internal/jobqueue/worker_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_test.go):
+    - added `TestProjectContinuationExplicitDeliverablePathFromTextForWorkerDetectsOutputWriteAsPath`
+    - added `TestBuildProjectContinuationTaskHintsForWorkerPrefersOutputWriteAsPathFromDescription`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/jobqueue -run 'Test(ProjectContinuationExplicitDeliverablePathFromTextForWorkerDetectsOutputWriteAsPath|BuildProjectContinuationTaskHintsForWorkerPrefersOutputWriteAsPathFromDescription|BuildProjectContinuationTaskHintsForWorkerDetectsLeadingPathTitleDeliverable|BuildProjectContinuationTaskHintsForWorkerDetectsParenthesizedOptionPath)$' -count=1`

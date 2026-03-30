@@ -83,13 +83,35 @@ const (
 var taskQueueSinglePassCLIWritePathPattern = regexp.MustCompile("(?is)(?:single\\s+file|write\\s+a\\s+single\\s+complete[^`\\n]*?at)\\s*:?\\s*`([^`]+)`")
 
 var explicitDeliverablePathPatternsForWorker = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`),
+	regexp.MustCompile(`(?i)\b(?:deliverable|output|file)\b(?:[*_]+)?\s*:\s*(?:[*_]+)?\s*([^\s,;]+)`),
+	regexp.MustCompile(`(?i)\b(?:deliverable|output|file)\b(?:[*_]+)?\s*:\s*(?:[*_]+)?\s*(?:write|create|produce|append|add|update)\b[^.;:\n]{0,240}?\s+as\s+([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
-	regexp.MustCompile(`(?i)\b(?:write|create|produce)\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
+	regexp.MustCompile(`(?i)\b(?:write|create|produce)\b[^.;:\n]{0,240}?\s+(?:at|to)\s+([^\s,;]+)`),
+	regexp.MustCompile(`(?i)\b(?:append|add|update)\b[^.;:\n]{0,120}?\s+(?:to|into)\s+(?:the\s+existing\s+)?([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\bsave\s+as\s+([^\s,;]+)`),
 }
+var leadingVerbDeliverablePathPatternForWorker = regexp.MustCompile(`(?i)^\s*(?:write|create|produce|append|add|update)\s+([^\s,;]+)`)
 var leadingExplicitDeliverablePathPatternForWorker = regexp.MustCompile(`^\s*([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)\s*(?:\([^)\n]*\)|[-—:])`)
 var parenthesizedDeliverableOptionPathPatternForWorker = regexp.MustCompile(`\(([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)\s+or\s+[^)\n]+\)`)
+var explicitDeliverableActionWordsForWorker = map[string]struct{}{
+	"add":      {},
+	"append":   {},
+	"build":    {},
+	"create":   {},
+	"draft":    {},
+	"generate": {},
+	"produce":  {},
+	"update":   {},
+	"write":    {},
+}
+var bareExplicitDeliverableFileNamesForWorker = map[string]struct{}{
+	"dockerfile": {},
+	"license":    {},
+	"makefile":   {},
+	"notice":     {},
+	"procfile":   {},
+	"readme":     {},
+}
 
 var projectContinuationBatchRangePatternForWorker = regexp.MustCompile(`(?i)\bposts?\s+(\d{1,3})\s*[–-]\s*(\d{1,3})\b`)
 var projectContinuationWorkspacePathPatternForWorker = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\b`)
@@ -4027,6 +4049,13 @@ func projectContinuationExplicitDeliverablePathFromTextForWorker(text string) st
 		}
 		return candidate
 	}
+	if match := leadingVerbDeliverablePathPatternForWorker.FindStringSubmatch(text); len(match) >= 2 {
+		rawCandidate := strings.TrimSpace(match[1])
+		candidate := normalizeExplicitDeliverablePathCandidateForWorker(rawCandidate)
+		if looksLikeExplicitDeliverablePathForWorker(candidate, rawCandidate) {
+			return candidate
+		}
+	}
 	return ""
 }
 
@@ -4545,6 +4574,13 @@ func explicitDeliverablePathForWorker(task repo.ProjectTask) string {
 				return candidate
 			}
 		}
+		if match := leadingVerbDeliverablePathPatternForWorker.FindStringSubmatch(description); len(match) >= 2 {
+			rawCandidate := strings.TrimSpace(match[1])
+			candidate := normalizeExplicitDeliverablePathCandidateForWorker(rawCandidate)
+			if looksLikeExplicitDeliverablePathForWorker(candidate, rawCandidate) {
+				return candidate
+			}
+		}
 		if match := parenthesizedDeliverableOptionPathPatternForWorker.FindStringSubmatch(description); len(match) >= 2 {
 			rawCandidate := strings.TrimSpace(match[1])
 			candidate := normalizeExplicitDeliverablePathCandidateForWorker(rawCandidate)
@@ -4623,6 +4659,12 @@ func looksLikeExplicitDeliverablePathForWorker(normalized, raw string) bool {
 	if normalized == "" {
 		return false
 	}
+	if workspacePathLooksParameterizedForWorker(normalized) {
+		return false
+	}
+	if _, ok := explicitDeliverableActionWordsForWorker[strings.ToLower(strings.TrimSpace(normalized))]; ok {
+		return false
+	}
 	if strings.Contains(normalized, "/") || strings.Contains(filepath.Base(normalized), ".") {
 		return true
 	}
@@ -4630,12 +4672,14 @@ func looksLikeExplicitDeliverablePathForWorker(normalized, raw string) bool {
 	if trimmedRaw == "" {
 		return false
 	}
-	for _, r := range trimmedRaw {
-		if r >= 'A' && r <= 'Z' {
-			return true
-		}
+	if _, ok := explicitDeliverableActionWordsForWorker[strings.ToLower(trimmedRaw)]; ok {
+		return false
 	}
-	return false
+	lowerRaw := strings.ToLower(trimmedRaw)
+	if _, ok := bareExplicitDeliverableFileNamesForWorker[lowerRaw]; ok {
+		return true
+	}
+	return strings.HasPrefix(trimmedRaw, ".")
 }
 
 func looksLikePreferredDeliverableRootPathForWorker(normalized string) bool {
@@ -4655,6 +4699,14 @@ func normalizeWorkspaceRelativePathForWorker(value string) string {
 		return ""
 	}
 	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(trimmed)))
+}
+
+func workspacePathLooksParameterizedForWorker(normalized string) bool {
+	normalized = normalizeWorkspaceRelativePathForWorker(normalized)
+	if normalized == "" {
+		return false
+	}
+	return strings.ContainsAny(normalized, "{}[]<>*?")
 }
 
 func sameWorkspaceRelativePathForWorker(left, right string) bool {

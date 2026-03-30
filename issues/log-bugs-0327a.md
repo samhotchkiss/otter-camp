@@ -1009,3 +1009,13 @@
   - impact:
     - bounded decomposition children could get steered back onto their parent deliverable
     - that reopened avoidable recovery focus churn even when the child task already named a smaller intermediate artifact
+- 2026-03-30 00:19 MDT - The worker-side PM continuation snapshot still had a stale explicit deliverable parser after the engine-side fix shipped.
+  - fresh live evidence:
+    - PM continuation prompt `3c11059b-d01b-4a4d-aa5c-41bc053d23cf` rendered task `244` as `deliverable_path=Write`
+    - the task description already contained `Output: Write the complete style block as planning/template-08-css-foundation.txt`
+  - bug:
+    - `explicitDeliverablePathPatternsForWorker` in [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) still used the older `deliverable|output:` matcher set
+    - `looksLikeExplicitDeliverablePathForWorker(...)` was also looser than the engine and accepted capitalized bare tokens like `Write` and `Dark` as if they were valid deliverable paths
+  - impact:
+    - PM continuation prompts could stay corrupted even after task recovery target inference was fixed
+    - the PM lane could keep making decomposition/replacement decisions from malformed `deliverable_path` hints
