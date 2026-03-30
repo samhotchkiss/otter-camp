@@ -25073,6 +25073,26 @@ func TestBuildRecoveryResumeActionPromptUsesAvailableDraftDirectly(t *testing.T)
 	}
 }
 
+func TestBuildRecoveryResumeActionPromptIncludesInheritedSharedDeliverableRule(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildRecoveryResumeActionPrompt(recoveryResumeState{
+		targetPath:          "planning/sambot-architecture.md",
+		inheritedSharedPath: "planning/sambot-architecture.md",
+		summaryDraft:        "# Serverless\n\nUse serverless for MVP traffic.",
+	})
+
+	if !strings.Contains(prompt, "This child lane inherits the shared parent file `planning/sambot-architecture.md`.") {
+		t.Fatalf("prompt = %q, want shared parent file note", prompt)
+	}
+	if !strings.Contains(prompt, "Do not use file.write to replace `planning/sambot-architecture.md`") {
+		t.Fatalf("prompt = %q, want file.write prohibition", prompt)
+	}
+	if !strings.Contains(prompt, "use file.edit for the bounded section update instead") {
+		t.Fatalf("prompt = %q, want file.edit guidance", prompt)
+	}
+}
+
 func TestBuildRecoveryResumeActionPromptUsesContinuationSummaryDraftDirectly(t *testing.T) {
 	t.Parallel()
 
@@ -40428,6 +40448,49 @@ func TestBuildRecoveryResumeStateMessageIncludesStructuredReviewDecisionContext(
 	}
 	if !strings.Contains(message, "`sambot/api.js`") || !strings.Contains(message, "`test-results/api-contract.txt`") {
 		t.Fatalf("message = %q, want structured evidence refs", message)
+	}
+}
+
+func TestBuildRecoveryResumeStateMessageIncludesInheritedSharedDeliverableHint(t *testing.T) {
+	t.Parallel()
+
+	message := buildRecoveryResumeStateMessage(recoveryResumeState{
+		blockerClass:        "durable_recovery_checkpoint",
+		targetPath:          "planning/sambot-architecture.md",
+		inheritedSharedPath: "planning/sambot-architecture.md",
+	})
+
+	if !strings.Contains(message, "Shared parent file: planning/sambot-architecture.md") {
+		t.Fatalf("message missing shared parent file hint: %q", message)
+	}
+	if !strings.Contains(message, "Bounded edit rule: do not use file.write") {
+		t.Fatalf("message missing bounded edit rule: %q", message)
+	}
+	if !strings.Contains(message, "use file.edit for the bounded section update") {
+		t.Fatalf("message missing file.edit guidance: %q", message)
+	}
+}
+
+func TestRecoveryResumeInheritedSharedDeliverablePathUsesTaskGuard(t *testing.T) {
+	t.Parallel()
+
+	engine := &TurnEngine{}
+	taskRecord := repo.ProjectTask{
+		Metadata: json.RawMessage(`{
+			"decomposition_parent_task_id":"05af10ea-ad16-4e05-8e5e-27d4692298e4",
+			"agent_turn_validation_guard":{
+				"failure_code":"inherited_shared_deliverable_write_blocked",
+				"failure_reason":"recovery halted because the decomposed child lane inherits shared parent deliverable planning/sambot-architecture.md; resume only with bounded file.edit updates on the current shared file or by moving integration back to the parent task"
+			}
+		}`),
+	}
+	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
+		Version:    1,
+		TargetPath: "planning/sambot-architecture.md",
+	}
+
+	if got := engine.recoveryResumeInheritedSharedDeliverablePath(taskRecord, checkpoint); got != "planning/sambot-architecture.md" {
+		t.Fatalf("shared path = %q, want %q", got, "planning/sambot-architecture.md")
 	}
 }
 

@@ -218,7 +218,7 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	synthStopReason := "validation_loop_blocked"
 	synthStartedAt := createdAt.Add(95 * time.Second)
 	synthCompletedAt := createdAt.Add(100 * time.Second)
-	if _, err := turnRepo.Create(ctx, repo.ChatTurn{
+	synthTurn, err := turnRepo.Create(ctx, repo.ChatTurn{
 		SessionID:        session.ID,
 		TurnNumber:       2,
 		TriggerMessageID: &synthMessage1.ID,
@@ -228,7 +228,8 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 		StartedAt:        &synthStartedAt,
 		CompletedAt:      &synthCompletedAt,
 		StopReason:       &synthStopReason,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create synthetic continuation turn: %v", err)
 	}
 	if _, err := messageRepo.Create(ctx, repo.ChatMessage{
@@ -384,6 +385,12 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 			Content:   "Reading the helper script back.",
 			Metadata:  json.RawMessage(`{"tool_calls":[{"id":"read-1","name":"cli_execute","arguments":{"command":"cat scripts/demo.sh"}}]}`),
 		},
+		{
+			SessionID: session.ID,
+			Role:      "system",
+			TurnID:    &synthTurn.ID,
+			Content:   "[Repeated identical file.list validation failure in this turn (2/3): recovery_target_focus_required. Ending the turn early so the next continuation can take a narrower step.]",
+		},
 	} {
 		created, err := messageRepo.Create(ctx, message)
 		if err != nil {
@@ -461,6 +468,9 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	}
 	if !strings.Contains(stdout, `"recent_validation_loop_blocks"`) || !strings.Contains(stdout, `recovery_target_focus_required`) {
 		t.Fatalf("db token-usage output missing recent validation-loop blocks section: %q", stdout)
+	}
+	if !strings.Contains(stdout, `"validation_loop_families"`) || !strings.Contains(stdout, `"blocked_turns": 2`) {
+		t.Fatalf("db token-usage output missing validation loop families section: %q", stdout)
 	}
 	if !strings.Contains(stdout, `"repeated_synthetic_prompts"`) || !strings.Contains(stdout, `"synthetic_prompts": 2`) {
 		t.Fatalf("db token-usage output missing repeated synthetic prompt section: %q", stdout)
@@ -567,6 +577,23 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	}
 	if !foundRecoveryFocus {
 		t.Fatalf("recent_validation_loop_blocks missing recovery_target_focus_required row: %#v", validationLoopBlocks)
+	}
+	validationLoopFamilies, ok := payload["validation_loop_families"].([]any)
+	if !ok || len(validationLoopFamilies) != 1 {
+		t.Fatalf("unexpected validation_loop_families payload: %#v", payload["validation_loop_families"])
+	}
+	validationLoopFamilyRow, ok := validationLoopFamilies[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected validation_loop_families row: %#v", validationLoopFamilies[0])
+	}
+	if validationLoopFamilyRow["blocked_turns"] != float64(2) {
+		t.Fatalf("unexpected validation_loop_families blocked_turns: %#v", validationLoopFamilyRow["blocked_turns"])
+	}
+	if validationLoopFamilyRow["distinct_lanes"] != float64(1) {
+		t.Fatalf("unexpected validation_loop_families distinct_lanes: %#v", validationLoopFamilyRow["distinct_lanes"])
+	}
+	if excerpt, _ := validationLoopFamilyRow["block_excerpt"].(string); !strings.Contains(excerpt, "recovery_target_focus_required") {
+		t.Fatalf("unexpected validation_loop_families block_excerpt: %#v", validationLoopFamilyRow["block_excerpt"])
 	}
 	inFlightAgentTurns, ok := payload["in_flight_agent_turns"].([]any)
 	if !ok || len(inFlightAgentTurns) != 1 {

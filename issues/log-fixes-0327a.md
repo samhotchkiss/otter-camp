@@ -3798,3 +3798,45 @@
     - `GOFLAGS='' go test -tags=integration ./cmd/ottercamp -run '^TestDBTokenUsageJSONIncludesCacheReadsAndAttribution$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is to run the live report after rebuild/restart and use the new section to pick the next hot review hardening seam
+- 2026-03-29 13:15 MDT - Picked up the first `add-0328e` anti-loop metrics slice so repeated failure families are visible before the generalized threshold layer lands.
+  - changed [`cmd/ottercamp/main.go`](/Users/sam/dev/otter-camp/cmd/ottercamp/main.go):
+    - added `dbTokenUsageValidationLoopFamilyRow`
+    - extended `dbTokenUsageReport` with `validation_loop_families`
+    - added a derived query that groups repeated `validation_loop_blocked` turns by `scope_type`, `mode`, and latest system `block_excerpt`, reporting blocked-turn count, distinct-lane count, and last-seen time
+    - added a matching table section in `printDBTokenUsageReportTable(...)`
+  - changed [`cmd/ottercamp/main_db_integration_test.go`](/Users/sam/dev/otter-camp/cmd/ottercamp/main_db_integration_test.go):
+    - widened the fixture so the same `recovery_target_focus_required` block family appears across two turns in one session
+    - widened JSON assertions so `db token-usage` must now expose `validation_loop_families` with the expected grouped counts
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./cmd/ottercamp -run '^TestDBTokenUsageJSONIncludesCacheReadsAndAttribution$' -count=1`
+  - deploy / proof status:
+    - local at this checkpoint; next step is to run the live report after rebuild/restart and use the new section to choose the next hardening slice
+- 2026-03-29 13:35 MDT - Picked up the next hardening slice directly from the new `validation_loop_families` report.
+  - changed [`internal/controlplane/task_queue_processor.go`](/Users/sam/dev/otter-camp/internal/controlplane/task_queue_processor.go):
+    - added `inheritedSharedDeliverableKickoffInstruction(...)`
+    - normal `task_queue_processor` kickoff prompts now reuse persisted inherited-shared-deliverable guard/checkpoint state and explicitly tell the child lane to read the shared file and use `file.edit` for the bounded section update instead of whole-file `file.write`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - added `recoveredInheritedSharedDeliverableKickoffInstruction(...)`
+    - recovered missing-kickoff prompts now carry the same bounded-edit instruction when the task metadata already proves the lane inherits a shared parent doc
+  - changed tests:
+    - [`internal/controlplane/task_queue_processor_test.go`](/Users/sam/dev/otter-camp/internal/controlplane/task_queue_processor_test.go)
+      - added `TestBuildQueueKickoffMessageForInheritedSharedDeliverableChild`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+      - added `TestBuildRecoveredTaskQueueKickoffMessageForInheritedSharedDeliverableChild`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/controlplane -run 'Test(BuildQueueKickoffMessageFor(OrchestrationOnlyParent|InheritedSharedDeliverableChild)|BuildFlowTransitionKickoffMessageForRejectedOrchestrationOnlyParent)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestBuildRecoveredTaskQueueKickoffMessageForInheritedSharedDeliverableChild$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is rebuild/restart and confirm the next shared-doc child kickoff carries the `file.edit` instruction live before the model spends another blocked `file.write`
+- 2026-03-29 13:47 MDT - Followed that kickoff slice with the stronger recovery-prompt fix after fresh live evidence showed the lanes were still entering through generic recovery resume state.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - extended `recoveryResumeState` with `inheritedSharedPath`
+    - added `recoveryResumeInheritedSharedDeliverablePath(...)` so the engine can detect inherited shared-parent-file retries from task metadata plus checkpoint state
+    - `buildRecoveryResumeStateMessage(...)` now emits `Shared parent file: ...` plus a bounded-edit rule telling the child lane not to use whole-file `file.write` and to use `file.edit` on the shared file instead
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestBuildRecoveryResumeStateMessageIncludesInheritedSharedDeliverableHint`
+    - added `TestRecoveryResumeInheritedSharedDeliverablePathUsesTaskGuard`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildRecoveryResumeStateMessageIncludes(StructuredReviewDecisionContext|InheritedSharedDeliverableHint)|RecoveryResumeInheritedSharedDeliverablePathUsesTaskGuard)$' -count=1`
+  - deploy / proof status:
+    - local and green at this checkpoint; next step is rebuild/restart and confirm the next live shared-doc retry sees the new bounded-edit rule in `[Recovery resume state]`

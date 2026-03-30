@@ -19572,6 +19572,7 @@ func reportTargetSlug(title string) string {
 
 type recoveryResumeState struct {
 	targetPath                  string
+	inheritedSharedPath         string
 	targetDraft                 string
 	targetDraftRejectedReason   string
 	artifactPath                string
@@ -19770,6 +19771,7 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 		priorFailureReasons: append([]string(nil), checkpoint.PriorFailureReasons...),
 	}
 	if haveTaskRecord {
+		state.inheritedSharedPath = e.recoveryResumeInheritedSharedDeliverablePath(taskRecord, *checkpoint)
 		if decision, ok := e.flowExecutionReviewDecisionForSession(ctx, rt.session); ok {
 			state.reviewDecisionSummary, state.reviewDecisionCriteria, state.reviewDecisionEvidenceRefs = structuredReviewDecisionPromptContext(decision)
 		}
@@ -19860,6 +19862,28 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 		return recoveryResumeState{}, false
 	}
 	return state, true
+}
+
+func (e *TurnEngine) recoveryResumeInheritedSharedDeliverablePath(taskRecord repo.ProjectTask, checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) string {
+	metadata := messageMetadataMap(taskRecord.Metadata)
+	parentIDText := strings.TrimSpace(stringValue(metadata["decomposition_parent_task_id"]))
+	if parentIDText == "" {
+		return ""
+	}
+	targetPath := normalizeWorkspaceRelativePath(strings.TrimSpace(checkpoint.TargetPath))
+	if targetPath == "" {
+		return ""
+	}
+	guard, _ := metadata["agent_turn_validation_guard"].(map[string]any)
+	failureCode := strings.TrimSpace(stringValue(guard["failure_code"]))
+	failureReason := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(stringValue(guard["failure_reason"]))), " "))
+	checkpointReason := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(checkpoint.FailureReason)), " "))
+	if failureCode == "inherited_shared_deliverable_write_blocked" ||
+		strings.Contains(failureReason, "inherits shared parent deliverable") ||
+		strings.Contains(checkpointReason, "inherits shared parent deliverable") {
+		return targetPath
+	}
+	return ""
 }
 
 func (e *TurnEngine) contentMigrationCheckpointResumeContext(ctx context.Context, rt *turnRuntime, taskRecord repo.ProjectTask) (string, []string, bool) {
@@ -20155,6 +20179,12 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 	if blockerClass := strings.TrimSpace(state.blockerClass); blockerClass != "" {
 		lines = append(lines, "Checkpoint blocker class: "+blockerClass)
 	}
+	if sharedPath := strings.TrimSpace(state.inheritedSharedPath); sharedPath != "" {
+		lines = append(lines,
+			"Shared parent file: "+sharedPath,
+			fmt.Sprintf("Bounded edit rule: do not use file.write to replace `%s` from this child lane. Read `%s` and use file.edit for the bounded section update instead.", sharedPath, sharedPath),
+		)
+	}
 	if taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(state.failureReason) {
 		lines = append(lines,
 			"Prior recovery failure rejected a non-substantive draft. Treat rejected placeholder text as invalid context, not as the draft to continue.",
@@ -20281,6 +20311,12 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 		} else {
 			lines = append(lines, "Treat "+target+" as the target file for this recovery turn.")
 		}
+	}
+	if sharedPath := strings.TrimSpace(state.inheritedSharedPath); sharedPath != "" {
+		lines = append(lines,
+			fmt.Sprintf("This child lane inherits the shared parent file `%s`.", sharedPath),
+			fmt.Sprintf("Do not use file.write to replace `%s` from this child lane. Read `%s` and use file.edit for the bounded section update instead.", sharedPath, sharedPath),
+		)
 	}
 	if note := strings.TrimSpace(state.reviewRepairNote); note != "" {
 		lines = append(lines, "Prior review already identified the concrete deliverable defect below. Repair that exact issue directly instead of rereading workspace roots, listings, or checkpoints.")

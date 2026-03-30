@@ -14,6 +14,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
@@ -1253,6 +1254,9 @@ func buildQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 	if taskLooksLikeOrchestrationOnlyParent(taskRecord) {
 		base += "\n\nExecution instruction:\nThis task is an orchestration-only parent container. Do not execute the parent deliverable directly. Inspect the current child-task set and create or repair bounded executable child tasks beneath this parent. Do not begin by rereading planning artifacts unless a concrete blocker names one."
 	}
+	if instruction := inheritedSharedDeliverableKickoffInstruction(taskRecord); instruction != "" {
+		base += "\n\nExecution instruction:\n" + instruction
+	}
 	return base
 }
 
@@ -1274,6 +1278,48 @@ func buildFlowKickoffMessage(taskRecord repo.ProjectTask, execution repo.FlowNod
 		return base
 	}
 	return base + "\n\nFlow node execution: " + execution.ID.String()
+}
+
+func inheritedSharedDeliverableKickoffInstruction(taskRecord repo.ProjectTask) string {
+	metadata := taskQueueMetadataMap(taskRecord.Metadata)
+	parentIDText := strings.TrimSpace(stringValue(metadata["decomposition_parent_task_id"]))
+	if parentIDText == "" {
+		return ""
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if !ok || strings.TrimSpace(checkpoint.TargetPath) == "" {
+		return ""
+	}
+	guard, _ := metadata["agent_turn_validation_guard"].(map[string]any)
+	failureCode := strings.TrimSpace(stringValue(guard["failure_code"]))
+	failureReason := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(stringValue(guard["failure_reason"]))), " "))
+	if failureCode != "inherited_shared_deliverable_write_blocked" && !strings.Contains(failureReason, "inherits shared parent deliverable") {
+		return ""
+	}
+	targetPath := strings.TrimSpace(checkpoint.TargetPath)
+	return fmt.Sprintf("This decomposed child task inherits the shared parent deliverable `%s`. Do not use file.write to replace the whole shared file from this lane. Read `%s` and use file.edit for the bounded section update instead; if the child still needs the whole document rewritten, move that work back to the parent task.", targetPath, targetPath)
+}
+
+func taskQueueMetadataMap(metadata json.RawMessage) map[string]any {
+	if len(metadata) == 0 || !json.Valid(metadata) {
+		return map[string]any{}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil || payload == nil {
+		return map[string]any{}
+	}
+	return payload
+}
+
+func stringValue(v any) string {
+	switch typed := v.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		return fmt.Sprint(v)
+	}
 }
 
 // SubscribeTaskCompleted subscribes to task status events that should settle

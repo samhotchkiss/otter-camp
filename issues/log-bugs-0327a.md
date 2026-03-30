@@ -683,3 +683,23 @@
   - impact:
     - backend child tasks can oscillate between a wrong companion file and no preferred target at all
     - even after the bad target is rejected, recovery/review targeting can stay weaker than it should be and reopen avoidable rediscovery
+- 2026-03-29 13:35 MDT - Shared-doc child lanes were still rediscovering the inherited-file boundary through blocked `file.write` turns instead of starting with the right edit contract.
+  - fresh live evidence:
+    - the new `validation_loop_families` report put `[Task shared-deliverable guard blocked a decomposed child lane from replacing the inherited parent file with file.write ...]` at the top of the one-hour chart with `180` blocked turns across `179` lanes
+    - fresh SamBot child sessions like task `160` session `c1e64071-9d3b-4eca-aa0a-90446948c0b8` reopened via generic kickoff/recovery prompts, then hit the same inherited-shared-file guard again on `planning/sambot-architecture.md`
+  - bug:
+    - kickoff prompt construction did not reuse the already-persisted inherited-shared-deliverable checkpoint/guard state
+    - as a result, repaired/reopened child lanes started with ordinary “Start work on task ...” text and only learned the `file.edit` boundary after wasting another blocked `file.write`
+  - impact:
+    - shared parent documents churn through avoidable blocked turns even after the runtime already knows the child lane must stay in bounded-edit mode
+    - the loop family is visible at scale because the first prompt in each reopened lane is missing the strongest deterministic guidance the runtime already has
+- 2026-03-29 13:47 MDT - The first kickoff-only patch was not enough because the live retries were actually driven by generic recovery resume state, not just kickoff text.
+  - fresh live evidence:
+    - post-`3639` shared-doc retries on sessions `c359de9c-99ef-40a1-859f-44ee712af338` (task `160`) and `16610ff3-7374-434a-9243-a84e8ccb8023` (task `177`) still showed a generic `[Recovery resume state]`
+    - the next assistant action in both lanes was another whole-file `file.write` to `planning/sambot-architecture.md`, followed by the same inherited-shared-file guard
+  - bug:
+    - recovery resume prompt construction did not surface the inherited shared-parent-file constraint even when task metadata and the checkpoint already proved that exact failure family
+    - as a result, the highest-signal instruction was still buried in tool-validation history instead of the current retry prompt
+  - impact:
+    - repeated shared-doc child retries can ignore the weaker kickoff improvements and immediately spend another blocked whole-file write
+    - the system already knows the correct next-step rule, but the most immediate retry prompt was not carrying it

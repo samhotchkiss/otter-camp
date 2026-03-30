@@ -847,6 +847,36 @@ func TestBuildQueueKickoffMessageForOrchestrationOnlyParent(t *testing.T) {
 	}
 }
 
+func TestBuildQueueKickoffMessageForInheritedSharedDeliverableChild(t *testing.T) {
+	taskRecord := repo.ProjectTask{
+		Title: "Append the serverless tradeoff section",
+		Metadata: json.RawMessage(`{
+			"decomposition_parent_task_id":"05af10ea-ad16-4e05-8e5e-27d4692298e4",
+			"agent_turn_validation_guard":{
+				"failure_code":"inherited_shared_deliverable_write_blocked",
+				"failure_reason":"recovery halted because the decomposed child lane inherits shared parent deliverable planning/sambot-architecture.md; resume only with bounded file.edit updates on the current shared file or by moving integration back to the parent task"
+			},
+			"recovery_file_write_checkpoint":{
+				"version":1,
+				"target_path":"planning/sambot-architecture.md",
+				"blocker_class":"durable_recovery_checkpoint",
+				"failure_reason":"not_found"
+			}
+		}`),
+	}
+
+	message := buildQueueKickoffMessage(taskRecord)
+	if !strings.Contains(message, "inherits the shared parent deliverable `planning/sambot-architecture.md`") {
+		t.Fatalf("kickoff message = %q, want shared-deliverable note", message)
+	}
+	if !strings.Contains(message, "use file.edit for the bounded section update") {
+		t.Fatalf("kickoff message = %q, want file.edit guidance", message)
+	}
+	if !strings.Contains(message, "Do not use file.write") {
+		t.Fatalf("kickoff message = %q, want file.write prohibition", message)
+	}
+}
+
 func TestBuildFlowTransitionKickoffMessageForRejectedOrchestrationOnlyParent(t *testing.T) {
 	description := "Parent/orchestration task for wave gating validation. Validates that child tasks exercise the gating behavior correctly. Does not do execution work itself."
 	taskRecord := repo.ProjectTask{

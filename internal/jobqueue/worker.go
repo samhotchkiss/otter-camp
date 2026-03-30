@@ -24,6 +24,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/metrics"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 )
@@ -3101,7 +3102,41 @@ func buildRecoveredTaskQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 	if recoveredTaskLooksLikeOrchestrationOnlyParent(taskRecord) {
 		base += "\n\nExecution instruction:\nThis task is an orchestration-only parent container. Do not execute the parent deliverable directly. Inspect the current child-task set and create or repair bounded executable child tasks beneath this parent. Do not begin by rereading planning artifacts unless a concrete blocker names one."
 	}
+	if instruction := recoveredInheritedSharedDeliverableKickoffInstruction(taskRecord); instruction != "" {
+		base += "\n\nExecution instruction:\n" + instruction
+	}
 	return base
+}
+
+func recoveredInheritedSharedDeliverableKickoffInstruction(taskRecord repo.ProjectTask) string {
+	metadata := workerMessageMetadataMap(taskRecord.Metadata)
+	parentIDText := strings.TrimSpace(fmt.Sprint(metadata["decomposition_parent_task_id"]))
+	if parentIDText == "" {
+		return ""
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if !ok || strings.TrimSpace(checkpoint.TargetPath) == "" {
+		return ""
+	}
+	guard, _ := metadata["agent_turn_validation_guard"].(map[string]any)
+	failureCode := strings.TrimSpace(fmt.Sprint(guard["failure_code"]))
+	failureReason := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(fmt.Sprint(guard["failure_reason"]))), " "))
+	if failureCode != "inherited_shared_deliverable_write_blocked" && !strings.Contains(failureReason, "inherits shared parent deliverable") {
+		return ""
+	}
+	targetPath := strings.TrimSpace(checkpoint.TargetPath)
+	return fmt.Sprintf("This decomposed child task inherits the shared parent deliverable `%s`. Do not replay a whole-file file.write from this lane. Read `%s` and use file.edit for the bounded section update instead; if the task still needs the whole document rewritten, move that work back to the parent task.", targetPath, targetPath)
+}
+
+func workerMessageMetadataMap(metadata json.RawMessage) map[string]any {
+	if len(metadata) == 0 || !json.Valid(metadata) {
+		return map[string]any{}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil || payload == nil {
+		return map[string]any{}
+	}
+	return payload
 }
 
 func recoveredTaskLooksLikeOrchestrationOnlyParent(taskRecord repo.ProjectTask) bool {

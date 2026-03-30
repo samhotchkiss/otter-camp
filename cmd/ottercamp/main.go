@@ -2625,6 +2625,15 @@ type dbTokenUsageValidationLoopBlockRow struct {
 	CompletedAt  time.Time `json:"completed_at"`
 }
 
+type dbTokenUsageValidationLoopFamilyRow struct {
+	ScopeType     string    `json:"scope_type"`
+	Mode          string    `json:"mode"`
+	BlockExcerpt  string    `json:"block_excerpt"`
+	BlockedTurns  int64     `json:"blocked_turns"`
+	DistinctLanes int64     `json:"distinct_lanes"`
+	LastSeen      time.Time `json:"last_seen"`
+}
+
 type dbTokenUsageSyntheticPromptRow struct {
 	SessionID              uuid.UUID `json:"session_id"`
 	ScopeType              string    `json:"scope_type"`
@@ -2701,25 +2710,26 @@ type dbTokenUsageBacklogRow struct {
 }
 
 type dbTokenUsageReport struct {
-	WindowHours                 int                                  `json:"window_hours"`
-	Limit                       int                                  `json:"limit"`
-	OrganizationID              *uuid.UUID                           `json:"organization_id,omitempty"`
-	Overview                    dbTokenUsageOverview                 `json:"overview"`
-	ByPurpose                   []dbTokenUsagePurposeRow             `json:"by_purpose"`
-	TopSessions                 []dbTokenUsageSessionRow             `json:"top_sessions"`
-	TopTurns                    []dbTokenUsageTurnRow                `json:"top_turns"`
-	InFlightAgentTurns          []dbTokenUsageInFlightTurnRow        `json:"in_flight_agent_turns"`
-	RepeatedPackageInstalls     []dbTokenUsagePackageInstallRow      `json:"repeated_package_installs"`
-	ShellFileBuildReadbackChurn []dbTokenUsageShellChurnRow          `json:"shell_file_build_readback_churn"`
-	CLIWorkingDirectoryRoots    []dbTokenUsageCLIRootRow             `json:"task_cli_working_directory_roots"`
-	RecentValidationLoopBlocks  []dbTokenUsageValidationLoopBlockRow `json:"recent_validation_loop_blocks"`
-	RepeatedSyntheticPrompts    []dbTokenUsageSyntheticPromptRow     `json:"repeated_synthetic_prompts"`
-	ReviewResumeOutcomes        []dbTokenUsageReviewOutcomeRow       `json:"review_resume_outcomes"`
-	CompletedByStopReason       []dbTokenUsageStopReasonRow          `json:"completed_by_stop_reason"`
-	Failures                    []dbTokenUsageFailureRow             `json:"failures"`
-	ProviderHealth              []dbTokenUsageProviderHealthRow      `json:"provider_health"`
-	RateLimitRoutingSplit       []dbTokenUsageRoutingSplitRow        `json:"rate_limit_routing_split"`
-	PendingBacklog              []dbTokenUsageBacklogRow             `json:"pending_agent_turn_backlog"`
+	WindowHours                 int                                   `json:"window_hours"`
+	Limit                       int                                   `json:"limit"`
+	OrganizationID              *uuid.UUID                            `json:"organization_id,omitempty"`
+	Overview                    dbTokenUsageOverview                  `json:"overview"`
+	ByPurpose                   []dbTokenUsagePurposeRow              `json:"by_purpose"`
+	TopSessions                 []dbTokenUsageSessionRow              `json:"top_sessions"`
+	TopTurns                    []dbTokenUsageTurnRow                 `json:"top_turns"`
+	InFlightAgentTurns          []dbTokenUsageInFlightTurnRow         `json:"in_flight_agent_turns"`
+	RepeatedPackageInstalls     []dbTokenUsagePackageInstallRow       `json:"repeated_package_installs"`
+	ShellFileBuildReadbackChurn []dbTokenUsageShellChurnRow           `json:"shell_file_build_readback_churn"`
+	CLIWorkingDirectoryRoots    []dbTokenUsageCLIRootRow              `json:"task_cli_working_directory_roots"`
+	RecentValidationLoopBlocks  []dbTokenUsageValidationLoopBlockRow  `json:"recent_validation_loop_blocks"`
+	ValidationLoopFamilies      []dbTokenUsageValidationLoopFamilyRow `json:"validation_loop_families"`
+	RepeatedSyntheticPrompts    []dbTokenUsageSyntheticPromptRow      `json:"repeated_synthetic_prompts"`
+	ReviewResumeOutcomes        []dbTokenUsageReviewOutcomeRow        `json:"review_resume_outcomes"`
+	CompletedByStopReason       []dbTokenUsageStopReasonRow           `json:"completed_by_stop_reason"`
+	Failures                    []dbTokenUsageFailureRow              `json:"failures"`
+	ProviderHealth              []dbTokenUsageProviderHealthRow       `json:"provider_health"`
+	RateLimitRoutingSplit       []dbTokenUsageRoutingSplitRow         `json:"rate_limit_routing_split"`
+	PendingBacklog              []dbTokenUsageBacklogRow              `json:"pending_agent_turn_backlog"`
 }
 
 func runDBTokenUsage(args []string) int {
@@ -3634,6 +3644,65 @@ func loadDBTokenUsageReport(ctx context.Context, pool *pgxpool.Pool, windowHours
 		return nil, err
 	}
 
+	validationLoopFamilyRows, err := pool.Query(ctx, `
+		WITH ranked AS (
+			SELECT
+				ct.id AS turn_id,
+				ct.session_id,
+				cs.scope_type,
+				cs.mode,
+				COALESCE(NULLIF(left(regexp_replace(trim(coalesce(cm.content, '')), '\s+', ' ', 'g'), 240), ''), 'validation_loop_blocked') AS block_excerpt,
+				ct.completed_at,
+				ROW_NUMBER() OVER (
+					PARTITION BY ct.id
+					ORDER BY cm.created_at DESC NULLS LAST, cm.sequence_number DESC NULLS LAST, cm.id DESC NULLS LAST
+				) AS rn
+			FROM chat_turn ct
+			JOIN chat_session cs ON cs.id = ct.session_id
+			LEFT JOIN chat_message cm
+				ON cm.turn_id = ct.id
+				AND cm.role = 'system'
+			WHERE ct.completed_at >= $1
+			  AND ct.status = 'completed'
+			  AND ct.stop_reason = 'validation_loop_blocked'
+			  AND ($2::uuid IS NULL OR cs.organization_id = $2)
+		)
+		SELECT
+			scope_type,
+			mode,
+			block_excerpt,
+			COUNT(*) AS blocked_turns,
+			COUNT(DISTINCT session_id) AS distinct_lanes,
+			MAX(completed_at) AS last_seen
+		FROM ranked
+		WHERE rn = 1
+		GROUP BY scope_type, mode, block_excerpt
+		HAVING COUNT(*) > 1
+		ORDER BY blocked_turns DESC, distinct_lanes DESC, last_seen DESC, scope_type, mode, block_excerpt
+		LIMIT $3
+	`, sinceAt, orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer validationLoopFamilyRows.Close()
+	for validationLoopFamilyRows.Next() {
+		var row dbTokenUsageValidationLoopFamilyRow
+		if scanErr := validationLoopFamilyRows.Scan(
+			&row.ScopeType,
+			&row.Mode,
+			&row.BlockExcerpt,
+			&row.BlockedTurns,
+			&row.DistinctLanes,
+			&row.LastSeen,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		report.ValidationLoopFamilies = append(report.ValidationLoopFamilies, row)
+	}
+	if err := validationLoopFamilyRows.Err(); err != nil {
+		return nil, err
+	}
+
 	syntheticPromptRows, err := pool.Query(ctx, `
 		SELECT
 			cm.session_id,
@@ -3952,6 +4021,21 @@ func printDBTokenUsageReportTable(w io.Writer, formatter clitools.OutputFormatte
 		})
 	}
 	_ = formatter.WriteTable([]string{"Turn", "Session", "Scope", "Mode", "Block Excerpt", "Completed At"}, validationLoopRows)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "== Validation-Loop Families ==")
+	validationLoopFamilyRows := make([][]string, 0, len(report.ValidationLoopFamilies))
+	for _, row := range report.ValidationLoopFamilies {
+		validationLoopFamilyRows = append(validationLoopFamilyRows, []string{
+			row.ScopeType,
+			row.Mode,
+			row.BlockExcerpt,
+			strconv.FormatInt(row.BlockedTurns, 10),
+			strconv.FormatInt(row.DistinctLanes, 10),
+			row.LastSeen.UTC().Format(time.RFC3339),
+		})
+	}
+	_ = formatter.WriteTable([]string{"Scope", "Mode", "Block Excerpt", "Blocked Turns", "Distinct Lanes", "Last Seen"}, validationLoopFamilyRows)
 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "== Repeated Synthetic Prompts By Lane ==")
