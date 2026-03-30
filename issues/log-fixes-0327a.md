@@ -5247,3 +5247,11 @@
     - added `TestRetryProjectExecutionContinuationForExecutableContractStopUsesFocusedParent`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(RetryProjectExecutionContinuationForExecutableContractStopUsesFocusedParent|ProjectExecutionContinuationSnapshotForSummaryFallsBackWhenPriorityFilterCollapsesToProjectLine|InitialMessageTextWithContinuationSummary(PrependsRecentProjectSummary|PrefersRecentStructuredContinuationPrompt)|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskList(UnderscoreAlias)?)$' -count=1`
+- 2026-03-30 17:49 MDT - Bypassed ordinary continuation suppression for focused executable-contract retries.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `retryProjectExecutionContinuationForExecutableContractStop(...)` now appends its focused retry as a dedicated `project_continuation_resume` user message via `chat.AppendMessage(...)`
+    - metadata still carries `auto_continue`, `completed_task_id`, `continuation_snapshot_fingerprint`, and `repo_version`, but the prompt no longer routes through the generic `appendProjectExecutionContinuationMessage(...)` suppressor
+  - existing focused helper test remains green:
+    - `TestRetryProjectExecutionContinuationForExecutableContractStopUsesFocusedParent`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(RetryProjectExecutionContinuationForExecutableContractStopUsesFocusedParent|ProjectExecutionContinuationSnapshotForSummaryFallsBackWhenPriorityFilterCollapsesToProjectLine|InitialMessageTextWithContinuationSummary(PrependsRecentProjectSummary|PrefersRecentStructuredContinuationPrompt)|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskList(UnderscoreAlias)?)$' -count=1`

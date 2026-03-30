@@ -5827,12 +5827,36 @@ func (e *TurnEngine) retryProjectExecutionContinuationForExecutableContractStop(
 		childActivity[focusTask.ID],
 		taskHintsByTask[focusTask.ID],
 	)
-	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	metadataMap := map[string]any{
+		"source":                            "project_continuation_resume",
+		"auto_continue":                     true,
+		"continuation_snapshot_fingerprint": projectExecutionContinuationPromptFingerprint(completedTaskID, retryPrompt),
+		"repo_version":                      strings.TrimSpace(versionpkg.RepoVersion),
+	}
+	if completedTaskID != uuid.Nil {
+		metadataMap["completed_task_id"] = completedTaskID.String()
+	}
+	metadata, err := json.Marshal(metadataMap)
 	if err != nil {
 		return false, err
 	}
-	if retryMessage == nil {
-		return true, nil
+	var authorType *string
+	var authorID *uuid.UUID
+	if agentID != uuid.Nil {
+		agentType := "agent"
+		authorType = &agentType
+		authorID = &agentID
+	}
+	retryMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  session.ID,
+		AuthorType: authorType,
+		AuthorID:   authorID,
+		Role:       "user",
+		Content:    retryPrompt,
+		Metadata:   metadata,
+	})
+	if err != nil {
+		return false, err
 	}
 	nextPayload := AgentTurnPayload{
 		SessionID:  session.ID,

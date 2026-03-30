@@ -1934,3 +1934,15 @@
       - executable-contract stop
       - fresh short continuation
     - without ever getting the explicit `Current focus parent / repair this same-deliverable child` prompt the runtime already had enough information to build
+- 2026-03-30 17:49 MDT - The new focused executable-contract retry prompt was still being swallowed by the generic continuation suppressor.
+  - fresh live evidence:
+    - even after the focused retry helper landed, the live session still showed only:
+      - short `project_execution_continuation` rows on `repo_version=3744`
+      - no visible user message with `Current focus parent: task 297 ...`
+    - the session already contained older focused `project_execution_continuation` prompts for the same `OC-297` / `OC-328` family, which made the generic append path a bad fit
+  - bug:
+    - `retryProjectExecutionContinuationForExecutableContractStop(...)` still used `appendProjectExecutionContinuationMessage(...)`
+    - that helper is designed to suppress repeated ordinary `project_execution_continuation` prompts, so it could discard the focused executable-contract retry entirely
+  - impact:
+    - the runtime could correctly derive the focused parent/child repair prompt and still never surface it to the session
+    - PM remained stuck in the same short-continuation loop despite the richer retry logic existing in code
