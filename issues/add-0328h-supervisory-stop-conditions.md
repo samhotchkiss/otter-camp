@@ -672,3 +672,21 @@ They need sharper stopping rules than ordinary execution lanes.
     - task session `38a6f713-a252-4c38-bd96-5579a8113b22` is now `closed`
     - halt turn `b9bd2a34-72c0-40da-b9eb-f39f2683eddb` ended with `[Recovery turn halted: cli.execute for templates/template-08-replace.html was retried without command after one correction ...]`
     - persisted checkpoint now records `failure_reason=repeated recovery cli.execute without command for templates/template-08-replace.html across explicit resume attempts; latest retry again omitted cli.execute.command`
+- 2026-03-30 00:03 MDT - The next live blocker shifted from recovery command churn into deliverable-path inference for the bounded replacement child.
+  - fresh live evidence on task `244`:
+    - the task queue kickoff explicitly said `Output: Write the complete style block as planning/template-08-css-foundation.txt`
+    - recovery still targeted `templates/template-08-replace.html` because the extractor missed `Output: Write ... as PATH`
+    - the child lane therefore burned `file.list` retries against the parent HTML deliverable and hit `recovery_target_focus_required`
+  - local fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now recognizes `Deliverable/Output/File: Write ... as PATH` in `explicitDeliverablePathPatterns`
+    - recovery output selection now prefers that explicit child output path over incidental parent-file mentions in the description text
+    - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+      - `TestExplicitDeliverablePathDetectsOutputWriteAsPath`
+      - `TestRecoveryFileOutputContextPrefersExplicitOutputWriteAsPathOverParentDeliverableMention`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ExplicitDeliverablePath(DetectsOutputWriteAsPath|FallsBackToDecompositionSourceDescription|RejectsParameterizedMarkdownOutputPath|DetectsDirectVerbPathWithoutPreposition|DetectsAppendTargetPath|UsesTitleWhenDescriptionStartsWithInputRead|PrefersLongDescriptionPathOverBareTitleToken|DetectsMarkdownEmphasizedDeliverableLabel)|RecoveryFileOutputContext(PrefersExplicitDeliverablePathOverHistoricalPlanningArtifacts|PrefersExplicitOutputWriteAsPathOverParentDeliverableMention))$' -count=1`
+  - live proof:
+    - task `244` is now `blocked`
+    - task session `39ab4358-2265-4670-afb8-791a48daefed` is `closed`
+    - checkpoint target is now correctly `planning/template-08-css-foundation.txt`
+    - halt message `28343d0f-66da-4c75-8817-16895082e062` rejected the intent-only draft against that planning output instead of bouncing on the parent HTML file

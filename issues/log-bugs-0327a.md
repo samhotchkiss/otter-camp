@@ -998,3 +998,14 @@
     - it ignored missing-command reasons stored in `PriorFailureReasons`, even though prompt construction already used that history
   - impact:
     - the lane could still spend one more bounded correction hop after the runtime already had enough history to know this was a repeated missing-command family
+- 2026-03-30 00:03 MDT - Replacement child tasks that wrote bounded supporting artifacts could still inherit the parent deliverable as their recovery target.
+  - fresh live evidence:
+    - task `244` was created to write `planning/template-08-css-foundation.txt`
+    - its description mentioned `template-08-replace.html` only as the final assembly target
+    - recovery nevertheless targeted `templates/template-08-replace.html`, so the child hit `recovery_target_focus_required` instead of working on its own planning output
+  - bug:
+    - `explicitDeliverablePath(...)` did not recognize the `Output: Write ... as PATH` wording family
+    - once the explicit child output path was missed, recovery output selection fell back to the incidental parent-file mention in the earlier description text
+  - impact:
+    - bounded decomposition children could get steered back onto their parent deliverable
+    - that reopened avoidable recovery focus churn even when the child task already named a smaller intermediate artifact

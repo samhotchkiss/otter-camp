@@ -41336,6 +41336,21 @@ func TestExplicitDeliverablePathDetectsMarkdownEmphasizedDeliverableLabel(t *tes
 	}
 }
 
+func TestExplicitDeliverablePathDetectsOutputWriteAsPath(t *testing.T) {
+	t.Parallel()
+
+	description := "Produce a standalone `<style>` block (to be embedded in the final template-08-replace.html) implementing the Dark Mode Editorial design system.\n\nOutput: Write the complete style block as `planning/template-08-css-foundation.txt` so it can be assembled into the final HTML in a later step."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  244,
+		Title:       "Write Dark Mode Editorial CSS foundation",
+		Description: &description,
+	}
+
+	if got := explicitDeliverablePath(taskRecord); got != "planning/template-08-css-foundation.txt" {
+		t.Fatalf("explicitDeliverablePath(...) = %q, want %q", got, "planning/template-08-css-foundation.txt")
+	}
+}
+
 func TestContentMigrationCheckpointPreferredOutputPathSkipsExplicitSingleFileDeliverable(t *testing.T) {
 	t.Parallel()
 
@@ -43906,6 +43921,67 @@ func TestRecoveryFileOutputContextPrefersExplicitDeliverablePathOverHistoricalPl
 	}
 	if draft != "" {
 		t.Fatalf("draft = %q, want empty explicit-deliverable fallback", draft)
+	}
+}
+
+func TestRecoveryFileOutputContextPrefersExplicitOutputWriteAsPathOverParentDeliverableMention(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	description := "Produce a standalone `<style>` block (to be embedded in the final template-08-replace.html) implementing the Dark Mode Editorial design system.\n\nOutput: Write the complete style block as `planning/template-08-css-foundation.txt` so it can be assembled into the final HTML in a later step."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		ProjectID:      projectID,
+		OrganizationID: fixture.session.OrganizationID,
+		Title:          "Write Dark Mode Editorial CSS foundation",
+		Description:    &description,
+	}
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path": "templates/template-08-replace.html",
+				"content": "<!doctype html><html><body>placeholder</body></html>",
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	targetPath, draft, ok := fixture.engine.recoveryFileOutputContext(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery file output context")
+	}
+	if targetPath != "planning/template-08-css-foundation.txt" {
+		t.Fatalf("targetPath = %q, want planning/template-08-css-foundation.txt", targetPath)
+	}
+	if draft != "" {
+		t.Fatalf("draft = %q, want empty draft when only parent deliverable was read", draft)
 	}
 }
 

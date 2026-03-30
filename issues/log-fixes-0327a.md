@@ -4312,3 +4312,17 @@
     - halt turn `b9bd2a34-72c0-40da-b9eb-f39f2683eddb` ended with `[Recovery turn halted: cli.execute for templates/template-08-replace.html was retried without command after one correction ...]`
     - task metadata now records `failure_reason=repeated recovery cli.execute without command for templates/template-08-replace.html across explicit resume attempts; latest retry again omitted cli.execute.command`
     - this removed the last extra correction hop from the template-08 recovery family and handed control back to the PM lane
+- 2026-03-30 00:03 MDT - Fixed child recovery target inference for `Output: Write ... as PATH` tasks.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added an `explicitDeliverablePathPatterns` matcher for `Deliverable/Output/File: Write ... as PATH`
+    - this makes `explicitDeliverablePath(...)` and downstream recovery target selection prefer the bounded child output path instead of an incidental parent deliverable mention elsewhere in the description
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestExplicitDeliverablePathDetectsOutputWriteAsPath`
+    - added `TestRecoveryFileOutputContextPrefersExplicitOutputWriteAsPathOverParentDeliverableMention`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ExplicitDeliverablePath(DetectsOutputWriteAsPath|FallsBackToDecompositionSourceDescription|RejectsParameterizedMarkdownOutputPath|DetectsDirectVerbPathWithoutPreposition|DetectsAppendTargetPath|UsesTitleWhenDescriptionStartsWithInputRead|PrefersLongDescriptionPathOverBareTitleToken|DetectsMarkdownEmphasizedDeliverableLabel)|RecoveryFileOutputContext(PrefersExplicitDeliverablePathOverHistoricalPlanningArtifacts|PrefersExplicitOutputWriteAsPathOverParentDeliverableMention))$' -count=1`
+  - live proof:
+    - task `244` session `39ab4358-2265-4670-afb8-791a48daefed` is now `closed`
+    - checkpoint target is now `planning/template-08-css-foundation.txt`
+    - halt message `28343d0f-66da-4c75-8817-16895082e062` rejected the intent-only draft for that planning artifact directly
+    - the old `recovery_target_focus_required` churn against `templates/template-08-replace.html` did not recur after redeploy
