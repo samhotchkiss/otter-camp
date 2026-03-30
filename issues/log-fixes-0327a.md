@@ -4534,3 +4534,11 @@
     - added `TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop|HandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionStopWithLiveOpenChild|HandleCompletedProjectExecutionContinuationTurnRetriesFocusedPrerequisiteRepairStopWithFreshMessage)$' -count=1`
+- 2026-03-30 22:34 MDT - Resolved prior continuation terminal turns through `trigger_message_id` so the engine matches the live schema.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `shouldSuppressRepeatedProjectExecutionContinuation(...)` now builds a `trigger_message_id -> chat_turn` map from `e.turns.ListBySession(...)`
+    - `projectContinuationTerminalTurnForMessage(...)` now checks that trigger-linked turn first and only falls back to `message.turn_id` for older/unit-fixture shapes
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStopViaTriggerMessageID`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop|ShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStopViaTriggerMessageID|ShouldSuppressRepeatedProjectExecutionContinuationAfterChildLaneWaitState|HandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionStopWithLiveOpenChild|HandleCompletedProjectExecutionContinuationTurnRetriesFocusedPrerequisiteRepairStopWithFreshMessage)$' -count=1`

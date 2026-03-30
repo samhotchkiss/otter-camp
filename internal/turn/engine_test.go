@@ -26434,6 +26434,75 @@ func TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoff
 	}
 }
 
+func TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStopViaTriggerMessageID(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fixture := newUnitFixture(t, "async")
+	completedTaskID := uuid.New()
+	focusTaskID := uuid.New()
+	priorPrompt := strings.Join([]string{
+		"Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 246 (Write planning/sambot-personality-spec.md) id=" + focusTaskID.String() + " work_status=draft deliverable_path=planning/sambot-personality-spec.md child_tasks=3 replaceable_blocked_child_tasks=3 malformed_child_tasks=1.",
+		"Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.",
+	}, " ")
+	fingerprint := projectExecutionContinuationPromptFingerprint(completedTaskID, priorPrompt)
+
+	priorTurn, err := fixture.chat.CreateTurn(ctx, fixture.session.ID, fixture.chat.participants[0].ParticipantID)
+	if err != nil {
+		t.Fatalf("CreateTurn prior: %v", err)
+	}
+	if err := fixture.chat.StartTurn(ctx, priorTurn.ID); err != nil {
+		t.Fatalf("StartTurn prior: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	if _, err := fixture.chat.SetStopReason(ctx, priorTurn.ID, &stopReason); err != nil {
+		t.Fatalf("SetStopReason prior: %v", err)
+	}
+	if err := fixture.chat.FailTurn(ctx, priorTurn.ID, "replacement child still not created"); err != nil {
+		t.Fatalf("FailTurn prior: %v", err)
+	}
+	priorMessage := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "failed",
+		Content:   priorPrompt,
+		Metadata: mustJSONRaw(map[string]any{
+			"source":                            projectExecutionContinuationSource,
+			"auto_continue":                     true,
+			"completed_task_id":                 completedTaskID.String(),
+			"continuation_snapshot_fingerprint": fingerprint,
+		}),
+	})
+	if _, err := fixture.chat.SetTriggerMessageID(ctx, priorTurn.ID, &priorMessage.ID); err != nil {
+		t.Fatalf("SetTriggerMessageID prior: %v", err)
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurn.ID,
+		Role:      "system",
+		Status:    "final",
+		Content:   projectContinuationReplacementHandoffPrefix + " Do not reread sibling artifacts from the project lane; create the fresh replacement child now or use only task.list(parent_task_id=...) if child-lane verification is still required.]",
+	})
+
+	nextPrompt := strings.Join([]string{
+		"Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 246 (Write planning/sambot-personality-spec.md) id=" + focusTaskID.String() + " work_status=draft deliverable_path=planning/sambot-personality-spec.md child_tasks=3 replaceable_blocked_child_tasks=3 malformed_child_tasks=1.",
+		"Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.",
+		"Your next assistant action must create the smallest fresh replacement child task beneath task 246 (Write planning/sambot-personality-spec.md) now, or queue an existing direct child draft there if one already fits unchanged.",
+	}, " ")
+	nextFingerprint := projectExecutionContinuationPromptFingerprint(completedTaskID, nextPrompt)
+	if nextFingerprint == fingerprint {
+		t.Fatal("expected replacement-child retry fingerprint to drift across prompt variants in this regression")
+	}
+
+	suppress, err := fixture.engine.shouldSuppressRepeatedProjectExecutionContinuation(ctx, fixture.session.ID, completedTaskID, nextFingerprint, focusTaskID)
+	if err != nil {
+		t.Fatalf("shouldSuppressRepeatedProjectExecutionContinuation: %v", err)
+	}
+	if !suppress {
+		t.Fatal("expected repeated replacement-handoff continuation linked by trigger_message_id to be suppressed")
+	}
+}
+
 func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksFileRead(t *testing.T) {
 	t.Parallel()
 

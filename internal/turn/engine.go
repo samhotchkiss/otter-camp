@@ -8800,6 +8800,25 @@ func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx cont
 	if err != nil {
 		return false, err
 	}
+	turnByTriggerMessageID := make(map[uuid.UUID]repo.ChatTurn)
+	if e.turns != nil {
+		turns, err := e.turns.ListBySession(ctx, sessionID)
+		if err != nil {
+			return false, err
+		}
+		if len(turns) > 0 {
+			turnByTriggerMessageID = make(map[uuid.UUID]repo.ChatTurn, len(turns))
+		}
+		for _, turn := range turns {
+			if turn.TriggerMessageID == nil || *turn.TriggerMessageID == uuid.Nil {
+				continue
+			}
+			existing, ok := turnByTriggerMessageID[*turn.TriggerMessageID]
+			if !ok || turnNumberHigherPriority(turn, existing) {
+				turnByTriggerMessageID[*turn.TriggerMessageID] = turn
+			}
+		}
+	}
 	for i := len(messages) - 1; i >= 0; i-- {
 		message := messages[i]
 		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
@@ -8813,15 +8832,18 @@ func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx cont
 		if completedTaskID != uuid.Nil && priorCompletedTaskID != completedTaskID {
 			continue
 		}
-		if message.TurnID == nil || *message.TurnID == uuid.Nil {
+		turn, ok, turnErr := e.projectContinuationTerminalTurnForMessage(ctx, message, turnByTriggerMessageID)
+		if turnErr != nil {
+			return false, turnErr
+		}
+		if !ok {
 			continue
 		}
-		turn, getErr := e.chat.GetTurn(ctx, *message.TurnID)
-		if getErr != nil || turn == nil || !isTerminalTurnStatus(turn.Status) {
+		if !isTerminalTurnStatus(turn.Status) {
 			continue
 		}
 		if allowSuccessfulHandoffSuppression && completedTaskID != uuid.Nil {
-			for _, turnMessage := range messagesForTurn(messages, *message.TurnID) {
+			for _, turnMessage := range messagesForTurn(messages, turn.ID) {
 				if !strings.EqualFold(strings.TrimSpace(turnMessage.Role), "system") {
 					continue
 				}
@@ -8835,7 +8857,7 @@ func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx cont
 		if turn.StopReason == nil || !strings.EqualFold(strings.TrimSpace(*turn.StopReason), "validation_loop_blocked") {
 			continue
 		}
-		for _, turnMessage := range messagesForTurn(messages, *message.TurnID) {
+		for _, turnMessage := range messagesForTurn(messages, turn.ID) {
 			if !strings.EqualFold(strings.TrimSpace(turnMessage.Role), "system") {
 				continue
 			}
@@ -8853,7 +8875,7 @@ func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx cont
 		if strings.TrimSpace(stringValue(metadata["continuation_snapshot_fingerprint"])) != strings.TrimSpace(fingerprint) {
 			continue
 		}
-		for _, turnMessage := range messagesForTurn(messages, *message.TurnID) {
+		for _, turnMessage := range messagesForTurn(messages, turn.ID) {
 			if !strings.EqualFold(strings.TrimSpace(turnMessage.Role), "system") {
 				continue
 			}
@@ -8870,6 +8892,39 @@ func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx cont
 		}
 	}
 	return false, nil
+}
+
+func (e *TurnEngine) projectContinuationTerminalTurnForMessage(ctx context.Context, message repo.ChatMessage, byTrigger map[uuid.UUID]repo.ChatTurn) (repo.ChatTurn, bool, error) {
+	if message.ID != uuid.Nil {
+		if turn, ok := byTrigger[message.ID]; ok {
+			return turn, true, nil
+		}
+	}
+	if message.TurnID != nil && *message.TurnID != uuid.Nil {
+		turn, err := e.chat.GetTurn(ctx, *message.TurnID)
+		if err != nil || turn == nil {
+			return repo.ChatTurn{}, false, err
+		}
+		return repo.ChatTurn(*turn), true, nil
+	}
+	return repo.ChatTurn{}, false, nil
+}
+
+func turnNumberHigherPriority(candidate, existing repo.ChatTurn) bool {
+	if candidate.RetryCount != existing.RetryCount {
+		return candidate.RetryCount > existing.RetryCount
+	}
+	candidateCompleted := candidate.CompletedAt
+	existingCompleted := existing.CompletedAt
+	switch {
+	case candidateCompleted != nil && existingCompleted == nil:
+		return true
+	case candidateCompleted == nil && existingCompleted != nil:
+		return false
+	case candidateCompleted != nil && existingCompleted != nil && !candidateCompleted.Equal(*existingCompleted):
+		return candidateCompleted.After(*existingCompleted)
+	}
+	return candidate.ID.String() > existing.ID.String()
 }
 
 func buildProjectBootstrapContinuationPrompt(autoTurnCount int) string {

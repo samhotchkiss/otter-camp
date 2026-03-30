@@ -1193,3 +1193,13 @@
     - so `appendProjectExecutionContinuationMessage(...)` kept creating a fresh continuation after every identical blocked turn against the same focus parent
   - impact:
     - even after worker cleanup, the PM lane could still self-rearm the same blocked continuation family from inside the turn engine itself
+- 2026-03-30 22:34 MDT - Engine-side repeated-continuation suppression was still blind to the production trigger-row shape.
+  - fresh live evidence:
+    - repeated PM continuation user rows `11900` and `11904` in session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` had `turn_id=NULL`
+    - the terminal blocked turns did exist, but only through `chat_turn.trigger_message_id`
+    - the turn engine therefore kept missing the prior blocked stop and appended another focused replacement-parent continuation
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) was resolving prior continuation terminal turns through `message.turn_id`
+    - that works in some unit fixtures, but not in the live schema for user trigger messages
+  - impact:
+    - repeated focused replacement-parent continuation families can survive both worker cleanup and engine-side stop suppression because the engine fails to find the already-completed blocked turn in production

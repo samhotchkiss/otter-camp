@@ -767,3 +767,14 @@ They need sharper stopping rules than ordinary execution lanes.
       - `TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop|HandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionStopWithLiveOpenChild|HandleCompletedProjectExecutionContinuationTurnRetriesFocusedPrerequisiteRepairStopWithFreshMessage)$' -count=1`
+- 2026-03-30 22:34 MDT - The production follow-up was a schema mismatch, not a bad prefix.
+  - fresh live evidence:
+    - PM continuation rows like `11900` and `11904` had `turn_id=NULL`
+    - the completed blocked turns existed only through `chat_turn.trigger_message_id`
+    - engine suppression was therefore looking in the wrong place for the already-consumed stop family
+  - landed fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now resolves prior terminal continuations by `trigger_message_id` first, then falls back to `message.turn_id`
+    - added focused unit coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+      - `TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStopViaTriggerMessageID`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop|ShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStopViaTriggerMessageID|ShouldSuppressRepeatedProjectExecutionContinuationAfterChildLaneWaitState|HandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionStopWithLiveOpenChild|HandleCompletedProjectExecutionContinuationTurnRetriesFocusedPrerequisiteRepairStopWithFreshMessage)$' -count=1`
