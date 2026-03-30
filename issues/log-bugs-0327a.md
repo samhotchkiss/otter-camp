@@ -1796,3 +1796,16 @@
   - impact:
     - single-file prompt-corpus tasks can still explode into non-executable support fragments
     - those fragments then pollute PM continuation focus and burn rediscovery/validation turns even though they should never have been child lanes
+- 2026-03-30 14:37 MDT - Real decomposed child lanes were losing the parent contract and then getting blocked by overly strict recovery-target reread guards.
+  - fresh live evidence:
+    - after the malformed child fix, PM auto-queued only `OC-320`, which proved stale drafts `321/322` were no longer actionable
+    - `OC-320` immediately blocked in recovery after trying to read named planning artifacts:
+      - `planning/prd-spec/oc-246-prd.md`
+      - `planning/prd-spec/oc-246-acceptance-criteria.md`
+    - the child task itself had only the bare deliverable sentence as its description, even though the parent orchestration task still held the richer source contract and dependency guidance in `decomposition.source_description`
+  - bug:
+    - queue decomposition generated child tasks with flattened descriptions and no carried-forward `decomposition.source_description`
+    - recovery target focus guards then treated all non-target reads as unrelated discovery, even when the task contract explicitly named dependency artifacts needed to author the deliverable
+  - impact:
+    - legitimate bounded child lanes can become under-specified after decomposition
+    - recovery blocks before the lane can read its own named source material, causing direct-write retries or immediate `terminal_keep_blocked` outcomes instead of usable execution

@@ -3,6 +3,7 @@ package taskdecomp
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -1289,6 +1290,62 @@ func TestApplyChildMetadataSetsParentReference(t *testing.T) {
 	}
 	if got, ok := ParseWorkstreamIndex(metadata); !ok || got != 4 {
 		t.Fatalf("ParseWorkstreamIndex = (%d, %t), want (4, true)", got, ok)
+	}
+}
+
+func TestApplyChildSourceDescriptionSetsDecompositionSourceDescription(t *testing.T) {
+	metadata := ApplyChildSourceDescription(json.RawMessage(`{"preserve":"yes"}`), "  Reference planning/spec.md first.  ")
+
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(metadata): %v", err)
+	}
+	decomp, ok := payload["decomposition"].(map[string]any)
+	if !ok {
+		t.Fatalf("decomposition = %T, want map[string]any", payload["decomposition"])
+	}
+	if got := decomp["source_description"]; got != "Reference planning/spec.md first." {
+		t.Fatalf("source_description = %v, want trimmed source description", got)
+	}
+}
+
+func TestPrepareQueueDecompositionCarriesSourceDescriptionToPrimaryChild(t *testing.T) {
+	parentID := uuid.New()
+	description := strings.Join([]string{
+		"Create two deliverables for the SamBot prompt corpus refresh.",
+		"",
+		"Deliverables:",
+		"- Write planning/sambot-prompts/test-conversations-level3.md with the final deeply technical conversation set.",
+		"- Write planning/sambot-prompts/test-conversations-level2.md with the final moderately technical conversation set.",
+		"",
+		"Reference planning/sambot-feature-spec.md and scraped-posts/ for Sam's voice and technical positions.",
+	}, "\n")
+
+	result, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: parentID,
+		Title:        "Refresh SamBot technical conversation corpora",
+		Description:  &description,
+		Metadata:     json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("PrepareQueueDecomposition: %v", err)
+	}
+	if !result.Applied {
+		t.Fatalf("Applied = false, want true: %+v", result)
+	}
+	if len(result.ChildDrafts) < 2 {
+		t.Fatalf("ChildDrafts len = %d, want >= 2", len(result.ChildDrafts))
+	}
+	if got := deref(result.ChildDrafts[0].Description); strings.TrimSpace(got) != strings.TrimSpace(description) {
+		t.Fatalf("primary child description = %q, want full source description", got)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(result.ChildDrafts[0].Metadata, &metadata); err != nil {
+		t.Fatalf("json.Unmarshal(primary child metadata): %v", err)
+	}
+	decomp, _ := metadata["decomposition"].(map[string]any)
+	if got := strings.TrimSpace(fmt.Sprintf("%v", decomp["source_description"])); got != strings.TrimSpace(description) {
+		t.Fatalf("primary child source_description = %q, want %q", got, strings.TrimSpace(description))
 	}
 }
 

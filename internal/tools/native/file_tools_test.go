@@ -1072,6 +1072,62 @@ func TestFileReadRejectsRecoveryNotFoundRereadOutsideTarget(t *testing.T) {
 	}
 }
 
+func TestFileReadAllowsRecoveryDependencyArtifactReadNamedInTaskContract(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	dependencyPath := "planning/prd-spec/oc-246-prd.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "planning", "prd-spec"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(planning/prd-spec): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(dependencyPath)), []byte("# PRD\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(dependency): %v", err)
+	}
+
+	description := "Write planning/sambot-prompts/test-conversations-level3.md containing the final deeply technical SamBot conversation set."
+	metadata := json.RawMessage(`{"decomposition":{"source_description":"Write planning/sambot-prompts/test-conversations-level3.md containing the final deeply technical SamBot conversation set. Reference planning/prd-spec/oc-246-prd.md for source requirements."}}`)
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Author level-3 SamBot test dialogues file",
+			Description:    &description,
+			Metadata:       metadata,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "system",
+				Content:   "[Recovery resume state]\nTarget file: planning/sambot-prompts/test-conversations-level3.md\n",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": dependencyPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != nil {
+		t.Fatalf("error = %v, out=%v, want nil", got, out)
+	}
+	if got := out["path"]; got != dependencyPath {
+		t.Fatalf("path = %v, want %q", got, dependencyPath)
+	}
+}
+
 func TestFileListAllowsBlockedReviewNodeDeliverableRootInspectionWithinRecoveryTargetRoot(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

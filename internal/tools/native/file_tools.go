@@ -364,6 +364,9 @@ func (e *NativeToolExecutor) rejectRecoveryTargetReread(ctx context.Context, sco
 				return nil, false, err
 			}
 		} else {
+			if taskTreatsPathAsDependencyArtifact(taskRecord, normalizedPath) {
+				return nil, false, nil
+			}
 			explicitPath := e.taskExplicitDeliverablePath(ctx, taskRecord)
 			if explicitPath != "" &&
 				sameOrNestedWorkspacePath(normalizedPath, explicitPath) &&

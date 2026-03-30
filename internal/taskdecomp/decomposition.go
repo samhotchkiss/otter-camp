@@ -457,6 +457,14 @@ func PrepareQueueDecomposition(input QueueDecompositionInput) (QueueDecompositio
 			}
 		}
 	}
+	for idx := range childDrafts {
+		childDrafts[idx].Metadata = ApplyChildSourceDescription(childDrafts[idx].Metadata, sourceDescription)
+		if strings.TrimSpace(childDrafts[idx].Title) == strings.TrimSpace(plan.PrimaryDeliverable) {
+			if contextual := strings.TrimSpace(sourceDescription); contextual != "" {
+				childDrafts[idx].Description = strPtr(contextual)
+			}
+		}
+	}
 
 	return QueueDecomposition{
 		Applied:           true,
@@ -568,6 +576,28 @@ func ApplyChildMetadata(existing json.RawMessage, parentTaskID uuid.UUID, workst
 	if workstreamIndex > 0 {
 		payload["workstream_index"] = workstreamIndex
 	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return normalizeJSON(existing)
+	}
+	return normalizeJSON(encoded)
+}
+
+func ApplyChildSourceDescription(existing json.RawMessage, sourceDescription string) json.RawMessage {
+	trimmed := strings.TrimSpace(sourceDescription)
+	if trimmed == "" {
+		return normalizeJSON(existing)
+	}
+	payload := metadataObject(existing)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	decomp, _ := payload[metadataKeyDecomposition].(map[string]any)
+	if decomp == nil {
+		decomp = map[string]any{}
+	}
+	decomp["source_description"] = trimmed
+	payload[metadataKeyDecomposition] = decomp
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return normalizeJSON(existing)

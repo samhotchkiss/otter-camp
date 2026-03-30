@@ -5099,3 +5099,19 @@
     - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(TaskLooksProceduralInstructionArtifact|ExtractDeliverablesIgnores(ProceduralChecklistFragments|ConversationRequirementFragments|InstructionOnlyRequirementLines))$' -count=1`
     - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshotIgnoresMalformed(Checklist|ReferenceOnly|Procedural)Children$' -count=1`
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformed(ChecklistFragment|ReferenceOnly|Procedural)Children$' -count=1`
+- 2026-03-30 14:37 MDT - Carried parent source contracts into real child lanes and allowed recovery to read explicitly named dependency artifacts.
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+    - added `ApplyChildSourceDescription(...)`
+    - `PrepareQueueDecomposition(...)` now copies the parent `source_description` into every generated child’s metadata
+    - the primary child now keeps the full parent source description as its own description after decomposition validation succeeds
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - recovery target reread guards now allow reads of explicitly named dependency artifacts from the task contract before falling back to `recovery_target_focus_required`
+  - changed tests:
+    - [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go):
+      - added `TestApplyChildSourceDescriptionSetsDecompositionSourceDescription`
+      - added `TestPrepareQueueDecompositionCarriesSourceDescriptionToPrimaryChild`
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go):
+      - added `TestFileReadAllowsRecoveryDependencyArtifactReadNamedInTaskContract`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(ApplyChildSourceDescriptionSetsDecompositionSourceDescription|PrepareQueueDecompositionCarriesSourceDescriptionToPrimaryChild|TaskLooksProceduralInstructionArtifact|ExtractDeliverablesIgnores(ProceduralChecklistFragments|ConversationRequirementFragments|InstructionOnlyRequirementLines))$' -count=1`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(FileRead(AllowsRecoveryDependencyArtifactReadNamedInTaskContract|RejectsRecovery(NotFoundRereadOutsideTarget|DirectoryRereadOutsideTarget)|ReadRejectsPromptConversationPlaceholderAtRootConversationCorpusPath)|FileWriteRejectsPromptConversationPlaceholderInConversationCorpusPath)$' -count=1`
