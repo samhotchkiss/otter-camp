@@ -23735,6 +23735,85 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFile
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotTreatsWorkspaceDeliverableAsCloseoutReadyForMalformedDuplicateParent(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	orgID := fixture.session.OrganizationID
+	projectSlug := "workspace-deliverable-closeout-parent"
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				Slug:           projectSlug,
+				DisplayName:    "Workspace Deliverable Closeout Parent",
+			},
+		},
+	}
+	fixture.engine.dataDir = t.TempDir()
+	projectRoot := filepath.Join(fixture.engine.dataDir, "workspaces", projectSlug)
+	if err := os.MkdirAll(filepath.Join(projectRoot, "sambot"), 0o755); err != nil {
+		t.Fatalf("mkdir project root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "sambot", "api.js"), []byte(strings.Repeat("const response = 'sam';\n", 40)), 0o644); err != nil {
+		t.Fatalf("write workspace deliverable: %v", err)
+	}
+
+	parentDraftID := uuid.New()
+	parentDescription := "Write sambot/api.js — a complete, working Express.js API server for SamBot chat."
+	childDescription := "Create sambot/api.js (~60-80 lines) that implements Part 1/3 of the SamBot Express API."
+	childID := uuid.New()
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:             parentDraftID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				TaskNumber:     207,
+				Title:          "Build SamBot Express.js API — sambot/api.js (replaces blocked OC-199)",
+				Description:    &parentDescription,
+				WorkStatus:     "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"applied":             true,
+						"mode":                "parallel_children",
+						"orchestration_only":  true,
+						"source_description":  parentDescription,
+						"primary_deliverable": "sambot/api.js",
+					},
+				}),
+			},
+			childID: {
+				ID:             childID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				TaskNumber:     213,
+				Title:          "Scaffold Express server with static context loader and health endpoint — sambot/api.js (1/3)",
+				Description:    &childDescription,
+				WorkStatus:     "draft",
+				Metadata:       json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.ReplacementDraftLine, "task 207") {
+		t.Fatalf("ReplacementDraftLine = %q, should not keep parent 207 in replacement bucket once workspace deliverable exists", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "task 207") {
+		t.Fatalf("DraftTaskLine = %q, want parent 207 restored as closeout-ready draft", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "workspace_deliverable_present=true") {
+		t.Fatalf("DraftTaskLine = %q, want workspace deliverable marker", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "task 207") {
+		t.Fatalf("FocusTaskLine = %q, want focus to stay on parent 207 closeout", snapshot.FocusTaskLine)
+	}
+}
+
 func TestEnqueueTaskValidationBlockedContinuationPromptBlocksMalformedDuplicateSharedFileChild(t *testing.T) {
 	t.Parallel()
 
@@ -24436,6 +24515,89 @@ func TestShouldBlockProjectContinuationFocusedDraftTaskCreateForCloseoutReadyPar
 	}
 	if !strings.Contains(reason, "closeout-ready state") || !strings.Contains(reason, "advance or close") {
 		t.Fatalf("reason = %q, want closeout-ready guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftTaskCreateForWorkspaceDeliverableCloseoutParent(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	projectSlug := "workspace-closeout-task-create"
+	parentTaskID := uuid.New()
+	childTaskID := uuid.New()
+	parentDescription := "Write sambot/api.js — a complete, working Express.js API server for SamBot chat."
+	childDescription := "Create sambot/api.js (~60-80 lines) that implements Part 1/3 of the SamBot Express API."
+
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				Slug:           projectSlug,
+				DisplayName:    "Workspace Closeout Task Create",
+			},
+		},
+	}
+	fixture.engine.dataDir = t.TempDir()
+	projectRoot := filepath.Join(fixture.engine.dataDir, "workspaces", projectSlug)
+	if err := os.MkdirAll(filepath.Join(projectRoot, "sambot"), 0o755); err != nil {
+		t.Fatalf("mkdir project root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "sambot", "api.js"), []byte(strings.Repeat("app.get('/health', (_req, res) => res.json({status:'ok'}));\n", 12)), 0o644); err != nil {
+		t.Fatalf("write workspace deliverable: %v", err)
+	}
+
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentTaskID: {
+				ID:             parentTaskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				TaskNumber:     207,
+				Title:          "Build SamBot Express.js API — sambot/api.js (replaces blocked OC-199)",
+				Description:    &parentDescription,
+				WorkStatus:     "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"applied":             true,
+						"mode":                "parallel_children",
+						"orchestration_only":  true,
+						"source_description":  parentDescription,
+						"primary_deliverable": "sambot/api.js",
+					},
+				}),
+			},
+			childTaskID: {
+				ID:             childTaskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				TaskNumber:     213,
+				Title:          "Scaffold Express server with static context loader and health endpoint — sambot/api.js (1/3)",
+				Description:    &childDescription,
+				WorkStatus:     "draft",
+				Metadata:       json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTaskID.String())),
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session:            fixture.session,
+		initialMessageText: "Continue the active project execution now.",
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftTaskCreateTool(context.Background(), rt, "task.create", map[string]any{
+		"parent_task_id": parentTaskID.String(),
+		"title":          "Part 2/3 API child",
+		"description":    "Duplicate replacement child beneath sambot/api.js parent.",
+	})
+	if !blocked {
+		t.Fatal("expected project continuation to block duplicate child creation when workspace deliverable already exists")
+	}
+	if !strings.Contains(reason, "closeout-ready state") || !strings.Contains(reason, "advance or close") {
+		t.Fatalf("reason = %q, want closeout-ready workspace deliverable guidance", reason)
 	}
 }
 

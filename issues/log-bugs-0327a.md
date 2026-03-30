@@ -895,3 +895,14 @@
     - an already-running discovery-only child lane could continue churning on sibling-write stops until another restart/resume cycle happened to re-enter preflight
   - impact:
     - the live template-08 canary could keep burning task-recovery turns even after the classifier fix was deployed
+- 2026-03-29 22:04 MDT - PM continuation logic still treated draft parents with real on-disk deliverables as replacement-child work.
+  - fresh live evidence:
+    - `planning/sambot-tech-architecture.md` existed at 10 KB in the parent workspace and `sambot/api.js` existed at 9.6 KB, both substantive
+    - despite that, draft parents `OC-200` and `OC-207` still re-entered the PM continuation as replacement-child candidates because their stale child lanes were malformed/blocked
+    - the first fresh PM continuation after restart explicitly described both deliverables as present, but still attempted to create another replacement child beneath `OC-200`
+  - bug:
+    - draft-parent closeout readiness only looked at orchestration metadata (`completed_closeout_child_tasks` / `outcome_satisfied`)
+    - it did not infer parent-closeout state from a substantive explicit deliverable already present in the parent project workspace
+  - impact:
+    - PM continuations could keep re-splitting or re-verifying work that was already materially delivered on disk
+    - the runtime needed a stronger guard to stop duplicate child creation for those deliverable-present parents

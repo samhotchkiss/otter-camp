@@ -4085,3 +4085,19 @@
   - proof status:
     - this follow-on fix targets the exact still-live task `220` / session `a8ae127f-900e-4fb1-8985-5732d1540341` gap observed right after the first redeploy
     - next canary should show the sibling-write stop turning into a terminal block for task `220`, even if the lane was already running before the classifier change
+- 2026-03-29 22:04 MDT - Taught PM continuations to treat substantive on-disk deliverables as closeout-ready parent evidence for malformed/blocked child families.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - project-continuation child activity now records `workspaceDeliverablePresent` when an explicit deliverable file already exists in the project workspace and passes local placeholder/reviewer-summary rejection checks
+    - `projectContinuationDraftTaskReadyForParentClosureForTask(...)` now treats malformed/blocked child-parent cases with that workspace evidence as closeout-ready
+    - PM snapshots and focused draft task-create / task-update guards now consume the same workspace-backed closeout signal
+    - task refs now surface `workspace_deliverable_present=true` for those draft parents so the continuation prompt can steer toward closeout instead of more child creation
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestProjectExecutionContinuationSnapshotTreatsWorkspaceDeliverableAsCloseoutReadyForMalformedDuplicateParent`
+    - added `TestShouldBlockProjectContinuationFocusedDraftTaskCreateForWorkspaceDeliverableCloseoutParent`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshot(IgnoresMalformed(DuplicateSharedFileChildren|ReferenceOnlyChildren)|TreatsWorkspaceDeliverableAsCloseoutReadyForMalformedDuplicateParent)|ShouldBlockProjectContinuationFocusedDraftTaskCreate(ForCloseoutReadyParent|ForWorkspaceDeliverableCloseoutParent)|ShouldBlockProjectContinuationFocusedDraftMutationAllowsSatisfiedCloseoutReadyParent)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectContinuationActionPromptAddsSatisfiedCloseoutGuidance|ShouldBlockProjectContinuationFocusedDraftMutationRequiresParentCompletionEvidence|ProjectExecutionContinuationSnapshotSummarizesProjectState)$' -count=1`
+  - live proof:
+    - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` now explicitly recognized `planning/sambot-tech-architecture.md` and `sambot/api.js` as deliverable-present closeout work
+    - the fresh continuation turn carried `workspace_deliverable_present=true` for `OC-200`
+    - when the model still tried `task.create` under `OC-200`, the runtime blocked it with the new closeout-ready duplicate-child guard instead of letting another replacement child into the tree

@@ -489,3 +489,15 @@ They need sharper stopping rules than ordinary execution lanes.
   - proof status:
     - this is specifically aimed at the still-live task `220` session `a8ae127f-900e-4fb1-8985-5732d1540341`
     - the expected post-redeploy canary is that the next sibling-write stop blocks task `220` outright instead of scheduling another recovery resume
+- 2026-03-29 22:04 MDT - Followed the PM canary forward into parent-closeout handling for already-delivered shared files.
+  - fresh live evidence:
+    - the new PM continuation explicitly recognized both `planning/sambot-tech-architecture.md` and `sambot/api.js` as already present deliverables
+    - but the model still tried to create another replacement child under `OC-200` until the focused draft task.create guard stopped it
+  - local / deployed fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now marks draft parents with substantive on-disk explicit deliverables as `workspace_deliverable_present=true` inside project-continuation child activity
+    - malformed/blocked-child parents with that workspace evidence now count as closeout-ready for PM snapshot focus and for the focused draft duplicate-child guards
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshot(IgnoresMalformed(DuplicateSharedFileChildren|ReferenceOnlyChildren)|TreatsWorkspaceDeliverableAsCloseoutReadyForMalformedDuplicateParent)|ShouldBlockProjectContinuationFocusedDraftTaskCreate(ForCloseoutReadyParent|ForWorkspaceDeliverableCloseoutParent)|ShouldBlockProjectContinuationFocusedDraftMutationAllowsSatisfiedCloseoutReadyParent)$' -count=1`
+  - live proof:
+    - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` now carries `workspace_deliverable_present=true` for `OC-200`
+    - the attempted duplicate child create under `OC-200` was blocked with the closeout-ready guard instead of reopening another replacement lane

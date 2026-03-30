@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log/slog"
 	"math"
 	"net"
@@ -5504,7 +5505,10 @@ func (e *TurnEngine) retryProjectExecutionContinuationForBoundedSizeStop(
 	if err != nil {
 		return false, err
 	}
-	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
+	childActivity, err := e.projectContinuationChildActivity(ctx, session.ScopeID, projectTasks, taskHintsByTask)
+	if err != nil {
+		return false, err
+	}
 	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
 	if err != nil {
 		return false, err
@@ -5574,11 +5578,14 @@ func (e *TurnEngine) retryProjectExecutionContinuationForReplacementChildWork(
 		return false, err
 	}
 	priorityPaths := projectContinuationPriorityPathsFromText(strings.TrimSpace(latestUser.Content))
-	focusTask, ok := projectContinuationCurrentFocusTask(projectTasks, taskHintsByTask, priorityPaths)
+	childActivity, err := e.projectContinuationChildActivity(ctx, session.ScopeID, projectTasks, taskHintsByTask)
+	if err != nil {
+		return false, err
+	}
+	focusTask, ok := projectContinuationCurrentFocusTaskWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths)
 	if !ok {
 		return false, nil
 	}
-	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	focusActivity := childActivity[focusTask.ID]
 	if !projectContinuationDraftTaskNeedsFreshReplacementChildWorkForTask(focusTask, focusActivity) {
 		return false, nil
@@ -5652,11 +5659,14 @@ func (e *TurnEngine) retryProjectExecutionContinuationForParentCompletionRequire
 		return false, err
 	}
 	priorityPaths := projectContinuationPriorityPathsFromText(strings.TrimSpace(latestUser.Content))
-	focusTask, ok := projectContinuationCurrentFocusTask(projectTasks, taskHintsByTask, priorityPaths)
+	childActivity, err := e.projectContinuationChildActivity(ctx, session.ScopeID, projectTasks, taskHintsByTask)
+	if err != nil {
+		return false, err
+	}
+	focusTask, ok := projectContinuationCurrentFocusTaskWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths)
 	if !ok {
 		return false, nil
 	}
-	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	focusActivity := childActivity[focusTask.ID]
 	if !projectContinuationDraftTaskReadyForParentClosureForTask(focusTask, focusActivity) {
 		return false, nil
@@ -5732,9 +5742,12 @@ func (e *TurnEngine) retryProjectExecutionContinuationForRediscoveryStop(
 	if err != nil {
 		return false, err
 	}
-	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
+	childActivity, err := e.projectContinuationChildActivity(ctx, session.ScopeID, projectTasks, taskHintsByTask)
+	if err != nil {
+		return false, err
+	}
 	priorityPaths := projectContinuationPriorityPathsFromText(strings.TrimSpace(latestUser.Content))
-	focusTask, focusOK := projectContinuationCurrentFocusTask(projectTasks, taskHintsByTask, priorityPaths)
+	focusTask, focusOK := projectContinuationCurrentFocusTaskWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths)
 	blockedTask, blockedOK := projectContinuationCurrentActionableBlockedTask(projectTasks, taskHintsByTask, priorityPaths)
 	if blockedOK {
 		activeTaskLane, activeErr := e.projectTaskAlreadyOwnsExecutionLane(ctx, blockedTask)
@@ -6245,7 +6258,10 @@ func (e *TurnEngine) countProjectDraftTasks(ctx context.Context, projectID uuid.
 		return 0, err
 	}
 	taskHintsByTask := buildProjectContinuationTaskHints(projectTasks, nil)
-	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
+	childActivity, err := e.projectContinuationChildActivity(ctx, projectID, projectTasks, taskHintsByTask)
+	if err != nil {
+		return 0, err
+	}
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
 	supersededDraftTaskIDs := projectContinuationSupersededDraftTaskIDs(projectTasks, taskHintsByTask, childActivity, malformedChildTaskIDs)
 	count := 0
@@ -6505,7 +6521,10 @@ func (e *TurnEngine) nextRunnableDraftProjectTaskForPriorityPaths(ctx context.Co
 		return projectTasks[i].TaskNumber < projectTasks[j].TaskNumber
 	})
 	taskHintsByTask := buildProjectContinuationTaskHints(projectTasks, nil)
-	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
+	childActivity, err := e.projectContinuationChildActivity(ctx, projectID, projectTasks, taskHintsByTask)
+	if err != nil {
+		return repo.ProjectTask{}, false, err
+	}
 	for _, task := range projectTasks {
 		if !isProjectContinuationActionableDraftTask(task, childActivity[task.ID]) || taskLooksLikeOrchestrationOnlyParent(task) {
 			continue
@@ -8737,6 +8756,9 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 			lines = append(lines, "When closeout-ready parent evidence and completed-task batch evidence are already present, do not re-verify broad artifact roots on disk before advancing the parent unless a concrete tool error says the artifact is missing.")
 			lines = append(lines, "Before marking that closeout-ready parent done, record parent_orchestration.child_verifications for the completed child outputs, parent_orchestration.integration_check.status=passed, and parent_orchestration.outcome_assessment.satisfied=true on the parent task itself.")
 		}
+		if strings.Contains(draftLine, "workspace_deliverable_present=true") {
+			lines = append(lines, "If a named draft task above already shows workspace_deliverable_present=true, the deliverable body is already on disk. Treat that parent as a closeout/verification step, not as fresh replacement-child work.")
+		}
 		if strings.Contains(draftLine, "deliverable_path=") {
 			lines = append(lines, "If a named draft task above already shows deliverable_path=..., inspect or write that exact path instead of reopening broad workspace context.")
 		}
@@ -9483,8 +9505,12 @@ func (e *TurnEngine) projectContinuationBoundedSizeFocusTask(
 	if err != nil {
 		return repo.ProjectTask{}, false, err
 	}
+	childActivity, err := e.projectContinuationChildActivity(ctx, projectID, projectTasks, taskHintsByTask)
+	if err != nil {
+		return repo.ProjectTask{}, false, err
+	}
 	priorityPaths := projectContinuationPriorityPathsFromText(strings.TrimSpace(latestUser.Content))
-	focusTask, ok := projectContinuationCurrentFocusTask(projectTasks, taskHintsByTask, priorityPaths)
+	focusTask, ok := projectContinuationCurrentFocusTaskWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths)
 	if !ok {
 		return repo.ProjectTask{}, false, nil
 	}
@@ -12649,7 +12675,10 @@ func (e *TurnEngine) taskExecutionContinuationSnapshot(ctx context.Context, task
 	if err != nil {
 		return snapshot, err
 	}
-	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
+	childActivity, err := e.projectContinuationChildActivity(ctx, taskRecord.ProjectID, projectTasks, taskHintsByTask)
+	if err != nil {
+		return snapshot, err
+	}
 	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(projectTasks))
 	for _, candidate := range projectTasks {
 		tasksByID[candidate.ID] = candidate
@@ -20889,6 +20918,146 @@ func (e *TurnEngine) projectExecutionContinuationSnapshot(ctx context.Context, p
 	return e.projectExecutionContinuationSnapshotForSummary(ctx, projectID, "")
 }
 
+func (e *TurnEngine) projectContinuationChildActivity(
+	ctx context.Context,
+	projectID uuid.UUID,
+	projectTasks []repo.ProjectTask,
+	taskHintsByTask map[uuid.UUID]projectContinuationTaskHints,
+) (map[uuid.UUID]projectContinuationChildActivity, error) {
+	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
+	if e == nil || len(projectTasks) == 0 {
+		return childActivity, nil
+	}
+	evidenceByTaskID, err := e.projectContinuationWorkspaceDeliverableEvidence(ctx, projectID, projectTasks, taskHintsByTask)
+	if err != nil {
+		return nil, err
+	}
+	for taskID := range evidenceByTaskID {
+		activity := childActivity[taskID]
+		activity.workspaceDeliverablePresent = true
+		childActivity[taskID] = activity
+	}
+	return childActivity, nil
+}
+
+func (e *TurnEngine) projectContinuationWorkspaceDeliverableEvidence(
+	ctx context.Context,
+	projectID uuid.UUID,
+	projectTasks []repo.ProjectTask,
+	taskHintsByTask map[uuid.UUID]projectContinuationTaskHints,
+) (map[uuid.UUID]struct{}, error) {
+	if e == nil || e.projects == nil || len(projectTasks) == 0 {
+		return nil, nil
+	}
+	if projectID == uuid.Nil {
+		projectID = projectTasks[0].ProjectID
+	}
+	if projectID == uuid.Nil {
+		return nil, nil
+	}
+	projectRecord, err := e.projects.GetByID(ctx, projectID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	organizationID := projectRecord.OrganizationID
+	if organizationID == uuid.Nil {
+		for _, task := range projectTasks {
+			if task.OrganizationID != uuid.Nil {
+				organizationID = task.OrganizationID
+				break
+			}
+		}
+	}
+	roots, err := e.projectWorkspaceRoots(ctx, organizationID, projectRecord)
+	if err != nil {
+		return nil, err
+	}
+	if len(roots) == 0 {
+		return nil, nil
+	}
+	var evidence map[uuid.UUID]struct{}
+	cache := make(map[string]bool)
+	for _, task := range projectTasks {
+		if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+			continue
+		}
+		hints := taskHintsByTask[task.ID]
+		deliverablePath := normalizeWorkspaceRelativePath(hints.DeliverablePath)
+		if deliverablePath == "" {
+			continue
+		}
+		present, ok := cache[deliverablePath]
+		if !ok {
+			present = projectContinuationWorkspaceDeliverablePresentForTask(task, deliverablePath, roots)
+			cache[deliverablePath] = present
+		}
+		if !present {
+			continue
+		}
+		if evidence == nil {
+			evidence = make(map[uuid.UUID]struct{})
+		}
+		evidence[task.ID] = struct{}{}
+	}
+	return evidence, nil
+}
+
+func projectContinuationWorkspaceDeliverablePresentForTask(task repo.ProjectTask, deliverablePath string, roots []string) bool {
+	for _, root := range roots {
+		content, ok := readProjectContinuationWorkspaceFile(root, deliverablePath)
+		if !ok {
+			continue
+		}
+		if projectContinuationWorkspaceDeliverableLooksSubstantive(task, deliverablePath, content) {
+			return true
+		}
+	}
+	return false
+}
+
+func readProjectContinuationWorkspaceFile(root, relPath string) (string, bool) {
+	normalizedRoot := strings.TrimSpace(root)
+	normalizedPath := normalizeWorkspaceRelativePath(relPath)
+	if normalizedRoot == "" || normalizedPath == "" {
+		return "", false
+	}
+	absPath := filepath.Join(normalizedRoot, filepath.FromSlash(normalizedPath))
+	info, err := os.Stat(absPath)
+	if err != nil || info.IsDir() || info.Size() <= 0 {
+		return "", false
+	}
+	file, err := os.Open(absPath)
+	if err != nil {
+		return "", false
+	}
+	defer file.Close()
+	const maxRead = 64 * 1024
+	payload, err := io.ReadAll(io.LimitReader(file, maxRead))
+	if err != nil {
+		return "", false
+	}
+	return string(payload), true
+}
+
+func projectContinuationWorkspaceDeliverableLooksSubstantive(task repo.ProjectTask, targetPath, content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || len(trimmed) < 240 || strings.ContainsRune(trimmed, '\x00') {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.TrimSpace(recoveryFileWriteDraftRejectReason(trimmed, targetPath)) != "" ||
+		looksLikeDeliverableCompletionSummaryWithoutBody(targetPath, trimmed) ||
+		looksLikeTaskBriefEchoPlaceholder(targetPath, trimmed) ||
+		looksLikeStrongDeliverableReviewerSummaryPlaceholder(lower) ||
+		looksLikeDeliverableReviewMetaPlaceholder(lower) {
+		return false
+	}
+	return true
+}
+
 func (e *TurnEngine) projectExecutionContinuationSnapshotForSummary(ctx context.Context, projectID uuid.UUID, summary string) (projectExecutionContinuationSnapshot, error) {
 	snapshot := projectExecutionContinuationSnapshot{}
 	if projectID == uuid.Nil {
@@ -20906,12 +21075,16 @@ func (e *TurnEngine) projectExecutionContinuationSnapshotForSummary(ctx context.
 	if err != nil {
 		return snapshot, err
 	}
+	childActivity, err := e.projectContinuationChildActivity(ctx, projectID, projectTasks, taskHintsByTask)
+	if err != nil {
+		return snapshot, err
+	}
 	priorityPaths := projectContinuationPriorityPathsFromText(summary)
-	if filtered, matched := buildProjectExecutionContinuationSnapshot(projectTasks, taskHintsByTask, priorityPaths); matched {
+	if filtered, matched := buildProjectExecutionContinuationSnapshotWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths); matched {
 		filtered.ProjectLine = snapshot.ProjectLine
 		return filtered, nil
 	}
-	filtered, _ := buildProjectExecutionContinuationSnapshot(projectTasks, taskHintsByTask, nil)
+	filtered, _ := buildProjectExecutionContinuationSnapshotWithActivity(projectTasks, taskHintsByTask, childActivity, nil)
 	filtered.ProjectLine = snapshot.ProjectLine
 	return filtered, nil
 }
@@ -20921,6 +21094,16 @@ func buildProjectExecutionContinuationSnapshot(
 	taskHintsByTask map[uuid.UUID]projectContinuationTaskHints,
 	priorityPaths map[string]struct{},
 ) (projectExecutionContinuationSnapshot, bool) {
+	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
+	return buildProjectExecutionContinuationSnapshotWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths)
+}
+
+func buildProjectExecutionContinuationSnapshotWithActivity(
+	projectTasks []repo.ProjectTask,
+	taskHintsByTask map[uuid.UUID]projectContinuationTaskHints,
+	childActivity map[uuid.UUID]projectContinuationChildActivity,
+	priorityPaths map[string]struct{},
+) (projectExecutionContinuationSnapshot, bool) {
 	snapshot := projectExecutionContinuationSnapshot{}
 	activeTasks := make([]string, 0, 4)
 	completedTasks := make([]string, 0, 4)
@@ -20928,7 +21111,6 @@ func buildProjectExecutionContinuationSnapshot(
 	draftTasks := make([]string, 0, 4)
 	replacementDraftTasks := make([]string, 0, 4)
 	childActiveDraftTasks := make([]string, 0, 4)
-	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
 	supersededDraftTaskIDs := projectContinuationSupersededDraftTaskIDs(projectTasks, taskHintsByTask, childActivity, malformedChildTaskIDs)
 	completedBatchFamilies := projectContinuationRelevantCompletedBatchFamilies(projectTasks, taskHintsByTask, priorityPaths, malformedChildTaskIDs)
@@ -21455,6 +21637,7 @@ type projectContinuationChildActivity struct {
 	malformedChildTaskCount          int
 	replaceableBlockedChildTaskCount int
 	completedCloseoutChildTaskCount  int
+	workspaceDeliverablePresent      bool
 }
 
 func projectContinuationCountsAsOpenChildTask(status string) bool {
@@ -21550,6 +21733,11 @@ func projectContinuationDraftTaskReadyForParentClosure(activity projectContinuat
 func projectContinuationDraftTaskReadyForParentClosureForTask(task repo.ProjectTask, activity projectContinuationChildActivity) bool {
 	if activity.activeChildTaskCount != 0 {
 		return false
+	}
+	if activity.workspaceDeliverablePresent &&
+		(activity.malformedChildTaskCount > 0 ||
+			(activity.childTaskCount > 0 && activity.childTaskCount == activity.blockedChildTaskCount)) {
+		return true
 	}
 	if activity.completedCloseoutChildTaskCount == 0 && !projectContinuationDraftTaskOutcomeSatisfied(task) {
 		return false
@@ -21683,6 +21871,15 @@ func projectContinuationFocusCandidateTask(task repo.ProjectTask, activity proje
 
 func projectContinuationCurrentFocusTask(projectTasks []repo.ProjectTask, taskHintsByTask map[uuid.UUID]projectContinuationTaskHints, priorityPaths map[string]struct{}) (repo.ProjectTask, bool) {
 	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
+	return projectContinuationCurrentFocusTaskWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths)
+}
+
+func projectContinuationCurrentFocusTaskWithActivity(
+	projectTasks []repo.ProjectTask,
+	taskHintsByTask map[uuid.UUID]projectContinuationTaskHints,
+	childActivity map[uuid.UUID]projectContinuationChildActivity,
+	priorityPaths map[string]struct{},
+) (repo.ProjectTask, bool) {
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
 	supersededDraftTaskIDs := projectContinuationSupersededDraftTaskIDs(projectTasks, taskHintsByTask, childActivity, malformedChildTaskIDs)
 	filterByPriority := len(priorityPaths) > 0
@@ -21857,6 +22054,9 @@ func projectExecutionContinuationTaskRef(task repo.ProjectTask, activity project
 	}
 	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") && projectContinuationDraftTaskOutcomeSatisfied(task) {
 		parts = append(parts, "outcome_satisfied=true")
+	}
+	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") && activity.workspaceDeliverablePresent {
+		parts = append(parts, "workspace_deliverable_present=true")
 	}
 	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
 		if hints.ResumePolicy != "" {
@@ -33607,12 +33807,15 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 	if err != nil {
 		return false, ""
 	}
-	focusTask, ok := projectContinuationCurrentFocusTask(projectTasks, taskHintsByTask, priorityPaths)
+	childActivity, err := e.projectContinuationChildActivity(ctx, *projectID, projectTasks, taskHintsByTask)
+	if err != nil {
+		return false, ""
+	}
+	focusTask, ok := projectContinuationCurrentFocusTaskWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths)
 	if !ok {
 		return false, ""
 	}
 	focusTaskID = focusTask.ID
-	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	focusActivity := childActivity[focusTaskID]
 	if targetTaskID == focusTaskID &&
 		nextStatus == "done" &&
@@ -33660,11 +33863,14 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 	if err != nil {
 		return false, ""
 	}
-	focusTask, ok := projectContinuationCurrentFocusTask(projectTasks, taskHintsByTask, priorityPaths)
+	childActivity, err := e.projectContinuationChildActivity(ctx, *projectID, projectTasks, taskHintsByTask)
+	if err != nil {
+		return false, ""
+	}
+	focusTask, ok := projectContinuationCurrentFocusTaskWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths)
 	if !ok || focusTask.ID == uuid.Nil || focusTask.ID != parentTaskID {
 		return false, ""
 	}
-	childActivity := projectContinuationChildTaskActivity(projectTasks, taskHintsByTask)
 	focusActivity := childActivity[focusTask.ID]
 	if !projectContinuationDraftTaskReadyForParentClosureForTask(focusTask, focusActivity) {
 		return false, ""
