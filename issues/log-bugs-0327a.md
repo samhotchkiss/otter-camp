@@ -1465,3 +1465,13 @@
     - that branch treated `task.create(parent_task_id=focusTaskID)` returning `work_status=draft` as enough proof to end the PM turn, even though no runnable child lane had been observed
   - impact:
     - PM continuations can terminate after creating a replacement child that never actually starts, leaving the project stranded behind a new draft orphan
+- 2026-03-30 10:36 MDT - PM replacement-child retries could still duplicate direct child drafts that already existed under the focused parent.
+  - fresh live evidence:
+    - after task `289` blocked, PM turn `4eecaa52-246a-4d48-afa6-e40afda57a72` listed direct children under task `286`
+    - that list already included draft child tasks `290`, `291`, and `292`
+    - the same turn still called `task.create`, and the tool recycled blocked child ids `287` / `289` instead of producing a new runnable lane
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) in `shouldBlockProjectContinuationFocusedDraftTaskCreateTool(...)` only blocked `task.create` for closeout-ready parents
+    - it did not block project-lane child creation when the focused parent already had direct child drafts beneath it, even though the continuation prompt had already said to queue an existing direct child draft if one fit unchanged
+  - impact:
+    - PM retries can spend turns rediscovering and re-creating the same child lane beneath one parent instead of advancing the existing child drafts already present in the tree

@@ -22628,6 +22628,31 @@ func projectContinuationChildTaskActivity(tasks []repo.ProjectTask, hintsByTask 
 	return activityByParentID
 }
 
+func projectContinuationDirectDraftChildTasks(tasks []repo.ProjectTask, parentID uuid.UUID) []repo.ProjectTask {
+	if parentID == uuid.Nil || len(tasks) == 0 {
+		return nil
+	}
+	drafts := make([]repo.ProjectTask, 0)
+	for _, task := range tasks {
+		if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+			continue
+		}
+		metadata := messageMetadataMap(task.Metadata)
+		candidateParentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+		if !ok || candidateParentID == uuid.Nil || candidateParentID != parentID {
+			continue
+		}
+		drafts = append(drafts, task)
+	}
+	sort.Slice(drafts, func(i, j int) bool {
+		if drafts[i].TaskNumber == drafts[j].TaskNumber {
+			return strings.TrimSpace(drafts[i].Title) < strings.TrimSpace(drafts[j].Title)
+		}
+		return drafts[i].TaskNumber < drafts[j].TaskNumber
+	})
+	return drafts
+}
+
 func projectContinuationBlockedChildCountsAsReplacementWork(hints projectContinuationTaskHints) bool {
 	switch strings.TrimSpace(hints.ResumePolicy) {
 	case "terminal_keep_blocked", "needs_replacement_work":
@@ -35225,6 +35250,21 @@ func buildProjectContinuationFocusedDraftCloseoutTaskCreateGuardError(focusTask 
 	return fmt.Sprintf("project continuation already has focused draft task %s in a closeout-ready state for the same deliverable. Do not create another replacement child beneath %s from the project lane; advance or close %s directly instead.", label, label, label)
 }
 
+func buildProjectContinuationFocusedDraftExistingChildGuardError(focusTask repo.ProjectTask, draftChildren []repo.ProjectTask) string {
+	label := projectBootstrapTaskLabel(focusTask)
+	if len(draftChildren) == 0 {
+		return fmt.Sprintf("project continuation already has direct child drafts beneath focused draft task %s. Do not create another child beneath %s from the project lane; queue or repair the smallest existing direct child draft first.", label, label)
+	}
+	childLabels := make([]string, 0, min(3, len(draftChildren)))
+	for _, task := range draftChildren {
+		childLabels = append(childLabels, projectBootstrapTaskLabel(task))
+		if len(childLabels) == 3 {
+			break
+		}
+	}
+	return fmt.Sprintf("project continuation already has direct child draft task(s) beneath focused draft task %s: %s. Do not create another child beneath %s from the project lane; queue the smallest unchanged direct child draft if it already fits, or update/block the stale draft child first before attempting any new replacement.", label, strings.Join(childLabels, ", "), label)
+}
+
 func buildProjectContinuationFocusedDraftCloseoutMetadataGuardError(focusTask repo.ProjectTask, requiredChildLabels []string) string {
 	label := projectBootstrapTaskLabel(focusTask)
 	message := fmt.Sprintf("parent task requires child verification and passed integration before completion: closeout-ready parent %s must include child_output_verifications, integration_check.status=passed, outcome_assessment.satisfied=true, and work_status=queued in the same task.update.", label)
@@ -35434,7 +35474,13 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 		return false, ""
 	}
 	focusActivity := childActivity[focusTask.ID]
+	if focusActivity.workspaceDeliverablePresent {
+		return true, buildProjectContinuationFocusedDraftCloseoutTaskCreateGuardError(focusTask)
+	}
 	if !projectContinuationDraftTaskReadyForParentClosureForTask(focusTask, focusActivity) {
+		if draftChildren := projectContinuationDirectDraftChildTasks(projectTasks, focusTask.ID); len(draftChildren) > 0 {
+			return true, buildProjectContinuationFocusedDraftExistingChildGuardError(focusTask, draftChildren)
+		}
 		return false, ""
 	}
 	return true, buildProjectContinuationFocusedDraftCloseoutTaskCreateGuardError(focusTask)

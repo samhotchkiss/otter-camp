@@ -26409,6 +26409,72 @@ func TestShouldBlockProjectContinuationFocusedDraftTaskCreateForWorkspaceDeliver
 	}
 }
 
+func TestShouldBlockProjectContinuationFocusedDraftTaskCreateWhenDirectChildDraftsAlreadyExist(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentTaskID := uuid.New()
+	childDraftAID := uuid.New()
+	childDraftBID := uuid.New()
+	parentDescription := "Deliver planning/sambot-prompts/test-conversations-technical.md as a single shared markdown file."
+	childDescription := "Write planning/sambot-prompts/test-conversations-technical.md in a single pass."
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentTaskID: {
+				ID:          parentTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  286,
+				Title:       "Write test conversations demonstrating SamBot adaptive complexity at levels 2 and 3",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+			},
+			childDraftAID: {
+				ID:          childDraftAID,
+				ProjectID:   projectID,
+				TaskNumber:  290,
+				Title:       "Write the complete file to planning/sambot-prompts/test-conversations-technical.md in a single pass.",
+				Description: &childDescription,
+				WorkStatus:  "draft",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTaskID.String())),
+			},
+			childDraftBID: {
+				ID:          childDraftBID,
+				ProjectID:   projectID,
+				TaskNumber:  291,
+				Title:       "Write planning/sambot-prompts/test-conversations-technical.md — level 2 and level 3 adaptive complexity test conversations",
+				Description: &childDescription,
+				WorkStatus:  "draft",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTaskID.String())),
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: recover the stalled shared-file prompt conversations", projectExecutionContinuationSnapshot{
+			ProjectLine:          "Active project id: " + projectID.String(),
+			ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 286 (Write test conversations demonstrating SamBot adaptive complexity at levels 2 and 3) id=" + parentTaskID.String() + " title=\"Write test conversations demonstrating SamBot adaptive complexity at levels 2 and 3\" work_status=draft child_tasks=1 replaceable_blocked_child_tasks=1 malformed_child_tasks=2",
+			FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 286 (Write test conversations demonstrating SamBot adaptive complexity at levels 2 and 3) id=" + parentTaskID.String() + " title=\"Write test conversations demonstrating SamBot adaptive complexity at levels 2 and 3\" work_status=draft child_tasks=1 replaceable_blocked_child_tasks=1 malformed_child_tasks=2",
+		}),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftTaskCreateTool(context.Background(), rt, "task.create", map[string]any{
+		"parent_task_id": parentTaskID.String(),
+		"title":          "Write planning/sambot-prompts/test-conversations-technical.md with level-2 and level-3 test conversations",
+		"description":    "Duplicate replacement child beneath OC-286.",
+	})
+	if !blocked {
+		t.Fatal("expected project continuation to block duplicate task.create when direct child drafts already exist")
+	}
+	if !strings.Contains(reason, "direct child draft task(s)") || !strings.Contains(reason, "task 290") || !strings.Contains(reason, "task 291") {
+		t.Fatalf("reason = %q, want existing child draft guidance", reason)
+	}
+}
+
 func TestBuildProjectContinuationActionPromptAddsSatisfiedCloseoutGuidance(t *testing.T) {
 	prompt := buildProjectContinuationActionPrompt("Active project request: close out the satisfied spec parent", projectExecutionContinuationSnapshot{
 		ProjectLine:   "Active project id: 123",

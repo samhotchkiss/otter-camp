@@ -4788,3 +4788,13 @@
     - flipped `TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationDoesNotStopForDraftChildCreate`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation(DoesNotStopForDraftChildCreate|ForMissingDependencyPrompt|ForFocusPrerequisiteRepair|IgnoresAssignmentOnlyUpdate|RequiresObservedQueuedState|IgnoresUnfocusedDraftChildCreate|RequiresReplacementChildPrompt)?$|TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation$' -count=1`
+- 2026-03-30 10:36 MDT - Blocked duplicate PM child creation when direct child drafts already exist.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `projectContinuationDirectDraftChildTasks(...)`
+    - `shouldBlockProjectContinuationFocusedDraftTaskCreateTool(...)` now blocks `task.create` beneath the focused parent when direct child draft tasks already exist there
+    - true closeout-ready workspace parents still keep the closeout task.create guard ahead of the new direct-child-draft rule
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldBlockProjectContinuationFocusedDraftTaskCreateWhenDirectChildDraftsAlreadyExist`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShouldBlockProjectContinuationFocusedDraftTaskCreate(ForCloseoutReadyParent|ForWorkspaceDeliverableCloseoutParent|WhenDirectChildDraftsAlreadyExist)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation(DoesNotStopForDraftChildCreate|ForMissingDependencyPrompt|ForFocusPrerequisiteRepair|IgnoresAssignmentOnlyUpdate|RequiresObservedQueuedState|IgnoresUnfocusedDraftChildCreate|RequiresReplacementChildPrompt)?$|TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation$' -count=1`
