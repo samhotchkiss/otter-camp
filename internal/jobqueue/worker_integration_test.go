@@ -1033,6 +1033,145 @@ func TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionCloses
 	}
 }
 
+func TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionAbandonsTerminalInheritedSharedExecution(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "close-blocked-task-session-inherited-shared",
+		DisplayName: "Close Blocked Task Session Inherited Shared",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "close-blocked-task-session-inherited-" + uuid.NewString()[:8],
+		DisplayName:    "Close Blocked Task Session Inherited Shared",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Blocked Session Shared Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Handle stale blocked task session cleanup.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "close-blocked-task-session-inherited-template",
+		DisplayName:    "Close Blocked Task Session Inherited Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Blocked inherited shared child task",
+		WorkStatus:      "blocked",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+		Metadata: json.RawMessage(`{
+			"agent_turn_validation_guard": {
+				"blocked": true,
+				"failure_code": "inherited_shared_deliverable_write_blocked",
+				"failure_reason": "recovery halted because the decomposed child lane inherits shared parent deliverable planning/sambot-architecture.md; resume only with bounded file.edit updates on the current shared file or by moving integration back to the parent task"
+			}
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+
+	closed, err := worker.CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ctx)
+	if err != nil {
+		t.Fatalf("CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution: %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("closed sessions = %d, want 1", closed)
+	}
+
+	var executionStatus string
+	if err := pool.QueryRow(ctx, `
+		SELECT status
+		FROM flow_node_execution
+		WHERE id = $1
+	`, execution.ID).Scan(&executionStatus); err != nil {
+		t.Fatalf("query execution: %v", err)
+	}
+	if executionStatus != "abandoned" {
+		t.Fatalf("execution status = %q, want abandoned", executionStatus)
+	}
+
+	var sessionStatus string
+	if err := pool.QueryRow(ctx, `
+		SELECT status
+		FROM chat_session
+		WHERE id = $1
+	`, session.ID).Scan(&sessionStatus); err != nil {
+		t.Fatalf("query session: %v", err)
+	}
+	if sessionStatus != "closed" {
+		t.Fatalf("session status = %q, want closed", sessionStatus)
+	}
+}
+
 func TestJobWorkerRetireClosedAsyncSessionRunsCompletesDoneTaskRuns(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

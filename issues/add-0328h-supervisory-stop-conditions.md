@@ -337,3 +337,17 @@ They need sharper stopping rules than ordinary execution lanes.
     - `GOFLAGS='' go test ./internal/turn -run 'Test(DeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBackendTask|SessionTaskDeliverablePathIgnoresHistoricalAuxiliaryTestArtifactForBackendTaskReferencingFeatureSpec|SessionTaskDeliverablePathIgnoresConflictingParentFrontendDeliverableForBackendChild|SessionTaskDeliverablePathPrefersChildLeadingPathTitleOverParentDeliverable)$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is rebuild/restart and confirm the next task-174 retry starts from `sambot/api.js` instead of inheriting `sambot/test-api.js` or losing the target entirely
+- 2026-03-29 18:42 MDT - The next supervisory stop seam showed up after the shared-doc retry prompts were fixed. Child lanes blocked on the inherited shared-parent-file rule were now ending with `validation_loop_blocked`, but some async task sessions were keeping their `flow_node_execution` rows `active`, which left the worker with `active + no live turn + no live job` session shells.
+  - fresh live evidence:
+    - before the fix, blocked sessions for SamBot child tasks like `160`, `180`, `182`, `189`, and `195` showed `chat_session.status=active`, no pending/claimed `agent_turn`, no live `chat_turn`, and still had `flow_node_execution.status=active`
+    - that left the sessions reopenable/visible to supervisory repair even though the lane had already hit its terminal inherited-shared-doc stop
+  - local fix:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now abandons active `flow_node_execution` rows for blocked async `project_task` sessions whose validation guard proves the terminal `inherited_shared_deliverable_write_blocked` family and that have no live turns/jobs
+    - the existing blocked-session closeout path then closes those sessions on the next cleanup pass once the turn lifecycle settles
+    - added focused integration coverage in [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go) with `TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionAbandonsTerminalInheritedSharedExecution`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(AbandonsTerminalInheritedSharedExecution|ClosesRejectedExecution|SkipsPendingAgentTurn|SkipsRepairedTerminalRecoveryResume)$' -count=1`
+  - deploy / proof status:
+    - rebuilt/restarted on `repo_version=3641`
+    - fresh live canaries for tasks `160`, `180`, `182`, `189`, and `195` immediately flipped their leaked execution rows to `abandoned`
+    - the remaining straggler sessions then closed on the next cleanup interval, confirming this slice fixes the leak without widening the terminal-stop semantics further

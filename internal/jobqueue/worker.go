@@ -6264,6 +6264,41 @@ func (w *Worker) CloseTerminalProjectTaskAsyncSessions(ctx context.Context) (int
 
 func (w *Worker) CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ctx context.Context) (int64, error) {
 	if _, err := w.pool.Exec(ctx, `
+		UPDATE flow_node_execution fne
+		SET status = 'abandoned',
+		    completed_at = COALESCE(fne.completed_at, now()),
+		    runtime_substate = NULL
+		FROM chat_session cs
+		JOIN project_task pt ON pt.id = cs.scope_id
+		WHERE fne.session_id = cs.id
+		  AND fne.status = 'active'
+		  AND cs.status = 'active'
+		  AND cs.mode = 'async'
+		  AND cs.scope_type = 'project_task'
+		  AND pt.work_status = 'blocked'
+		  AND COALESCE((pt.metadata->'agent_turn_validation_guard'->>'blocked')::boolean, false)
+		  AND (
+		    pt.metadata->'agent_turn_validation_guard'->>'failure_code' = 'inherited_shared_deliverable_write_blocked'
+		    OR lower(COALESCE(pt.metadata->'agent_turn_validation_guard'->>'failure_reason', '')) LIKE '%inherits shared parent deliverable%'
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct_live
+		    WHERE ct_live.session_id = cs.id
+		      AND ct_live.status IN ('pending', 'in_progress')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = $1
+		      AND jq.status IN ('pending', 'claimed')
+		      AND (jq.payload->>'session_id')::uuid = cs.id
+		  )
+	`, agentTurnJobType); err != nil {
+		return 0, fmt.Errorf("abandon blocked project_task active executions without live work: %w", err)
+	}
+
+	if _, err := w.pool.Exec(ctx, `
 		UPDATE chat_turn
 		SET status = 'cancelled',
 		    cancel_requested_at = now(),

@@ -3856,3 +3856,15 @@
     - fresh recovery state messages now contain `Shared parent file: ...` / `Bounded edit rule: ...`
     - fresh synthetic `task_recovery_resume` prompts now contain `This child lane inherits the shared parent file ... Do not use file.write ... use file.edit ...`
     - example fresh session: `e8c87d61-2cb1-4bc7-91f0-c707172b7b0e`
+- 2026-03-29 18:42 MDT - Followed that shared-doc prompt work with the worker-side cleanup fix for terminal inherited-shared execution leaks.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(...)` now first abandons active `flow_node_execution` rows for blocked async `project_task` sessions whose validation guard proves the terminal `inherited_shared_deliverable_write_blocked` family and that have no live turns/jobs
+    - the existing session-close logic then picks those sessions up on the next cleanup pass once the turn has fully settled
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionAbandonsTerminalInheritedSharedExecution`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(AbandonsTerminalInheritedSharedExecution|ClosesRejectedExecution|SkipsPendingAgentTurn|SkipsRepairedTerminalRecoveryResume)$' -count=1`
+  - live proof:
+    - rebuilt/restarted on `repo_version=3641`
+    - leaked inherited-shared child executions for tasks `160`, `180`, `182`, `189`, and `195` immediately flipped to `abandoned`
+    - the remaining active session shells then closed on the next cleanup interval, which is the intended cleanup path once the completed turn is no longer transiently in-flight

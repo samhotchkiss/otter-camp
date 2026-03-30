@@ -713,3 +713,13 @@
   - impact:
     - live shared-doc child lanes could still reopen with a generic recovery prompt one turn later
     - even after the engine knew the lane must stay in bounded `file.edit` mode, the next retry turn could lose that signal and pay another blocked `file.write`
+- 2026-03-29 18:42 MDT - Terminal inherited-shared-doc stops were still leaking active executions after the prompt side was fixed.
+  - fresh live evidence:
+    - blocked async task sessions for tasks `160`, `180`, `182`, `189`, and `195` had no pending/claimed `agent_turn`, no live `chat_turn`, and only `validation_loop_blocked` completed turns
+    - despite that, the same sessions still carried `flow_node_execution.status=active`, which kept the runtime thinking there was live execution state attached to a terminal stop
+  - bug:
+    - `CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(...)` only closed sessions whose execution rows were already terminal
+    - inherited-shared-doc terminal stops could finish the turn before another worker pass had converted the attached execution row out of `active`
+  - impact:
+    - supervisory cleanup sees active async task sessions that are no longer doing useful work
+    - blocked shared-doc child lanes can linger as “active execution” shells until a later repair pass happens to reconcile them
