@@ -4582,3 +4582,12 @@
     - added `TestShouldBlockProjectContinuationFocusedDraftReadToolForPrerequisiteRepairWithoutReplacementHandoff`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationFocusedDraftReadToolForPrerequisiteRepairWithoutReplacementHandoff|DispatchToolsCoalescesFocusedDraftReadGuardInSingleBatch|RecoveryResumeSharedSectionTarget(MatchesInheritedSharedPath)?|RecoveryResumeSharedSectionTargetFromText(MatchesMarkdownHeading|MatchesAddSectionToPath)|ProjectExecutionContinuationSnapshot(PrefersSharedDocDraftChildOverReplacementParent|PrefersSharedDocDraftChildOverBlockedSiblingFragmentsWithoutPath|PrefersDraftChildOverFreshReplacementParent)|HandleMalformedDuplicateSharedFileChildTaskPreflight|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren)$' -count=1`
+- 2026-03-31 00:07 MDT - Made preferred-target reread guards terminal for task-review turns.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `dispatchTools(...)` now stops the turn when review already has full bounded evidence on the preferred deliverable and a reread is blocked
+    - added `taskReviewBlockedPreferredTargetStopMessage(...)` so the system message explicitly tells the lane to use existing evidence and call `flow.review_decision` now
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestTaskReviewBlockedPreferredTargetStopMessage`
+    - added `TestShouldStopAfterBlockedTaskReviewPreferredTargetReread`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(TaskReviewBlockedPreferredTargetStopMessage|ShouldStopAfterBlockedTaskReviewPreferredTargetReread|ShouldBlockProjectContinuationFocusedDraftReadToolForPrerequisiteRepairWithoutReplacementHandoff|DispatchToolsCoalescesFocusedDraftReadGuardInSingleBatch|RecoveryResumeSharedSectionTarget(MatchesInheritedSharedPath)?|RecoveryResumeSharedSectionTargetFromText(MatchesMarkdownHeading|MatchesAddSectionToPath)|ProjectExecutionContinuationSnapshot(PrefersSharedDocDraftChildOverReplacementParent|PrefersSharedDocDraftChildOverBlockedSiblingFragmentsWithoutPath|PrefersDraftChildOverFreshReplacementParent)|HandleMalformedDuplicateSharedFileChildTaskPreflight|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren)$' -count=1`

@@ -15988,6 +15988,13 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			}
 			return true, nil
 		}
+		if shouldStopAfterBlockedTaskReviewPreferredTargetReread(rt, results) {
+			rt.stopReason = stopReasonValidationBlocked
+			if message := taskReviewBlockedPreferredTargetStopMessage(rt, results); message != "" {
+				_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, message)
+			}
+			return true, nil
+		}
 		if missingPath, ok := missingProjectContinuationDependencyArtifactPath(rt, runCalls, results); ok {
 			rt.stopReason = stopReasonValidationBlocked
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, projectContinuationMissingDependencyStopMessage(missingPath))
@@ -30686,6 +30693,42 @@ func shouldStopAfterBlockedProjectExecutionBlockedMutation(rt *turnRuntime, resu
 		}
 	}
 	return false
+}
+
+func shouldStopAfterBlockedTaskReviewPreferredTargetReread(rt *turnRuntime, results []ToolResult) bool {
+	if !taskReviewPromptActive(rt) {
+		return false
+	}
+	for _, result := range results {
+		errText := strings.ToLower(strings.TrimSpace(toolResultErrorCode(result)))
+		if strings.Contains(errText, "already fully inspected in this turn") ||
+			strings.Contains(errText, "already has bounded head, tail, and gap evidence in this turn") {
+			return true
+		}
+	}
+	return false
+}
+
+func taskReviewBlockedPreferredTargetStopMessage(rt *turnRuntime, results []ToolResult) string {
+	targetPath := ""
+	for _, result := range results {
+		errText := strings.ToLower(strings.TrimSpace(toolResultErrorCode(result)))
+		if !strings.Contains(errText, "already fully inspected in this turn") &&
+			!strings.Contains(errText, "already has bounded head, tail, and gap evidence in this turn") {
+			continue
+		}
+		if path := normalizeWorkspaceRelativePath(anyString(result.Output["deliverable_path"])); path != "" {
+			targetPath = path
+			break
+		}
+	}
+	if targetPath == "" {
+		targetPath = taskReviewPreferredDeliverableTarget(rt)
+	}
+	if targetPath == "" {
+		return "[Task review already has enough bounded evidence from the preferred deliverable target in this turn. Do not reread the same file again. Use the evidence already gathered across this review session and call flow.review_decision now.]"
+	}
+	return fmt.Sprintf("[Task review already has enough bounded evidence from `%s` in this turn. Do not reread that preferred deliverable again. Use the evidence already gathered across this review session and call flow.review_decision now.]", targetPath)
 }
 
 func projectContinuationCloseoutReadyParentPromptActive(rt *turnRuntime) bool {

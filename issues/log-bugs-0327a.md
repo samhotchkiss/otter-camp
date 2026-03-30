@@ -1247,3 +1247,13 @@
     - plain focus-draft prerequisite-repair prompts were therefore missing the same `file.read` / `file.list` guard even though the prompt already required one narrow `task.update`
   - impact:
     - PM continuations can still waste a full turn on deliverable rereads after an `agent.list` or `flow.list_templates` prerequisite block, instead of stopping immediately and retrying the narrow task mutation
+- 2026-03-31 00:07 MDT - Task-review preferred-target reread guards were not terminal.
+  - fresh live evidence:
+    - review session `ea51c44c-3ad2-4e5c-aed0-ad07557d4423` read `templates/template-08-replace.html`, then hit the existing guard:
+      - `preferred deliverable target ... was already fully inspected in this turn`
+    - the lane still resumed another assistant step instead of ending and pushing toward `flow.review_decision`
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) emitted the reread-block tool error, but there was no matching early-stop path for task-review sessions
+    - unlike project-continuation blocked mutations, review turns therefore kept streaming after the guard instead of terminating with an explicit decision-now instruction
+  - impact:
+    - review lanes can still spend extra model turns after they already have enough bounded evidence from the preferred deliverable target

@@ -16247,6 +16247,33 @@ func TestProjectExecutionBlockedMutationStopMessageOnFocusedPrerequisiteRepairGu
 	}
 }
 
+func TestTaskReviewBlockedPreferredTargetStopMessage(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageSource: "task_review_action",
+		initialMessageText:   "Review only. Inspect the current deliverables and use flow.review_decision to approve or reject this review step. Preferred deliverable target: templates/template-08-replace.html",
+	}
+	message := taskReviewBlockedPreferredTargetStopMessage(rt, []ToolResult{{
+		Name:  "file.read",
+		Error: "preferred deliverable target `templates/template-08-replace.html` was already fully inspected in this turn. Do not reread `templates/template-08-replace.html` from byte 0 again; use that existing read as evidence, inspect one bounded adjacent output if needed, or call flow.review_decision now.",
+		Output: map[string]any{
+			"deliverable_path": "templates/template-08-replace.html",
+		},
+	}})
+
+	if !strings.Contains(message, "call flow.review_decision now") {
+		t.Fatalf("message = %q, want immediate review-decision guidance", message)
+	}
+	if !strings.Contains(message, "templates/template-08-replace.html") {
+		t.Fatalf("message = %q, want preferred target path", message)
+	}
+}
+
 func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation(t *testing.T) {
 	t.Parallel()
 
@@ -16568,6 +16595,26 @@ func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnCloseoutReadyDra
 	}
 	if !strings.Contains(message, "Do not split it again or create another replacement child") {
 		t.Fatalf("message = %q, want anti-resplit guidance", message)
+	}
+}
+
+func TestShouldStopAfterBlockedTaskReviewPreferredTargetReread(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageSource: "task_review_action",
+		initialMessageText:   "Review only. Inspect the current deliverables and use flow.review_decision to approve or reject this review step. Preferred deliverable target: templates/template-08-replace.html",
+	}
+	results := []ToolResult{{
+		Name:  "file.read",
+		Error: "preferred deliverable target `templates/template-08-replace.html` was already fully inspected in this turn. Do not reread `templates/template-08-replace.html` from byte 0 again; use that existing read as evidence, inspect one bounded adjacent output if needed, or call flow.review_decision now.",
+	}}
+	if !shouldStopAfterBlockedTaskReviewPreferredTargetReread(rt, results) {
+		t.Fatal("expected fully-inspected preferred-target reread block to stop review turn")
 	}
 }
 
