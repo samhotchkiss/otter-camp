@@ -4554,3 +4554,11 @@
       - `TestProjectExecutionContinuationSnapshotPrefersDraftChildOverFreshReplacementParent`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshot(PrefersSharedDocDraftChildOverReplacementParent|PrefersSharedDocDraftChildOverBlockedSiblingFragmentsWithoutPath|PrefersDraftChildOverFreshReplacementParent)|HandleMalformedDuplicateSharedFileChildTaskPreflight|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren)$' -count=1`
+- 2026-03-30 23:16 MDT - Widened shared-doc section-target parsing to match the live draft-child wording.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `sharedDeliverableSectionTargetPattern` now recognizes `Add a "X" section to PATH ...` wording, not just `write the X section of PATH`
+    - the same parser now tolerates trailing descriptive text after the explicit path on the same line
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestRecoveryResumeSharedSectionTargetFromTextMatchesAddSectionToPath`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(RecoveryResumeSharedSectionTarget(MatchesInheritedSharedPath)?|RecoveryResumeSharedSectionTargetFromText(MatchesMarkdownHeading|MatchesAddSectionToPath)|ProjectExecutionContinuationSnapshot(PrefersSharedDocDraftChildOverReplacementParent|PrefersSharedDocDraftChildOverBlockedSiblingFragmentsWithoutPath|PrefersDraftChildOverFreshReplacementParent)|HandleMalformedDuplicateSharedFileChildTaskPreflight|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren)$' -count=1`

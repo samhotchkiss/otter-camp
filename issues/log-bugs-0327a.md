@@ -1215,3 +1215,13 @@
   - impact:
     - PM continuations can keep treating a parent with a legitimate draft section child as if all children are still terminally blocked/malformed
     - that reopens replacement-parent handoff churn instead of advancing the existing draft child
+- 2026-03-30 23:16 MDT - The shared-doc section-target parser was too narrow for the live draft-child wording.
+  - fresh live evidence:
+    - continuation `11916` on `repo_version=3685` still surfaced parent `246` as the replacement focus even after the sibling-proof fix
+    - child task `249` used the real live wording `Add a "Technical Depth Calibration" section to planning/sambot-personality-spec.md ...`
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) only parsed shared section targets from phrases like `write the X section of PATH`
+    - it did not recognize `add a "X" section to PATH` or descriptions that continue after the explicit path
+  - impact:
+    - task `249` resolved to no section target, so blocked siblings on the same shared file still counted as proof against it
+    - PM continuations kept reopening the replacement-parent handoff loop for `246` instead of advancing the real draft child

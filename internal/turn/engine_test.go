@@ -43123,6 +43123,15 @@ func TestRecoveryResumeSharedSectionTargetFromTextMatchesMarkdownHeading(t *test
 	}
 }
 
+func TestRecoveryResumeSharedSectionTargetFromTextMatchesAddSectionToPath(t *testing.T) {
+	t.Parallel()
+
+	raw := `Add a "Technical Depth Calibration" section to planning/sambot-personality-spec.md that specifies how SamBot matches the visitor's level.`
+	if got := recoveryResumeSharedSectionTargetFromText(raw, "planning/sambot-personality-spec.md"); got != "Technical Depth Calibration" {
+		t.Fatalf("shared section target from text = %q, want %q", got, "Technical Depth Calibration")
+	}
+}
+
 func TestBuildRecoveryResumeStateMessageIncludesInheritedSharedDeliverableHint(t *testing.T) {
 	t.Parallel()
 

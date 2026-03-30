@@ -222,7 +222,7 @@ var preferredDeliverableRootPatterns = []*regexp.Regexp{
 }
 
 var reviewPromptDescriptionOutputPathPattern = regexp.MustCompile(`(?i)\b(content(?:/[A-Za-z0-9._-]+)+\.(?:md|markdown|html|txt|json|ya?ml))\b`)
-var sharedDeliverableSectionTargetPattern = regexp.MustCompile("(?i)^(?:write|draft|create|update)\\s+the\\s+(.+?)\\s+section\\s+of\\s+`?([A-Za-z0-9._/-]+)`?\\.?$")
+var sharedDeliverableSectionTargetPattern = regexp.MustCompile("(?i)^(?:(?:write|draft|create|update)\\s+the\\s+|add\\s+(?:a|an)\\s+\"?)(.+?)\"?\\s+section\\s+(?:of|to)\\s+`?([A-Za-z0-9._/-]+)`?(?:\\b.*)?$")
 
 const reviewRepeatedFileReadNotFoundTurnStopSubstring = "[Repeated identical file.read validation failure in this turn (2/3): not_found."
 const projectContinuationRediscoveryGuardPrefix = "[Project continuation rediscovery guard blocked only broad rereads."
