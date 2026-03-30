@@ -6709,6 +6709,19 @@ func TestInferredTaskDeliverableDraftSkipsSourceBackedContentPostsTask(t *testin
 	}
 }
 
+func TestInferredTaskDeliverableDraftSkipsPromptConversationCorpusTask(t *testing.T) {
+	description := "Write one deeply technical (complexity level 3) test conversation demonstrating SamBot's adaptive complexity. Topic: state machines in AI orchestration. Write a multi-turn conversation (6-10 exchanges) and append it to planning/sambot-prompts/test-conversations-level3.md."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  316,
+		Title:       "Write deeply technical SamBot test conversation on state machines (replacement)",
+		Description: &description,
+	}
+
+	if draft := inferredTaskDeliverableDraft(taskRecord); draft != "" {
+		t.Fatalf("draft = %q, want no inferred draft for prompt conversation corpus task", draft)
+	}
+}
+
 func TestReconcileRecoveryCheckpointCandidateNormalizesExecutionFirstReportTarget(t *testing.T) {
 	t.Parallel()
 
@@ -33593,7 +33606,7 @@ func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsUsesExplicitMarkdownDeliv
 
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
-	description := "Document the speaker pipeline stages (ingestion, processing, output/delivery) and define explicit validation criteria for each stage. Output: validation-scope.md in workspace. ~20 min."
+	description := "Document the speaker pipeline stages (ingestion, processing, output/delivery) and define explicit validation criteria for each stage. Output: planning/validation-scope.md in workspace. ~20 min."
 
 	fixture.session.ScopeType = "project_task"
 	fixture.session.ScopeID = taskID
@@ -33641,7 +33654,7 @@ func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsUsesExplicitMarkdownDeliv
 	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
 		t.Fatalf("toolCalls = %+v, want one synthesized file.write", toolCalls)
 	}
-	if got := stringValue(toolCalls[0].Arguments["path"]); got != "validation-scope.md" {
+	if got := stringValue(toolCalls[0].Arguments["path"]); got != "planning/validation-scope.md" {
 		t.Fatalf("path = %q, want explicit markdown deliverable path", got)
 	}
 	if got := stringValue(toolCalls[0].Arguments["content"]); !strings.Contains(got, "## Validation Criteria") {
@@ -33694,6 +33707,57 @@ func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsSourceBackedContentP
 	}
 	if synthesized {
 		t.Fatalf("synthesized = true, want false for source-backed content/posts task; toolCalls=%+v", toolCalls)
+	}
+	if toolCalls != nil {
+		t.Fatalf("toolCalls = %+v, want nil", toolCalls)
+	}
+}
+
+func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsPromptConversationCorpusTask(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Write one deeply technical (complexity level 3) test conversation demonstrating SamBot's adaptive complexity. Topic: state machines in AI orchestration. Write a multi-turn conversation (6-10 exchanges) and append it to planning/sambot-prompts/test-conversations-level3.md."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     316,
+		Title:          "Write deeply technical SamBot test conversation on state machines (replacement)",
+		WorkStatus:     "in_progress",
+		Description:    &description,
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskExecutionFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"Let me gather the prompt context and then write the conversation.",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskExecutionFileWriteToolCalls: %v", err)
+	}
+	if synthesized {
+		t.Fatalf("synthesized = true, want false for prompt conversation corpus task; toolCalls=%+v", toolCalls)
 	}
 	if toolCalls != nil {
 		t.Fatalf("toolCalls = %+v, want nil", toolCalls)

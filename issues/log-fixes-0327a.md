@@ -5040,3 +5040,13 @@
     - added `TestTurnEngineIntegrationMissingSharedParentFileChildKickoffPreflightBlocksBeforeModelCall`
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegration(MissingSharedParentFileChildKickoffPreflightBlocksBeforeModelCall|MalformedDuplicateSharedFileChildKickoffPreflightBlocksBeforeModelCall|MalformedConflictingDeliverableChildKickoffPreflightBlocksBeforeModelCall)$' -count=1`
+- 2026-03-30 14:07 MDT - Stopped inferred markdown scaffolds from auto-populating concrete SamBot prompt-conversation deliverables.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `shouldSkipInferredPromptConversationDraft(...)`
+    - `shouldSkipInferredTaskDeliverableDraft(...)` now skips inferred markdown starters for `planning/sambot-prompts/...` conversation-corpus tasks that need substantive multi-turn content, not a generic document skeleton
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestInferredTaskDeliverableDraftSkipsPromptConversationCorpusTask`
+    - added `TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsPromptConversationCorpusTask`
+    - refreshed `TestMaybeSynthesizeTaskExecutionFileWriteToolCallsUsesExplicitMarkdownDeliverableDraft` to use a planning-doc target that the current runtime still allows as a synthesized markdown starter
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(InferredTaskDeliverableDraft(BuildsExplicitMarkdownStarter|SkipsSourceBackedContentPostsTask|SkipsPromptConversationCorpusTask)|MaybeSynthesizeTaskExecutionFileWriteToolCalls(UsesExplicitMarkdownDeliverableDraft|SkipsSourceBackedContentPostsTask|SkipsPromptConversationCorpusTask))$' -count=1`

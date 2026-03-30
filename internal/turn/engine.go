@@ -20703,6 +20703,10 @@ func shouldSkipInferredTaskDeliverableDraft(taskRecord repo.ProjectTask, targetP
 		}
 	}
 	lower := context.String()
+	normalizedTarget := strings.ToLower(strings.TrimSpace(filepath.ToSlash(targetPath)))
+	if shouldSkipInferredPromptConversationDraft(normalizedTarget, lower) {
+		return true
+	}
 	if !containsAny(lower,
 		"content/posts/",
 		"content/posts",
@@ -20725,6 +20729,23 @@ func shouldSkipInferredTaskDeliverableDraft(taskRecord repo.ProjectTask, targetP
 		"save the article text",
 		"clean markdown files under content/posts/",
 		"clean markdown files in content/posts/",
+	)
+}
+
+func shouldSkipInferredPromptConversationDraft(targetPath, lower string) bool {
+	if !strings.HasPrefix(targetPath, "planning/sambot-prompts/") {
+		return false
+	}
+	return containsAny(lower,
+		"test conversation",
+		"test conversations",
+		"multi-turn conversation",
+		"multi-turn conversations",
+		"dialogue",
+		"dialog",
+		"adaptive complexity",
+		"append it to planning/sambot-prompts/",
+		"append to planning/sambot-prompts/",
 	)
 }
 

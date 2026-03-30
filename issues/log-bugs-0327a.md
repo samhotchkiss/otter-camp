@@ -1735,3 +1735,14 @@
   - impact:
     - malformed shared-file fragment children pay at least one model round of guaranteed discovery churn
     - PM gets delayed feedback about structurally impossible child lanes that should have been blocked immediately
+- 2026-03-30 14:07 MDT - Prompt-conversation task lanes under `planning/sambot-prompts/` still accepted inferred markdown-starter scaffolds as if they were legitimate deliverable drafts.
+  - fresh live evidence:
+    - task `316` execution auto-wrote `planning/sambot-prompts/test-conversations-level3.md` with a task-brief scaffold instead of a real conversation
+    - review lanes correctly rejected that placeholder file, but the execution lane kept re-creating it
+    - the task eventually blocked only because the review node hit `flow rejection max visits exceeded`
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) allowed `inferredTaskDeliverableDraft(...)` to build generic markdown starters for concrete SamBot prompt-corpus tasks
+    - `maybeSynthesizeTaskExecutionFileWriteToolCalls(...)` then treated that inferred scaffold as a safe fallback deliverable and auto-wrote it after generic kickoff chatter
+  - impact:
+    - execution lanes can manufacture their own placeholder deliverables
+    - review rejects the placeholder correctly, but the runtime still pays repeated reject/reopen cycles until the flow blocks on max visits
