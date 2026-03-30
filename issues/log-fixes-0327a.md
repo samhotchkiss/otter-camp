@@ -4966,3 +4966,15 @@
   - verified with:
     - `GOFLAGS='' go test ./internal/tools/native -run 'TestFileRead(RejectsRecoveryDirectoryRereadOutsideTarget|RejectsRecoveryNotFoundRereadOutsideTarget|RejectsExecutionSiblingDeliverableInspectionWithinRecoveryTargetRootForBatchTask|AllowsCheckpointArtifactInspectionWhenTrackedBatchOutputsComplete)$' -count=1`
     - `GOFLAGS='' go test -tags=integration ./internal/tools/native -run 'TestIntegrationFileReadRejectsMissingRecoveryRereadOutsideTarget$' -count=1`
+- 2026-03-30 13:16 MDT - Blocked fresh PM replacement children when the focused parent already has malformed duplicate drafts for the same deliverable.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `shouldBlockProjectContinuationFocusedDraftTaskCreateTool(...)` now separates malformed direct child drafts into:
+      - same-deliverable duplicate/conflicting children, which block fresh `task.create`
+      - unrelated malformed drafts, which still allow a fresh replacement child
+    - added `buildProjectContinuationFocusedDraftMalformedSameDeliverableChildGuardError(...)` so PM gets explicit consolidation guidance instead of another replacement attempt
+    - added `projectContinuationPreferredSameDeliverableDraftChild(...)` to choose the best existing same-file child draft by substantive title/description length, then task number
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - renamed the permissive malformed-draft case to pin the intended different-deliverable behavior
+    - added `TestShouldBlockProjectContinuationFocusedDraftTaskCreateForMalformedSameDeliverableDraftChildren`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShouldBlockProjectContinuationFocusedDraftTaskCreate(AllowsFreshReplacementWhenDirectChildDraftsAreMalformedForDifferentDeliverables|ForMalformedSameDeliverableDraftChildren)$|TestBuildProjectContinuationFocusedDraftExistingChildGuardErrorIncludesChildLabels$' -count=1`

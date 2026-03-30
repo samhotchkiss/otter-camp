@@ -35484,6 +35484,45 @@ func buildProjectContinuationFocusedDraftExistingChildGuardError(focusTask repo.
 	return fmt.Sprintf("project continuation already has direct child draft task(s) beneath focused draft task %s: %s. Do not create another child beneath %s from the project lane; queue the smallest unchanged direct child draft if it already fits, or update/block the stale draft child first before attempting any new replacement.", label, strings.Join(childLabels, ", "), label)
 }
 
+func buildProjectContinuationFocusedDraftMalformedSameDeliverableChildGuardError(focusTask repo.ProjectTask, draftChildren []repo.ProjectTask) string {
+	label := projectBootstrapTaskLabel(focusTask)
+	if len(draftChildren) == 0 {
+		return fmt.Sprintf("project continuation already has malformed same-deliverable direct child drafts beneath focused draft task %s. Do not create another child beneath %s from the project lane; consolidate the existing same-file draft set first.", label, label)
+	}
+	preferred := projectContinuationPreferredSameDeliverableDraftChild(draftChildren)
+	preferredLabel := projectBootstrapTaskLabel(preferred)
+	childLabels := make([]string, 0, min(3, len(draftChildren)))
+	for _, task := range draftChildren {
+		childLabels = append(childLabels, projectBootstrapTaskLabel(task))
+		if len(childLabels) == 3 {
+			break
+		}
+	}
+	return fmt.Sprintf("project continuation already has malformed same-deliverable direct child draft task(s) beneath focused draft task %s: %s. Do not create another child beneath %s from the project lane; pick the best existing same-deliverable child draft such as %s, queue or repair that draft if it is still usable, and block or consolidate the duplicate siblings before attempting any new replacement.", label, strings.Join(childLabels, ", "), label, preferredLabel)
+}
+
+func projectContinuationPreferredSameDeliverableDraftChild(tasks []repo.ProjectTask) repo.ProjectTask {
+	if len(tasks) == 0 {
+		return repo.ProjectTask{}
+	}
+	descriptionText := func(value *string) string {
+		if value == nil {
+			return ""
+		}
+		return *value
+	}
+	best := tasks[0]
+	bestScore := len(strings.TrimSpace(best.Title)) + len(strings.TrimSpace(descriptionText(best.Description)))
+	for _, task := range tasks[1:] {
+		score := len(strings.TrimSpace(task.Title)) + len(strings.TrimSpace(descriptionText(task.Description)))
+		if score > bestScore || (score == bestScore && task.TaskNumber > best.TaskNumber) {
+			best = task
+			bestScore = score
+		}
+	}
+	return best
+}
+
 func buildProjectContinuationFocusedDraftCloseoutMetadataGuardError(focusTask repo.ProjectTask, requiredChildLabels []string) string {
 	label := projectBootstrapTaskLabel(focusTask)
 	message := fmt.Sprintf("parent task requires child verification and passed integration before completion: closeout-ready parent %s must include child_output_verifications, integration_check.status=passed, outcome_assessment.satisfied=true, and work_status=queued in the same task.update.", label)
@@ -35713,14 +35752,22 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 	if !projectContinuationDraftTaskReadyForParentClosureForTask(focusTask, focusActivity) {
 		if draftChildren := projectContinuationDirectDraftChildTasks(projectTasks, focusTask.ID); len(draftChildren) > 0 {
 			reusableDraftChildren := make([]repo.ProjectTask, 0, len(draftChildren))
+			malformedSameDeliverableDraftChildren := make([]repo.ProjectTask, 0, len(draftChildren))
 			for _, task := range draftChildren {
 				if _, malformed := malformedChildTaskIDs[task.ID]; malformed {
+					if projectContinuationMalformedDuplicateSharedFileChild(task, focusTask) ||
+						projectContinuationMalformedConflictingDeliverableChildForParent(task, focusTask) {
+						malformedSameDeliverableDraftChildren = append(malformedSameDeliverableDraftChildren, task)
+					}
 					continue
 				}
 				reusableDraftChildren = append(reusableDraftChildren, task)
 			}
 			if len(reusableDraftChildren) > 0 {
 				return true, buildProjectContinuationFocusedDraftExistingChildGuardError(focusTask, reusableDraftChildren)
+			}
+			if len(malformedSameDeliverableDraftChildren) > 0 {
+				return true, buildProjectContinuationFocusedDraftMalformedSameDeliverableChildGuardError(focusTask, malformedSameDeliverableDraftChildren)
 			}
 		}
 		return false, ""

@@ -1633,3 +1633,19 @@
       bypassed the existing recovery-focus guard entirely
   - impact:
     - recovery turns can waste one more read-only hop on forbidden sibling paths before the validation-loop blocker fires, instead of receiving the stronger focused correction immediately
+- 2026-03-30 13:16 MDT - PM focused-draft `task.create` still allowed infinite same-file replacement attempts when all existing direct child drafts were malformed duplicates of the parent deliverable.
+  - fresh live evidence:
+    - parent task `297` accumulated three malformed direct draft children for the exact same file:
+      - `298`
+      - `302`
+      - `303`
+    - PM continuation messages already called those children malformed, but the project lane still attempted another replacement `task.create`
+    - those replacement attempts only re-hit the bounded-size stop instead of forcing consolidation of the existing same-file drafts
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) in `shouldBlockProjectContinuationFocusedDraftTaskCreateTool(...)` filtered out every malformed direct child draft before deciding whether to block a new `task.create`
+    - that behavior was too broad:
+      - it was correct for malformed procedural/reference fragments on different deliverables
+      - it was wrong for malformed duplicate same-deliverable drafts beneath the focused parent
+    - as a result, the PM lane treated `298/302/303` as if no blocking child drafts existed at all
+  - impact:
+    - project continuations can keep trying to create a fresh replacement child for the same shared file, paying more bounded-size stops and never consolidating the already-present same-file draft set

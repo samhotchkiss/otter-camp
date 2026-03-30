@@ -26904,7 +26904,7 @@ func TestBuildProjectContinuationFocusedDraftExistingChildGuardErrorIncludesChil
 	}
 }
 
-func TestShouldBlockProjectContinuationFocusedDraftTaskCreateAllowsFreshReplacementWhenDirectChildDraftsAreMalformed(t *testing.T) {
+func TestShouldBlockProjectContinuationFocusedDraftTaskCreateAllowsFreshReplacementWhenDirectChildDraftsAreMalformedForDifferentDeliverables(t *testing.T) {
 	t.Parallel()
 
 	projectID := uuid.New()
@@ -26912,7 +26912,7 @@ func TestShouldBlockProjectContinuationFocusedDraftTaskCreateAllowsFreshReplacem
 	childDraftAID := uuid.New()
 	childDraftBID := uuid.New()
 	parentDescription := "Deliver planning/sambot-prompts/test-conversations-technical.md as a single shared markdown file."
-	childDescription := "Write planning/sambot-prompts/test-conversations-technical.md in a single pass."
+	childDescription := "Reference planning/sambot-feature-spec.md for feature requirements."
 
 	fixture := newUnitFixture(t, "async")
 	fixture.session.ScopeType = "project"
@@ -26932,7 +26932,7 @@ func TestShouldBlockProjectContinuationFocusedDraftTaskCreateAllowsFreshReplacem
 				ID:          childDraftAID,
 				ProjectID:   projectID,
 				TaskNumber:  290,
-				Title:       "Write the complete file to planning/sambot-prompts/test-conversations-technical.md in a single pass.",
+				Title:       "Reference planning/sambot-feature-spec.md for feature requirements.",
 				Description: &childDescription,
 				WorkStatus:  "draft",
 				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTaskID.String())),
@@ -26941,7 +26941,7 @@ func TestShouldBlockProjectContinuationFocusedDraftTaskCreateAllowsFreshReplacem
 				ID:          childDraftBID,
 				ProjectID:   projectID,
 				TaskNumber:  291,
-				Title:       "Write planning/sambot-prompts/test-conversations-technical.md — level 2 and level 3 adaptive complexity test conversations",
+				Title:       "Refer to planning/sambot-feature-spec.md before drafting architecture notes.",
 				Description: &childDescription,
 				WorkStatus:  "draft",
 				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTaskID.String())),
@@ -26964,6 +26964,76 @@ func TestShouldBlockProjectContinuationFocusedDraftTaskCreateAllowsFreshReplacem
 	})
 	if blocked {
 		t.Fatalf("reason = %q, want malformed direct child drafts to allow a fresh replacement child", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftTaskCreateForMalformedSameDeliverableDraftChildren(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentTaskID := uuid.New()
+	childDraftAID := uuid.New()
+	childDraftBID := uuid.New()
+	parentDescription := "Deliver planning/sambot-prompts/test-conversations-level3.md as a single shared markdown file."
+	childDescriptionA := "Produce the file planning/sambot-prompts/test-conversations-level3.md."
+	childDescriptionB := "Create the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical SamBot test conversations with expert-depth exchanges."
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentTaskID: {
+				ID:          parentTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  297,
+				Title:       "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+			},
+			childDraftAID: {
+				ID:          childDraftAID,
+				ProjectID:   projectID,
+				TaskNumber:  302,
+				Title:       "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations",
+				Description: &childDescriptionA,
+				WorkStatus:  "draft",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTaskID.String())),
+			},
+			childDraftBID: {
+				ID:          childDraftBID,
+				ProjectID:   projectID,
+				TaskNumber:  303,
+				Title:       "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot dialogues",
+				Description: &childDescriptionB,
+				WorkStatus:  "draft",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTaskID.String())),
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: recover the blocked level-3 SamBot dialogue file", projectExecutionContinuationSnapshot{
+			ProjectLine:          "Active project id: " + projectID.String(),
+			ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 297 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations) id=" + parentTaskID.String() + " title=\"Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations\" work_status=draft child_tasks=3 malformed_child_tasks=3",
+			FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 297 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations) id=" + parentTaskID.String() + " title=\"Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations\" work_status=draft child_tasks=3 malformed_child_tasks=3",
+		}),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftTaskCreateTool(context.Background(), rt, "task.create", map[string]any{
+		"parent_task_id": parentTaskID.String(),
+		"title":          "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot conversations",
+		"description":    "Fresh replacement child beneath OC-297 after duplicate shared-file drafts blocked.",
+	})
+	if !blocked {
+		t.Fatal("expected malformed same-deliverable direct child drafts to block another replacement task.create")
+	}
+	if !strings.Contains(reason, "malformed same-deliverable direct child draft task(s)") {
+		t.Fatalf("reason = %q, want malformed same-deliverable child guidance", reason)
+	}
+	if !strings.Contains(reason, "task 303") {
+		t.Fatalf("reason = %q, want preferred existing child label", reason)
 	}
 }
 
