@@ -5007,3 +5007,12 @@
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'TestBuildProjectContinuationActionPrompt(AddsReplacementChildGuidanceForMalformedChildren|PrefersRepairOfMalformedSameDeliverableDraftChild)$|TestShouldBlockProjectContinuationFocusedDraftMutation(ForMalformedDuplicateChild|AllowsPreferredMalformedSameDeliverableDraftChild|BlocksNonPreferredMalformedSameDeliverableDraftChild)$|TestShouldBlockProjectContinuationFocusedDraftTaskCreate(AllowsFreshReplacementWhenDirectChildDraftsAreMalformedForDifferentDeliverables|ForMalformedSameDeliverableDraftChildren)$|TestBuildProjectContinuationFocusedDraftExistingChildGuardErrorIncludesChildLabels$' -count=1`
     - `GOFLAGS='' go test ./internal/jobqueue -run '^$' -count=1`
+- 2026-03-30 13:45 MDT - Made retargeted child recovery prefer the current explicit/checkpoint deliverable over stale inherited-parent history.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `reconcileRecoveryCheckpointCandidate(...)` now captures an authoritative task-owned recovery target from current task metadata/checkpoint normalization
+    - once that authoritative target exists, older historical recovery paths no longer override it during checkpoint reconciliation
+    - mismatched recovery artifacts are still cleared if they no longer belong to the authoritative target
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestLoadRecoveryResumeStatePrefersRetargetedChildDeliverableOverHistoricalInheritedParentFile`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(LoadRecoveryResumeStatePrefersTaskExplicitDeliverableOverWrongCheckpointTarget|LoadRecoveryResumeStatePrefersRetargetedChildDeliverableOverHistoricalInheritedParentFile|RecoveryTargetPathForSessionPrefersParentExplicitDeliverableOverWrongCheckpointTarget)$' -count=1`

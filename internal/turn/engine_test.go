@@ -45144,6 +45144,87 @@ func TestLoadRecoveryResumeStatePrefersTaskExplicitDeliverableOverWrongCheckpoin
 	}
 }
 
+func TestLoadRecoveryResumeStatePrefersRetargetedChildDeliverableOverHistoricalInheritedParentFile(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	parentID := uuid.New()
+	taskID := uuid.New()
+	projectID := uuid.New()
+	orgID := fixture.session.OrganizationID
+	projectSlug := "resume-state-retargeted-child"
+	orgSlug := "test-org"
+	parentDescription := "Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical SamBot conversations."
+	childDescription := "Write Level 3 test conversations focused on realistic follow-up questions that push into edge cases or implementation specifics. Deliverable: planning/sambot-prompts/test-conversations-level3-followups.md"
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:             parentID,
+				TaskNumber:     297,
+				Title:          "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot conversations",
+				Description:    &parentDescription,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				WorkStatus:     "draft",
+			},
+			taskID: {
+				ID:             taskID,
+				TaskNumber:     306,
+				Title:          "Include realistic follow-up questions that push into edge cases or implementation specifics",
+				Description:    &childDescription,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				WorkStatus:     "blocked",
+				Metadata: mustRawJSON(t, map[string]any{
+					"decomposition_parent_task_id": parentID.String(),
+					"recovery_file_write_checkpoint": map[string]any{
+						"version":        1,
+						"blocker_class":  "durable_recovery_checkpoint",
+						"target_path":    "planning/sambot-prompts/test-conversations-level3-followups.md",
+						"artifact_path":  ".ottercamp/recovery/planning/sambot-prompts/test-conversations-level3-followups.md",
+						"failure_reason": "assistant draft for planning/sambot-prompts/test-conversations-level3-followups.md described intent to write the deliverable instead of the file body",
+					},
+				}),
+			},
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: orgID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		orgID: {ID: orgID, Slug: orgSlug},
+	}}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"file.read","output":{"path":"planning/sambot-prompts/test-conversations-level3.md","error":"not_found"}}`,
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	state, ok := fixture.engine.loadRecoveryResumeState(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery resume state")
+	}
+	if state.targetPath != "planning/sambot-prompts/test-conversations-level3-followups.md" {
+		t.Fatalf("targetPath = %q, want retargeted child deliverable path", state.targetPath)
+	}
+}
+
 func TestPreferredTaskDeliverableRootIgnoresReferenceRootWhenExplicitDeliverableExists(t *testing.T) {
 	t.Parallel()
 

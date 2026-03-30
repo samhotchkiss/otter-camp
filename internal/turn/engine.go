@@ -19512,8 +19512,9 @@ func (e *TurnEngine) reconcileRecoveryCheckpointCandidate(ctx context.Context, r
 		return checkpoint
 	}
 	var (
-		taskRecord     repo.ProjectTask
-		haveTaskRecord bool
+		taskRecord              repo.ProjectTask
+		haveTaskRecord          bool
+		authoritativeTaskTarget string
 	)
 	if taskRecord, ok := e.recoveryCheckpointTaskRecord(ctx, rt); ok {
 		haveTaskRecord = true
@@ -19522,6 +19523,15 @@ func (e *TurnEngine) reconcileRecoveryCheckpointCandidate(ctx context.Context, r
 			checkpoint.ArtifactPath = ""
 		}
 		checkpoint = normalizeRecoveryCheckpointPathsForTask(taskRecord, checkpoint)
+		authoritativeTaskTarget = strings.TrimSpace(metadataPreferredRecoveryTargetPathForTask(taskRecord))
+		if authoritativeTaskTarget != "" && !sameWorkspaceRelativePath(checkpoint.TargetPath, authoritativeTaskTarget) {
+			checkpoint.TargetPath = authoritativeTaskTarget
+			if checkpoint.ArtifactPath != "" {
+				if recoveredTarget, targetOK := recoveryTargetPathFromArtifact(checkpoint.ArtifactPath); !targetOK || !sameWorkspaceRelativePath(recoveredTarget, authoritativeTaskTarget) {
+					checkpoint.ArtifactPath = ""
+				}
+			}
+		}
 	}
 	historicalHintTarget, hintOK := e.recoveryHistoricalTargetPathHint(ctx, rt)
 	historicalTarget, historicalDraft, ok := e.recoveryHistoricalSubstantiveOutputContext(ctx, rt)
@@ -19558,6 +19568,9 @@ func (e *TurnEngine) reconcileRecoveryCheckpointCandidate(ctx context.Context, r
 		return checkpoint
 	}
 	if sameWorkspaceRelativePath(candidateTarget, historicalTarget) {
+		return checkpoint
+	}
+	if authoritativeTaskTarget != "" && sameWorkspaceRelativePath(candidateTarget, authoritativeTaskTarget) {
 		return checkpoint
 	}
 	if haveTaskRecord {

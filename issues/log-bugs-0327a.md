@@ -1684,3 +1684,16 @@
   - impact:
     - even after the runtime guard logic is corrected, the PM lane still opens by planning the wrong mutation
     - that guarantees another blocked `task.create` attempt before the model can ever try the now-allowed `task.update` on the preferred child
+- 2026-03-30 13:45 MDT - Retargeted decomposed child recovery still reused the stale inherited shared parent file instead of the child-specific deliverable path.
+  - fresh live evidence:
+    - task `306` description and current recovery checkpoint both targeted:
+      - `planning/sambot-prompts/test-conversations-level3-followups.md`
+    - but the next recovery resume state still emitted:
+      - `Target file: planning/sambot-prompts/test-conversations-level3.md`
+    - the lane immediately reread that shared parent file, got `not_found`, and re-blocked on the inherited shared deliverable guard
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) recovery checkpoint reconciliation still let historical recovery target hints compete after the task had already been retargeted to a new explicit deliverable
+    - after PM split work changed a decomposed child from the shared parent file to a child-owned file, older recovery history could still win during resume-state assembly
+  - impact:
+    - child-specific recovery keeps reopening the wrong parent-file blocker instead of resuming the new bounded output
+    - PM retargeting fixes are partially neutralized because the recovery lane continues to inherit stale shared-file context
