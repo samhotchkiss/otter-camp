@@ -3952,3 +3952,15 @@
   - live proof:
     - on the rebuilt binary, duplicate full-file child tasks `152` and `155` showed no newer `resume_validation_blocked_task` wakeups or task sessions beyond the last pre-fix `19:23:58-19:24:03 MDT` cycle
     - that is the expected steady state for terminal malformed child checkpoints: stay blocked, do not mint another blocked-task resume kickoff
+- 2026-03-29 19:54 MDT - Followed that with the worker-side PM continuation race fix.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `ensureProjectContinuationMessageDecision(...)` now acquires a session-scoped advisory lock before it loads pending/consumed continuation state
+    - the same function now inserts the synthetic `project_execution_continuation` message directly on that locked connection, so the full “should I create one?” decision and the insert are serialized together
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerEnsureProjectContinuationMessageDecisionSerializesConcurrentCreation`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(EnsureProjectContinuationMessageDecisionSerializesConcurrentCreation|RequeueStrandedUserMessageTurns(SkipsBlockedValidationLoopTaskSession|RetiresSettledProjectContinuation|IgnoresNewerFailedAssistantStub)?|PurgeStaleAgentTurnJobs(FailsConsumedPendingMessagesForTerminalTurn|RemovesTerminalMessageAttemptDispatches)|CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(FailsPendingMessagesForTerminalBlockedSession|AbandonsTerminalInheritedSharedExecution|ClosesRejectedExecution|SkipsPendingAgentTurn|SkipsRepairedTerminalRecoveryResume)|EnsureProjectContinuationMessageSuppressesRepeatedConsumed(RediscoveryBlockedContinuation|TaskLaneBoundaryContinuation|BoundedSizeContinuation))$' -count=1`
+  - live proof:
+    - after the rebuilt worker came up, the SamBot PM session stopped accumulating duplicate same-fingerprint continuations
+    - the duplicate backlog drained to failed terminal messages, and the next PM turn `e0fb59d1-8685-4dee-8cd5-7bd10f961bb7` made real progress by creating/queueing tasks `198` and `199`
+    - steady state after that turn was `0` pending `project_execution_continuation` messages for the PM session

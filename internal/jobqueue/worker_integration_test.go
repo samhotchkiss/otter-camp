@@ -1172,6 +1172,216 @@ func TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionAbando
 	}
 }
 
+func TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionFailsPendingMessagesForTerminalBlockedSession(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "close-blocked-task-session-fails-pending-messages",
+		DisplayName: "Close Blocked Task Session Fails Pending Messages",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "close-blocked-task-session-fails-pending-" + uuid.NewString()[:8],
+		DisplayName:    "Close Blocked Task Session Fails Pending Messages",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Blocked Session Pending Message Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Handle stale blocked task session cleanup.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "close-blocked-task-session-pending-message-template",
+		DisplayName:    "Close Blocked Task Session Pending Message Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Blocked inherited shared child task with stale pending kickoff",
+		WorkStatus:      "blocked",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+		Metadata: json.RawMessage(`{
+			"agent_turn_validation_guard": {
+				"blocked": true,
+				"failure_code": "inherited_shared_deliverable_write_blocked",
+				"failure_reason": "recovery halted because the decomposed child lane inherits shared parent deliverable planning/sambot-architecture.md; resume only with bounded file.edit updates on the current shared file or by moving integration back to the parent task"
+			}
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+	pendingKickoff, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Start work on task.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"task_queue_processor","flow_node_execution_id":"%s"}`, execution.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create pending kickoff: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "tool_result",
+		Content:   `{"output":{"type":"run_log_link"}}`,
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create pending tool_result: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	completedAt := time.Now()
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		TriggerMessageID: &pendingKickoff.ID,
+		RetryCount:       0,
+		StopReason:       &stopReason,
+		CompletedAt:      &completedAt,
+	})
+	if err != nil {
+		t.Fatalf("create completed turn: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE flow_node_execution
+		SET status = 'abandoned',
+		    completed_at = now(),
+		    runtime_substate = NULL
+		WHERE id = $1
+	`, execution.ID); err != nil {
+		t.Fatalf("abandon flow execution: %v", err)
+	}
+
+	closed, err := worker.CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ctx)
+	if err != nil {
+		t.Fatalf("CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution: %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("closed sessions = %d, want 1", closed)
+	}
+
+	var sessionStatus string
+	if err := pool.QueryRow(ctx, `
+		SELECT status
+		FROM chat_session
+		WHERE id = $1
+	`, session.ID).Scan(&sessionStatus); err != nil {
+		t.Fatalf("query session: %v", err)
+	}
+	if sessionStatus != "closed" {
+		t.Fatalf("session status = %q, want closed", sessionStatus)
+	}
+
+	var kickoffStatus, kickoffError string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, pendingKickoff.ID).Scan(&kickoffStatus, &kickoffError); err != nil {
+		t.Fatalf("query kickoff message: %v", err)
+	}
+	if kickoffStatus != "failed" {
+		t.Fatalf("kickoff status = %q, want failed", kickoffStatus)
+	}
+	if kickoffError != "session_closed" {
+		t.Fatalf("kickoff error = %q, want session_closed", kickoffError)
+	}
+
+	var pendingMessages int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_message
+		WHERE session_id = $1
+		  AND status = 'pending'
+	`, session.ID).Scan(&pendingMessages); err != nil {
+		t.Fatalf("count pending messages: %v", err)
+	}
+	if pendingMessages != 0 {
+		t.Fatalf("pending messages = %d, want 0", pendingMessages)
+	}
+
+	var turnStatus string
+	if err := pool.QueryRow(ctx, `
+		SELECT status
+		FROM chat_turn
+		WHERE id = $1
+	`, turn.ID).Scan(&turnStatus); err != nil {
+		t.Fatalf("query turn: %v", err)
+	}
+	if turnStatus != "completed" {
+		t.Fatalf("turn status = %q, want completed", turnStatus)
+	}
+}
+
 func TestJobWorkerRetireClosedAsyncSessionRunsCompletesDoneTaskRuns(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -4895,6 +5105,145 @@ func TestJobWorkerPurgeStaleAgentTurnJobsRemovesTerminalMessageAttemptDispatches
 	}
 	if liveStatus != "pending" || liveError != nil {
 		t.Fatalf("live job = (%q, %v), want pending/<nil>", liveStatus, liveError)
+	}
+}
+
+func TestJobWorkerPurgeStaleAgentTurnJobsFailsConsumedPendingMessagesForTerminalTurn(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "purge-stale-pending-messages-terminal-turn",
+		DisplayName: "Purge Stale Pending Messages Terminal Turn",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Pending Message Purge Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You handle stale dispatch cleanup.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "purge-stale-pending-messages-project-" + uuid.NewString()[:8],
+		DisplayName:    "Purge Stale Pending Messages Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Stale pending kickoff with terminal turn",
+		WorkStatus:      "blocked",
+		BlocksScope:     "task",
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "resume task",
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("Create message: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		TriggerMessageID: &message.ID,
+		RetryCount:       0,
+		StopReason:       &stopReason,
+	})
+	if err != nil {
+		t.Fatalf("Create completed turn: %v", err)
+	}
+	toolResult, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &turn.ID,
+		Role:      "tool_result",
+		Content:   `{"output":{"type":"run_log_link"}}`,
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("Create tool_result: %v", err)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 0 {
+		t.Fatalf("purged jobs = %d, want 0", purged)
+	}
+
+	var messageStatus, messageError string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, message.ID).Scan(&messageStatus, &messageError); err != nil {
+		t.Fatalf("query kickoff message: %v", err)
+	}
+	if messageStatus != "failed" {
+		t.Fatalf("kickoff status = %q, want failed", messageStatus)
+	}
+	if messageError != "superseded stale pending message after terminal turn" {
+		t.Fatalf("kickoff error = %q, want stale terminal-turn message error", messageError)
+	}
+
+	var toolStatus, toolError string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, toolResult.ID).Scan(&toolStatus, &toolError); err != nil {
+		t.Fatalf("query tool_result: %v", err)
+	}
+	if toolStatus != "failed" {
+		t.Fatalf("tool_result status = %q, want failed", toolStatus)
+	}
+	if toolError != "superseded stale pending tool_result after terminal turn" {
+		t.Fatalf("tool_result error = %q, want stale terminal-turn tool_result error", toolError)
 	}
 }
 
@@ -9048,6 +9397,130 @@ func TestJobWorkerRequeueStrandedUserMessageTurnsRetiresSettledProjectContinuati
 	}
 	if pendingJobs != 0 {
 		t.Fatalf("pending agent_turn jobs = %d, want 0", pendingJobs)
+	}
+}
+
+func TestJobWorkerRequeueStrandedUserMessageTurnsSkipsBlockedValidationLoopTaskSession(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-stranded-blocked-validation-loop",
+		DisplayName: "Requeue Stranded Blocked Validation Loop",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Blocked Validation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover pending work.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-stranded-blocked-validation-project-" + uuid.NewString()[:8],
+		DisplayName:    "Requeue Stranded Blocked Validation Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Blocked validation-loop task",
+		WorkStatus:      "blocked",
+		BlocksScope:     "task",
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+		Metadata: json.RawMessage(`{
+			"agent_turn_validation_guard": {
+				"blocked": true,
+				"failure_code": "inherited_shared_deliverable_write_blocked",
+				"failure_reason": "recovery halted because the decomposed child lane inherits shared parent deliverable planning/sambot-architecture.md"
+			}
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active task recovery now.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"task_recovery_resume","synthetic_user_message":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create pending user message: %v", err)
+	}
+
+	requeued, err := worker.RequeueStrandedUserMessageTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueStrandedUserMessageTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued turns = %d, want 1 handled blocked validation-loop message", requeued)
+	}
+
+	var (
+		status       string
+		errorMessage string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, message.ID).Scan(&status, &errorMessage); err != nil {
+		t.Fatalf("load blocked validation-loop message: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("message status = %q, want failed", status)
+	}
+	if errorMessage != "blocked validation loop already settled; do not requeue stranded user message" {
+		t.Fatalf("message error = %q", errorMessage)
+	}
+
+	var queuedJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		  AND status IN ('pending', 'claimed')
+	`, session.ID).Scan(&queuedJobs); err != nil {
+		t.Fatalf("count queued jobs: %v", err)
+	}
+	if queuedJobs != 0 {
+		t.Fatalf("queued jobs = %d, want 0 for blocked validation-loop session", queuedJobs)
 	}
 }
 
@@ -19673,6 +20146,157 @@ func TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedRedi
 	}
 	if pendingCount != 0 {
 		t.Fatalf("pending continuation messages = %d, want 0 after suppression", pendingCount)
+	}
+}
+
+func TestJobWorkerEnsureProjectContinuationMessageDecisionSerializesConcurrentCreation(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "ensure-project-continuation-serializes-concurrent-creation",
+		DisplayName: "Ensure Project Continuation Serializes Concurrent Creation",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "ensure-project-continuation-serializes-concurrent-creation-project",
+		DisplayName:    "Ensure Project Continuation Serializes Concurrent Creation Project",
+		Description:    "Project for concurrent continuation creation coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "ensure-project-continuation-serializes-concurrent-creation-template",
+		DisplayName:    "Ensure Project Continuation Serializes Concurrent Creation Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     12,
+		Title:          "Import reference corpus",
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	}); err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      13,
+		Title:           "Write the bounded architecture follow-up",
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		AssignedAgentID: &agent.ID,
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	}); err != nil {
+		t.Fatalf("create draft task: %v", err)
+	}
+
+	const callers = 8
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	type result struct {
+		id         uuid.UUID
+		suppressed bool
+		err        error
+	}
+	results := make(chan result, callers)
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			messageID, suppressed, err := worker.ensureProjectContinuationMessageDecision(context.Background(), session.ID)
+			results <- result{id: messageID, suppressed: suppressed, err: err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	seenIDs := make(map[uuid.UUID]struct{})
+	for res := range results {
+		if res.err != nil {
+			t.Fatalf("ensureProjectContinuationMessageDecision: %v", res.err)
+		}
+		if res.suppressed {
+			t.Fatal("suppressed = true, want the first pending continuation message to be reused")
+		}
+		if res.id == uuid.Nil {
+			t.Fatal("messageID = nil, want a reusable pending continuation message")
+		}
+		seenIDs[res.id] = struct{}{}
+	}
+	if len(seenIDs) != 1 {
+		t.Fatalf("distinct continuation message ids = %d, want 1", len(seenIDs))
+	}
+
+	var pendingCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_message
+		WHERE session_id = $1
+		  AND role = 'user'
+		  AND status = 'pending'
+		  AND COALESCE(metadata->>'source', '') = 'project_execution_continuation'
+	`, session.ID).Scan(&pendingCount); err != nil {
+		t.Fatalf("count pending continuation messages: %v", err)
+	}
+	if pendingCount != 1 {
+		t.Fatalf("pending continuation messages = %d, want 1", pendingCount)
 	}
 }
 

@@ -1006,6 +1006,53 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("purge stale agent_turn jobs (terminal blocked recovery resumes): %w", err)
 	}
 
+	// Condition 5d: if a user kickoff message already has a terminal turn
+	// recorded, it should not remain pending. These stale pending kickoff rows
+	// can keep blocked task sessions looking live even after the execution and
+	// dispatch job have already settled.
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE chat_message cm
+		SET status = 'failed',
+		    error_message = 'superseded stale pending message after terminal turn',
+		    updated_at = now()
+		WHERE cm.role = 'user'
+		  AND cm.status = 'pending'
+		  AND EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    WHERE ct.trigger_message_id = cm.id
+		      AND ct.status IN ('completed', 'cancelled', 'failed')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn live
+		    WHERE live.trigger_message_id = cm.id
+		      AND live.status IN ('pending', 'in_progress')
+		  )
+	`); err != nil {
+		return 0, fmt.Errorf("fail stale pending kickoff messages (terminal turns): %w", err)
+	}
+
+	// Condition 5e: pending tool_result rows tied to already-terminal turns are
+	// equally stale and should be retired so later session-close cleanup sees a
+	// fully terminal task lane.
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE chat_message cm
+		SET status = 'failed',
+		    error_message = 'superseded stale pending tool_result after terminal turn',
+		    updated_at = now()
+		WHERE cm.role = 'tool_result'
+		  AND cm.status = 'pending'
+		  AND EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    WHERE ct.id = cm.turn_id
+		      AND ct.status IN ('completed', 'cancelled', 'failed')
+		  )
+	`); err != nil {
+		return 0, fmt.Errorf("fail stale pending tool_result messages (terminal turns): %w", err)
+	}
+
 	// Condition 6: if the exact session/message/retry attempt already has a
 	// live pending/in-progress turn recorded, keep exactly one backing
 	// dispatch job for that live attempt and dead-letter only true duplicates.
@@ -1317,6 +1364,33 @@ func (w *Worker) RequeueStrandedUserMessageTurns(ctx context.Context) (int64, er
 		var messageID uuid.UUID
 		if err := rows.Scan(&sessionID, &messageID); err != nil {
 			return repaired, fmt.Errorf("scan stranded user message turn: %w", err)
+		}
+		var blockedValidationLoop bool
+		if err := w.pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM chat_session cs
+				JOIN project_task pt ON pt.id = cs.scope_id
+				WHERE cs.id = $1
+				  AND cs.scope_type = 'project_task'
+				  AND lower(trim(pt.work_status)) = 'blocked'
+				  AND COALESCE((pt.metadata->'agent_turn_validation_guard'->>'blocked')::boolean, false)
+			)
+		`, sessionID).Scan(&blockedValidationLoop); err != nil {
+			return repaired, fmt.Errorf("check blocked validation loop stranded user message for session %s: %w", sessionID, err)
+		}
+		if blockedValidationLoop {
+			if _, err := w.pool.Exec(ctx, `
+				UPDATE chat_message
+				SET status = 'failed',
+				    error_message = 'blocked validation loop already settled; do not requeue stranded user message'
+				WHERE id = $1
+				  AND status = 'pending'
+			`, messageID); err != nil {
+				return repaired, fmt.Errorf("fail blocked validation-loop stranded user message for session %s: %w", sessionID, err)
+			}
+			repaired++
+			continue
 		}
 		retired, err := w.retireSettledProjectContinuationMessage(ctx, sessionID, messageID)
 		if err != nil {
@@ -2448,11 +2522,26 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		return uuid.Nil, false, nil
 	}
 
+	lockConn, err := w.pool.Acquire(ctx)
+	if err != nil {
+		return uuid.Nil, false, fmt.Errorf("acquire project continuation lock connection: %w", err)
+	}
+	defer lockConn.Release()
+
+	if _, err := lockConn.Exec(ctx, `SELECT pg_advisory_lock(hashtext($1::text))`, sessionID.String()); err != nil {
+		return uuid.Nil, false, fmt.Errorf("lock project continuation decision: %w", err)
+	}
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = lockConn.Exec(unlockCtx, `SELECT pg_advisory_unlock(hashtext($1::text))`, sessionID.String())
+	}()
+
 	var (
 		bootstrapStatus string
 		projectID       uuid.UUID
 	)
-	if err := w.pool.QueryRow(ctx, `
+	if err := lockConn.QueryRow(ctx, `
 		SELECT COALESCE(metadata->'project_bootstrap'->>'status', ''),
 		       CASE
 		         WHEN scope_type = 'project' THEN scope_id
@@ -2503,7 +2592,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			remainingDrafts    int
 			err                error
 		)
-		if err := w.pool.QueryRow(ctx, `
+		if err := lockConn.QueryRow(ctx, `
 			WITH latest_completed AS (
 				SELECT id, task_number, title
 				FROM project_task
@@ -2545,7 +2634,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 	var latestConsumedSameCompletedTaskMessageID uuid.UUID
 	var latestConsumedSameCompletedTaskRepoVersion string
 	if source == "project_execution_continuation" && expectedCompletedTaskID != "" {
-		err := w.pool.QueryRow(ctx, `
+		err := lockConn.QueryRow(ctx, `
 			SELECT cm.id,
 			       COALESCE(cm.metadata->>'repo_version', '')
 			FROM chat_message cm
@@ -2567,7 +2656,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		}
 	}
 	if source == "project_execution_continuation" && expectedCompletedTaskID != "" && expectedSnapshotFingerprint != "" {
-		err := w.pool.QueryRow(ctx, `
+		err := lockConn.QueryRow(ctx, `
 			SELECT cm.id,
 			       COALESCE(cm.metadata->>'repo_version', '')
 			FROM chat_message cm
@@ -2597,7 +2686,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		existingRepoVersionText         string
 		existingMessageConsumed         bool
 	)
-	err := w.pool.QueryRow(ctx, `
+	err = lockConn.QueryRow(ctx, `
 		SELECT id,
 		       COALESCE(metadata->>'completed_task_id', ''),
 		       COALESCE(metadata->>$3, ''),
@@ -2660,7 +2749,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 				return uuid.Nil, false, fmt.Errorf("check repeated project continuation successful-handoff suppression for pending message: %w", suppressErr)
 			}
 			if handoffSuppressed {
-				if _, execErr := w.pool.Exec(ctx, `
+				if _, execErr := lockConn.Exec(ctx, `
 					UPDATE chat_message
 					SET status = 'failed',
 					    error_message = $2
@@ -2672,7 +2761,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 				return uuid.Nil, true, nil
 			}
 		}
-		if _, execErr := w.pool.Exec(ctx, `
+		if _, execErr := lockConn.Exec(ctx, `
 			UPDATE chat_message
 			SET status = 'failed',
 			    error_message = CASE
@@ -2722,17 +2811,32 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		return uuid.Nil, false, fmt.Errorf("marshal project continuation metadata: %w", err)
 	}
 
-	message, err := repo.NewChatMessageRepo(w.pool).Create(ctx, repo.ChatMessage{
-		SessionID: sessionID,
-		Role:      "user",
-		Content:   content,
-		Status:    "pending",
-		Metadata:  metadata,
-	})
-	if err != nil {
+	var sequenceNumber int64
+	if err := lockConn.QueryRow(ctx, `
+		SELECT COALESCE(MAX(sequence_number), 0) + 1
+		FROM chat_message
+		WHERE session_id = $1
+	`, sessionID).Scan(&sequenceNumber); err != nil {
+		return uuid.Nil, false, fmt.Errorf("allocate project continuation sequence number: %w", err)
+	}
+
+	var messageID uuid.UUID
+	if err := lockConn.QueryRow(ctx, `
+		INSERT INTO chat_message (
+			session_id,
+			sequence_number,
+			role,
+			content,
+			content_format,
+			status,
+			metadata
+		)
+		VALUES ($1, $2, 'user', $3, 'text', 'pending', $4::jsonb)
+		RETURNING id
+	`, sessionID, sequenceNumber, content, metadata).Scan(&messageID); err != nil {
 		return uuid.Nil, false, fmt.Errorf("create project continuation message: %w", err)
 	}
-	return message.ID, false, nil
+	return messageID, false, nil
 }
 
 func (w *Worker) suppressRepeatedIdenticalProjectContinuation(ctx context.Context, messageID uuid.UUID, allowSuccessfulHandoffSuppression bool) (bool, error) {
@@ -6395,6 +6499,49 @@ func (w *Worker) CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ctx co
 		  AND status IN ('pending', 'in_progress')
 	`, agentTurnJobType); err != nil {
 		return 0, fmt.Errorf("cancel blocked project_task session turns without live execution: %w", err)
+	}
+
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE chat_message
+		SET status = 'failed',
+		    error_message = 'session_closed'
+		WHERE session_id IN (
+			SELECT cs.id
+			FROM chat_session cs
+			JOIN project_task pt ON pt.id = cs.scope_id
+			WHERE cs.status = 'active'
+			  AND cs.mode = 'async'
+			  AND cs.scope_type = 'project_task'
+			  AND pt.work_status = 'blocked'
+			  AND EXISTS (
+			    SELECT 1
+			    FROM flow_node_execution fne_terminal
+			    WHERE fne_terminal.session_id = cs.id
+			      AND fne_terminal.status IN ('abandoned', 'rejected')
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM flow_node_execution fne_active
+			    WHERE fne_active.session_id = cs.id
+			      AND fne_active.status = 'active'
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM chat_turn ct
+			    WHERE ct.session_id = cs.id
+			      AND ct.status IN ('pending', 'in_progress')
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM job_queue jq
+			    WHERE jq.job_type = $1
+			      AND jq.status IN ('pending', 'claimed')
+			      AND (jq.payload->>'session_id')::uuid = cs.id
+			  )
+		)
+		  AND status IN ('pending', 'streaming')
+	`, agentTurnJobType); err != nil {
+		return 0, fmt.Errorf("fail blocked project_task pending messages without live execution: %w", err)
 	}
 
 	ct, err := w.pool.Exec(ctx, `

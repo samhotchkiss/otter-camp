@@ -372,3 +372,18 @@ They need sharper stopping rules than ordinary execution lanes.
     - rebuilt/restarted on `repo_version=3641`
     - fresh live canaries for tasks `160`, `180`, `182`, `189`, and `195` immediately flipped their leaked execution rows to `abandoned`
     - the remaining straggler sessions then closed on the next cleanup interval, confirming this slice fixes the leak without widening the terminal-stop semantics further
+- 2026-03-29 19:54 MDT - The next adjacent supervisory stop seam was above session closeout: multiple worker repair paths were racing `ensureProjectContinuationMessageDecision(...)` for the same PM session after repeated rediscovery-blocked turns.
+  - fresh live evidence before the fix:
+    - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` accumulated a stack of identical `project_execution_continuation` user messages with the same `completed_task_id=5a83aa54-9762-4eb3-bec8-667cbe1c934b`, `repo_version=3648`, and `continuation_snapshot_fingerprint=11a60b5f6dfd5f9b`
+    - turns `ad5ae86e`, `30a62796`, `6d07d50f`, `0a069bdb`, and `b446a0fc` each ended `validation_loop_blocked` on the rediscovery guard with no successful `task.create`, `task.update`, or `flow.review_decision`, yet the worker kept minting more identical continuations
+  - local/live fix:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now serializes the full project-continuation decision/create path on a session-scoped advisory lock and inserts the continuation message on that same locked connection
+    - this closes the race between multiple repair paths that could previously all decide “create continuation” before any pending message was visible to the others
+    - added focused integration coverage in [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go) with `TestJobWorkerEnsureProjectContinuationMessageDecisionSerializesConcurrentCreation`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(EnsureProjectContinuationMessageDecisionSerializesConcurrentCreation|RequeueStrandedUserMessageTurns(SkipsBlockedValidationLoopTaskSession|RetiresSettledProjectContinuation|IgnoresNewerFailedAssistantStub)?|PurgeStaleAgentTurnJobs(FailsConsumedPendingMessagesForTerminalTurn|RemovesTerminalMessageAttemptDispatches)|CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(FailsPendingMessagesForTerminalBlockedSession|AbandonsTerminalInheritedSharedExecution|ClosesRejectedExecution|SkipsPendingAgentTurn|SkipsRepairedTerminalRecoveryResume)|EnsureProjectContinuationMessageSuppressesRepeatedConsumed(RediscoveryBlockedContinuation|TaskLaneBoundaryContinuation|BoundedSizeContinuation))$' -count=1`
+  - deploy / proof status:
+    - rebuilt/restarted worker on `repo_version=3648`
+    - the duplicate continuation pile drained to failed terminal messages instead of growing
+    - the final PM turn `e0fb59d1-8685-4dee-8cd5-7bd10f961bb7` then made real progress by creating/queueing tasks `198` and `199`
+    - steady state after that turn: `0` pending `project_execution_continuation` messages on the PM session and no new duplicate same-fingerprint continuation fan-out

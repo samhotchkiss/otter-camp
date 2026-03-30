@@ -773,3 +773,13 @@
   - impact:
     - malformed duplicate full-file children kept reopening forever even though the runtime already had a terminal checkpoint reason telling it the lane should stay blocked
     - this was still a manual-test blocker because the blocked-task resume layer could override earlier worker/session suppressors
+- 2026-03-29 19:54 MDT - PM continuation suppression still had a race even after the repeated-rediscovery blocker logic existed.
+  - fresh live evidence:
+    - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` accumulated many identical `project_execution_continuation` user messages with the same `completed_task_id=5a83aa54-9762-4eb3-bec8-667cbe1c934b` and `continuation_snapshot_fingerprint=11a60b5f6dfd5f9b`
+    - turns `ad5ae86e`, `30a62796`, `6d07d50f`, `0a069bdb`, and `b446a0fc` all ended `validation_loop_blocked` on the rediscovery guard with no successful PM mutation, yet the worker still minted more identical continuations
+  - bug:
+    - `ensureProjectContinuationMessageDecision(...)` only serialized the final message insert indirectly; the broader “do I need a continuation?” decision was still happening concurrently in multiple worker repair paths
+    - that let several repair loops all decide to create a fresh continuation before any pending PM message became visible to the others
+  - impact:
+    - the PM lane could spin on identical same-fingerprint rediscovery continuations even after the repeated-block suppressor existed
+    - this was a direct manual-test blocker because the project session looked alive but kept paying for duplicated PM turns instead of settling or making bounded progress
