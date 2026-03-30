@@ -4733,3 +4733,13 @@
     - added `TestBuildProjectExecutionContinuationPromptForWorkerTreatsWorkspaceDeliverableAsCloseout`
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(BuildProjectExecutionContinuation(PromptForWorkerTreatsWorkspaceDeliverableAsCloseout|ParentAdvanceRetryPromptForWorker)|ProjectContinuationTurnCloseoutReadyTaskLabel(FallsBackToPromptFocusParent)?|ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|JobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation)$' -count=1`
+- 2026-03-31 07:52 MDT - Restored worker snapshot parity with the engine for closeout-ready on-disk deliverables.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - worker snapshots now run a workspace-deliverable evidence pass using project compatibility roots
+    - draft parents with substantive on-disk deliverables now set `workspace_deliverable_present=true` in worker task refs
+    - worker closeout classification is now task-aware, so draft parents with only terminal blocked/cancelled child lanes can still surface as actionable closeout parents when the deliverable body already exists
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerProjectExecutionContinuationSnapshotTreatsWorkspaceDeliverableParentAsActionableDraft`
+    - added `TestJobWorkerEnsureProjectContinuationMessageTreatsWorkspaceDeliverableParentAsCloseout`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(JobWorkerProjectExecutionContinuationSnapshotTreats(WorkspaceDeliverableParentAsActionableDraft|CloseoutReadyParentAsActionableDraft)|JobWorkerEnsureProjectContinuationMessageTreatsWorkspaceDeliverableParentAsCloseout|BuildProjectExecutionContinuationPromptForWorkerTreatsWorkspaceDeliverableAsCloseout|ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|ProjectContinuationTurnCloseoutReadyTaskLabelFallsBackToPromptFocusParent)$' -count=1`

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
+	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
 const (
@@ -3815,6 +3817,7 @@ type projectContinuationChildActivityForWorker struct {
 	malformedChildTaskCount          int
 	replaceableBlockedChildTaskCount int
 	completedCloseoutChildTaskCount  int
+	workspaceDeliverablePresent      bool
 }
 
 func projectContinuationCountsAsOpenChildTaskForWorker(status string) bool {
@@ -3831,7 +3834,11 @@ func isProjectContinuationActionableDraftTaskForWorker(task repo.ProjectTask, ac
 }
 
 func projectContinuationDraftTaskNeedsFreshReplacementChildWorkForWorker(activity projectContinuationChildActivityForWorker) bool {
-	if projectContinuationDraftTaskReadyForParentClosureForWorker(activity) {
+	return projectContinuationDraftTaskNeedsFreshReplacementChildWorkForWorkerTask(repo.ProjectTask{}, activity)
+}
+
+func projectContinuationDraftTaskNeedsFreshReplacementChildWorkForWorkerTask(task repo.ProjectTask, activity projectContinuationChildActivityForWorker) bool {
+	if projectContinuationDraftTaskReadyForParentClosureForWorkerTask(task, activity) {
 		return false
 	}
 	if activity.activeChildTaskCount != 0 {
@@ -3846,7 +3853,19 @@ func projectContinuationDraftTaskNeedsFreshReplacementChildWorkForWorker(activit
 }
 
 func projectContinuationDraftTaskReadyForParentClosureForWorker(activity projectContinuationChildActivityForWorker) bool {
-	if activity.completedCloseoutChildTaskCount == 0 || activity.activeChildTaskCount != 0 {
+	return projectContinuationDraftTaskReadyForParentClosureForWorkerTask(repo.ProjectTask{}, activity)
+}
+
+func projectContinuationDraftTaskReadyForParentClosureForWorkerTask(task repo.ProjectTask, activity projectContinuationChildActivityForWorker) bool {
+	if activity.activeChildTaskCount != 0 {
+		return false
+	}
+	if activity.workspaceDeliverablePresent &&
+		(activity.malformedChildTaskCount > 0 ||
+			(activity.childTaskCount > 0 && activity.childTaskCount == activity.blockedChildTaskCount)) {
+		return true
+	}
+	if activity.completedCloseoutChildTaskCount == 0 && !projectContinuationDraftTaskOutcomeSatisfiedForWorker(task) {
 		return false
 	}
 	return activity.childTaskCount == 0 || activity.childTaskCount == activity.blockedChildTaskCount
@@ -4121,7 +4140,10 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 	if err != nil {
 		return snapshot, err
 	}
-	childActivity := projectContinuationChildTaskActivityForWorker(projectTasks, taskHintsByTask)
+	childActivity, err := w.projectContinuationChildActivity(ctx, projectID, projectTasks, taskHintsByTask)
+	if err != nil {
+		return snapshot, err
+	}
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDsForWorker(projectTasks)
 	activeTasks := make([]string, 0, 4)
 	completedTasks := make([]string, 0, 4)
@@ -4144,7 +4166,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 		hints := taskHintsByTask[task.ID]
 		if _, superseded := supersededDraftTaskIDs[task.ID]; superseded {
 			if isActionableProjectDraftTaskForWorker(task) &&
-				!projectContinuationDraftTaskNeedsFreshReplacementChildWorkForWorker(activity) &&
+				!projectContinuationDraftTaskNeedsFreshReplacementChildWorkForWorkerTask(task, activity) &&
 				projectContinuationDraftTaskHasExistingChildWorkForWorker(activity) &&
 				len(childActiveDraftTasks) < 4 {
 				childActiveDraftTasks = append(childActiveDraftTasks, projectExecutionContinuationTaskRefForWorker(task, activity, hints))
@@ -4159,7 +4181,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 			continue
 		}
 		if isActionableProjectDraftTaskForWorker(task) {
-			if projectContinuationDraftTaskReadyForParentClosureForWorker(activity) {
+			if projectContinuationDraftTaskReadyForParentClosureForWorkerTask(task, activity) {
 				if len(draftTasks) < 4 {
 					draftTasks = append(draftTasks, taskRef)
 				}
@@ -4169,7 +4191,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 				continue
 			}
 			if activity.childTaskCount > 0 || activity.malformedChildTaskCount > 0 {
-				if projectContinuationDraftTaskNeedsFreshReplacementChildWorkForWorker(activity) {
+				if projectContinuationDraftTaskNeedsFreshReplacementChildWorkForWorkerTask(task, activity) {
 					if len(replacementDraftTasks) < 4 {
 						replacementDraftTasks = append(replacementDraftTasks, taskRef)
 					}
@@ -4223,6 +4245,165 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 		snapshot.FocusTaskLine = "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: " + focusTask
 	}
 	return snapshot, nil
+}
+
+func (w *Worker) projectContinuationChildActivity(
+	ctx context.Context,
+	projectID uuid.UUID,
+	projectTasks []repo.ProjectTask,
+	taskHintsByTask map[uuid.UUID]projectContinuationTaskHintsForWorker,
+) (map[uuid.UUID]projectContinuationChildActivityForWorker, error) {
+	childActivity := projectContinuationChildTaskActivityForWorker(projectTasks, taskHintsByTask)
+	if w == nil || w.pool == nil || len(projectTasks) == 0 {
+		return childActivity, nil
+	}
+	evidenceByTaskID, err := w.projectContinuationWorkspaceDeliverableEvidence(ctx, projectID, projectTasks, taskHintsByTask)
+	if err != nil {
+		return nil, err
+	}
+	for taskID := range evidenceByTaskID {
+		activity := childActivity[taskID]
+		activity.workspaceDeliverablePresent = true
+		childActivity[taskID] = activity
+	}
+	return childActivity, nil
+}
+
+func (w *Worker) projectContinuationWorkspaceDeliverableEvidence(
+	ctx context.Context,
+	projectID uuid.UUID,
+	projectTasks []repo.ProjectTask,
+	taskHintsByTask map[uuid.UUID]projectContinuationTaskHintsForWorker,
+) (map[uuid.UUID]struct{}, error) {
+	if w == nil || w.pool == nil || len(projectTasks) == 0 {
+		return nil, nil
+	}
+	if projectID == uuid.Nil {
+		projectID = projectTasks[0].ProjectID
+	}
+	if projectID == uuid.Nil {
+		return nil, nil
+	}
+	projectRecord, err := repo.NewProjectRepo(w.pool).GetByID(ctx, projectID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	roots, err := w.projectWorkspaceRoots(ctx, projectRecord)
+	if err != nil {
+		return nil, err
+	}
+	if len(roots) == 0 {
+		return nil, nil
+	}
+	var evidence map[uuid.UUID]struct{}
+	cache := make(map[string]bool)
+	for _, task := range projectTasks {
+		if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+			continue
+		}
+		hints := taskHintsByTask[task.ID]
+		deliverablePath := normalizeWorkspaceRelativePathForWorker(hints.DeliverablePath)
+		if deliverablePath == "" {
+			continue
+		}
+		present, ok := cache[deliverablePath]
+		if !ok {
+			present = projectContinuationWorkspaceDeliverablePresentForTaskForWorker(task, deliverablePath, roots)
+			cache[deliverablePath] = present
+		}
+		if !present {
+			continue
+		}
+		if evidence == nil {
+			evidence = make(map[uuid.UUID]struct{})
+		}
+		evidence[task.ID] = struct{}{}
+	}
+	return evidence, nil
+}
+
+func (w *Worker) projectWorkspaceRoots(ctx context.Context, projectRecord repo.Project) ([]string, error) {
+	projectRoot, err := workspace.ProjectRoot("", projectRecord.Slug)
+	if err != nil {
+		return nil, err
+	}
+	if w == nil || w.pool == nil || projectRecord.OrganizationID == uuid.Nil {
+		return []string{projectRoot}, nil
+	}
+	orgRecord, err := repo.NewOrgRepo(w.pool).GetByID(ctx, projectRecord.OrganizationID)
+	if err != nil {
+		return []string{projectRoot}, nil
+	}
+	roots, err := workspace.ProjectCompatibilityRoots("", orgRecord.Slug, projectRecord.Slug)
+	if err != nil {
+		return nil, err
+	}
+	if len(roots) == 0 {
+		return []string{projectRoot}, nil
+	}
+	return roots, nil
+}
+
+func projectContinuationWorkspaceDeliverablePresentForTaskForWorker(task repo.ProjectTask, deliverablePath string, roots []string) bool {
+	for _, root := range roots {
+		content, ok := readProjectContinuationWorkspaceFileForWorker(root, deliverablePath)
+		if !ok {
+			continue
+		}
+		if projectContinuationWorkspaceDeliverableLooksSubstantiveForWorker(task, deliverablePath, content) {
+			return true
+		}
+	}
+	return false
+}
+
+func readProjectContinuationWorkspaceFileForWorker(root, relPath string) (string, bool) {
+	normalizedRoot := strings.TrimSpace(root)
+	normalizedPath := normalizeWorkspaceRelativePathForWorker(relPath)
+	if normalizedRoot == "" || normalizedPath == "" {
+		return "", false
+	}
+	absPath := filepath.Join(normalizedRoot, filepath.FromSlash(normalizedPath))
+	info, err := os.Stat(absPath)
+	if err != nil || info.IsDir() || info.Size() <= 0 {
+		return "", false
+	}
+	file, err := os.Open(absPath)
+	if err != nil {
+		return "", false
+	}
+	defer file.Close()
+	const maxRead = 64 * 1024
+	payload, err := io.ReadAll(io.LimitReader(file, maxRead))
+	if err != nil {
+		return "", false
+	}
+	return string(payload), true
+}
+
+func projectContinuationWorkspaceDeliverableLooksSubstantiveForWorker(_ repo.ProjectTask, targetPath, content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || len(trimmed) < 240 || strings.ContainsRune(trimmed, '\x00') {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	switch {
+	case strings.Contains(lower, "the deliverable is complete. the runtime will advance the flow"):
+		return false
+	case strings.Contains(lower, "this is a mismatched_deliverable_context"):
+		return false
+	case strings.Contains(lower, "the file content is clearly not a valid deliverable"):
+		return false
+	case strings.Contains(lower, "the reviewer assessment"):
+		return false
+	case strings.Contains(lower, "review decision"):
+		return false
+	}
+	_ = targetPath
+	return true
 }
 
 func projectContinuationRelevantCompletedBatchFamiliesForWorker(
@@ -4929,6 +5110,12 @@ func projectExecutionContinuationTaskRefForWorker(task repo.ProjectTask, activit
 	}
 	if task.RequiresHumanReview {
 		parts = append(parts, "requires_human_review=true")
+	}
+	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") && projectContinuationDraftTaskOutcomeSatisfiedForWorker(task) {
+		parts = append(parts, "outcome_satisfied=true")
+	}
+	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") && activity.workspaceDeliverablePresent {
+		parts = append(parts, "workspace_deliverable_present=true")
 	}
 	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
 		if hints.ResumePolicy != "" {

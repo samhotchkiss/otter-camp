@@ -805,3 +805,13 @@ They need sharper stopping rules than ordinary execution lanes.
     - added focused regression `TestBuildProjectExecutionContinuationPromptForWorkerTreatsWorkspaceDeliverableAsCloseout` in [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(BuildProjectExecutionContinuation(PromptForWorkerTreatsWorkspaceDeliverableAsCloseout|ParentAdvanceRetryPromptForWorker)|ProjectContinuationTurnCloseoutReadyTaskLabel(FallsBackToPromptFocusParent)?|ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|JobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation)$' -count=1`
+- 2026-03-31 07:52 MDT - Closed the last worker-side gap in that supervisory family: snapshot parity for on-disk closeout parents.
+  - fresh live evidence:
+    - worker continuation `422ede58-e7de-4ab2-a5a8-747fb07d9610` still collapsed to the generic PM header because the worker snapshot never surfaced `workspace_deliverable_present=true` for the already-written parent deliverable
+  - landed fix:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now computes workspace-deliverable evidence during worker snapshot assembly and uses task-aware closeout classification, so the closeout-ready parent stays visible in the worker-authored retry prompt
+    - added focused regressions:
+      - `TestJobWorkerProjectExecutionContinuationSnapshotTreatsWorkspaceDeliverableParentAsActionableDraft`
+      - `TestJobWorkerEnsureProjectContinuationMessageTreatsWorkspaceDeliverableParentAsCloseout`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(JobWorkerProjectExecutionContinuationSnapshotTreats(WorkspaceDeliverableParentAsActionableDraft|CloseoutReadyParentAsActionableDraft)|JobWorkerEnsureProjectContinuationMessageTreatsWorkspaceDeliverableParentAsCloseout|BuildProjectExecutionContinuationPromptForWorkerTreatsWorkspaceDeliverableAsCloseout|ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|ProjectContinuationTurnCloseoutReadyTaskLabelFallsBackToPromptFocusParent)$' -count=1`

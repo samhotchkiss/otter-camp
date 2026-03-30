@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +20,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
+	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
 func TestJobWorkerProcessesEnqueuedJobs(t *testing.T) {
@@ -25961,6 +25964,168 @@ func TestProjectContinuationTurnCloseoutReadyTaskLabelFallsBackToPromptFocusPare
 	}
 }
 
+func TestJobWorkerEnsureProjectContinuationMessageTreatsWorkspaceDeliverableParentAsCloseout(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	dataDir := t.TempDir()
+	t.Setenv("OTTERCAMP_DATA_DIR", dataDir)
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "ensure-project-continuation-workspace-closeout",
+		DisplayName: "Ensure Project Continuation Workspace Closeout",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "ensure-project-continuation-workspace-closeout-project",
+		DisplayName:    "Ensure Project Continuation Workspace Closeout Project",
+		Description:    "Project for workspace deliverable closeout continuation coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot("", project.Slug)
+	if err != nil {
+		t.Fatalf("workspace.ProjectRoot: %v", err)
+	}
+	targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash("planning/sambot-tech-architecture.md"))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir workspace dir: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(strings.Repeat("SamBot architecture decisions and deployment details.\n", 12)), 0o644); err != nil {
+		t.Fatalf("write workspace deliverable: %v", err)
+	}
+
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "ensure-project-continuation-workspace-closeout-template",
+		DisplayName:    "Ensure Project Continuation Workspace Closeout Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     84,
+		Title:          "Build HTML layout template 8 of 10 (Editorial Longform)",
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	}); err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	parentDescription := "Write planning/sambot-tech-architecture.md with the final SamBot architecture details."
+	focusTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      245,
+		Title:           "Write planning/sambot-tech-architecture.md",
+		Description:     &parentDescription,
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &agent.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create focus task: %v", err)
+	}
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": focusTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     257,
+		Title:          "System overview section",
+		WorkStatus:     "blocked",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+		Metadata:       childMetadata,
+	}); err != nil {
+		t.Fatalf("create blocked child: %v", err)
+	}
+
+	messageID, suppressed, err := worker.ensureProjectContinuationMessageDecision(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ensureProjectContinuationMessageDecision: %v", err)
+	}
+	if suppressed {
+		t.Fatal("suppressed = true, want fresh continuation message")
+	}
+	if messageID == uuid.Nil {
+		t.Fatal("messageID = nil, want fresh continuation message")
+	}
+
+	var prompt string
+	if err := pool.QueryRow(ctx, `SELECT content FROM chat_message WHERE id = $1`, messageID).Scan(&prompt); err != nil {
+		t.Fatalf("query continuation prompt: %v", err)
+	}
+	if !strings.Contains(prompt, "already closeout-ready for the same deliverable") {
+		t.Fatalf("prompt = %q, want closeout-ready wording", prompt)
+	}
+	focusLabel := fmt.Sprintf("task %d (Write planning/sambot-tech-architecture.md)", focusTask.TaskNumber)
+	if !strings.Contains(prompt, "Current focus parent: "+focusLabel) {
+		t.Fatalf("prompt = %q, want focused parent reference", prompt)
+	}
+	if !strings.Contains(prompt, "advance or close "+focusLabel) {
+		t.Fatalf("prompt = %q, want direct parent advance instruction", prompt)
+	}
+	if strings.Contains(prompt, "Recently completed work may have unlocked the next wave of bounded tasks.") {
+		t.Fatalf("prompt = %q, should not fall back to generic continuation wording", prompt)
+	}
+}
+
 func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -33343,6 +33508,140 @@ func TestJobWorkerProjectExecutionContinuationSnapshotTreatsCloseoutReadyParentA
 	}
 	if !strings.Contains(snapshot.FocusTaskLine, "completed_closeout_child_tasks=1") {
 		t.Fatalf("snapshot = %+v, want focus closeout marker", snapshot)
+	}
+}
+
+func TestJobWorkerProjectExecutionContinuationSnapshotTreatsWorkspaceDeliverableParentAsActionableDraft(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	dataDir := t.TempDir()
+	t.Setenv("OTTERCAMP_DATA_DIR", dataDir)
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "worker-project-snapshot-workspace-closeout",
+		DisplayName: "Worker Project Snapshot Workspace Closeout",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "worker-project-snapshot-workspace-closeout-project",
+		DisplayName:    "Worker Project Snapshot Workspace Closeout Project",
+		Description:    "Project for workspace closeout-ready PM snapshot coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot("", project.Slug)
+	if err != nil {
+		t.Fatalf("workspace.ProjectRoot: %v", err)
+	}
+	targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash("planning/sambot-tech-architecture.md"))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir workspace dir: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(strings.Repeat("SamBot architecture decisions and deployment details.\n", 12)), 0o644); err != nil {
+		t.Fatalf("write workspace deliverable: %v", err)
+	}
+
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "worker-project-snapshot-workspace-closeout-template",
+		DisplayName:    "Worker Project Snapshot Workspace Closeout Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentDescription := "Write planning/sambot-tech-architecture.md with the final SamBot architecture details."
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      245,
+		Title:           "Write planning/sambot-tech-architecture.md",
+		Description:     &parentDescription,
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &agent.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	for _, child := range []struct {
+		number int
+		title  string
+		status string
+	}{
+		{257, "System overview section", "blocked"},
+		{258, "Prompt engineering section", "cancelled"},
+	} {
+		if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+			OrganizationID: org.ID,
+			ProjectID:      project.ID,
+			TaskNumber:     child.number,
+			Title:          child.title,
+			WorkStatus:     child.status,
+			BlocksScope:    "task",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "system",
+			CreatedByID:    &agent.ID,
+			Metadata:       childMetadata,
+		}); err != nil {
+			t.Fatalf("create child %d: %v", child.number, err)
+		}
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	parentLabel := fmt.Sprintf("task %d (Write planning/sambot-tech-architecture.md)", parentTask.TaskNumber)
+	if !strings.Contains(snapshot.DraftTaskLine, parentLabel) {
+		t.Fatalf("snapshot = %+v, want parent %d in actionable draft line", snapshot, parentTask.TaskNumber)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, parentLabel) {
+		t.Fatalf("snapshot = %+v, want parent %d as focus task", snapshot, parentTask.TaskNumber)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "workspace_deliverable_present=true") {
+		t.Fatalf("snapshot = %+v, want workspace deliverable marker on focus task", snapshot)
+	}
+	if strings.Contains(snapshot.ReplacementDraftLine, parentLabel) {
+		t.Fatalf("snapshot = %+v, should not keep parent 245 in replacement bucket", snapshot)
 	}
 }
 

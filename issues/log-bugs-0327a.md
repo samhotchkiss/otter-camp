@@ -1404,3 +1404,11 @@
     - it did not give `workspace_deliverable_present=true` higher precedence at the top-level routing decision, even though the replacement-handoff sub-builder itself already knew that on-disk deliverables are closeout/verification work
   - impact:
     - worker-authored PM continuations can keep reopening replacement-child loops for an already-written deliverable even after the focus label is preserved
+- 2026-03-31 07:52 MDT - Worker PM snapshots still lacked engine-parity for on-disk deliverable evidence.
+  - fresh live evidence:
+    - continuation `422ede58-e7de-4ab2-a5a8-747fb07d9610` reduced to the generic PM header even though the closeout-ready parent had already been identified in the project lane
+  - bug:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) built project-continuation snapshots from child-task activity alone
+    - unlike the engine path, it never scanned the project workspace for substantive deliverable bodies, never set `workspace_deliverable_present=true`, and still used the older activity-only closeout check that required a completed closeout child or satisfied outcome
+  - impact:
+    - worker-authored PM continuations can forget a closeout-ready parent that the engine already knows is on disk, dropping the focus line and reopening broad rediscovery before the turn even starts
