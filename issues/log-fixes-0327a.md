@@ -5124,3 +5124,24 @@
     - added `TestExtractDeliverablesIgnoresSuggestedTopicSections`
   - verified with:
     - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(ApplyChildSourceDescriptionSetsDecompositionSourceDescription|PrepareQueueDecompositionCarriesSourceDescriptionToPrimaryChild|TaskLooksProceduralInstructionArtifact|ExtractDeliverablesIgnores(ProceduralChecklistFragments|ConversationRequirementFragments|InstructionOnlyRequirementLines|SuggestedTopicSections))$' -count=1`
+- 2026-03-30 15:05 MDT - Suppressed inherited shared-file topic children from PM continuation snapshots.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `projectContinuationMalformedChildTaskIDs(...)` now also ignores inherited shared-file topic children that:
+      - inherit a file-like parent deliverable
+      - do not name a bounded section target
+      - do not name a different explicit artifact
+      - do not contain a standalone visible write verb
+    - added `projectContinuationMalformedInheritedSharedFileTopicChild(...)`
+    - added `taskHasStandaloneVisibleFileAction(...)`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - added the worker-side equivalents:
+      - `projectContinuationMalformedInheritedSharedFileTopicChildForWorker(...)`
+      - `taskHasStandaloneVisibleFileActionForWorker(...)`
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+      - added `TestProjectExecutionContinuationSnapshotIgnoresMalformedInheritedSharedFileTopicChildren`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+      - added `TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedInheritedSharedFileTopicChildren`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshotIgnoresMalformed(InheritedSharedFileTopicChildren|DuplicateSharedFileChildrenUsingSourceDescriptionOnly|ChecklistFragmentChildren|ReferenceOnlyChildren|ProceduralChildren)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformed(InheritedSharedFileTopicChildren|ChecklistFragmentChildren|ReferenceOnlyChildren|ProceduralChildren|DuplicateSharedFileChildren)$' -count=1`

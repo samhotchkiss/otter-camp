@@ -5234,6 +5234,7 @@ func projectContinuationMalformedChildTaskIDsForWorker(tasks []repo.ProjectTask)
 		if !projectContinuationParentForbidsDecompositionForWorker(parentTask) &&
 			!taskdecomp.TaskLooksProceduralInstructionArtifact(task.Title, task.Description) &&
 			!projectContinuationMalformedDuplicateSharedFileChildForWorker(task, parentTask) &&
+			!projectContinuationMalformedInheritedSharedFileTopicChildForWorker(task, parentTask) &&
 			!projectContinuationMalformedConflictingDeliverableChildForWorker(task, parentTask) {
 			continue
 		}
@@ -5255,6 +5256,23 @@ func projectContinuationMalformedDuplicateSharedFileChildForWorker(task, parentT
 		return false
 	}
 	return taskClaimsWholeSharedFileOwnershipForWorker(task, parentPath)
+}
+
+func projectContinuationMalformedInheritedSharedFileTopicChildForWorker(task, parentTask repo.ProjectTask) bool {
+	parentPath := taskDuplicateSharedFileDeliverablePathForWorker(parentTask)
+	if parentPath == "" || !strings.Contains(filepath.Base(parentPath), ".") {
+		return false
+	}
+	if recoveryResumeSharedSectionTargetForWorker(task, parentPath) != "" || taskClaimsWholeSharedFileOwnershipForWorker(task, parentPath) {
+		return false
+	}
+	if visiblePath := taskVisibleBriefDeliverablePathForWorker(task); visiblePath != "" && !sameWorkspaceRelativePathForWorker(visiblePath, parentPath) {
+		return false
+	}
+	if sourcePath := taskDecompositionSourceDeliverablePathForWorker(task); sourcePath != "" && !sameWorkspaceRelativePathForWorker(sourcePath, parentPath) {
+		return false
+	}
+	return !taskHasStandaloneVisibleFileActionForWorker(task)
 }
 
 func projectContinuationPreferredSameDeliverableDraftChildForWorker(tasks []repo.ProjectTask) repo.ProjectTask {
@@ -5413,6 +5431,26 @@ func containsStandaloneActionWordForWorker(text, action string) bool {
 	for _, field := range strings.Fields(strings.ToLower(text)) {
 		candidate := strings.Trim(field, ".,:;!?()[]{}<>\"'`")
 		if candidate == normalizedAction {
+			return true
+		}
+	}
+	return false
+}
+
+func taskHasStandaloneVisibleFileActionForWorker(taskRecord repo.ProjectTask) bool {
+	description := ""
+	if taskRecord.Description != nil {
+		description = strings.TrimSpace(*taskRecord.Description)
+	}
+	text := strings.ToLower(strings.Join(strings.Fields(strings.Join([]string{
+		strings.TrimSpace(taskRecord.Title),
+		description,
+	}, " ")), " "))
+	if text == "" {
+		return false
+	}
+	for _, action := range []string{"write", "create", "draft", "produce", "add", "update", "edit", "append"} {
+		if containsStandaloneActionWordForWorker(text, action) {
 			return true
 		}
 	}

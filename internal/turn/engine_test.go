@@ -25458,6 +25458,67 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFile
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotIgnoresMalformedInheritedSharedFileTopicChildren(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	parentDescription := "Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn SamBot test conversations."
+	childDescription := "Building Production ML Pipelines - real-world MLOps challenges, model serving, monitoring."
+	childID := uuid.New()
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:          parentDraftID,
+				ProjectID:   projectID,
+				TaskNumber:  303,
+				Title:       "Write planning/sambot-prompts/test-conversations-level3.md",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"applied":             true,
+						"mode":                "parallel_children",
+						"orchestration_only":  true,
+						"source_description":  parentDescription,
+						"primary_deliverable": "planning/sambot-prompts/test-conversations-level3.md",
+					},
+				}),
+			},
+			childID: {
+				ID:          childID,
+				ProjectID:   projectID,
+				TaskNumber:  327,
+				Title:       "Building Production ML Pipelines",
+				Description: &childDescription,
+				WorkStatus:  "draft",
+				Metadata:    mustJSONRaw(map[string]any{"decomposition_parent_task_id": parentDraftID.String()}),
+			},
+		},
+	}
+	parentTask := fixture.engine.tasks.(*fakeTaskRepo).items[parentDraftID]
+	childTask := fixture.engine.tasks.(*fakeTaskRepo).items[childID]
+	if !projectContinuationMalformedInheritedSharedFileTopicChild(childTask, parentTask) {
+		t.Fatalf("inherited shared-file topic matcher = false; parentPath=%q visiblePath=%q sourcePath=%q", taskDuplicateSharedFileDeliverablePath(parentTask), taskVisibleBriefDeliverablePath(childTask), taskDecompositionSourceDeliverablePath(childTask))
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.DraftTaskLine, "task 327") {
+		t.Fatalf("DraftTaskLine = %q, should omit malformed inherited shared-file topic child", snapshot.DraftTaskLine)
+	}
+	if strings.Contains(snapshot.FocusTaskLine, "task 327") {
+		t.Fatalf("FocusTaskLine = %q, should not focus malformed inherited shared-file topic child", snapshot.FocusTaskLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "task 303") {
+		t.Fatalf("ReplacementDraftLine = %q, want parent restored as replacement draft", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=1") {
+		t.Fatalf("ReplacementDraftLine = %q, want malformed child count", snapshot.ReplacementDraftLine)
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotIgnoresMalformedConflictingDeliverableChildren(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

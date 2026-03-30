@@ -11466,6 +11466,26 @@ func containsStandaloneActionWord(text, action string) bool {
 	return false
 }
 
+func taskHasStandaloneVisibleFileAction(taskRecord repo.ProjectTask) bool {
+	description := ""
+	if taskRecord.Description != nil {
+		description = strings.TrimSpace(*taskRecord.Description)
+	}
+	text := strings.ToLower(strings.Join(strings.Fields(strings.Join([]string{
+		strings.TrimSpace(taskRecord.Title),
+		description,
+	}, " ")), " "))
+	if text == "" {
+		return false
+	}
+	for _, action := range []string{"write", "create", "draft", "produce", "add", "update", "edit", "append"} {
+		if containsStandaloneActionWord(text, action) {
+			return true
+		}
+	}
+	return false
+}
+
 func taskSharedFileOwnershipTexts(taskRecord repo.ProjectTask) []string {
 	texts := []string{strings.TrimSpace(taskRecord.Title)}
 	if taskRecord.Description != nil {
@@ -23039,6 +23059,7 @@ func projectContinuationMalformedChildTaskIDs(tasks []repo.ProjectTask) map[uuid
 		if !projectContinuationParentForbidsDecomposition(parentTask) &&
 			!taskdecomp.TaskLooksProceduralInstructionArtifact(task.Title, task.Description) &&
 			!projectContinuationMalformedDuplicateSharedFileChild(task, parentTask) &&
+			!projectContinuationMalformedInheritedSharedFileTopicChild(task, parentTask) &&
 			!projectContinuationMalformedConflictingDeliverableChildForParent(task, parentTask) {
 			continue
 		}
@@ -23060,6 +23081,23 @@ func projectContinuationMalformedDuplicateSharedFileChild(task, parentTask repo.
 		return false
 	}
 	return taskClaimsWholeSharedFileOwnership(task, parentPath)
+}
+
+func projectContinuationMalformedInheritedSharedFileTopicChild(task, parentTask repo.ProjectTask) bool {
+	parentPath := taskDuplicateSharedFileDeliverablePath(parentTask)
+	if parentPath == "" || !strings.Contains(filepath.Base(parentPath), ".") {
+		return false
+	}
+	if recoveryResumeSharedSectionTarget(task, parentPath) != "" || taskClaimsWholeSharedFileOwnership(task, parentPath) {
+		return false
+	}
+	if visiblePath := taskVisibleBriefDeliverablePath(task); visiblePath != "" && !sameWorkspaceRelativePath(visiblePath, parentPath) {
+		return false
+	}
+	if sourcePath := taskDecompositionSourceDeliverablePath(task); sourcePath != "" && !sameWorkspaceRelativePath(sourcePath, parentPath) {
+		return false
+	}
+	return !taskHasStandaloneVisibleFileAction(task)
 }
 
 func projectContinuationMalformedConflictingDeliverableChildForParent(task, parentTask repo.ProjectTask) bool {

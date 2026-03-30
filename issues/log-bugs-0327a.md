@@ -1821,3 +1821,17 @@
   - impact:
     - PM can still waste turns on policy/checklist fragments after the earlier conversation-requirement filter
     - suggested topical guidance can spawn draft child tasks even though the real output is still a single shared file
+- 2026-03-30 15:05 MDT - PM continuation snapshots still counted inherited shared-file topic labels as runnable draft children.
+  - fresh live evidence:
+    - `OC-327` appeared in PM continuation focus after the parent level-3 shared-doc task decomposed
+    - the task lane itself immediately blocked with the existing inherited-shared-parent-file guard, proving the child did not own a bounded section or replacement artifact
+    - the child brief was only a topic label with no explicit write verb and no independent output path
+  - bug:
+    - `projectContinuationMalformedChildTaskIDs(...)` and the worker equivalent only filtered:
+      - procedural instruction fragments
+      - duplicate shared-file children that still claimed the parent’s full file
+      - conflicting deliverable children
+    - they did not filter topic-only child tasks that inherited a shared single-file parent but named no owned section or explicit artifact
+  - impact:
+    - PM can continue queueing obviously malformed shared-doc topic children even though task-lane preflight immediately blocks them
+    - this reopens replacement-child churn and burns PM continuation turns on work that should never leave the parent lane
