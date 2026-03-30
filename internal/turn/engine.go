@@ -6042,12 +6042,12 @@ func buildProjectExecutionContinuationParentCompletionRetryPrompt(
 		retryPrompt += fmt.Sprintf(" Do not reread `%s` again from the project lane.", deliverablePath)
 	}
 	if len(requiredChildLabels) > 0 {
-		retryPrompt += fmt.Sprintf(" The completion gate specifically named completed child tasks %s.", strings.Join(requiredChildLabels, ", "))
+		retryPrompt += fmt.Sprintf(" The completion gate specifically named direct child task evidence for %s.", strings.Join(requiredChildLabels, ", "))
 	}
 	if focusTask.ID != uuid.Nil {
 		retryPrompt += fmt.Sprintf(" If any required child task IDs are still unknown, use only task.list(parent_task_id=%s) once to fetch them.", focusTask.ID.String())
 	}
-	retryPrompt += fmt.Sprintf(" Your next assistant action must issue one narrow task.update for %s with child_output_verifications for the completed children, integration_check.status=passed, outcome_assessment.satisfied=true, and work_status=done.", focusLabel)
+	retryPrompt += fmt.Sprintf(" Your next assistant action must issue one narrow task.update for %s with child_output_verifications covering the concrete child or superseding outputs that already satisfy the deliverable, integration_check.status=passed, outcome_assessment.satisfied=true, and work_status=done.", focusLabel)
 	retryPrompt += " If the runtime still reports a missing child verification after that update, report that concrete missing child in one blocker sentence instead of rereading context again."
 	return retryPrompt
 }
@@ -8754,7 +8754,7 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		if strings.Contains(draftLine, "completed_closeout_child_tasks=") || strings.Contains(draftLine, "outcome_satisfied=true") {
 			lines = append(lines, "If a named draft task above already shows completed_closeout_child_tasks=... or outcome_satisfied=true, treat that parent as closeout-ready and advance or close it instead of creating another replacement child.")
 			lines = append(lines, "When closeout-ready parent evidence and completed-task batch evidence are already present, do not re-verify broad artifact roots on disk before advancing the parent unless a concrete tool error says the artifact is missing.")
-			lines = append(lines, "Before marking that closeout-ready parent done, record parent_orchestration.child_verifications for the completed child outputs, parent_orchestration.integration_check.status=passed, and parent_orchestration.outcome_assessment.satisfied=true on the parent task itself.")
+			lines = append(lines, "Before marking that closeout-ready parent done, record parent_orchestration.child_verifications for the concrete child or superseding outputs that already satisfy the deliverable, parent_orchestration.integration_check.status=passed, and parent_orchestration.outcome_assessment.satisfied=true on the parent task itself.")
 		}
 		if strings.Contains(draftLine, "workspace_deliverable_present=true") {
 			lines = append(lines, "If a named draft task above already shows workspace_deliverable_present=true, the deliverable body is already on disk. Treat that parent as a closeout/verification step, not as fresh replacement-child work.")
@@ -30132,7 +30132,7 @@ func projectExecutionBlockedMutationStopMessage(results []ToolResult) string {
 			return "[Project continuation already has a narrower focused draft task. Create or advance the smallest fresh child work beneath that focus task instead of re-queueing it or promoting its ancestors from the project lane.]"
 		}
 		if strings.Contains(errText, "parent task requires child verification and passed integration before completion") {
-			return "[Project continuation found that the closeout-ready parent still needs parent_orchestration evidence before it can finish. Record parent_orchestration.child_verifications for the completed child tasks, set parent_orchestration.integration_check.status=passed, and set parent_orchestration.outcome_assessment.satisfied=true on the parent task itself. Do not cancel blocked stale child lanes from the project session first.]"
+			return "[Project continuation found that the closeout-ready parent still needs parent_orchestration evidence before it can finish. Record parent_orchestration.child_verifications for the concrete child or superseding outputs that already satisfy the deliverable, set parent_orchestration.integration_check.status=passed, and set parent_orchestration.outcome_assessment.satisfied=true on the parent task itself. Do not cancel blocked stale child lanes from the project session first.]"
 		}
 		if strings.Contains(errText, "task_execution_required") {
 			detail := strings.TrimSpace(anyString(result.Output["message"]))
@@ -33679,6 +33679,12 @@ func buildProjectContinuationFocusedDraftReplacementGuardError(focusTask repo.Pr
 	}
 }
 
+func buildProjectContinuationMalformedChildMutationGuardError(targetTask, focusTask repo.ProjectTask) string {
+	targetLabel := projectBootstrapTaskLabel(targetTask)
+	focusLabel := projectBootstrapTaskLabel(focusTask)
+	return fmt.Sprintf("project continuation already knows %s is a malformed child artifact beneath focused draft %s. Do not re-queue or promote %s from the project lane; advance a legitimate sibling task or create the smallest fresh bounded replacement child beneath %s instead.", targetLabel, focusLabel, targetLabel, focusLabel)
+}
+
 func buildProjectContinuationFocusedDraftCloseoutTaskCreateGuardError(focusTask repo.ProjectTask) string {
 	label := projectBootstrapTaskLabel(focusTask)
 	return fmt.Sprintf("project continuation already has focused draft task %s in a closeout-ready state for the same deliverable. Do not create another replacement child beneath %s from the project lane; advance or close %s directly instead.", label, label, label)
@@ -33811,6 +33817,7 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 	if err != nil {
 		return false, ""
 	}
+	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
 	focusTask, ok := projectContinuationCurrentFocusTaskWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths)
 	if !ok {
 		return false, ""
@@ -33829,6 +33836,9 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 	targetTask, ok := tasksByID[targetTaskID]
 	if !ok {
 		return false, ""
+	}
+	if _, malformed := malformedChildTaskIDs[targetTaskID]; malformed {
+		return true, buildProjectContinuationMalformedChildMutationGuardError(targetTask, focusTask)
 	}
 	if strings.EqualFold(strings.TrimSpace(targetTask.WorkStatus), "draft") &&
 		projectContinuationTaskIsAncestor(tasksByID, targetTaskID, focusTaskID) {

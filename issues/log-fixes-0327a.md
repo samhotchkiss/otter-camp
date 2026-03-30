@@ -4101,3 +4101,37 @@
     - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` now explicitly recognized `planning/sambot-tech-architecture.md` and `sambot/api.js` as deliverable-present closeout work
     - the fresh continuation turn carried `workspace_deliverable_present=true` for `OC-200`
     - when the model still tried `task.create` under `OC-200`, the runtime blocked it with the new closeout-ready duplicate-child guard instead of letting another replacement child into the tree
+- 2026-03-29 22:13 MDT - Relaxed parent completion for closeout-ready parents whose only remaining children are terminal stale artifacts.
+  - changed [`internal/taskorchestration/metadata.go`](/Users/sam/dev/otter-camp/internal/taskorchestration/metadata.go):
+    - `Evaluate(...)` / `ValidateCompletion(...)` now allow parent closeout without a direct `done` child when:
+      - all remaining children are terminal
+      - at least one `child_output_verifications` entry is recorded
+      - `integration_check.status=passed`
+      - `outcome_assessment.satisfied=true`
+    - this preserves the explicit verification requirement but stops blocking closeout-ready parents just because the surviving child lanes are only stale blocked/cancelled remnants
+  - changed [`internal/taskorchestration/metadata_test.go`](/Users/sam/dev/otter-camp/internal/taskorchestration/metadata_test.go):
+    - added `TestValidateCompletionAllowsVerifiedSatisfiedParentWithoutCompletedDirectChild`
+    - added `TestValidateCompletionStillRequiresVerificationWhenNoCompletedDirectChildRemains`
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - widened the PM parent-closeout retry prompt and stop message so they ask for child verification evidence covering the concrete child or superseding outputs already satisfying the deliverable, instead of insisting on `completed child tasks`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - updated the closeout-retry system-message expectation to the new superseding-evidence wording
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskorchestration -run 'TestValidateCompletion(AllowsVerifiedSatisfiedParentWithoutCompletedDirectChild|StillRequiresVerificationWhenNoCompletedDirectChildRemains|AllowsBlockedProceduralChildrenWithSatisfiedParent|AllowsBlockedChildrenAfterCompletedCloseoutProof|StillRejectsActiveChildAfterCompletedCloseoutProof)$' -count=1`
+    - `GOFLAGS='' go test ./internal/taskorchestration -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurnRetriesGenericReplyWithFreshMessage|HandleCompletedProjectExecutionContinuationTurnSuppressesRepeatedRediscoveryBlockedRetry|ShouldBlockProjectContinuationFocusedDraftTaskCreateForWorkspaceDeliverableCloseoutParent|ShouldBlockProjectContinuationFocusedDraftMutationAllowsSatisfiedCloseoutReadyParent|ProjectExecutionContinuationSnapshotTreatsWorkspaceDeliverableAsCloseoutReadyForMalformedDuplicateParent)$' -count=1`
+  - proof status:
+    - directly driven by the live `OC-200` closeout failure on PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`
+    - deployed and ready for the next PM closeout retry; the lane moved on to template-08 before reproducing the old direct-child error on the new binary
+- 2026-03-29 22:18 MDT - Blocked PM re-queue of malformed duplicate child artifacts.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `shouldBlockProjectContinuationFocusedDraftMutationTool(...)` now blocks `task.update` when the target task is itself a malformed child artifact beneath the current focused draft parent
+    - the new guard message tells the PM lane to leave that malformed child alone and either advance a legitimate sibling or create a real bounded replacement beneath the focus parent
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldBlockProjectContinuationFocusedDraftMutationForMalformedDuplicateChild`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShouldBlockProjectContinuationFocusedDraftMutation(ForMalformedChildParent|ForMalformedDuplicateChild|AllowsSatisfiedCloseoutReadyParent|RequiresParentCompletionEvidence)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshot(IgnoresMalformedDuplicateSharedFileChildrenUsingSingleFileWording|TreatsWorkspaceDeliverableAsCloseoutReadyForMalformedDuplicateParent)$' -count=1`
+  - proof status:
+    - diagnosis is directly backed by the live PM continuation that queued malformed duplicate child `OC-220` beneath `OC-84`
+    - the guard is now deployed; the next PM retry should block that exact malformed-child requeue path instead of handing it off again

@@ -13344,7 +13344,7 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionR
 		TurnID:         &turnID,
 		Role:           "system",
 		Status:         "final",
-		Content:        "[Project continuation found that the closeout-ready parent still needs parent_orchestration evidence before it can finish. Record parent_orchestration.child_verifications for the completed child tasks, set parent_orchestration.integration_check.status=passed, and set parent_orchestration.outcome_assessment.satisfied=true on the parent task itself. Do not cancel blocked stale child lanes from the project session first.]",
+		Content:        "[Project continuation found that the closeout-ready parent still needs parent_orchestration evidence before it can finish. Record parent_orchestration.child_verifications for the concrete child or superseding outputs that already satisfy the deliverable, set parent_orchestration.integration_check.status=passed, and set parent_orchestration.outcome_assessment.satisfied=true on the parent task itself. Do not cancel blocked stale child lanes from the project session first.]",
 		SequenceNumber: 13,
 	}
 	messages := []repo.ChatMessage{*latestUser, *assistant, *updateResult, *systemMessage}
@@ -24358,6 +24358,69 @@ func TestShouldBlockProjectContinuationFocusedDraftMutationForMalformedChildPare
 	}
 	if !strings.Contains(reason, "focused draft task task 58") || !strings.Contains(reason, "malformed child artifact lane") {
 		t.Fatalf("reason = %q, want focused malformed-child guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftMutationForMalformedDuplicateChild(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentTaskID := uuid.New()
+	childTaskID := uuid.New()
+	parentDescription := "Write a single file: `templates/template-08-replace.html`"
+	childDescription := "## Deliverable\nWrite a single file: `templates/template-08-replace.html`\n\nThis child should produce the full template."
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentTaskID: {
+				ID:          parentTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  84,
+				Title:       "Build HTML layout template 8 of 10 (Editorial Longform) — replacement for blocked OC-43/OC-38",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"applied":             true,
+						"mode":                "parallel_children",
+						"orchestration_only":  true,
+						"source_description":  parentDescription,
+						"primary_deliverable": "templates/template-08-replace.html",
+					},
+				}),
+			},
+			childTaskID: {
+				ID:          childTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  220,
+				Title:       "Write templates/template-08-replace.html — Editorial Longform layout template (template 8 of 10)",
+				Description: &childDescription,
+				WorkStatus:  "blocked",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTaskID.String())),
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: restore template 08", projectExecutionContinuationSnapshot{
+			ProjectLine:          "Active project id: " + projectID.String(),
+			ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 84 (Build HTML layout template 8 of 10 (Editorial Longform) — replacement for blocked OC-43/OC-38) id=" + parentTaskID.String() + " title=\"Build HTML layout template 8 of 10 (Editorial Longform) — replacement for blocked OC-43/OC-38\" work_status=draft malformed_child_tasks=1",
+			FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 84 (Build HTML layout template 8 of 10 (Editorial Longform) — replacement for blocked OC-43/OC-38) id=" + parentTaskID.String() + " title=\"Build HTML layout template 8 of 10 (Editorial Longform) — replacement for blocked OC-43/OC-38\" work_status=draft malformed_child_tasks=1",
+		}),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftMutationTool(context.Background(), rt, "task.update", map[string]any{
+		"task_id":     childTaskID.String(),
+		"work_status": "queued",
+	})
+	if !blocked {
+		t.Fatal("expected project continuation to block re-queueing malformed duplicate child work")
+	}
+	if !strings.Contains(reason, "task 220") || !strings.Contains(reason, "malformed child artifact") || !strings.Contains(reason, "task 84") {
+		t.Fatalf("reason = %q, want malformed child requeue guidance", reason)
 	}
 }
 

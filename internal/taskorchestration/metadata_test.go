@@ -346,3 +346,104 @@ func TestValidateCompletionStillRejectsActiveChildAfterCompletedCloseoutProof(t 
 		t.Fatalf("error = %v, want active-child completion detail", err)
 	}
 }
+
+func TestValidateCompletionAllowsVerifiedSatisfiedParentWithoutCompletedDirectChild(t *testing.T) {
+	parentID := uuid.New()
+	blockedChildID := uuid.New()
+	cancelledChildID := uuid.New()
+	now := time.Date(2026, 3, 29, 22, 20, 0, 0, time.UTC)
+	description := "Write sambot/api.js — a complete, working Express.js API server for SamBot."
+	parent := repo.ProjectTask{
+		ID:         parentID,
+		TaskNumber: 200,
+		Title:      "Write SamBot technical architecture spec — planning/sambot-tech-architecture.md (replaces blocked OC-198)",
+		Metadata: taskdecomp.ApplyMetadata(json.RawMessage(`{}`), taskdecomp.Plan{
+			RequiresDecomposition: true,
+			PrimaryDeliverable:    "planning/sambot-tech-architecture.md",
+			Deliverables: []string{
+				"planning/sambot-tech-architecture.md",
+				"Replacement child A",
+				"Replacement child B",
+			},
+		}, description, []uuid.UUID{blockedChildID, cancelledChildID}),
+	}
+	metadata, err := Apply(parent.Metadata, Update{
+		ChildVerifications: []ChildVerification{
+			NewChildVerification(blockedChildID, "Verified the superseding architecture spec already exists on disk and satisfies the parent deliverable.", now),
+		},
+		IntegrationCheck:  NewIntegrationCheck("passed", "Reviewed the delivered architecture spec end to end.", now),
+		OutcomeAssessment: NewOutcomeAssessment(true, "The parent architecture outcome is already satisfied.", now),
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	parent.Metadata = metadata
+
+	blockedChild := repo.ProjectTask{
+		ID:         blockedChildID,
+		TaskNumber: 212,
+		Title:      "Replacement child A",
+		WorkStatus: "blocked",
+	}
+	cancelledChild := repo.ProjectTask{
+		ID:         cancelledChildID,
+		TaskNumber: 205,
+		Title:      "Replacement child B",
+		WorkStatus: "cancelled",
+	}
+
+	if err := ValidateCompletion(parent, []repo.ProjectTask{blockedChild, cancelledChild}); err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+}
+
+func TestValidateCompletionStillRequiresVerificationWhenNoCompletedDirectChildRemains(t *testing.T) {
+	parentID := uuid.New()
+	blockedChildID := uuid.New()
+	cancelledChildID := uuid.New()
+	now := time.Date(2026, 3, 29, 22, 25, 0, 0, time.UTC)
+	description := "Write sambot/api.js — a complete, working Express.js API server for SamBot."
+	parent := repo.ProjectTask{
+		ID:         parentID,
+		TaskNumber: 200,
+		Title:      "Write SamBot technical architecture spec — planning/sambot-tech-architecture.md (replaces blocked OC-198)",
+		Metadata: taskdecomp.ApplyMetadata(json.RawMessage(`{}`), taskdecomp.Plan{
+			RequiresDecomposition: true,
+			PrimaryDeliverable:    "planning/sambot-tech-architecture.md",
+			Deliverables: []string{
+				"planning/sambot-tech-architecture.md",
+				"Replacement child A",
+				"Replacement child B",
+			},
+		}, description, []uuid.UUID{blockedChildID, cancelledChildID}),
+	}
+	metadata, err := Apply(parent.Metadata, Update{
+		IntegrationCheck:  NewIntegrationCheck("passed", "Reviewed the delivered architecture spec end to end.", now),
+		OutcomeAssessment: NewOutcomeAssessment(true, "The parent architecture outcome is already satisfied.", now),
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	parent.Metadata = metadata
+
+	blockedChild := repo.ProjectTask{
+		ID:         blockedChildID,
+		TaskNumber: 212,
+		Title:      "Replacement child A",
+		WorkStatus: "blocked",
+	}
+	cancelledChild := repo.ProjectTask{
+		ID:         cancelledChildID,
+		TaskNumber: 205,
+		Title:      "Replacement child B",
+		WorkStatus: "cancelled",
+	}
+
+	err = ValidateCompletion(parent, []repo.ProjectTask{blockedChild, cancelledChild})
+	if !errors.Is(err, ErrParentCompletionRequirements) {
+		t.Fatalf("ValidateCompletion err = %v, want ErrParentCompletionRequirements", err)
+	}
+	if !strings.Contains(err.Error(), "no completed child tasks are available for parent verification") {
+		t.Fatalf("error = %v, want missing verification detail", err)
+	}
+}

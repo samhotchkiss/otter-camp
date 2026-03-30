@@ -501,3 +501,25 @@ They need sharper stopping rules than ordinary execution lanes.
   - live proof:
     - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` now carries `workspace_deliverable_present=true` for `OC-200`
     - the attempted duplicate child create under `OC-200` was blocked with the closeout-ready guard instead of reopening another replacement lane
+- 2026-03-29 22:13 MDT - Followed the same PM canary into the final parent-closeout validation seam.
+  - fresh live evidence:
+    - `OC-200` still failed `task.update(work_status=done)` with `no completed child tasks are available for parent verification` even after PM supplied child verification, integration, and outcome metadata
+    - in this case all direct child lanes were already terminal stale artifacts, so the validator was enforcing an impossible direct-child requirement
+  - local / deployed fix:
+    - [`internal/taskorchestration/metadata.go`](/Users/sam/dev/otter-camp/internal/taskorchestration/metadata.go) now allows parent closeout when verification evidence is recorded, integration/outcome are satisfied, and all remaining child lanes are terminal even if none are direct `done` children
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now tells PM to use child verification evidence for the concrete child or superseding outputs already satisfying the deliverable, instead of specifically demanding `completed child tasks`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskorchestration -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurnRetriesGenericReplyWithFreshMessage|HandleCompletedProjectExecutionContinuationTurnSuppressesRepeatedRediscoveryBlockedRetry|ShouldBlockProjectContinuationFocusedDraftTaskCreateForWorkspaceDeliverableCloseoutParent|ShouldBlockProjectContinuationFocusedDraftMutationAllowsSatisfiedCloseoutReadyParent|ProjectExecutionContinuationSnapshotTreatsWorkspaceDeliverableAsCloseoutReadyForMalformedDuplicateParent)$' -count=1`
+  - proof status:
+    - deployed and ready for the next PM closeout retry; the session moved on to the template-08 canary before reproducing the old direct-child error on the new runtime
+- 2026-03-29 22:18 MDT - Closed the last PM handoff leak in the template-08 canary.
+  - fresh live evidence:
+    - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` still chose `task.update(work_status=queued)` for malformed duplicate child `OC-220` after listing children under `OC-84`
+  - local / deployed fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now blocks project-lane `task.update` when the target is itself a malformed child artifact beneath the focused draft parent
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShouldBlockProjectContinuationFocusedDraftMutation(ForMalformedChildParent|ForMalformedDuplicateChild|AllowsSatisfiedCloseoutReadyParent|RequiresParentCompletionEvidence)$' -count=1`
+  - proof status:
+    - diagnosis is directly live-backed by the `OC-220` handoff transcript
+    - the next PM retry should now reject that malformed-child requeue instead of handing it off again

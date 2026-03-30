@@ -906,3 +906,22 @@
   - impact:
     - PM continuations could keep re-splitting or re-verifying work that was already materially delivered on disk
     - the runtime needed a stronger guard to stop duplicate child creation for those deliverable-present parents
+- 2026-03-29 22:13 MDT - Parent completion still hard-required one direct completed child even for closeout-ready parents whose only remaining children were terminal stale artifacts.
+  - fresh live evidence:
+    - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` retried `task.update` on `OC-200` with `child_output_verifications`, `integration_check.status=passed`, `outcome_assessment.satisfied=true`, and `work_status=done`
+    - the runtime still returned `parent task requires child verification and passed integration before completion: no completed child tasks are available for parent verification`
+    - all direct children under `OC-200` were already terminal (`blocked` / `cancelled`), while the actual deliverable proof lived in superseding same-deliverable work already present on disk
+  - bug:
+    - `taskorchestration.ValidateCompletion(...)` only accepted parent closeout if at least one direct child task had `work_status=done`
+    - it ignored the new closeout-ready case where the parent has recorded verification evidence plus passed integration / satisfied outcome, but the surviving child lanes are only stale blocked/cancelled remnants
+  - impact:
+    - PM could correctly identify delivered parent work, yet still fail the final `task.update` because the validator demanded impossible direct-child evidence
+- 2026-03-29 22:18 MDT - PM mutation guards still allowed direct re-queue of malformed duplicate child artifacts.
+  - fresh live evidence:
+    - after the template-08 handoff, the PM lane listed child tasks `OC-85` and `OC-220`
+    - it then chose `task.update(work_status=queued)` for `OC-220`, the malformed duplicate whole-file child, instead of treating `OC-220` as dead artifact work
+    - the runtime accepted the `task.update` and immediately ended the PM turn, after which task `220` fell back into the same blocked duplicate-child family
+  - bug:
+    - `shouldBlockProjectContinuationFocusedDraftMutationTool(...)` blocked malformed parent re-queues and ancestor promotions, but did not block `task.update` when the target itself was a malformed child artifact beneath the focused draft parent
+  - impact:
+    - PM continuations could still waste handoff cycles by re-queuing malformed duplicate children that the snapshot code already knew should be ignored

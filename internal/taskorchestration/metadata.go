@@ -188,6 +188,7 @@ func Evaluate(parentTask repo.ProjectTask, childTasks []repo.ProjectTask) Comple
 		hasExecutableChild        bool
 		hasCompletedChild         bool
 		hasCompletedCloseoutChild bool
+		hasRecordedVerification   bool
 		missingLabels             []string
 	)
 	for _, child := range childTasks {
@@ -210,6 +211,9 @@ func Evaluate(parentTask repo.ProjectTask, childTasks []repo.ProjectTask) Comple
 		}
 		completed := status == "done"
 		recorded, ok := verified[child.ID]
+		if ok {
+			hasRecordedVerification = true
+		}
 		result.Children = append(result.Children, ChildStatus{
 			TaskID:    child.ID,
 			Label:     taskLabel(child),
@@ -233,7 +237,7 @@ func Evaluate(parentTask repo.ProjectTask, childTasks []repo.ProjectTask) Comple
 	if hasExecutableChild {
 		result.Missing = append(result.Missing, "all child tasks must complete before the parent can finish integration")
 	}
-	if !hasCompletedChild {
+	if !hasCompletedChild && !allowsVerifiedCloseoutWithoutCompletedChild(state, len(childTasks), hasExecutableChild, hasRecordedVerification) {
 		result.Missing = append(result.Missing, "no completed child tasks are available for parent verification")
 	}
 	if len(missingLabels) > 0 {
@@ -416,6 +420,16 @@ func containsAnyCloseoutSignal(text string) bool {
 		}
 	}
 	return false
+}
+
+func allowsVerifiedCloseoutWithoutCompletedChild(state ParentState, childCount int, hasExecutableChild, hasRecordedVerification bool) bool {
+	if childCount == 0 || hasExecutableChild || !hasRecordedVerification {
+		return false
+	}
+	if state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied {
+		return false
+	}
+	return state.IntegrationCheck != nil && normalizeIntegrationStatus(state.IntegrationCheck.Status) == "passed"
 }
 
 func parentSourceDescriptionForbidsDecomposition(metadata json.RawMessage) bool {
