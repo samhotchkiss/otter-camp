@@ -1019,3 +1019,14 @@
   - impact:
     - PM continuation prompts could stay corrupted even after task recovery target inference was fixed
     - the PM lane could keep making decomposition/replacement decisions from malformed `deliverable_path` hints
+- 2026-03-30 00:34 MDT - Closeout-ready draft parents could still burn the rest of a PM turn after the runtime already knew `done` was the wrong next mutation.
+  - fresh live evidence:
+    - task `243` already had `workspace_deliverable_present=true` and closeout metadata
+    - `task.update(... work_status=done ...)` failed with `task can only be marked done when its flow reaches a terminal node`
+    - instead of stopping and retrying with a queue/promotion action, the same PM turn fell through into `task.list` and duplicate `task.create` attempts
+  - bug:
+    - `shouldStopAfterBlockedProjectExecutionBlockedMutation(...)` did not treat the terminal-flow rejection as a stopping condition for closeout-ready parent prompts
+    - `projectExecutionBlockedMutationStopMessage(...)` had no branch telling the next continuation to queue the same parent rather than split it again
+  - impact:
+    - closeout-ready parents could reopen replacement-child churn after the parent-orchestration evidence was already recorded
+    - the PM lane lost turns on duplicate child-create attempts that the existing guards then had to reject

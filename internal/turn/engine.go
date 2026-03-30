@@ -15602,7 +15602,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 		if shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, blockedCalls) {
 			rt.stopReason = stopReasonValidationBlocked
-			if message := projectExecutionBlockedMutationStopMessage(blockedCalls); message != "" {
+			if message := projectExecutionBlockedMutationStopMessage(rt, blockedCalls); message != "" {
 				_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, message)
 			}
 			return true, nil
@@ -15672,7 +15672,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 		if shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, results) {
 			rt.stopReason = stopReasonValidationBlocked
-			if message := projectExecutionBlockedMutationStopMessage(results); message != "" {
+			if message := projectExecutionBlockedMutationStopMessage(rt, results); message != "" {
 				_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, message)
 			}
 			return true, nil
@@ -15862,7 +15862,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 		if shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, []ToolResult{result}) {
 			rt.stopReason = stopReasonValidationBlocked
-			if message := projectExecutionBlockedMutationStopMessage([]ToolResult{result}); message != "" {
+			if message := projectExecutionBlockedMutationStopMessage(rt, []ToolResult{result}); message != "" {
 				_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, message)
 			}
 			return true, nil
@@ -30141,6 +30141,11 @@ func shouldStopAfterBlockedProjectExecutionBlockedMutation(rt *turnRuntime, resu
 	for _, result := range results {
 		name := strings.ToLower(strings.TrimSpace(result.Name))
 		errText := strings.ToLower(strings.TrimSpace(toolResultErrorCode(result)))
+		if strings.EqualFold(name, "task.update") &&
+			strings.Contains(errText, "task can only be marked done when its flow reaches a terminal node") &&
+			projectContinuationCloseoutReadyParentPromptActive(rt) {
+			return true
+		}
 		if containsAny(errText,
 			"task_lane_owned_by_project_task_session",
 			"task_execution_required",
@@ -30186,6 +30191,24 @@ func shouldStopAfterBlockedProjectExecutionBlockedMutation(rt *turnRuntime, resu
 		}
 	}
 	return false
+}
+
+func projectContinuationCloseoutReadyParentPromptActive(rt *turnRuntime) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	initial := strings.TrimSpace(rt.initialMessageText)
+	if initial == "" {
+		return false
+	}
+	return strings.Contains(initial, "outcome_satisfied=true") ||
+		strings.Contains(initial, "workspace_deliverable_present=true") ||
+		strings.Contains(initial, "completed_closeout_child_tasks=") ||
+		strings.Contains(strings.ToLower(initial), "closeout-ready parent")
 }
 
 func shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt *turnRuntime, calls []ToolCall, results []ToolResult) bool {
@@ -30282,9 +30305,13 @@ func projectExecutionDraftChildHandoffSucceeded(call ToolCall, result ToolResult
 	return strings.EqualFold(strings.TrimSpace(projectExecutionResultWorkStatus(call.Arguments, result)), "draft")
 }
 
-func projectExecutionBlockedMutationStopMessage(results []ToolResult) string {
+func projectExecutionBlockedMutationStopMessage(rt *turnRuntime, results []ToolResult) string {
 	for _, result := range results {
 		errText := strings.ToLower(strings.TrimSpace(toolResultErrorCode(result)))
+		if strings.Contains(errText, "task can only be marked done when its flow reaches a terminal node") &&
+			projectContinuationCloseoutReadyParentPromptActive(rt) {
+			return "[Project continuation found that the focused parent is already closeout-ready but cannot jump straight from draft to done. Do not split it again or create another replacement child. If the parent_orchestration evidence is already recorded, advance that same parent into execution with work_status=queued so its own flow can finish; otherwise record the missing parent_orchestration evidence on that parent first, then queue it.]"
+		}
 		if strings.Contains(errText, "completed closeout child proof") {
 			return "[Project continuation focus parent already has completed closeout child proof. Advance or close the parent directly instead of creating another replacement child for the same batch.]"
 		}

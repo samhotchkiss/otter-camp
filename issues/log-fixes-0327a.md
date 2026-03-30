@@ -4336,3 +4336,11 @@
     - added `TestBuildProjectContinuationTaskHintsForWorkerPrefersOutputWriteAsPathFromDescription`
   - verified with:
     - `GOFLAGS='' go test ./internal/jobqueue -run 'Test(ProjectContinuationExplicitDeliverablePathFromTextForWorkerDetectsOutputWriteAsPath|BuildProjectContinuationTaskHintsForWorkerPrefersOutputWriteAsPathFromDescription|BuildProjectContinuationTaskHintsForWorkerDetectsLeadingPathTitleDeliverable|BuildProjectContinuationTaskHintsForWorkerDetectsParenthesizedOptionPath)$' -count=1`
+- 2026-03-30 00:34 MDT - Added a runtime stop for closeout-ready draft parents that try to jump straight from `draft` to `done`.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `shouldStopAfterBlockedProjectExecutionBlockedMutation(...)` now treats `task can only be marked done when its flow reaches a terminal node` as a stop condition when the continuation prompt is already about a closeout-ready parent
+    - `projectExecutionBlockedMutationStopMessage(...)` now tells the next continuation to queue that same parent into execution once parent-orchestration evidence is present, instead of splitting it again
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnCloseoutReadyDraftDoneError`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterBlockedProjectExecutionBlockedMutation(OnMetaTaskCreate|OnTaskLaneBoundaryErrors|OnSubtaskCreateBoundaryError|OnBoundedSizeTaskUpdateError|OnCloseoutReadyDraftDoneError)|ProjectExecutionBlockedMutationStopMessage(OnTaskExecutionRequired|OnTaskLaneBoundary|OnParentCompletionRequirements|OnFocusedDraftReadGuard))$' -count=1`

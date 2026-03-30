@@ -15815,7 +15815,7 @@ func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnTaskLaneBoundary
 func TestProjectExecutionBlockedMutationStopMessageOnTaskExecutionRequired(t *testing.T) {
 	t.Parallel()
 
-	message := projectExecutionBlockedMutationStopMessage([]ToolResult{{
+	message := projectExecutionBlockedMutationStopMessage(nil, []ToolResult{{
 		Name: "file.write",
 		Output: map[string]any{
 			"error":   "task_execution_required",
@@ -15834,7 +15834,7 @@ func TestProjectExecutionBlockedMutationStopMessageOnTaskExecutionRequired(t *te
 func TestProjectExecutionBlockedMutationStopMessageOnTaskLaneBoundary(t *testing.T) {
 	t.Parallel()
 
-	message := projectExecutionBlockedMutationStopMessage([]ToolResult{{
+	message := projectExecutionBlockedMutationStopMessage(nil, []ToolResult{{
 		Name:  "task.update",
 		Error: "task_lane_owned_by_project_task_session: active execution lane exists",
 		Output: map[string]any{
@@ -15853,7 +15853,7 @@ func TestProjectExecutionBlockedMutationStopMessageOnTaskLaneBoundary(t *testing
 func TestProjectExecutionBlockedMutationStopMessageOnParentCompletionRequirements(t *testing.T) {
 	t.Parallel()
 
-	message := projectExecutionBlockedMutationStopMessage([]ToolResult{{
+	message := projectExecutionBlockedMutationStopMessage(nil, []ToolResult{{
 		Name:  "task.update",
 		Error: "parent task requires child verification and passed integration before completion: verify child outputs for OC-66, OC-67; record a passed integration or end-to-end check",
 	}})
@@ -15872,7 +15872,7 @@ func TestProjectExecutionBlockedMutationStopMessageOnParentCompletionRequirement
 func TestProjectExecutionBlockedMutationStopMessageOnFocusedDraftReadGuard(t *testing.T) {
 	t.Parallel()
 
-	message := projectExecutionBlockedMutationStopMessage([]ToolResult{{
+	message := projectExecutionBlockedMutationStopMessage(nil, []ToolResult{{
 		Name:  "file.read",
 		Error: "project continuation already has focused draft parent task id=123 and the prompt already required a direct replacement-child handoff. Do not call file.read from the project lane now; create the smallest fresh replacement child beneath that parent, or if child-lane verification is still required use only task.list(parent_task_id=123).",
 	}})
@@ -16136,8 +16136,39 @@ func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnBoundedSizeTaskU
 	if !shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, []ToolResult{result}) {
 		t.Fatal("expected bounded-size task.update rejection to stop the turn")
 	}
-	if message := projectExecutionBlockedMutationStopMessage([]ToolResult{result}); !strings.Contains(message, "bounded size policy") {
+	if message := projectExecutionBlockedMutationStopMessage(nil, []ToolResult{result}); !strings.Contains(message, "bounded size policy") {
 		t.Fatalf("projectExecutionBlockedMutationStopMessage = %q, want bounded-size guidance", message)
+	}
+}
+
+func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnCloseoutReadyDraftDoneError(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageText: "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 243 work_status=draft deliverable_path=templates/template-08-replace.html workspace_deliverable_present=true outcome_satisfied=true",
+	}
+	result := ToolResult{
+		Name: "task.update",
+		Output: map[string]any{
+			"error": "task can only be marked done when its flow reaches a terminal node",
+		},
+	}
+	if !shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, []ToolResult{result}) {
+		t.Fatal("expected closeout-ready draft done rejection to stop the turn")
+	}
+	message := projectExecutionBlockedMutationStopMessage(rt, []ToolResult{result})
+	if !strings.Contains(message, "cannot jump straight from draft to done") {
+		t.Fatalf("message = %q, want draft-to-done guidance", message)
+	}
+	if !strings.Contains(message, "work_status=queued") {
+		t.Fatalf("message = %q, want queue guidance", message)
+	}
+	if !strings.Contains(message, "Do not split it again or create another replacement child") {
+		t.Fatalf("message = %q, want anti-resplit guidance", message)
 	}
 }
 
@@ -43958,7 +43989,7 @@ func TestRecoveryFileOutputContextPrefersExplicitOutputWriteAsPathOverParentDeli
 		Content: string(mustRawJSON(t, map[string]any{
 			"tool_name": "file.read",
 			"output": map[string]any{
-				"path": "templates/template-08-replace.html",
+				"path":    "templates/template-08-replace.html",
 				"content": "<!doctype html><html><body>placeholder</body></html>",
 			},
 		})),
