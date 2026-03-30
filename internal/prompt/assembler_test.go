@@ -751,48 +751,70 @@ func TestPromptAssemblerDefersSummarizationWhenSessionBackoffActive(t *testing.T
 func TestPromptAssemblerSkipsSummarizationForAsyncExecutionSessions(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name      string
-		scopeType string
-		scopeID   uuid.UUID
-	}{
-		{name: "project async", scopeType: "project", scopeID: uuid.New()},
-		{name: "project task async", scopeType: "project_task", scopeID: uuid.New()},
+	assembler := mustUnitAssembler(t, unitAssemblerConfig{
+		session: repo.ChatSession{
+			ID:             uuid.New(),
+			OrganizationID: uuid.New(),
+			ScopeType:      "project_task",
+			ScopeID:        uuid.New(),
+			Mode:           "async",
+		},
+		agent: repo.Agent{ID: uuid.New()},
+	})
+	checker := &fakeSummarizationChecker{shouldSummarize: true}
+	assembler.summarization = checker
+	enqueuer, ok := assembler.enqueuer.(*fakeEnqueuer)
+	if !ok {
+		t.Fatalf("enqueuer = %T, want *fakeEnqueuer", assembler.enqueuer)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assembler := mustUnitAssembler(t, unitAssemblerConfig{
-				session: repo.ChatSession{
-					ID:             uuid.New(),
-					OrganizationID: uuid.New(),
-					ScopeType:      tc.scopeType,
-					ScopeID:        tc.scopeID,
-					Mode:           "async",
-				},
-				agent: repo.Agent{ID: uuid.New()},
-			})
-			checker := &fakeSummarizationChecker{shouldSummarize: true}
-			assembler.summarization = checker
-			enqueuer, ok := assembler.enqueuer.(*fakeEnqueuer)
-			if !ok {
-				t.Fatalf("enqueuer = %T, want *fakeEnqueuer", assembler.enqueuer)
-			}
+	if _, err := assembler.Assemble(context.Background(), AssemblyInput{
+		SessionID:      assembler.sessions.(*fakeSessionRepo).session.ID,
+		AgentID:        assembler.agents.(*fakeAgentRepo).agent.ID,
+		ModelProfileID: "default",
+	}); err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if checker.calls != 0 {
+		t.Fatalf("summarization checker calls = %d, want 0", checker.calls)
+	}
+	if enqueuer.jobType != "" {
+		t.Fatalf("enqueued job type = %q, want none", enqueuer.jobType)
+	}
+}
 
-			if _, err := assembler.Assemble(context.Background(), AssemblyInput{
-				SessionID:      assembler.sessions.(*fakeSessionRepo).session.ID,
-				AgentID:        assembler.agents.(*fakeAgentRepo).agent.ID,
-				ModelProfileID: "default",
-			}); err != nil {
-				t.Fatalf("Assemble: %v", err)
-			}
-			if checker.calls != 0 {
-				t.Fatalf("summarization checker calls = %d, want 0", checker.calls)
-			}
-			if enqueuer.jobType != "" {
-				t.Fatalf("enqueued job type = %q, want none", enqueuer.jobType)
-			}
-		})
+func TestPromptAssemblerAllowsSummarizationForAsyncProjectSessions(t *testing.T) {
+	t.Parallel()
+
+	assembler := mustUnitAssembler(t, unitAssemblerConfig{
+		session: repo.ChatSession{
+			ID:             uuid.New(),
+			OrganizationID: uuid.New(),
+			ScopeType:      "project",
+			ScopeID:        uuid.New(),
+			Mode:           "async",
+		},
+		agent: repo.Agent{ID: uuid.New()},
+	})
+	checker := &fakeSummarizationChecker{shouldSummarize: true}
+	assembler.summarization = checker
+	enqueuer, ok := assembler.enqueuer.(*fakeEnqueuer)
+	if !ok {
+		t.Fatalf("enqueuer = %T, want *fakeEnqueuer", assembler.enqueuer)
+	}
+
+	if _, err := assembler.Assemble(context.Background(), AssemblyInput{
+		SessionID:      assembler.sessions.(*fakeSessionRepo).session.ID,
+		AgentID:        assembler.agents.(*fakeAgentRepo).agent.ID,
+		ModelProfileID: "default",
+	}); err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if checker.calls != 1 {
+		t.Fatalf("summarization checker calls = %d, want 1", checker.calls)
+	}
+	if enqueuer.jobType != chat.ChatSummarizeJobType {
+		t.Fatalf("enqueued job type = %q, want %q", enqueuer.jobType, chat.ChatSummarizeJobType)
 	}
 }
 

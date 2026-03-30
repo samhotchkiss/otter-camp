@@ -1889,3 +1889,18 @@
   - impact:
     - one bad PM `task.create` could multiply into hundreds or thousands of recursive draft rows without any additional model creativity
     - PM/session hardening alone could not stop the chain once the first malformed whole-file child had already been created
+- 2026-03-30 17:08 MDT - Synthetic PM continuation retries were still losing enough structured context to reopen broad rediscovery and conflicting sibling mutations.
+  - fresh live evidence:
+    - PM turn `fcce6005-...` used `task_list` four times in one retry despite an existing `[Continuation summary] ...` message in the same session
+    - another PM turn emitted three sibling `task.create` calls under the same focused parent and stalled before tool results landed
+    - snapshot focus still surfaced descendant draft `6639` even though a completed replacement higher in the ancestry had already superseded that chain
+  - bug:
+    - async project sessions were still treated like async task execution for summarization suppression, so synthetic continuation prompts could lose the richer state needed by rediscovery guards
+    - guard logic handled `task.list` but not the underscore alias `task_list`
+    - tier1 concurrent dispatch allowed conflicting sibling parent mutations to race in the same batch
+    - PM snapshot supersession logic only filtered the directly superseded draft, not its actionable descendants
+    - direct focused prerequisite repair still paid for a full project-wide actionable-draft scan in the degenerate 6k+ task tree
+  - impact:
+    - PM retries could regress into whole-project rediscovery from short continuation prompts
+    - same-parent child creation could stall or race instead of executing deterministically
+    - stale descendant drafts could keep attracting PM focus even after the chain was logically resolved

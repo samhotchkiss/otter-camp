@@ -15269,6 +15269,152 @@ func TestJobWorkerResolveStaleTriggeredRetryMessageIDSwitchesProjectExecutionToB
 	}
 }
 
+func TestJobWorkerResolveStaleTriggeredRetryMessageIDRefreshesProjectContinuationMessage(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "resolve-stale-triggered-project-continuation-refresh",
+		DisplayName: "Resolve Stale Triggered Project Continuation Refresh",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "resolve-stale-triggered-project-continuation-refresh-project",
+		DisplayName:    "Resolve Stale Triggered Project Continuation Refresh Project",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "resolve-stale-triggered-project-continuation-refresh-template",
+		DisplayName:    "Resolve Stale Triggered Project Continuation Refresh Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	doneTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      1,
+		Title:           "Completed bounded task",
+		WorkStatus:      "done",
+		BlocksScope:     "task",
+		AssignedAgentID: &agent.ID,
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      2,
+		Title:           "Write planning/sambot-prompts/test-conversations-level3.md",
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		AssignedAgentID: &agent.ID,
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	}); err != nil {
+		t.Fatalf("create draft task: %v", err)
+	}
+	staleContinuationMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "pending",
+		Metadata: json.RawMessage(fmt.Sprintf(
+			`{"source":"project_execution_continuation","auto_continue":true,"synthetic_user_message":true,"completed_task_id":"%s"}`,
+			doneTask.ID,
+		)),
+	})
+	if err != nil {
+		t.Fatalf("create stale continuation message: %v", err)
+	}
+
+	retryMessageID, err := worker.resolveStaleTriggeredRetryMessageID(ctx, session.ID, "project", staleContinuationMessage.ID)
+	if err != nil {
+		t.Fatalf("resolveStaleTriggeredRetryMessageID: %v", err)
+	}
+	if retryMessageID == uuid.Nil {
+		t.Fatal("retryMessageID = nil, want fresh continuation message")
+	}
+	if retryMessageID == staleContinuationMessage.ID {
+		t.Fatalf("retryMessageID = %s, want a fresh project continuation message", retryMessageID)
+	}
+
+	var (
+		source      string
+		status      string
+		completedID string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT COALESCE(metadata->>'source', ''),
+		       status,
+		       COALESCE(metadata->>'completed_task_id', '')
+		FROM chat_message
+		WHERE id = $1
+	`, retryMessageID).Scan(&source, &status, &completedID); err != nil {
+		t.Fatalf("load retry continuation message: %v", err)
+	}
+	if source != "project_execution_continuation" {
+		t.Fatalf("retry source = %q, want project_execution_continuation", source)
+	}
+	if status != "pending" {
+		t.Fatalf("retry status = %q, want pending", status)
+	}
+	if completedID != doneTask.ID.String() {
+		t.Fatalf("retry completed_task_id = %q, want %q", completedID, doneTask.ID.String())
+	}
+}
+
 func TestJobWorkerClearCompletedSessionCurrentTurnsEnablesRequeue(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -22731,6 +22877,145 @@ func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateS
 	}
 	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=1") {
 		t.Fatalf("ReplacementDraftLine = %q, want malformed child count", snapshot.ReplacementDraftLine)
+	}
+}
+
+func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresDescendantsOfSupersededDraftParents(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "project-continuation-snapshot-ignores-superseded-draft-descendants",
+		DisplayName: "Project Continuation Snapshot Ignores Superseded Draft Descendants",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "project-continuation-snapshot-ignores-superseded-draft-descendants-project",
+		DisplayName:    "Project Continuation Snapshot Ignores Superseded Draft Descendants Project",
+		Description:    "Project for superseded draft descendant snapshot coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "project-continuation-snapshot-ignores-superseded-draft-descendants-template",
+		DisplayName:    "Project Continuation Snapshot Ignores Superseded Draft Descendants Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	doneDescription := "Write planning/sambot-prompts/test-conversations-level3.md as the final replacement deliverable."
+	doneMetadata, err := json.Marshal(map[string]any{
+		"parent_orchestration": map[string]any{
+			"outcome_assessment": map[string]any{
+				"satisfied": true,
+				"summary":   "planning/sambot-prompts/test-conversations-level3.md is already implementation-complete.",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal done metadata: %v", err)
+	}
+	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     310,
+		Title:          "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations (replacement)",
+		Description:    &doneDescription,
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+		Metadata:       doneMetadata,
+	}); err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	parentDescription := "Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations."
+	supersededParent, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     328,
+		Title:          "Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations that exercise SamBot's ability to speak as Sam Hotchkiss on hard technical subjects.",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create superseded parent task: %v", err)
+	}
+	descendantMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": supersededParent.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal descendant metadata: %v", err)
+	}
+	descendantDescription := "User asks about Sam's approach to AI ethics beyond policy papers — how does he build it into systems?"
+	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     6639,
+		Title:          "User asks about Sam's approach to AI ethics beyond policy papers — how does he build it into systems?",
+		Description:    &descendantDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+		Metadata:       descendantMetadata,
+	}); err != nil {
+		t.Fatalf("create descendant task: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.DraftTaskLine, "task 328") || strings.Contains(snapshot.DraftTaskLine, "task 6639") {
+		t.Fatalf("DraftTaskLine = %q, should omit superseded draft parent chain", snapshot.DraftTaskLine)
+	}
+	if strings.Contains(snapshot.FocusTaskLine, "task 328") || strings.Contains(snapshot.FocusTaskLine, "task 6639") {
+		t.Fatalf("FocusTaskLine = %q, should omit superseded draft parent chain", snapshot.FocusTaskLine)
+	}
+
+	remainingDrafts, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	if remainingDrafts != 0 {
+		t.Fatalf("countActionableProjectDraftTasks = %d, want 0 after ignoring superseded draft descendants", remainingDrafts)
 	}
 }
 

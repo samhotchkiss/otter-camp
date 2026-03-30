@@ -5198,3 +5198,24 @@
     - kept the existing concrete single-file queue canaries green alongside the new guard
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/task -run 'TestTaskServiceIntegrationQueue(RejectsMalformedDuplicateSharedFileChild|RejectsProceduralInstructionArtifact|AllowsSingleConcreteTemplateWithRequirements|AllowsSingleConcreteTemplateWithTemplateConceptLine)$' -count=1`
+- 2026-03-30 17:08 MDT - Hardened synthetic PM continuation retries against broad rediscovery, sibling mutation races, and stale descendant focus.
+  - changed [`internal/prompt/assembler.go`](/Users/sam/dev/otter-camp/internal/prompt/assembler.go):
+    - `shouldSkipAsyncExecutionSummarization(...)` now skips summarization only for async `project_task` sessions, not async project sessions
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `dispatchTier1Concurrent(...)` now serializes conflicting same-parent `task.create` and same-task `task.update` batches
+    - `initialMessageTextWithContinuationSummary(...)` prepends the latest in-session `[Continuation summary] ...` text to synthetic continuation triggers before guard evaluation
+    - `shouldBlockProjectContinuationSnapshotRediscoveryTool(...)` now blocks both `task.list` and `task_list`
+    - direct focused prerequisite repair can bypass the full project scan through `projectContinuationFocusedPrerequisiteRepairCanSkipProjectScan(...)`
+    - project bootstrap / continuation queue failures returning `ErrExecutableTaskContractRequired` are converted into bounded PM guidance instead of hard turn failure
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - moved the continuation advisory lock behind the expensive snapshot/load work so the lock window is smaller
+    - continuation snapshots now record `ActionableDraftCount`
+    - superseded-draft filtering now removes actionable descendants of already-superseded draft parents
+  - changed tests:
+    - [`internal/prompt/assembler_test.go`](/Users/sam/dev/otter-camp/internal/prompt/assembler_test.go)
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/prompt -run 'TestPromptAssembler(SkipsSummarizationForAsyncExecutionSessions|AllowsSummarizationForAsyncProjectSessions)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(DispatchTier1Concurrent(SerializesSameParentTaskCreateCalls|AllowsIndependentTier1CallsInParallel)|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskList(UnderscoreAlias)?|InitialMessageTextWithContinuationSummaryPrependsRecentProjectSummary|ShouldStopAfterSuccessfulProjectExecutionHandoffMutation(ForMissingDependencyPrompt|ForFocusPrerequisiteRepair|StopsForFocusedDraftChildCreate|StopsForFocusedDraftChildCreateBatch|IgnoresAssignmentOnlyUpdate|RequiresObservedQueuedState|IgnoresUnfocusedDraftChildCreate|RequiresReplacementChildPrompt)?|ShouldBlockProjectContinuationFocusedDraftTaskCreate(ForCloseoutReadyParent|ForWorkspaceDeliverableCloseoutParent|AllowsFreshReplacementWhenDirectChildDraftsAreMalformedForDifferentDeliverables|ForMalformedSameDeliverableDraftChildren|ForExecutableRepair)|ProjectExecutionContinuationSnapshot(IgnoresDescendantsOfSupersededDraftParents|IgnoresSupersededCloseoutDrafts|IgnoresSupersededSatisfiedOutcomeDrafts)|HandleCompletedProjectExecutionContinuationTurnConsumesExecutableContractQueueFailure|ShouldBlockProjectContinuationFocusedDraftMutationAllowsDirectPrerequisiteRepairWithoutProjectScan|EnsureProjectBootstrapFirstWaveExecutionConsumesExecutableContractFailure)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(ProjectExecutionContinuationSnapshot(IgnoresMalformedDuplicateSharedFileChildrenUsingSingleFileWording|IgnoresDescendantsOfSupersededDraftParents)|ResolveStaleTriggeredRetryMessageID(SwitchesProjectExecutionToBootstrapWhileBootstrapActive|RefreshesProjectContinuationMessage))$' -count=1`

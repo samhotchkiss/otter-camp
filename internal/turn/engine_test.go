@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -166,6 +167,83 @@ func TestTurnRecoverableWorktreeAddError(t *testing.T) {
 				t.Fatalf("turnRecoverableWorktreeAddError(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestDispatchTier1ConcurrentSerializesSameParentTaskCreateCalls(t *testing.T) {
+	engine := &TurnEngine{}
+	var (
+		active    atomic.Int32
+		maxActive atomic.Int32
+	)
+	engine.dispatcher = &fakeDispatcher{
+		tier1Fn: func(ctx context.Context, call ToolCall) (ToolResult, error) {
+			current := active.Add(1)
+			for {
+				observed := maxActive.Load()
+				if current <= observed || maxActive.CompareAndSwap(observed, current) {
+					break
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+			active.Add(-1)
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"ok": true}}, nil
+		},
+	}
+
+	parentID := uuid.New()
+	calls := []ToolCall{
+		{ID: "call-1", Name: "task.create", Arguments: map[string]any{"parent_task_id": parentID.String()}},
+		{ID: "call-2", Name: "task.create", Arguments: map[string]any{"parent_task_id": parentID.String()}},
+	}
+
+	results, err := engine.dispatchTier1Concurrent(context.Background(), calls)
+	if err != nil {
+		t.Fatalf("dispatchTier1Concurrent: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("result count = %d, want 2", len(results))
+	}
+	if got := maxActive.Load(); got != 1 {
+		t.Fatalf("max concurrent tier1 dispatches = %d, want 1 for same-parent task.create", got)
+	}
+}
+
+func TestDispatchTier1ConcurrentAllowsIndependentTier1CallsInParallel(t *testing.T) {
+	engine := &TurnEngine{}
+	var (
+		active    atomic.Int32
+		maxActive atomic.Int32
+	)
+	engine.dispatcher = &fakeDispatcher{
+		tier1Fn: func(ctx context.Context, call ToolCall) (ToolResult, error) {
+			current := active.Add(1)
+			for {
+				observed := maxActive.Load()
+				if current <= observed || maxActive.CompareAndSwap(observed, current) {
+					break
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+			active.Add(-1)
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"ok": true}}, nil
+		},
+	}
+
+	calls := []ToolCall{
+		{ID: "call-1", Name: "task.create", Arguments: map[string]any{"parent_task_id": uuid.New().String()}},
+		{ID: "call-2", Name: "task.create", Arguments: map[string]any{"parent_task_id": uuid.New().String()}},
+	}
+
+	results, err := engine.dispatchTier1Concurrent(context.Background(), calls)
+	if err != nil {
+		t.Fatalf("dispatchTier1Concurrent: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("result count = %d, want 2", len(results))
+	}
+	if got := maxActive.Load(); got < 2 {
+		t.Fatalf("max concurrent tier1 dispatches = %d, want parallel dispatch for independent task.create calls", got)
 	}
 }
 
@@ -11439,6 +11517,26 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskLis
 	}
 }
 
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskListUnderscoreAlias(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageText: "Project execution should continue directly from the current task tree.\nAlready-active non-terminal tasks in the tree: task 35 (Fetch posts 1-12) id=111 title=\"Fetch posts 1-12\" work_status=in_progress deliverable_root=content/posts",
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "task_list", map[string]any{})
+	if !blocked {
+		t.Fatal("expected synthetic project continuation prompt to block broad task_list rediscovery")
+	}
+	if !strings.Contains(reason, "project snapshot") && !strings.Contains(reason, "project task tree") {
+		t.Fatalf("task_list guard reason = %q, want broad rediscovery context", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksSessionListForActiveTasks(t *testing.T) {
 	t.Parallel()
 
@@ -13175,6 +13273,113 @@ func TestHandleCompletedProjectExecutionContinuationTurnConsumesBoundedSizeQueue
 	}
 	if !strings.Contains(retryMessage.Content, "split task 19") && !strings.Contains(retryMessage.Content, "split task 19 (") {
 		t.Fatalf("retry message = %q, want direct split instruction for task 19", retryMessage.Content)
+	}
+}
+
+func TestHandleCompletedProjectExecutionContinuationTurnConsumesExecutableContractQueueFailure(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:              completedTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      16,
+				Title:           "Frank Sign-Off: Record validation results and project completion",
+				WorkStatus:      "done",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+			draftTaskID: {
+				ID:              draftTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      19,
+				Title:           "Write planning/sambot-prompts/test-conversations-level3.md",
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+		},
+	}
+	taskTransitions := &fakeTaskTransitionService{
+		repo: taskRepo,
+		err: taskdecomp.ExecutableTaskContractError{
+			Reason: "resume the bounded work from parent task 297 instead of queueing duplicate same-deliverable child 328 for 'planning/sambot-prompts/test-conversations-level3.md'",
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = taskTransitions
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "The remaining draft tasks can be wrapped up now.",
+		SequenceNumber: 11,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant}
+	completedTurn := &repo.ChatTurn{ID: turnID, SessionID: fixture.session.ID}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected executable-contract queue failure to be consumed")
+	}
+
+	updatedDraft, err := taskRepo.GetByID(context.Background(), draftTaskID)
+	if err != nil {
+		t.Fatalf("GetByID draft task: %v", err)
+	}
+	if updatedDraft.WorkStatus != "draft" {
+		t.Fatalf("draft task work_status = %q, want draft after executable-contract queue failure", updatedDraft.WorkStatus)
+	}
+
+	if len(fixture.enqueuer.jobs) != 0 {
+		t.Fatalf("enqueued jobs = %d, want 0 when no focused replacement retry can be inferred", len(fixture.enqueuer.jobs))
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var sawSystemMessage bool
+	for _, msg := range storedMessages {
+		if strings.EqualFold(strings.TrimSpace(msg.Role), "system") &&
+			strings.Contains(msg.Content, "still needs a bounded executable contract") &&
+			strings.Contains(msg.Content, "task 19") {
+			sawSystemMessage = true
+		}
+	}
+	if !sawSystemMessage {
+		t.Fatal("expected system message recording executable-contract auto-queue failure")
 	}
 }
 
@@ -17072,8 +17277,8 @@ func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationStopsForFocused
 		},
 	}}
 
-	if !shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
-		t.Fatal("expected focused draft child creation to stop the PM turn once the replacement child exists")
+	if shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
+		t.Fatal("draft-only focused child creation should not stop the PM turn before the child lane is runnable")
 	}
 }
 
@@ -17104,8 +17309,8 @@ func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationStopsForFocused
 		},
 	}}
 
-	if !shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
-		t.Fatal("expected focused draft child batch creation to stop the PM turn once replacement children exist")
+	if shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
+		t.Fatal("draft-only focused child batch creation should not stop the PM turn before the child lanes are runnable")
 	}
 }
 
@@ -26603,6 +26808,81 @@ func TestProjectExecutionContinuationSnapshotIgnoresSupersededSatisfiedOutcomeDr
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotIgnoresDescendantsOfSupersededDraftParents(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	doneTaskID := uuid.New()
+	supersededParentID := uuid.New()
+	descendantID := uuid.New()
+	doneDescription := "Write planning/sambot-prompts/test-conversations-level3.md as the final replacement deliverable."
+	parentDescription := "Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations."
+	descendantDescription := "User asks about Sam's approach to AI ethics beyond policy papers — how does he build it into systems?"
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			doneTaskID: {
+				ID:          doneTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  310,
+				Title:       "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations (replacement)",
+				Description: &doneDescription,
+				WorkStatus:  "done",
+				Metadata: mustJSONRaw(map[string]any{
+					"parent_orchestration": map[string]any{
+						"outcome_assessment": map[string]any{
+							"satisfied": true,
+							"summary":   "planning/sambot-prompts/test-conversations-level3.md is already implementation-complete.",
+						},
+					},
+				}),
+			},
+			supersededParentID: {
+				ID:          supersededParentID,
+				ProjectID:   projectID,
+				TaskNumber:  328,
+				Title:       "Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations that exercise SamBot's ability to speak as Sam Hotchkiss on hard technical subjects.",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+			},
+			descendantID: {
+				ID:          descendantID,
+				ProjectID:   projectID,
+				TaskNumber:  6639,
+				Title:       "User asks about Sam's approach to AI ethics beyond policy papers — how does he build it into systems?",
+				Description: &descendantDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition_parent_task_id": supersededParentID.String(),
+				}),
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshotForSummary(context.Background(), projectID, "planning/sambot-prompts/test-conversations-level3.md")
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshotForSummary: %v", err)
+	}
+	if strings.Contains(snapshot.DraftTaskLine, "task 328") || strings.Contains(snapshot.DraftTaskLine, "task 6639") {
+		t.Fatalf("DraftTaskLine = %q, should omit superseded draft parent chain", snapshot.DraftTaskLine)
+	}
+	if strings.Contains(snapshot.FocusTaskLine, "task 328") || strings.Contains(snapshot.FocusTaskLine, "task 6639") {
+		t.Fatalf("FocusTaskLine = %q, should omit superseded draft parent chain", snapshot.FocusTaskLine)
+	}
+
+	count, err := fixture.engine.countProjectDraftTasks(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("countProjectDraftTasks: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("countProjectDraftTasks = %d, want 0 after ignoring superseded draft descendants", count)
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotKeepsReplacementDraftWhenBlockedSamePathTaskRemains(t *testing.T) {
 	t.Parallel()
 
@@ -27318,6 +27598,64 @@ func TestShouldBlockProjectContinuationFocusedDraftTaskCreateForMalformedSameDel
 	}
 }
 
+func TestShouldBlockProjectContinuationFocusedDraftTaskCreateForExecutableRepair(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	focusTaskID := uuid.New()
+	parentTaskID := uuid.New()
+	parentDescription := "Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations."
+	focusDescription := "User asks about Sam's approach to AI ethics beyond policy papers — how does he build it into systems?"
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentTaskID: {
+				ID:          parentTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  328,
+				Title:       "Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations.",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+			},
+			focusTaskID: {
+				ID:          focusTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  6637,
+				Title:       "User asks about Sam's approach to AI ethics beyond policy papers — how does he build it into systems?",
+				Description: &focusDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition_parent_task_id": parentTaskID.String(),
+				}),
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: finish the level-3 SamBot conversations file", projectExecutionContinuationSnapshot{
+			ProjectLine:   "Active project id: " + projectID.String(),
+			DraftTaskLine: "Actionable draft tasks already in the tree: task 6637 (User asks about Sam's approach to AI ethics beyond policy papers — how does he build it into systems?) id=" + focusTaskID.String() + " title=\"User asks about Sam's approach to AI ethics beyond policy papers — how does he build it into systems?\" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-level3.md",
+			FocusTaskLine: "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 6637 (User asks about Sam's approach to AI ethics beyond policy papers — how does he build it into systems?) id=" + focusTaskID.String() + " title=\"User asks about Sam's approach to AI ethics beyond policy papers — how does he build it into systems?\" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-level3.md",
+		}),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftTaskCreateTool(context.Background(), rt, "task.create", map[string]any{
+		"parent_task_id": focusTaskID.String(),
+		"title":          "Draft conversation outline: AI ethics built into systems — define 4-6 user prompts and expected SamBot response themes",
+		"description":    "Output: Add a new section to planning/sambot-prompts/test-conversations-level3.md titled \"## Conversation: AI Ethics Built Into Systems\" with the outline in bullet form.",
+	})
+	if !blocked {
+		t.Fatal("expected project continuation to block child creation and require repairing the focused draft executable contract")
+	}
+	if !strings.Contains(reason, "needs a bounded executable contract") || !strings.Contains(reason, "task.update") || !strings.Contains(reason, "queue") {
+		t.Fatalf("reason = %q, want executable-repair guidance", reason)
+	}
+}
+
 func TestBuildProjectContinuationActionPromptAddsSatisfiedCloseoutGuidance(t *testing.T) {
 	prompt := buildProjectContinuationActionPrompt("Active project request: close out the satisfied spec parent", projectExecutionContinuationSnapshot{
 		ProjectLine:   "Active project id: 123",
@@ -27685,6 +28023,52 @@ func TestShouldBlockProjectContinuationFocusedDraftMutationForCurrentFocusParent
 	}
 	if !strings.Contains(reason, "work_status=queued") {
 		t.Fatalf("reason = %q, want queue guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftMutationAllowsDirectPrerequisiteRepairWithoutProjectScan(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	focusTaskID := uuid.New()
+	assignedAgentID := uuid.New()
+
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			focusTaskID: {
+				ID:         focusTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 6639,
+				Title:      "User asks about Sam's approach to AI ethics beyond policy papers",
+				WorkStatus: "draft",
+			},
+		},
+		listByProjectFn: func(_ context.Context, _ uuid.UUID, _ ...string) ([]repo.ProjectTask, error) {
+			t.Fatal("ListByProject should not be called for direct focus prerequisite repair")
+			return nil, nil
+		},
+	}
+	rt := &turnRuntime{
+		session:              fixture.session,
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			`Actionable draft tasks already in the tree: task 6639 (User asks about Sam's approach to AI ethics beyond policy papers) id=` + focusTaskID.String() + ` work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-level3.md assigned_agent_id=missing flow_template_id=9a60dfee-1fc7-4e3a-bd05-f9da1bb97552`,
+			`Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 6639 (User asks about Sam's approach to AI ethics beyond policy papers) id=` + focusTaskID.String() + ` work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-level3.md assigned_agent_id=missing flow_template_id=9a60dfee-1fc7-4e3a-bd05-f9da1bb97552`,
+			`Because that focus parent still has explicit prerequisite fields missing, do not inspect deliverables or sibling artifacts first. Repair the named assigned_agent_id / flow_template_id gaps on that exact task with one narrow task.update, or report one blocker sentence if the required value is still unknown.`,
+		}, " "),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftMutationTool(context.Background(), rt, "task.update", map[string]any{
+		"task_id":           focusTaskID.String(),
+		"work_status":       "queued",
+		"assigned_agent_id": assignedAgentID.String(),
+	})
+	if blocked {
+		t.Fatalf("blocked = true, reason = %q; want direct focus prerequisite repair to pass", reason)
 	}
 }
 
@@ -29031,6 +29415,46 @@ func TestAppendContinuationSummaryAndActionUsesFocusedBoundedSizeProjectResumePr
 	}
 	if !strings.Contains(message.Content, "split task 249 (Write planning/sambot-tech-architecture.md) into smaller reviewable child tasks now") {
 		t.Fatalf("historyStart content = %q, want bounded-size split instruction", message.Content)
+	}
+}
+
+func TestInitialMessageTextWithContinuationSummaryPrependsRecentProjectSummary(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	triggerID := uuid.New()
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.session.Mode = "async"
+	fixture.messages.create(repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		SequenceNumber: 10,
+		Role:           "system",
+		Status:         "final",
+		Content:        "[Continuation summary] Active project request: recover the blocked template work. Actionable draft tasks already in the tree: task 246 ...",
+	})
+	trigger := repo.ChatMessage{
+		ID:             triggerID,
+		SessionID:      fixture.session.ID,
+		SequenceNumber: 11,
+		Role:           "user",
+		Status:         "pending",
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source": projectExecutionContinuationSource,
+		}),
+	}
+	fixture.messages.create(trigger)
+
+	merged := fixture.engine.initialMessageTextWithContinuationSummary(context.Background(), fixture.session.ID, trigger, trigger.Content)
+	if !strings.HasPrefix(merged, "[Continuation summary] Active project request: recover the blocked template work.") {
+		t.Fatalf("merged initial message = %q, want continuation summary prepended", merged)
+	}
+	if !strings.Contains(merged, "Continue the active project execution now.") {
+		t.Fatalf("merged initial message = %q, want original trigger prompt retained", merged)
 	}
 }
 
@@ -40842,6 +41266,49 @@ func TestEnsureProjectBootstrapFirstWaveExecutionsStarted(t *testing.T) {
 	}
 }
 
+func TestEnsureProjectBootstrapFirstWaveExecutionConsumesExecutableContractFailure(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	taskID := uuid.New()
+	engine := &TurnEngine{
+		taskTransitions: &fakeTaskTransitionService{
+			err: taskdecomp.ExecutableTaskContractError{
+				Reason: "resume the bounded work from parent task 297 instead of queueing duplicate same-deliverable child 328 for `planning/sambot-prompts/test-conversations-level3.md`",
+			},
+		},
+	}
+
+	progress := projectBootstrapProgress{
+		ValidationStatus: projectBootstrapValidationPassed,
+		FirstWaveTasks: []repo.ProjectTask{
+			{
+				ID:         taskID,
+				ProjectID:  projectID,
+				TaskNumber: 328,
+				Title:      "Write planning/sambot-prompts/test-conversations-level3.md",
+				WorkStatus: "draft",
+			},
+		},
+		FirstWaveTaskCount: 1,
+	}
+
+	updated, err := engine.ensureProjectBootstrapFirstWaveExecution(context.Background(), progress)
+	if err != nil {
+		t.Fatalf("ensureProjectBootstrapFirstWaveExecution: %v", err)
+	}
+	if updated.ValidationStatus != projectBootstrapValidationFailed {
+		t.Fatalf("validation status = %q, want %q", updated.ValidationStatus, projectBootstrapValidationFailed)
+	}
+	if updated.ValidationFailureClass != projectBootstrapFailureFirstWaveExecution {
+		t.Fatalf("validation failure class = %q, want %q", updated.ValidationFailureClass, projectBootstrapFailureFirstWaveExecution)
+	}
+	if !strings.Contains(updated.ValidationFailureReason, "bounded executable contract") &&
+		!strings.Contains(updated.ValidationFailureReason, "task requires a bounded executable contract before it can be queued") {
+		t.Fatalf("validation failure reason = %q, want executable-contract guidance", updated.ValidationFailureReason)
+	}
+}
+
 func TestLooksLikeRecoveryFileDraftRejectsLongImperativeNarration(t *testing.T) {
 	t.Parallel()
 
@@ -43060,6 +43527,7 @@ type fakeTaskRepo struct {
 	updateCalls              int
 	updateMetadataCalls      int
 	updateAssignedAgentCalls int
+	listByProjectFn          func(context.Context, uuid.UUID, ...string) ([]repo.ProjectTask, error)
 }
 
 func (f *fakeTaskRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ProjectTask, error) {
@@ -43085,6 +43553,9 @@ func (f *fakeTaskRepo) GetByProjectAndNumber(_ context.Context, projectID uuid.U
 }
 
 func (f *fakeTaskRepo) ListByProject(_ context.Context, projectID uuid.UUID, _ ...string) ([]repo.ProjectTask, error) {
+	if f.listByProjectFn != nil {
+		return f.listByProjectFn(context.Background(), projectID)
+	}
 	if f.err != nil {
 		return nil, f.err
 	}

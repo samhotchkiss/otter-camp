@@ -1797,7 +1797,7 @@ func shouldSkipAsyncExecutionSummarization(session repo.ChatSession) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(session.ScopeType)) {
-	case "project", "project_task":
+	case "project_task":
 		return true
 	default:
 		return false

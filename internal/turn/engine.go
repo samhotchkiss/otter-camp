@@ -4992,6 +4992,12 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 				progress.ValidationFailureReason = err.Error()
 				return progress, nil
 			}
+			if errors.Is(err, taskdecomp.ErrExecutableTaskContractRequired) {
+				progress.ValidationStatus = projectBootstrapValidationFailed
+				progress.ValidationFailureClass = projectBootstrapFailureFirstWaveExecution
+				progress.ValidationFailureReason = err.Error()
+				return progress, nil
+			}
 			return progress, err
 		}
 		queuedAny = true
@@ -5168,6 +5174,24 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 				),
 			)
 			if retried, retryErr := e.retryProjectExecutionContinuationForBoundedSizeStop(ctx, session, completedTurn, latestUser, messages); retryErr != nil {
+				return false, retryErr
+			} else if retried {
+				return true, nil
+			}
+			return true, nil
+		}
+		if errors.Is(err, taskdecomp.ErrExecutableTaskContractRequired) {
+			_, _ = e.appendSystemMessage(
+				ctx,
+				completedTurn.ID,
+				session.ID,
+				fmt.Sprintf(
+					"[Project continuation found remaining draft %s but could not auto-queue it because it still needs a bounded executable contract: %s. Resume the bounded parent or preferred same-deliverable child instead of queueing this duplicate draft unchanged.]",
+					projectBootstrapTaskLabel(nextTask),
+					strings.TrimSpace(err.Error()),
+				),
+			)
+			if retried, retryErr := e.retryProjectExecutionContinuationForReplacementChildWork(ctx, session, completedTurn, latestUser); retryErr != nil {
 				return false, retryErr
 			} else if retried {
 				return true, nil
@@ -5511,6 +5535,25 @@ func (e *TurnEngine) retryProjectExecutionContinuationForMissingDependency(
 						strings.TrimSpace(transitionErr.Error()),
 					),
 				)
+				return true, nil
+			}
+			if errors.Is(transitionErr, taskdecomp.ErrExecutableTaskContractRequired) {
+				_, _ = e.appendSystemMessage(
+					ctx,
+					latestCompleted.ID,
+					session.ID,
+					fmt.Sprintf(
+						"[Project continuation found matching draft %s for prerequisite artifact `%s`, but could not auto-queue it because it still needs a bounded executable contract: %s. Resume the bounded parent or preferred same-deliverable child instead of queueing this duplicate draft unchanged.]",
+						projectBootstrapTaskLabel(nextTask),
+						missingPath,
+						strings.TrimSpace(transitionErr.Error()),
+					),
+				)
+				if retried, retryErr := e.retryProjectExecutionContinuationForReplacementChildWork(ctx, session, latestCompleted, latestUser); retryErr != nil {
+					return false, retryErr
+				} else if retried {
+					return true, nil
+				}
 				return true, nil
 			}
 			return false, transitionErr
@@ -10343,6 +10386,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		availabilityPreflighted: availabilityPreflighted,
 		recoveryTurn:            isRecoveryResumeMessage(message),
 	}
+	runtime.initialMessageText = e.initialMessageTextWithContinuationSummary(ctx, sessionID, message, runtime.initialMessageText)
 	if runtime.recoveryTurn {
 		runtime.recoveryTargetPath = e.recoveryTargetPathForSession(ctx, session)
 		runtime.recoveryDirectWriteOnly = e.recoveryDirectWriteOnlyState(ctx, session, runtime.recoveryTargetPath, runtime.initialMessageText)
@@ -13562,6 +13606,46 @@ func applySyntheticContinuationActionPrompt(rt *turnRuntime, message *chat.ChatM
 	}
 	rt.initialMessageID = message.ID
 	rt.initialMessageText = strings.TrimSpace(message.Content)
+}
+
+func (e *TurnEngine) initialMessageTextWithContinuationSummary(ctx context.Context, sessionID uuid.UUID, trigger repo.ChatMessage, initial string) string {
+	initial = strings.TrimSpace(initial)
+	if e == nil || e.messages == nil || sessionID == uuid.Nil {
+		return initial
+	}
+	source := strings.TrimSpace(stringValue(messageMetadataMap(trigger.Metadata)["source"]))
+	switch source {
+	case projectExecutionContinuationSource, "project_continuation_resume", taskContinuationResumeMessageSource, "organization_continuation_resume":
+	default:
+		return initial
+	}
+	if strings.Contains(initial, "Already-active non-terminal tasks in the tree:") ||
+		strings.Contains(initial, "Actionable draft tasks already in the tree:") ||
+		strings.Contains(initial, "[Continuation summary]") {
+		return initial
+	}
+	messages, err := e.messages.ListBySession(ctx, sessionID)
+	if err != nil {
+		return initial
+	}
+	var summary string
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		content := strings.TrimSpace(message.Content)
+		if !strings.HasPrefix(content, "[Continuation summary]") {
+			continue
+		}
+		summary = content
+	}
+	if summary == "" {
+		return initial
+	}
+	if initial == "" {
+		return summary
+	}
+	return strings.TrimSpace(summary + "\n\n" + initial)
 }
 
 func (e *TurnEngine) taskReviewContinuationActionPrompt(ctx context.Context, rt *turnRuntime, previousTurn *repo.ChatTurn) (string, json.RawMessage, bool, error) {
@@ -23205,6 +23289,10 @@ func projectContinuationSupersededDraftTaskIDs(
 	if len(projectTasks) == 0 {
 		return nil
 	}
+	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(projectTasks))
+	for _, task := range projectTasks {
+		tasksByID[task.ID] = task
+	}
 	var superseded map[uuid.UUID]struct{}
 	for _, draftTask := range projectTasks {
 		if _, malformed := malformedChildTaskIDs[draftTask.ID]; malformed {
@@ -23258,7 +23346,69 @@ func projectContinuationSupersededDraftTaskIDs(
 			break
 		}
 	}
+	if len(superseded) == 0 {
+		return nil
+	}
+	projectContinuationAppendSupersededDraftDescendants(projectTasks, tasksByID, malformedChildTaskIDs, superseded)
 	return superseded
+}
+
+func projectContinuationAppendSupersededDraftDescendants(
+	projectTasks []repo.ProjectTask,
+	tasksByID map[uuid.UUID]repo.ProjectTask,
+	malformedChildTaskIDs map[uuid.UUID]struct{},
+	superseded map[uuid.UUID]struct{},
+) {
+	if len(projectTasks) == 0 || len(superseded) == 0 {
+		return
+	}
+	memo := make(map[uuid.UUID]bool, len(projectTasks))
+	var hasSupersededAncestor func(taskID uuid.UUID, seen map[uuid.UUID]struct{}) bool
+	hasSupersededAncestor = func(taskID uuid.UUID, seen map[uuid.UUID]struct{}) bool {
+		if taskID == uuid.Nil {
+			return false
+		}
+		if cached, ok := memo[taskID]; ok {
+			return cached
+		}
+		task, ok := tasksByID[taskID]
+		if !ok {
+			memo[taskID] = false
+			return false
+		}
+		parentID := taskdecomp.ParseParentTaskID(task.Metadata)
+		if parentID == uuid.Nil {
+			memo[taskID] = false
+			return false
+		}
+		if _, ok := superseded[parentID]; ok {
+			memo[taskID] = true
+			return true
+		}
+		if _, cycle := seen[parentID]; cycle {
+			memo[taskID] = false
+			return false
+		}
+		seen[parentID] = struct{}{}
+		result := hasSupersededAncestor(parentID, seen)
+		delete(seen, parentID)
+		memo[taskID] = result
+		return result
+	}
+	for _, task := range projectTasks {
+		if _, malformed := malformedChildTaskIDs[task.ID]; malformed {
+			continue
+		}
+		if _, already := superseded[task.ID]; already {
+			continue
+		}
+		if !isActionableProjectDraftTask(task) {
+			continue
+		}
+		if hasSupersededAncestor(task.ID, map[uuid.UUID]struct{}{task.ID: {}}) {
+			superseded[task.ID] = struct{}{}
+		}
+	}
 }
 
 func projectContinuationDraftHasOpenRejectedProofForSameDeliverable(
@@ -27707,6 +27857,18 @@ func (e *TurnEngine) dispatchTier1Concurrent(ctx context.Context, calls []ToolCa
 	if len(calls) == 0 {
 		return nil, nil
 	}
+	if tier1BatchRequiresSequentialDispatch(calls) {
+		results := make([]ToolResult, len(calls))
+		for i := range calls {
+			result, err := e.dispatcher.DispatchTier1(ctx, calls[i])
+			if err != nil {
+				results[i] = ToolResult{ToolCallID: calls[i].ID, Name: calls[i].Name, Error: fmt.Sprintf("%s failed: %s", calls[i].Name, err.Error())}
+				continue
+			}
+			results[i] = result
+		}
+		return results, nil
+	}
 	results := make([]ToolResult, len(calls))
 	errCh := make(chan error, len(calls))
 	var wg sync.WaitGroup
@@ -27730,6 +27892,35 @@ func (e *TurnEngine) dispatchTier1Concurrent(ctx context.Context, calls []ToolCa
 		}
 	}
 	return results, nil
+}
+
+func tier1BatchRequiresSequentialDispatch(calls []ToolCall) bool {
+	seen := make(map[string]struct{}, len(calls))
+	for _, call := range calls {
+		key := tier1SequentialConflictKey(call)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			return true
+		}
+		seen[key] = struct{}{}
+	}
+	return false
+}
+
+func tier1SequentialConflictKey(call ToolCall) string {
+	switch strings.ToLower(strings.TrimSpace(call.Name)) {
+	case "task.create":
+		if parentTaskID, ok := parseUUIDAny(call.Arguments["parent_task_id"]); ok && parentTaskID != uuid.Nil {
+			return "task.create.parent:" + parentTaskID.String()
+		}
+	case "task.update":
+		if taskID, ok := parseUUIDAny(call.Arguments["task_id"]); ok && taskID != uuid.Nil {
+			return "task.update.task:" + taskID.String()
+		}
+	}
+	return ""
 }
 
 func (e *TurnEngine) appendToolResults(ctx context.Context, rt *turnRuntime, results []ToolResult) error {
@@ -31767,7 +31958,7 @@ func projectExecutionFocusedDraftChildCreateSucceeded(call ToolCall, result Tool
 	}
 	status := projectExecutionResultWorkStatus(call.Arguments, result)
 	switch status {
-	case "draft", "queued", "in_progress", "review":
+	case "queued", "in_progress", "review":
 		if taskOutput, ok := result.Output["task"].(map[string]any); ok {
 			taskID, ok := parseUUIDAny(taskOutput["id"])
 			return ok && taskID != uuid.Nil
@@ -31789,7 +31980,7 @@ func projectExecutionFocusedDraftChildCreateSucceeded(call ToolCall, result Tool
 				continue
 			}
 			switch strings.ToLower(strings.TrimSpace(stringValue(taskOutput["work_status"]))) {
-			case "draft", "queued", "in_progress", "review":
+			case "queued", "in_progress", "review":
 				return true
 			}
 		}
@@ -34749,7 +34940,7 @@ func buildProjectBootstrapRecoveryRereadToolGuardError(rt *turnRuntime, toolName
 		}
 	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "task.list":
+	case "task.list", "task_list":
 		return "bootstrap validation recovery already named the blocker and you already listed the persisted task tree on this turn; do not re-list it again. Repair the named task directly, or inspect only a single specific task if its details are still unclear."
 	case "task.get":
 		return "bootstrap validation recovery already includes the exact blocked task id and direct-repair instructions in the continuation message. Do not reread that task first; repair it directly with task.update and bounded child task creation."
@@ -34782,7 +34973,7 @@ func buildTaskExecutionBroadContextToolGuardError(toolName string) string {
 		return "task execution should not browse org or project memory for unrelated prior work. Continue from the active task brief, current workspace, and recent task-session tool results only."
 	case "project.get", "project.list":
 		return "task execution already has a task-scoped async session. Do not reread broad project state; continue from the active task brief, current workspace, and recent task-session tool results."
-	case "task.list":
+	case "task.list", "task_list":
 		return "task execution should not re-list the broader project task tree from a task-scoped async session. Continue the assigned task directly."
 	case "session.list", "session_list", "session.history", "session_history":
 		return "task execution should not browse other task or project sessions from a task-scoped async session. Continue from the active task brief, current workspace, and recent task-session tool results only."
@@ -35023,7 +35214,7 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 			return false, ""
 		}
 		return true, buildProjectContinuationSnapshotFlowTemplateRediscoveryGuardError(toolName)
-	case "task.list":
+	case "task.list", "task_list":
 		if parentTaskIDText := strings.TrimSpace(stringValue(arguments["parent_task_id"])); parentTaskIDText != "" {
 			parentTaskID, err := uuid.Parse(parentTaskIDText)
 			if err != nil || parentTaskID == uuid.Nil {
@@ -35839,6 +36030,15 @@ func buildProjectContinuationFocusedDraftMalformedSameDeliverableChildGuardError
 	return fmt.Sprintf("project continuation already has malformed same-deliverable direct child draft task(s) beneath focused draft task %s: %s. Do not create another child beneath %s from the project lane; pick the best existing same-deliverable child draft such as %s, queue or repair that draft if it is still usable, and block or consolidate the duplicate siblings before attempting any new replacement.", label, strings.Join(childLabels, ", "), label, preferredLabel)
 }
 
+func buildProjectContinuationFocusedDraftExecutableRepairGuardError(focusTask repo.ProjectTask, deliverable string) string {
+	label := projectBootstrapTaskLabel(focusTask)
+	target := strings.TrimSpace(deliverable)
+	if target == "" {
+		return fmt.Sprintf("project continuation already has focused draft task %s, but that draft still needs a bounded executable contract. Do not create another child beneath %s from the project lane. Use one narrow task.update on %s to replace its title and/or description with the bounded contract you just derived, then queue %s directly.", label, label, label, label)
+	}
+	return fmt.Sprintf("project continuation already has focused draft task %s for deliverable `%s`, but that draft still needs a bounded executable contract. Do not create another child beneath %s from the project lane. Use one narrow task.update on %s to replace its title and/or description with the bounded contract you just derived for `%s`, then queue %s directly.", label, target, label, label, target, label)
+}
+
 func buildProjectContinuationDescendantDraftReplacementGuardError(targetTask, focusTask repo.ProjectTask, activity projectContinuationChildActivity) string {
 	targetLabel := projectBootstrapTaskLabel(targetTask)
 	focusLabel := projectBootstrapTaskLabel(focusTask)
@@ -36026,6 +36226,9 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 	if focusTaskID == uuid.Nil {
 		return false, ""
 	}
+	if projectContinuationFocusedPrerequisiteRepairCanSkipProjectScan(rt, targetTaskID, nextStatus, arguments) {
+		return false, ""
+	}
 	projectID := resolveProjectID(ctx, rt.session, e.tasks)
 	if projectID == nil || *projectID == uuid.Nil {
 		return false, ""
@@ -36109,6 +36312,45 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 	return false, ""
 }
 
+func projectContinuationFocusedPrerequisiteRepairCanSkipProjectScan(rt *turnRuntime, targetTaskID uuid.UUID, nextStatus string, arguments map[string]any) bool {
+	if rt == nil || rt.session == nil || targetTaskID == uuid.Nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	switch nextStatus {
+	case "queued", "in_progress", "review":
+	default:
+		return false
+	}
+	initial := strings.TrimSpace(rt.initialMessageText)
+	if !projectContinuationFocusedPrerequisiteRepairActive(initial) || projectContinuationFocusedCloseoutReadyActive(initial) {
+		return false
+	}
+	if !strings.Contains(initial, "Actionable draft tasks already in the tree:") ||
+		!strings.Contains(initial, "Start from this existing actionable draft before broad rediscovery") {
+		return false
+	}
+	focusTaskID := projectContinuationFocusedTaskID(initial)
+	if focusTaskID == uuid.Nil || focusTaskID != targetTaskID {
+		return false
+	}
+	missingAssignedAgent := strings.Contains(initial, "assigned_agent_id=missing")
+	missingFlowTemplate := strings.Contains(initial, "flow_template_id=missing")
+	if !missingAssignedAgent && !missingFlowTemplate {
+		return false
+	}
+	if missingAssignedAgent && strings.TrimSpace(stringValue(arguments["assigned_agent_id"])) == "" {
+		return false
+	}
+	if missingFlowTemplate && strings.TrimSpace(stringValue(arguments["flow_template_id"])) == "" {
+		return false
+	}
+	return true
+}
+
 func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
 	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
 		return false, ""
@@ -36140,11 +36382,23 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 		return false, ""
 	}
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
-	focusTask, ok := projectContinuationCurrentFocusTaskWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths)
+	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(projectTasks))
+	for _, task := range projectTasks {
+		tasksByID[task.ID] = task
+	}
+	focusTaskID := projectContinuationFocusedTaskID(strings.TrimSpace(rt.initialMessageText))
+	if focusTaskID == uuid.Nil {
+		focusTaskID = projectContinuationPromptCurrentFocusParentTaskID(strings.TrimSpace(rt.initialMessageText))
+	}
+	focusTask, ok := tasksByID[focusTaskID]
+	if !ok || focusTask.ID == uuid.Nil || strings.EqualFold(strings.TrimSpace(focusTask.WorkStatus), "cancelled") {
+		focusTask, ok = projectContinuationCurrentFocusTaskWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths)
+	}
 	if !ok || focusTask.ID == uuid.Nil || focusTask.ID != parentTaskID {
 		return false, ""
 	}
 	focusActivity := childActivity[focusTask.ID]
+	focusHints := taskHintsByTask[focusTask.ID]
 	if focusActivity.workspaceDeliverablePresent {
 		return true, buildProjectContinuationFocusedDraftCloseoutTaskCreateGuardError(focusTask)
 	}
@@ -36169,9 +36423,83 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 				return true, buildProjectContinuationFocusedDraftMalformedSameDeliverableChildGuardError(focusTask, malformedSameDeliverableDraftChildren)
 			}
 		}
+		if projectContinuationFocusedDraftShouldRepairExecutableContract(focusTask, focusHints, strings.TrimSpace(rt.initialMessageText), arguments) {
+			deliverable := strings.TrimSpace(focusHints.DeliverablePath)
+			if deliverable == "" {
+				deliverable = strings.TrimSpace(focusHints.DeliverableRoot)
+			}
+			if deliverable == "" {
+				deliverable = projectContinuationPromptFocusDeliverable(strings.TrimSpace(rt.initialMessageText), focusTask.ID)
+			}
+			return true, buildProjectContinuationFocusedDraftExecutableRepairGuardError(focusTask, deliverable)
+		}
 		return false, ""
 	}
 	return true, buildProjectContinuationFocusedDraftCloseoutTaskCreateGuardError(focusTask)
+}
+
+func projectContinuationFocusedDraftShouldRepairExecutableContract(
+	focusTask repo.ProjectTask,
+	focusHints projectContinuationTaskHints,
+	initialMessage string,
+	arguments map[string]any,
+) bool {
+	if focusTask.ID == uuid.Nil {
+		return false
+	}
+	needsRepair := false
+	if err := taskdecomp.ValidateExecutableTaskContract(focusTask.Title, focusTask.Description); errors.Is(err, taskdecomp.ErrExecutableTaskContractRequired) {
+		needsRepair = true
+	}
+	if !taskHasStandaloneVisibleFileAction(focusTask) {
+		needsRepair = true
+	}
+	if !needsRepair {
+		return false
+	}
+	target := strings.TrimSpace(focusHints.DeliverablePath)
+	if target == "" {
+		target = strings.TrimSpace(focusHints.DeliverableRoot)
+	}
+	if target == "" {
+		target = projectContinuationPromptFocusDeliverable(initialMessage, focusTask.ID)
+	}
+	if target == "" {
+		return false
+	}
+	title := strings.ToLower(strings.TrimSpace(stringValue(arguments["title"])))
+	description := strings.ToLower(strings.TrimSpace(stringValue(arguments["description"])))
+	target = strings.ToLower(target)
+	return strings.Contains(title, target) || strings.Contains(description, target)
+}
+
+func projectContinuationPromptFocusDeliverable(initialMessage string, focusTaskID uuid.UUID) string {
+	if strings.TrimSpace(initialMessage) == "" || focusTaskID == uuid.Nil {
+		return ""
+	}
+	taskIDText := focusTaskID.String()
+	for _, line := range strings.Split(initialMessage, "\n") {
+		if !strings.Contains(line, taskIDText) {
+			continue
+		}
+		for _, marker := range []string{"deliverable_path=", "deliverable_root="} {
+			idx := strings.Index(line, marker)
+			if idx < 0 {
+				continue
+			}
+			value := strings.TrimSpace(line[idx+len(marker):])
+			if value == "" {
+				continue
+			}
+			if end := strings.IndexAny(value, " \t\r\n"); end >= 0 {
+				value = value[:end]
+			}
+			if value != "" {
+				return value
+			}
+		}
+	}
+	return ""
 }
 
 func buildTaskExecutionOffTargetEvidenceToolGuardError(targetPath, path, toolName string) string {
