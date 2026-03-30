@@ -4392,3 +4392,17 @@
     - added `TestPrepareQueueDecompositionSkipsSingleConcreteTemplateWithPurposeApproachAndAcceptanceSections`
   - verified with:
     - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(ExtractDeliverablesIgnores(PurposeApproachAndAcceptanceForSingleFileTemplate|ProceduralStepsAndImportantSections|DesignGuidanceAndProcessCompanionLines)|PrepareQueueDecompositionSkips(SingleConcreteTemplateWithRequirements|SingleConcreteTemplateWithPurposeApproachAndAcceptanceSections|ConcreteDeliverableWithTemplateConceptLine|ConcreteDeliverableWithProceduralSections))$' -count=1`
+- 2026-03-30 01:33 MDT - Suppressed repeated `task_recovery_resume` requeues after the engine’s direct-write-only stop family.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - added `taskRecoveryDirectWriteOnlyGuardPrefix`
+    - `PurgeStaleAgentTurnJobs(...)` now purges stale pending recovery-resume dispatches when the latest completed recovery turn stopped on the direct-write-only system guard
+    - `latestRecoveryResumeTurnShowsTerminalBlockedStop(...)` now recognizes the direct-write-only system stop, so both active-session and terminal-session recovery suppression treat it as terminal
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSuppressesDirectWriteOnlyGuard`
+    - added `TestJobWorkerRequeueTerminalRecoveryResumeSessionsWithoutLiveExecutionSuppressesDirectWriteOnlyGuard`
+    - added `TestJobWorkerPurgeStaleAgentTurnJobsPurgesDirectWriteOnlyRecoveryResume`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RequeueActiveExecutionSessionsWithoutTurnsSuppresses(DirectWriteOnlyGuard|InheritedSharedDeliverableGuard)|RequeueTerminalRecoveryResumeSessionsWithoutLiveExecutionSuppresses(DirectWriteOnlyGuard|InheritedSharedDeliverableGuard|SiblingResponsibilityGuard)|PurgeStaleAgentTurnJobsPurges(DirectWriteOnlyRecoveryResume|TerminalBlockedRecoveryResume))$' -count=1`
+  - live state after redeploy on `repo_version=3673`:
+    - task `255` session `81feec51-2006-4dbb-8549-5bdd43011b80` is closed
+    - the old direct-write-only canary no longer has any pending/claimed recovery-resume job behind it

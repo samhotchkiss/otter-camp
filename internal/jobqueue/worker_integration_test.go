@@ -16094,6 +16094,68 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSuppressesInheritedS
 	}
 }
 
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSuppressesDirectWriteOnlyGuard(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	stopReason := "validation_loop_blocked"
+	ctx, session, execution, message := createRecoveryResumeExecutionFixture(t, pool, "requeue-active-execution-suppress-direct-write-only-guard", &stopReason)
+	appendSystemMessageToRecoveryTurn(t, pool, session.ID, message.ID, "[Recovery direct-write-only mode blocked read-only discovery for `templates/template-08-replace.html`. Ending this turn now so the next continuation writes `templates/template-08-replace.html` directly or reports one concrete blocker sentence instead of reopening discovery.]")
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("repaired sessions = %d, want 1 when direct-write-only recovery resume is suppressed", requeued)
+	}
+
+	var messageStatus, errorMessage string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, message.ID).Scan(&messageStatus, &errorMessage); err != nil {
+		t.Fatalf("query recovery resume message: %v", err)
+	}
+	if messageStatus != "failed" {
+		t.Fatalf("message status = %q, want failed", messageStatus)
+	}
+	if errorMessage != taskRecoveryResumeSuppressedErrorMessage {
+		t.Fatalf("message error = %q, want %q", errorMessage, taskRecoveryResumeSuppressedErrorMessage)
+	}
+
+	var queuedJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status IN ('pending', 'claimed')
+		  AND (payload->>'session_id')::uuid = $1
+	`, session.ID).Scan(&queuedJobs); err != nil {
+		t.Fatalf("count queued jobs: %v", err)
+	}
+	if queuedJobs != 0 {
+		t.Fatalf("queued jobs = %d, want 0 after suppressing active recovery resume", queuedJobs)
+	}
+
+	var executionStatus string
+	if err := pool.QueryRow(ctx, `
+		SELECT status
+		FROM flow_node_execution
+		WHERE id = $1
+	`, execution.ID).Scan(&executionStatus); err != nil {
+		t.Fatalf("query execution status: %v", err)
+	}
+	if executionStatus != "active" {
+		t.Fatalf("execution status = %q, want active", executionStatus)
+	}
+}
+
 func TestJobWorkerRequeueTerminalRecoveryResumeSessionsWithoutLiveExecutionRequeuesLatestPendingResume(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -16354,6 +16416,67 @@ func TestJobWorkerRequeueTerminalRecoveryResumeSessionsWithoutLiveExecutionSuppr
 	}
 }
 
+func TestJobWorkerRequeueTerminalRecoveryResumeSessionsWithoutLiveExecutionSuppressesDirectWriteOnlyGuard(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	stopReason := "validation_loop_blocked"
+	ctx, session, execution, message := createTerminalRecoveryResumeExecutionFixture(t, pool, "requeue-terminal-recovery-suppress-direct-write-only", &stopReason)
+	appendSystemMessageToRecoveryTurn(t, pool, session.ID, message.ID, "[Recovery direct-write-only mode blocked read-only discovery for `templates/template-08-replace.html`. Ending this turn now so the next continuation writes `templates/template-08-replace.html` directly or reports one concrete blocker sentence instead of reopening discovery.]")
+
+	pendingResume, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active task recovery now.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"task_recovery_resume","synthetic_user_message":true,"flow_node_execution_id":"%s"}`, execution.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create pending recovery resume: %v", err)
+	}
+
+	requeued, err := worker.RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(ctx)
+	if err != nil {
+		t.Fatalf("RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("repaired terminal recovery resumes = %d, want 1 when direct-write-only stop suppresses the pending resume", requeued)
+	}
+
+	var messageStatus, errorMessage string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, pendingResume.ID).Scan(&messageStatus, &errorMessage); err != nil {
+		t.Fatalf("query failed recovery resume: %v", err)
+	}
+	if messageStatus != "failed" {
+		t.Fatalf("message status = %q, want failed", messageStatus)
+	}
+	if errorMessage != taskRecoveryResumeSuppressedErrorMessage {
+		t.Fatalf("message error = %q, want %q", errorMessage, taskRecoveryResumeSuppressedErrorMessage)
+	}
+
+	var queuedJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status IN ('pending', 'claimed')
+		  AND (payload->>'session_id')::uuid = $1
+	`, session.ID).Scan(&queuedJobs); err != nil {
+		t.Fatalf("count queued jobs: %v", err)
+	}
+	if queuedJobs != 0 {
+		t.Fatalf("queued jobs = %d, want 0 after suppressing terminal recovery resume", queuedJobs)
+	}
+}
+
 func TestJobWorkerCloseBlockedProjectTaskAsyncSessionsWithoutLiveExecutionSkipsRepairedTerminalRecoveryResume(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -16485,6 +16608,56 @@ func TestJobWorkerPurgeStaleAgentTurnJobsPurgesTerminalBlockedRecoveryResume(t *
 	}
 	if purged != 1 {
 		t.Fatalf("purged jobs = %d, want 1 after terminal blocked recovery stop", purged)
+	}
+
+	var status, lastError string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(last_error, '')
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status, &lastError); err != nil {
+		t.Fatalf("query job after purge pass: %v", err)
+	}
+	if status != "dead_letter" {
+		t.Fatalf("job status = %q, want dead_letter", status)
+	}
+	if lastError != "purged stale recovery resume after terminal blocked stop" {
+		t.Fatalf("last_error = %q, want terminal blocked recovery purge reason", lastError)
+	}
+}
+
+func TestJobWorkerPurgeStaleAgentTurnJobsPurgesDirectWriteOnlyRecoveryResume(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	stopReason := "validation_loop_blocked"
+	ctx, session, execution, message := createRecoveryResumeExecutionFixture(t, pool, "purge-direct-write-only-recovery-resume", &stopReason)
+	appendSystemMessageToRecoveryTurn(t, pool, session.ID, message.ID, "[Recovery direct-write-only mode blocked read-only discovery for `templates/template-08-replace.html`. Ending this turn now so the next continuation writes `templates/template-08-replace.html` directly or reports one concrete blocker sentence instead of reopening discovery.]")
+
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, $2, 70, $3, $4)
+		RETURNING id
+	`,
+		fmt.Sprintf(`{"session_id":"%s","message_id":"%s","flow_node_execution_id":"%s","retry_count":1}`, session.ID, message.ID, execution.ID),
+		time.Now().UTC(),
+		fmt.Sprintf("agent_turn:%s:%s:1", session.ID, message.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, message.ID, 1),
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert stale recovery resume job: %v", err)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 1 {
+		t.Fatalf("purged jobs = %d, want 1 after direct-write-only terminal recovery stop", purged)
 	}
 
 	var status, lastError string

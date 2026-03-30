@@ -79,6 +79,7 @@ const (
 	recoverySharedDeliverableGuardPrefix      = "[Recovery shared-deliverable guard:"
 	taskSiblingResponsibilityGuardPrefix      = "[Task sibling-responsibility guard blocked a discovery-only child lane from mutating the shared deliverable."
 	taskInheritedSharedDeliverableGuardPrefix = "[Task shared-deliverable guard blocked a decomposed child lane from replacing the inherited parent file with file.write."
+	taskRecoveryDirectWriteOnlyGuardPrefix    = "[Recovery direct-write-only mode blocked read-only discovery"
 )
 
 var taskQueueSinglePassCLIWritePathPattern = regexp.MustCompile("(?is)(?:single\\s+file|write\\s+a\\s+single\\s+complete[^`\\n]*?at)\\s*:?\\s*`([^`]+)`")
@@ -1032,8 +1033,9 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		    WHERE sm.content LIKE $1
 		       OR sm.content LIKE $2
 		       OR sm.content LIKE $3
+		       OR sm.content LIKE $4
 		  )
-	`, recoverySharedDeliverableGuardPrefix+"%", taskSiblingResponsibilityGuardPrefix+"%", taskInheritedSharedDeliverableGuardPrefix+"%")
+	`, recoverySharedDeliverableGuardPrefix+"%", taskSiblingResponsibilityGuardPrefix+"%", taskInheritedSharedDeliverableGuardPrefix+"%", taskRecoveryDirectWriteOnlyGuardPrefix+"%")
 	if err != nil {
 		return 0, fmt.Errorf("purge stale agent_turn jobs (terminal blocked recovery resumes): %w", err)
 	}
@@ -2196,11 +2198,13 @@ func (w *Worker) latestRecoveryResumeTurnShowsTerminalBlockedStop(ctx context.Co
 			WHERE sm.content LIKE $3
 			   OR sm.content LIKE $4
 			   OR sm.content LIKE $5
+			   OR sm.content LIKE $6
 		)
 	`, sessionID, executionID,
 		recoverySharedDeliverableGuardPrefix+"%",
 		taskSiblingResponsibilityGuardPrefix+"%",
 		taskInheritedSharedDeliverableGuardPrefix+"%",
+		taskRecoveryDirectWriteOnlyGuardPrefix+"%",
 	).Scan(&blocked); err != nil {
 		return false, err
 	}

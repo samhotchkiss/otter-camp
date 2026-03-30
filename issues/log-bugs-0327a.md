@@ -1079,3 +1079,16 @@
   - impact:
     - queue decomposition can spawn sibling same-file child lanes that all circle back to one shared deliverable
     - those malformed child lanes then reopen the familiar `recovery_target_focus_required` / read-only recovery churn family
+- 2026-03-30 01:33 MDT - Direct-write-only recovery stops were terminal in the turn engine but not terminal in worker recovery suppression.
+  - fresh live evidence:
+    - task `255` session `81feec51-2006-4dbb-8549-5bdd43011b80` repeatedly ended with the system stop `[Recovery direct-write-only mode blocked read-only discovery for templates/template-08-replace.html ...]`
+    - worker suppression only matched:
+      - `recoverySharedDeliverableGuardPrefix`
+      - `taskSiblingResponsibilityGuardPrefix`
+      - `taskInheritedSharedDeliverableGuardPrefix`
+    - so the same lane could still be considered eligible for another `task_recovery_resume`
+  - bug:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) did not classify the engine’s direct-write-only stop message as a terminal blocked recovery family
+  - impact:
+    - stale pending jobs and pending recovery-resume messages could survive even after the runtime had already concluded that the lane must either write the concrete file body directly or stop
+    - that kept malformed template-08 child lanes eligible for unnecessary recovery churn
