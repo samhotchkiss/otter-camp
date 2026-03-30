@@ -8619,7 +8619,8 @@ func (e *TurnEngine) appendProjectExecutionContinuationMessage(ctx context.Conte
 		return nil, repo.ErrNotFound
 	}
 	fingerprint := projectExecutionContinuationPromptFingerprint(completedTaskID, content)
-	if suppress, err := e.shouldSuppressRepeatedProjectExecutionContinuation(ctx, sessionID, completedTaskID, fingerprint); err != nil {
+	focusTaskID := projectContinuationFocusedTaskID(content)
+	if suppress, err := e.shouldSuppressRepeatedProjectExecutionContinuation(ctx, sessionID, completedTaskID, fingerprint, focusTaskID); err != nil {
 		return nil, err
 	} else if suppress {
 		return nil, nil
@@ -8773,7 +8774,7 @@ func projectContinuationMissingDependencyStopPathFromSystemMessage(content strin
 	return path, true
 }
 
-func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx context.Context, sessionID, completedTaskID uuid.UUID, fingerprint string) (bool, error) {
+func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx context.Context, sessionID, completedTaskID uuid.UUID, fingerprint string, focusTaskID uuid.UUID) (bool, error) {
 	if e == nil || e.messages == nil || e.chat == nil || sessionID == uuid.Nil || strings.TrimSpace(fingerprint) == "" {
 		return false, nil
 	}
@@ -8831,10 +8832,25 @@ func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx cont
 				}
 			}
 		}
-		if strings.TrimSpace(stringValue(metadata["continuation_snapshot_fingerprint"])) != strings.TrimSpace(fingerprint) {
+		if turn.StopReason == nil || !strings.EqualFold(strings.TrimSpace(*turn.StopReason), "validation_loop_blocked") {
 			continue
 		}
-		if turn.StopReason == nil || !strings.EqualFold(strings.TrimSpace(*turn.StopReason), "validation_loop_blocked") {
+		for _, turnMessage := range messagesForTurn(messages, *message.TurnID) {
+			if !strings.EqualFold(strings.TrimSpace(turnMessage.Role), "system") {
+				continue
+			}
+			trimmed := strings.TrimSpace(turnMessage.Content)
+			if strings.HasPrefix(trimmed, projectContinuationReplacementHandoffPrefix) {
+				if focusTaskID == uuid.Nil {
+					return true, nil
+				}
+				priorFocusTaskID := projectContinuationFocusedTaskID(message.Content)
+				if priorFocusTaskID != uuid.Nil && priorFocusTaskID == focusTaskID {
+					return true, nil
+				}
+			}
+		}
+		if strings.TrimSpace(stringValue(metadata["continuation_snapshot_fingerprint"])) != strings.TrimSpace(fingerprint) {
 			continue
 		}
 		for _, turnMessage := range messagesForTurn(messages, *message.TurnID) {
@@ -8846,9 +8862,6 @@ func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx cont
 				return true, nil
 			}
 			if strings.HasPrefix(trimmed, projectContinuationTaskLaneBoundaryGuardPrefix) {
-				return true, nil
-			}
-			if strings.HasPrefix(trimmed, projectContinuationReplacementHandoffPrefix) {
 				return true, nil
 			}
 			if _, ok := projectContinuationMissingDependencyStopPathFromSystemMessage(trimmed); ok {

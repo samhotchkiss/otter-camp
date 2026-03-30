@@ -15913,7 +15913,7 @@ func TestShouldSuppressRepeatedProjectExecutionContinuationAfterChildLaneWaitSta
 				Content:   tc.systemPrefix,
 			})
 
-			suppress, err := fixture.engine.shouldSuppressRepeatedProjectExecutionContinuation(ctx, fixture.session.ID, completedTaskID, fingerprint)
+			suppress, err := fixture.engine.shouldSuppressRepeatedProjectExecutionContinuation(ctx, fixture.session.ID, completedTaskID, fingerprint, uuid.Nil)
 			if err != nil {
 				t.Fatalf("shouldSuppressRepeatedProjectExecutionContinuation: %v", err)
 			}
@@ -26372,7 +26372,13 @@ func TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoff
 
 	ctx := context.Background()
 	fixture := newUnitFixture(t, "async")
-	fingerprint := projectExecutionContinuationPromptFingerprint(uuid.Nil, "replacement child retry prompt")
+	completedTaskID := uuid.New()
+	focusTaskID := uuid.New()
+	priorPrompt := strings.Join([]string{
+		"Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 246 (Write planning/sambot-personality-spec.md) id=" + focusTaskID.String() + " work_status=draft deliverable_path=planning/sambot-personality-spec.md child_tasks=3 replaceable_blocked_child_tasks=3 malformed_child_tasks=1.",
+		"Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.",
+	}, " ")
+	fingerprint := projectExecutionContinuationPromptFingerprint(completedTaskID, priorPrompt)
 
 	priorTurn, err := fixture.chat.CreateTurn(ctx, fixture.session.ID, fixture.chat.participants[0].ParticipantID)
 	if err != nil {
@@ -26393,10 +26399,11 @@ func TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoff
 		TurnID:    &priorTurn.ID,
 		Role:      "user",
 		Status:    "failed",
-		Content:   "replacement child retry prompt",
+		Content:   priorPrompt,
 		Metadata: mustJSONRaw(map[string]any{
 			"source":                            projectExecutionContinuationSource,
 			"auto_continue":                     true,
+			"completed_task_id":                 completedTaskID.String(),
 			"continuation_snapshot_fingerprint": fingerprint,
 		}),
 	})
@@ -26408,7 +26415,17 @@ func TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoff
 		Content:   projectContinuationReplacementHandoffPrefix + " Do not reread sibling artifacts from the project lane; create the fresh replacement child now or use only task.list(parent_task_id=...) if child-lane verification is still required.]",
 	})
 
-	suppress, err := fixture.engine.shouldSuppressRepeatedProjectExecutionContinuation(ctx, fixture.session.ID, uuid.Nil, fingerprint)
+	nextPrompt := strings.Join([]string{
+		"Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 246 (Write planning/sambot-personality-spec.md) id=" + focusTaskID.String() + " work_status=draft deliverable_path=planning/sambot-personality-spec.md child_tasks=3 replaceable_blocked_child_tasks=3 malformed_child_tasks=1.",
+		"Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.",
+		"Your next assistant action must create the smallest fresh replacement child task beneath task 246 (Write planning/sambot-personality-spec.md) now, or queue an existing direct child draft there if one already fits unchanged.",
+	}, " ")
+	nextFingerprint := projectExecutionContinuationPromptFingerprint(completedTaskID, nextPrompt)
+	if nextFingerprint == fingerprint {
+		t.Fatal("expected replacement-child retry fingerprint to drift across prompt variants in this regression")
+	}
+
+	suppress, err := fixture.engine.shouldSuppressRepeatedProjectExecutionContinuation(ctx, fixture.session.ID, completedTaskID, nextFingerprint, focusTaskID)
 	if err != nil {
 		t.Fatalf("shouldSuppressRepeatedProjectExecutionContinuation: %v", err)
 	}

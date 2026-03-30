@@ -4529,7 +4529,7 @@
 - 2026-03-30 22:18 MDT - Suppressed the same focused replacement-parent retry family in the turn engine itself.
   - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
     - added `projectContinuationReplacementHandoffPrefix`
-    - widened `shouldSuppressRepeatedProjectExecutionContinuation(...)` so repeated `validation_loop_blocked` turns that end with the focused replacement-parent handoff stop no longer append another identical continuation with the same fingerprint
+    - widened `shouldSuppressRepeatedProjectExecutionContinuation(...)` so repeated `validation_loop_blocked` turns that end with the focused replacement-parent handoff stop no longer append another identical continuation for the same focus parent, even when the retry prompt text drifts and changes the fingerprint
   - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
     - added `TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop`
   - verified with:

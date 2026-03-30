@@ -762,7 +762,7 @@ They need sharper stopping rules than ordinary execution lanes.
     - the user rows were being marked `superseded stale pending message after terminal turn`, which proved worker cleanup was firing
     - but each blocked turn still appended a new identical continuation from inside the turn engine
   - landed fix:
-    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now suppresses repeated continuation fingerprints when the prior `validation_loop_blocked` turn ended with the focused replacement-parent handoff stop
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now suppresses repeated focused replacement-parent retries for the same focus parent even when the retry prompt text drifts and produces a different continuation fingerprint
     - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
       - `TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop`
   - verified with:

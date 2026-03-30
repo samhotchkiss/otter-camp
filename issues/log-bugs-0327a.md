@@ -1189,6 +1189,7 @@
       - missing-dependency stops
       - task-lane-boundary stops
       - successful handoff / review-lane resume waits
-    - it did not suppress the focused replacement-parent handoff stop prefix, so `appendProjectExecutionContinuationMessage(...)` kept creating a fresh continuation after every identical blocked turn
+    - it did not suppress the focused replacement-parent handoff stop prefix, and the prompt text was drifting just enough to change the continuation fingerprint each time
+    - so `appendProjectExecutionContinuationMessage(...)` kept creating a fresh continuation after every identical blocked turn against the same focus parent
   - impact:
     - even after worker cleanup, the PM lane could still self-rearm the same blocked continuation family from inside the turn engine itself
