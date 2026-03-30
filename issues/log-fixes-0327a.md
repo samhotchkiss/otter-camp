@@ -3924,3 +3924,17 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshotSummarizesProjectState|BuildProjectExecutionContinuationPromptIncludesCompletedBatchSupersessionGuidance|ProjectExecutionContinuationSnapshotIgnoresMalformedNoDecomposeChildren)$' -count=1`
     - `GOFLAGS='' go test ./internal/jobqueue -run 'TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompleted(BatchSupersessionGuidance|CloseoutGuidance)$' -count=1`
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(UsesReviewProofStateForCompletedTasks|KeepsHumanContinuationPolicyOverStaleReviewGuard)$' -count=1`
+- 2026-03-29 19:48 MDT - Followed that with the next supervisory stop fix for inherited shared-doc child resurrection.
+  - changed [`internal/task/recovery_resume.go`](/Users/sam/dev/otter-camp/internal/task/recovery_resume.go):
+    - widened `recoveryResumeReasonMatchesTerminalMalformedChild(...)` so inherited shared-parent deliverable blockers now count as non-resumable malformed child lanes
+    - this stops `ResumeValidationBlockedTask(...)` from clearing/retrying the exact `inherited_shared_deliverable_write_blocked` family
+  - changed [`internal/task/service_test.go`](/Users/sam/dev/otter-camp/internal/task/service_test.go):
+    - added `TestClassifyTaskResumeDecisionRejectsInheritedSharedDeliverableChild`
+  - changed [`internal/controlplane/supervisor_integration_test.go`](/Users/sam/dev/otter-camp/internal/controlplane/supervisor_integration_test.go):
+    - added `TestSupervisor_InheritedSharedDeliverableChildTaskStaysBlocked`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/task -run 'Test(ClassifyTaskResumeDecisionRejectsInheritedSharedDeliverableChild|ResumeValidationBlockedTaskRejectsNonBlockedTask)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/controlplane -run 'TestSupervisor_(InheritedSharedDeliverableChildTaskStaysBlocked|DurableRecoveryCheckpointTaskStaysBlockedForManualRepair)$' -count=1`
+  - expected live effect after rebuild:
+    - inherited shared-doc child tasks like `160` stop emitting fresh `resume_validation_blocked_task` events and new async sessions
+    - PM/parent replacement logic becomes the only valid path forward for those malformed child lanes

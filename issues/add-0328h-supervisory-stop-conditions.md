@@ -34,6 +34,17 @@ They need sharper stopping rules than ordinary execution lanes.
 
 ### Working Notes
 
+- 2026-03-29 19:48 MDT - Picked up the next supervisory stop seam from live SamBot architecture child task `160`. The worker-side recovery suppressors were already draining individual `task_recovery_resume` retries, but the higher-level blocked-task resume path was still reviving the same child lane every minute with a fresh `resume_validation_blocked_task` kickoff.
+- 2026-03-29 19:48 MDT - Root cause sat in [`internal/task/recovery_resume.go`](/Users/sam/dev/otter-camp/internal/task/recovery_resume.go): `classifyTaskResumeDecision(...)` still treated the inherited shared-parent-file family as a resumable validation loop, because only procedural/no-decompose malformed children were classified as terminal `blocked_without_resumable_state`.
+- 2026-03-29 19:48 MDT - Local hardening is in:
+  - [`internal/task/recovery_resume.go`](/Users/sam/dev/otter-camp/internal/task/recovery_resume.go): inherited shared-parent deliverable blockers (`decomposed child lane inherits shared parent deliverable ...` and `child lane cannot bootstrap the whole shared file`) now count as terminal malformed child lanes
+  - [`internal/task/service_test.go`](/Users/sam/dev/otter-camp/internal/task/service_test.go): added `TestClassifyTaskResumeDecisionRejectsInheritedSharedDeliverableChild`
+  - [`internal/controlplane/supervisor_integration_test.go`](/Users/sam/dev/otter-camp/internal/controlplane/supervisor_integration_test.go): added `TestSupervisor_InheritedSharedDeliverableChildTaskStaysBlocked`
+- 2026-03-29 19:48 MDT - Focused verification is green:
+  - `GOFLAGS='' go test ./internal/task -run 'Test(ClassifyTaskResumeDecisionRejectsInheritedSharedDeliverableChild|ResumeValidationBlockedTaskRejectsNonBlockedTask)$' -count=1`
+  - `GOFLAGS='' go test -tags=integration ./internal/controlplane -run 'TestSupervisor_(InheritedSharedDeliverableChildTaskStaysBlocked|DurableRecoveryCheckpointTaskStaysBlockedForManualRepair)$' -count=1`
+- 2026-03-29 19:48 MDT - Deploy/proof target: after rebuild, inherited shared-doc child tasks like `160` should stop emitting fresh `resume_validation_blocked_task` events and new async task sessions. The expected steady state is `work_status=blocked` or parent-driven replacement, not minute-by-minute resurrection of the same child lane.
+
 - 2026-03-29 15:34 MDT - Picked up the next supervisory stop seam from fresh SamBot task `180`. The turn engine was already ending child recovery turns with `[Task shared-deliverable guard blocked a decomposed child lane from replacing the inherited parent file with file.write ...]`, but the worker still treated those stops as eligible for another active recovery resume while the execution remained `active`.
 - 2026-03-29 15:34 MDT - Local hardening is in [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
   - `RequeueActiveExecutionSessionsWithoutTurns(...)` now suppresses `task_recovery_resume` messages when the latest completed recovery turn for that execution already ended `validation_loop_blocked` with the inherited shared-deliverable / sibling-responsibility terminal stop family

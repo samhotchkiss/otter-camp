@@ -752,3 +752,14 @@
   - impact:
     - PM/operator prompts can over-trust implementation-complete work that has not actually been proven by a recorded review decision
     - this shows up as false-positive confidence rather than a direct crash or loop
+- 2026-03-29 19:48 MDT - Shared-doc child tasks were still being resurrected by the blocked-task resume layer even after worker-side recovery prompt suppression.
+  - fresh live evidence:
+    - task `160` generated a new async task session roughly once per minute (`18:57`, `18:59`, `19:00`, `19:01`, `19:03`, `19:04`, `19:06`, `19:08`, `19:09`, `19:10` MDT)
+    - each new session started with a fresh `task_queue_processor` kickoff carrying `recovery_action=resume_validation_blocked_task` and `validation_failure_code=inherited_shared_deliverable_write_blocked`
+    - the child then recreated the same `task_recovery_resume -> blocked file.write -> shared-deliverable guard` pattern
+  - bug:
+    - `ResumeValidationBlockedTask(...)` still treated `inherits shared parent deliverable ...` as a normal resumable validation loop
+    - that cleared the blocked validation state and let supervisor/task-queue wake the exact same malformed child lane again
+  - impact:
+    - worker/session cleanup on its own could not stop the family
+    - the same inherited shared-doc child tasks kept reopening as fresh sessions, which is a direct manual-test blocker because the runtime never settles on parent/replacement ownership

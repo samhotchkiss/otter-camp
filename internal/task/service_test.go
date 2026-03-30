@@ -603,6 +603,36 @@ func TestResumeValidationBlockedTaskRejectsNonBlockedTask(t *testing.T) {
 	}
 }
 
+func TestClassifyTaskResumeDecisionRejectsInheritedSharedDeliverableChild(t *testing.T) {
+	metadata, err := MergeValidationGuardMetadata(json.RawMessage(`{}`), ValidationGuardState{
+		Fingerprint:        "file.write:inherited_shared_deliverable_write_blocked",
+		AttemptFingerprint: "file.write:inherited_shared_deliverable_write_blocked",
+		ToolName:           "file.write",
+		FailureClass:       "tool_validation",
+		FailureCode:        "inherited_shared_deliverable_write_blocked",
+		FailureReason:      "recovery halted because the decomposed child lane inherits shared parent deliverable planning/sambot-architecture.md; resume only with bounded file.edit updates on the current shared file or by moving integration back to the parent task",
+		Count:              3,
+		BlockThreshold:     3,
+		Blocked:            true,
+	})
+	if err != nil {
+		t.Fatalf("MergeValidationGuardMetadata: %v", err)
+	}
+
+	decision := classifyTaskResumeDecision(repo.ProjectTask{
+		ID:         uuid.New(),
+		WorkStatus: "blocked",
+		Metadata:   metadata,
+	}, "recovery halted because the decomposed child lane inherits shared parent deliverable planning/sambot-architecture.md; resume only with bounded file.edit updates on the current shared file or by moving integration back to the parent task")
+
+	if decision.resumable {
+		t.Fatal("decision.resumable = true, want false")
+	}
+	if decision.blockerClass != RecoveryBlockerClassBlockedWithoutResumableState {
+		t.Fatalf("blockerClass = %q, want %q", decision.blockerClass, RecoveryBlockerClassBlockedWithoutResumableState)
+	}
+}
+
 func TestClassifyTaskResumeDecisionAllowsFlowRejectionMaxVisitsWithCheckpoint(t *testing.T) {
 	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(json.RawMessage(`{}`), taskcheckpoint.RecoveryFileWriteCheckpoint{
 		TargetPath:    "Work/report.md",

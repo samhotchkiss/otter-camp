@@ -373,8 +373,16 @@ func recoveryResumeReasonMatchesTerminalMalformedChild(blockerReason string) boo
 		strings.Contains(normalized, "malformed child lane") {
 		return true
 	}
-	return strings.Contains(normalized, "procedural child of") &&
-		strings.Contains(normalized, "instead of this malformed lane")
+	if strings.Contains(normalized, "procedural child of") &&
+		strings.Contains(normalized, "instead of this malformed lane") {
+		return true
+	}
+	if strings.Contains(normalized, "decomposed child lane") &&
+		(strings.Contains(normalized, "inherits shared parent deliverable") ||
+			strings.Contains(normalized, "inherited shared parent deliverable")) {
+		return true
+	}
+	return strings.Contains(normalized, "child lane cannot bootstrap the whole shared file")
 }
 
 func RecoveryCheckpointRequiresManualResolution(blockerReason string) bool {
