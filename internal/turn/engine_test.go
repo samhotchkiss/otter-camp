@@ -16794,6 +16794,43 @@ func TestProjectExecutionBlockedMutationStopMessageOnFocusedDraftReadGuard(t *te
 	}
 }
 
+func TestProjectExecutionBlockedMutationStopMessageOnNamedFocusRediscoveryDuringReplacementHandoff(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Current focus parent: task 286 (Write test conversations demonstrating SamBot adaptive complexity at levels 2 (moderately technical) and 3 (deeply technical)) [id=11111111-1111-1111-1111-111111111111 replaceable_blocked_child_tasks=1 malformed_child_tasks=5].",
+			"Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.",
+			"Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.",
+			"Your next assistant action must create or queue the smallest fresh replacement child task beneath that focus parent now. If child inspection is strictly required first, use only task.list(parent_task_id=...).",
+		}, " "),
+	}
+
+	message := projectExecutionBlockedMutationStopMessage(rt, []ToolResult{
+		{
+			Name:  "task.get",
+			Error: "project continuation already named task id=b1a0a912-6238-4241-9da7-68b27ece2c8b in the continuation prompt. Do not reread that task record first. If the current deliverable or blocker evidence already makes the next step clear, issue the direct task.update or smallest bounded replacement-task action now; otherwise inspect only genuinely new narrower evidence.",
+		},
+		{
+			Name:  "file.read",
+			Error: "project continuation already named terminally blocked task-owned deliverable `planning/sambot-prompts/test-conversations-technical.md` in the continuation prompt. Do not reread that blocked deliverable from the project lane; keep the blocked lane blocked and create the smallest replacement, closeout, or parent-update action instead.",
+		},
+	})
+
+	if !strings.Contains(message, "focused replacement-parent handoff") {
+		t.Fatalf("message = %q, want focused handoff summary", message)
+	}
+	if !strings.Contains(message, "task.list(parent_task_id=...)") {
+		t.Fatalf("message = %q, want narrow parent-scoped task.list guidance", message)
+	}
+}
+
 func TestProjectExecutionBlockedMutationStopMessageOnFocusedPrerequisiteRepairGuard(t *testing.T) {
 	t.Parallel()
 

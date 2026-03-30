@@ -31481,8 +31481,14 @@ func projectExecutionResultNamedField(arguments map[string]any, result ToolResul
 }
 
 func projectExecutionBlockedMutationStopMessage(rt *turnRuntime, results []ToolResult) string {
+	replacementHandoffActive := projectContinuationReplacementChildHandoffActive(rt)
 	for _, result := range results {
 		errText := strings.ToLower(strings.TrimSpace(toolResultErrorCode(result)))
+		if replacementHandoffActive &&
+			(strings.Contains(errText, "project continuation already named task id=") ||
+				strings.Contains(errText, "project continuation already named terminally blocked task-owned deliverable")) {
+			return "[Project continuation already has a focused replacement-parent handoff. Do not reread sibling artifacts from the project lane; create the fresh replacement child now or use only task.list(parent_task_id=...) if child-lane verification is still required.]"
+		}
 		if strings.Contains(errText, "task can only be marked done when its flow reaches a terminal node") &&
 			projectContinuationCloseoutReadyParentPromptActive(rt) {
 			return "[Project continuation found that the focused parent is already closeout-ready but cannot jump straight from draft to done. Do not split it again or create another replacement child. If the parent_orchestration evidence is already recorded, advance that same parent into execution with work_status=queued so its own flow can finish; otherwise record the missing parent_orchestration evidence on that parent first, then queue it.]"

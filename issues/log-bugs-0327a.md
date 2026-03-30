@@ -1535,3 +1535,15 @@
     - it did not exclude direct child drafts already classified as malformed artifact lanes, even when the PM prompt had already concluded that fresh replacement work was needed
   - impact:
     - the PM lane can get stuck in a contradiction where it is forbidden to create a new child because stale malformed drafts exist, but it is also forbidden to promote those same malformed drafts, leaving the replacement parent idle until a human or new code version intervenes
+- 2026-03-30 12:14 MDT - Focused replacement-parent PM retries were still being downgraded to generic rediscovery blocks when the blocked tool error referenced an already-named child task or terminally blocked deliverable.
+  - fresh live evidence:
+    - PM continuation `7938e21b-94e4-4acc-8435-d97e96eb00bb` already carried focused replacement-parent instructions for task `286`
+    - turn `bdb4ae96-6731-4033-8c6d-2e606619b5ab` hit:
+      - `task.get`: `project continuation already named task id=... in the continuation prompt`
+      - `file.read`: `project continuation already named terminally blocked task-owned deliverable ...`
+    - despite that, the stop message was still the generic rediscovery guard, not the replacement-handoff prefix the worker uses to synthesize a fresh focused retry
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) in `projectExecutionBlockedMutationStopMessage(...)` only mapped the older `prompt already required a direct replacement-child handoff` text to the replacement-handoff stop family
+    - it did not recognize the newer named-task and named-blocked-deliverable rediscovery guard strings that now appear after the same PM prompt narrowing
+  - impact:
+    - PM retries can be suppressed or reclassified like ordinary rediscovery churn even when the session has already narrowed to one direct replacement-child handoff, delaying the next bounded child queue action

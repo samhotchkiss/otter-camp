@@ -4856,3 +4856,16 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectContinuationFocusedDraftExistingChildGuardErrorIncludesChildLabels|ShouldBlockProjectContinuationFocusedDraftTaskCreate(AllowsFreshReplacementWhenDirectChildDraftsAreMalformed|ForCloseoutReadyParent|ForWorkspaceDeliverableCloseoutParent))$' -count=1`
   - deploy / proof target:
     - after a fresh repo-version build, the next PM continuation for task `286` should be able to create a new replacement child instead of looping on malformed drafts `290/291/292`
+- 2026-03-30 12:14 MDT - Classified already-named task/deliverable rediscovery guards as focused replacement-parent handoff stops.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `projectExecutionBlockedMutationStopMessage(...)` now returns the replacement-handoff system prefix when an active focused replacement-child PM prompt hits either:
+      - `project continuation already named task id=... in the continuation prompt`
+      - `project continuation already named terminally blocked task-owned deliverable ...`
+    - this keeps those turns on the worker's fresh replacement-child retry path instead of the generic rediscovery-block family
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestProjectExecutionBlockedMutationStopMessageOnNamedFocusRediscoveryDuringReplacementHandoff`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionBlockedMutationStopMessageOnNamedFocusRediscoveryDuringReplacementHandoff|ProjectExecutionBlockedMutationStopMessageOnFocusedDraftReadGuard|ShouldStopAfterBlockedProjectExecutionBlockedMutation)$' -count=1`
+  - live proof:
+    - after restart, fresh PM turn `0839998e-231f-45f0-9a22-8440550aa4e9` on task `286` no longer died on generic rediscovery
+    - it absorbed one blocked `task.get` against already-named task `290`, then issued `task.update work_status=queued` for `290`, and ended with the replacement-child success handoff stop
