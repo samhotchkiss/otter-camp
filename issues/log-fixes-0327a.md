@@ -4184,3 +4184,20 @@
     - pre-fix, task `225` decomposed into blocked children `226` (`Produce a single self-contained HTML5 file...`) and `227` (`Template concept: Editorial Longform ...`)
     - post-fix, the PM lane created single bounded child `228` (`Write templates/template-08-replace.html — single-pass HTML layout template 8 of 10`) and then handed off fresh replacement lane `229`
     - there was no new `Template concept:` child after deploy, which confirms the parser now keeps that support text out of the executable task tree
+- 2026-03-29 23:02 MDT - Carried direct-write-only stop state into ordinary task continuations and hid older same-path draft anchors in PM snapshots.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `projectContinuationTaskHints` now carries `DirectWriteOnly`
+    - `buildProjectContinuationTaskHints(...)` marks exact-path tasks `direct_write_only` when the latest validation guard is `content_required`
+    - `projectExecutionContinuationTaskRef(...)` now emits `direct_write_only=true` in the current-task snapshot line
+    - `buildTaskContinuationActionPrompt(...)` now converts that hint into the body-first/no-discovery supervisory stop language for ordinary async task lanes
+    - `projectContinuationSupersededDraftTaskIDs(...)` now also suppresses older draft tasks when a newer open task owns the same exact `deliverable_path`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - widened `TestBuildTaskContinuationActionPromptIncludesChildTaskSnapshotGuidance`
+    - widened `TestTaskExecutionContinuationSnapshotIncludesParentContractAndSiblingHints`
+    - added `TestProjectExecutionContinuationSnapshotIgnoresOlderDraftsSupersededByNewerOpenSamePathTask`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildTaskContinuationActionPromptIncludesChildTaskSnapshotGuidance|TaskExecutionContinuationSnapshotIncludesParentContractAndSiblingHints|ProjectExecutionContinuationSnapshotIgnoresOlderDraftsSupersededByNewerOpenSamePathTask)$' -count=1`
+  - deploy / proof status:
+    - rebuilt/restarted on local `repo_version=3661`
+    - task `229` had already closed after deterministic `content_required` blocking before the new prompt could re-fire, so direct production proof for the `direct_write_only=true` continuation text is still pending the next exact-file canary
+    - PM same-path supersession is likewise waiting on the next natural PM continuation after active review task `230` settles

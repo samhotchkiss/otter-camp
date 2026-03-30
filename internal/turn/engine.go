@@ -20846,6 +20846,11 @@ func buildTaskContinuationActionPrompt(summary string, snapshot taskExecutionCon
 		} else if strings.Contains(currentLine, "deliverable_root=") {
 			lines = append(lines, "If the current task above already shows deliverable_root=..., stay inside that exact root instead of broad workspace rediscovery.")
 		}
+		if strings.Contains(currentLine, "direct_write_only=true") {
+			lines = append(lines, "If the current task above already shows direct_write_only=true, do not begin with file.list, file.read, or readiness narration before writing.")
+			lines = append(lines, "Your next assistant message must begin with the first character of the deliverable body itself, not a sentence like 'I will write' or 'Let me check'.")
+			lines = append(lines, "Do not emit another file.write without populated content for that exact deliverable path.")
+		}
 		if strings.Contains(currentLine, "depends_on_path=") {
 			lines = append(lines, "If the current task above already shows depends_on_path=..., inspect that prerequisite artifact first instead of broad search.")
 		}
@@ -20913,6 +20918,7 @@ type projectContinuationTaskHints struct {
 	DependsOnPath   string
 	BatchRange      string
 	ProofState      string
+	DirectWriteOnly bool
 }
 
 const projectContinuationBlockerExcerptLimit = 120
@@ -21394,9 +21400,21 @@ func buildProjectContinuationTaskHints(tasks []repo.ProjectTask, blockedReasons 
 			DeliverableRoot: deliverableRoot,
 			DependsOnPath:   projectContinuationTaskDependencyHintPath(task, tasks),
 			BatchRange:      projectContinuationTaskBatchRange(task),
+			DirectWriteOnly: projectContinuationTaskRequiresDirectWriteOnly(task, deliverablePath),
 		}
 	}
 	return hintsByTask
+}
+
+func projectContinuationTaskRequiresDirectWriteOnly(task repo.ProjectTask, deliverablePath string) bool {
+	if strings.TrimSpace(deliverablePath) == "" {
+		return false
+	}
+	guard, ok := tasksvc.ParseValidationGuard(task.Metadata)
+	if !ok {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(guard.FailureCode), "content_required")
 }
 
 func projectContinuationTaskResumePolicy(task repo.ProjectTask, blockedReason string) string {
@@ -21971,8 +21989,50 @@ func projectContinuationSupersededDraftTaskIDs(
 			superseded[draftTask.ID] = struct{}{}
 			break
 		}
+		if _, already := superseded[draftTask.ID]; already {
+			continue
+		}
+		for _, openTask := range projectTasks {
+			if openTask.ID == draftTask.ID {
+				continue
+			}
+			if _, malformed := malformedChildTaskIDs[openTask.ID]; malformed {
+				continue
+			}
+			if !projectContinuationOpenTaskSupersedesDraft(draftTask, draftHints, openTask, taskHintsByTask[openTask.ID]) {
+				continue
+			}
+			if superseded == nil {
+				superseded = make(map[uuid.UUID]struct{})
+			}
+			superseded[draftTask.ID] = struct{}{}
+			break
+		}
 	}
 	return superseded
+}
+
+func projectContinuationOpenTaskSupersedesDraft(
+	draftTask repo.ProjectTask,
+	draftHints projectContinuationTaskHints,
+	openTask repo.ProjectTask,
+	openHints projectContinuationTaskHints,
+) bool {
+	if openTask.TaskNumber <= draftTask.TaskNumber {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(openTask.WorkStatus))
+	switch status {
+	case "draft", "queued", "in_progress", "review":
+	default:
+		return false
+	}
+	draftPath := normalizeWorkspaceRelativePath(draftHints.DeliverablePath)
+	openPath := normalizeWorkspaceRelativePath(openHints.DeliverablePath)
+	if draftPath == "" || openPath == "" {
+		return false
+	}
+	return sameWorkspaceRelativePath(draftPath, openPath)
 }
 
 func projectContinuationDoneTaskSupersedesDraft(
@@ -22031,6 +22091,9 @@ func projectExecutionContinuationTaskRef(task repo.ProjectTask, activity project
 		parts = append(parts, "deliverable_path="+deliverablePath)
 	} else if deliverableRoot := strings.TrimSpace(hints.DeliverableRoot); deliverableRoot != "" {
 		parts = append(parts, "deliverable_root="+deliverableRoot)
+	}
+	if hints.DirectWriteOnly {
+		parts = append(parts, "direct_write_only=true")
 	}
 	if dependsOnPath := strings.TrimSpace(hints.DependsOnPath); dependsOnPath != "" &&
 		(strings.TrimSpace(hints.DeliverablePath) == "" || !sameWorkspaceRelativePath(dependsOnPath, hints.DeliverablePath)) {

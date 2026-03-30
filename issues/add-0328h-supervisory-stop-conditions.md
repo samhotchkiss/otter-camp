@@ -34,6 +34,18 @@ They need sharper stopping rules than ordinary execution lanes.
 
 ### Working Notes
 
+- 2026-03-29 23:02 MDT - Picked up the next supervisory stop seam from the template-8 replacement family. Fresh live evidence on task `229` showed the runtime was already narrowing the lane onto the right file (`templates/template-08-replace.html`), but ordinary async task continuations still did not carry forward the stronger “direct write only” stop state that recovery prompts already use. The lane repeated `file.write` without `content`, got same-turn correction text, and then reopened the next continuation with the same “Let me provide...” narration instead of starting with the file body itself.
+- 2026-03-29 23:02 MDT - Local hardening is in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+  - task-continuation snapshots now surface `direct_write_only=true` when the latest validation guard is `content_required` for an exact deliverable path
+  - `buildTaskContinuationActionPrompt(...)` now turns that hint into the same supervisory stop language we already use in recovery: no `file.list` / `file.read` preamble, no readiness narration, and no another empty `file.write`
+  - PM continuation snapshots now also suppress older draft tasks once a newer open task owns the exact same deliverable path, so stale same-path drafts stop competing for attention after a fresh replacement lane is created
+- 2026-03-29 23:02 MDT - Focused verification is green:
+  - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildTaskContinuationActionPromptIncludesChildTaskSnapshotGuidance|TaskExecutionContinuationSnapshotIncludesParentContractAndSiblingHints|ProjectExecutionContinuationSnapshotIgnoresOlderDraftsSupersededByNewerOpenSamePathTask)$' -count=1`
+- 2026-03-29 23:02 MDT - Deploy/proof status:
+  - rebuilt/restarted on local `repo_version=3661`
+  - direct live proof for the new `direct_write_only=true` prompt is still pending the next fresh task continuation, because task `229` had already settled into a deterministic `content_required` block and session closeout by the time the new binary came up
+  - the same-path PM supersession rule is also still waiting on the next natural PM continuation after review task `230` settles; the expected outcome is that older same-file drafts (`225` / `228`) disappear from PM focus in favor of the freshest exact-path lane (`232`)
+
 - 2026-03-29 19:48 MDT - Picked up the next supervisory stop seam from live SamBot architecture child task `160`. The worker-side recovery suppressors were already draining individual `task_recovery_resume` retries, but the higher-level blocked-task resume path was still reviving the same child lane every minute with a fresh `resume_validation_blocked_task` kickoff.
 - 2026-03-29 19:48 MDT - Root cause sat in [`internal/task/recovery_resume.go`](/Users/sam/dev/otter-camp/internal/task/recovery_resume.go): `classifyTaskResumeDecision(...)` still treated the inherited shared-parent-file family as a resumable validation loop, because only procedural/no-decompose malformed children were classified as terminal `blocked_without_resumable_state`.
 - 2026-03-29 19:48 MDT - Local hardening is in:

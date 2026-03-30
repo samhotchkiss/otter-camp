@@ -22406,7 +22406,7 @@ func TestBuildTaskContinuationActionPromptTreatsDocumentSummaryAsDraft(t *testin
 
 func TestBuildTaskContinuationActionPromptIncludesChildTaskSnapshotGuidance(t *testing.T) {
 	snapshot := taskExecutionContinuationSnapshot{
-		CurrentTaskLine:    "Current task: task 41 (Write the results to content/technonymous-index.json) id=writer work_status=blocked deliverable_path=content/technonymous-index.json blocker=\"recovery halted after 3 retries\"",
+		CurrentTaskLine:    "Current task: task 41 (Write the results to content/technonymous-index.json) id=writer work_status=blocked deliverable_path=content/technonymous-index.json direct_write_only=true blocker=\"recovery halted after 3 retries\"",
 		ParentContractLine: "Parent task contract: task 39 (Replacement: Crawl technonymous.org and produce content/technonymous-index.json) id=parent work_status=draft source_contract=\"Crawl technonymous.org, discover all blog post URLs, and produce content/technonymous-index.json. Child deliverables: Navigate to technonymous.org using browser tools; Write the results to content/technonymous-index.json\"",
 		SiblingTaskLine:    "Sibling tasks already in the same parent group: task 40 (Navigate to technonymous.org using browser tools) id=sibling work_status=blocked",
 	}
@@ -22421,6 +22421,15 @@ func TestBuildTaskContinuationActionPromptIncludesChildTaskSnapshotGuidance(t *t
 	}
 	if !strings.Contains(prompt, "deliverable_path=..., inspect or write that exact path") {
 		t.Fatalf("prompt = %q, want exact-path guidance", prompt)
+	}
+	if !strings.Contains(prompt, "direct_write_only=true") {
+		t.Fatalf("prompt = %q, want direct-write snapshot hint", prompt)
+	}
+	if !strings.Contains(prompt, "do not begin with file.list, file.read, or readiness narration before writing") {
+		t.Fatalf("prompt = %q, want direct-write-only no-discovery guidance", prompt)
+	}
+	if !strings.Contains(prompt, "must begin with the first character of the deliverable body itself") {
+		t.Fatalf("prompt = %q, want direct-write-only body-first guidance", prompt)
 	}
 	if !strings.Contains(prompt, snapshot.ParentContractLine) {
 		t.Fatalf("prompt = %q, want parent contract line", prompt)
@@ -22447,6 +22456,23 @@ func TestTaskExecutionContinuationSnapshotIncludesParentContractAndSiblingHints(
 	parentDescription := "Navigate to technonymous.org using browser tools"
 	currentDescription := "Write the results to content/technonymous-index.json"
 	siblingDescription := "Navigate to technonymous.org using browser tools"
+	currentMetadata, err := mergeTaskValidationGuardMetadata(
+		mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentID.String()}),
+		taskValidationGuardState{
+			InitialMessageID:   uuid.NewString(),
+			Fingerprint:        "file.write:content_required",
+			AttemptFingerprint: "file.write:content_required:attempt",
+			ToolName:           "file.write",
+			FailureClass:       "tool_validation",
+			FailureCode:        "content_required",
+			FailureReason:      "file.write requires content",
+			Count:              1,
+			BlockThreshold:     validationLoopBlockThreshold,
+		},
+	)
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
 	taskRepo := &fakeTaskRepo{
 		items: map[uuid.UUID]repo.ProjectTask{
 			parentID: {
@@ -22480,7 +22506,7 @@ func TestTaskExecutionContinuationSnapshotIncludesParentContractAndSiblingHints(
 				WorkStatus:      "blocked",
 				AssignedAgentID: &assignedAgentID,
 				FlowTemplateID:  &flowTemplateID,
-				Metadata:        mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentID.String()}),
+				Metadata:        currentMetadata,
 			},
 			siblingID: {
 				ID:              siblingID,
@@ -22506,6 +22532,9 @@ func TestTaskExecutionContinuationSnapshotIncludesParentContractAndSiblingHints(
 	}
 	if !strings.Contains(snapshot.CurrentTaskLine, "deliverable_path=content/technonymous-index.json") {
 		t.Fatalf("CurrentTaskLine = %q, want deliverable path hint", snapshot.CurrentTaskLine)
+	}
+	if !strings.Contains(snapshot.CurrentTaskLine, "direct_write_only=true") {
+		t.Fatalf("CurrentTaskLine = %q, want direct-write-only hint", snapshot.CurrentTaskLine)
 	}
 	if !strings.Contains(snapshot.ParentContractLine, "task 39") {
 		t.Fatalf("ParentContractLine = %q, want parent task ref", snapshot.ParentContractLine)
@@ -24051,6 +24080,52 @@ func TestProjectExecutionContinuationSnapshotPrefersDraftChildOverFreshReplaceme
 	}
 	if count != 1 {
 		t.Fatalf("countProjectDraftTasks = %d, want 1 actionable draft child after parent 44 gains task 75", count)
+	}
+}
+
+func TestProjectExecutionContinuationSnapshotIgnoresOlderDraftsSupersededByNewerOpenSamePathTask(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	oldDraftID := uuid.New()
+	newDraftID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+	flowTemplateID := uuid.New()
+	oldDescription := "Produce the file templates/template-08-replace.html in a single file_write pass."
+	newDescription := "Write a complete standalone HTML layout to templates/template-08-replace.html in a single file_write pass."
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			oldDraftID: {
+				ID:              oldDraftID,
+				ProjectID:       projectID,
+				TaskNumber:      225,
+				Title:           "Write templates/template-08-replace.html — first replacement draft",
+				Description:     &oldDescription,
+				WorkStatus:      "draft",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+			},
+			newDraftID: {
+				ID:              newDraftID,
+				ProjectID:       projectID,
+				TaskNumber:      232,
+				Title:           "Write templates/template-08-replace.html — second replacement draft",
+				Description:     &newDescription,
+				WorkStatus:      "draft",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.DraftTaskLine, "task 225") {
+		t.Fatalf("DraftTaskLine = %q, should omit superseded older draft", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "task 232") {
+		t.Fatalf("DraftTaskLine = %q, want newest same-path draft", snapshot.DraftTaskLine)
 	}
 }
 
