@@ -986,11 +986,19 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 			return true
 		}
 	}
+	if strings.HasPrefix(normalized, "show ") &&
+		strings.Contains(normalized, " responding with ") &&
+		!containsWorkspaceArtifactReference(normalized) {
+		return true
+	}
 	for _, prefix := range []string{"reference ", "refer to "} {
 		if strings.HasPrefix(normalized, prefix) &&
 			(strings.Contains(normalized, ".md") || strings.Contains(normalized, "/")) {
 			return true
 		}
+	}
+	if strings.HasPrefix(normalized, "include at least ") {
+		return true
 	}
 	if (strings.HasPrefix(normalized, "include ") || strings.HasPrefix(normalized, "include:")) &&
 		(strings.Contains(normalized, ",") || strings.Contains(normalized, ":") || strings.Contains(normalized, " and ")) {

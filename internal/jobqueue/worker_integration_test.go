@@ -22202,6 +22202,162 @@ func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedReferenceO
 	}
 }
 
+func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedChecklistFragmentChildren(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "project-continuation-snapshot-ignores-malformed-checklist-fragment-children",
+		DisplayName: "Project Continuation Snapshot Ignores Malformed Checklist Fragment Children",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "sambot-level3-checklist-fragments",
+		DisplayName:    "SamBot Level3 Checklist Fragments",
+		Description:    "Project for malformed checklist fragment snapshot coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "sambot-level3-checklist-fragments-template",
+		DisplayName:    "SamBot Level3 Checklist Fragments Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	parentDescription := "Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical (complexity level 3) test conversations demonstrating SamBot's adaptive behavior."
+	parentMetadata, err := json.Marshal(map[string]any{
+		"decomposition": map[string]any{
+			"applied":             true,
+			"mode":                "parallel_children",
+			"orchestration_only":  true,
+			"source_description":  parentDescription,
+			"primary_deliverable": "planning/sambot-prompts/test-conversations-level3.md",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal parent metadata: %v", err)
+	}
+	parentTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     297,
+		Title:          "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+		Metadata:       parentMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	showDescription := "Show SamBot responding with precise technical depth — referencing specific architectures, tradeoffs, code-level concepts, and Sam Hotchkiss's authentic views and experience."
+	showMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal show child metadata: %v", err)
+	}
+	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     299,
+		Title:          "Show SamBot responding with precise technical depth — referencing specific architectures, tradeoffs, code-level concepts, and Sam Hotchkiss's authentic views and experience",
+		Description:    &showDescription,
+		WorkStatus:     "in_progress",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+		Metadata:       showMetadata,
+	}); err != nil {
+		t.Fatalf("create malformed show child task: %v", err)
+	}
+	includeDescription := "Include at least 4 exchanges (user/SamBot turns) per conversation."
+	includeMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal include child metadata: %v", err)
+	}
+	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     300,
+		Title:          "Include at least 4 exchanges (user/SamBot turns) per conversation",
+		Description:    &includeDescription,
+		WorkStatus:     "blocked",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+		Metadata:       includeMetadata,
+	}); err != nil {
+		t.Fatalf("create malformed include child task: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.DraftTaskLine, "test-conversations-level3.md — 3 deeply technical SamBot test conversations") {
+		t.Fatalf("DraftTaskLine = %q, should not treat malformed checklist-child parent as a plain runnable draft", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "test-conversations-level3.md — 3 deeply technical SamBot test conversations") {
+		t.Fatalf("ReplacementDraftLine = %q, want actionable parent task moved to replacement-child guidance", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=2") {
+		t.Fatalf("ReplacementDraftLine = %q, want malformed child count", snapshot.ReplacementDraftLine)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "Show SamBot responding with precise technical depth") {
+		t.Fatalf("ActiveTaskLine = %q, should omit malformed checklist child artifact", snapshot.ActiveTaskLine)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "Include at least 4 exchanges") {
+		t.Fatalf("ActiveTaskLine = %q, should omit malformed checklist child artifact", snapshot.ActiveTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "test-conversations-level3.md — 3 deeply technical SamBot test conversations") {
+		t.Fatalf("FocusTaskLine = %q, want parent task restored as focus", snapshot.FocusTaskLine)
+	}
+
+	remainingDrafts, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	if remainingDrafts != 1 {
+		t.Fatalf("countActionableProjectDraftTasks = %d, want 1 actionable parent after ignoring malformed checklist child artifacts", remainingDrafts)
+	}
+}
+
 func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

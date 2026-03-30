@@ -25082,6 +25082,87 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedReferenceOnlyChildr
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotIgnoresMalformedChecklistFragmentChildren(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	parentDescription := "Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical (complexity level 3) test conversations demonstrating SamBot's adaptive behavior."
+	showDescription := "Show SamBot responding with precise technical depth — referencing specific architectures, tradeoffs, code-level concepts, and Sam Hotchkiss's authentic views and experience."
+	includeDescription := "Include at least 4 exchanges (user/SamBot turns) per conversation."
+	showChildID := uuid.New()
+	includeChildID := uuid.New()
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:          parentDraftID,
+				ProjectID:   projectID,
+				TaskNumber:  297,
+				Title:       "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"applied":             true,
+						"mode":                "parallel_children",
+						"orchestration_only":  true,
+						"source_description":  parentDescription,
+						"primary_deliverable": "planning/sambot-prompts/test-conversations-level3.md",
+					},
+				}),
+			},
+			showChildID: {
+				ID:          showChildID,
+				ProjectID:   projectID,
+				TaskNumber:  299,
+				Title:       "Show SamBot responding with precise technical depth — referencing specific architectures, tradeoffs, code-level concepts, and Sam Hotchkiss's authentic views and experience",
+				Description: &showDescription,
+				WorkStatus:  "in_progress",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+			includeChildID: {
+				ID:          includeChildID,
+				ProjectID:   projectID,
+				TaskNumber:  300,
+				Title:       "Include at least 4 exchanges (user/SamBot turns) per conversation",
+				Description: &includeDescription,
+				WorkStatus:  "blocked",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.DraftTaskLine, "task 297 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations)") {
+		t.Fatalf("DraftTaskLine = %q, should not treat malformed checklist-child parent as a plain runnable draft", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "task 297 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations)") {
+		t.Fatalf("ReplacementDraftLine = %q, want actionable parent task moved to replacement-child guidance", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=2") {
+		t.Fatalf("ReplacementDraftLine = %q, want malformed child count", snapshot.ReplacementDraftLine)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "Show SamBot responding with precise technical depth") {
+		t.Fatalf("ActiveTaskLine = %q, should omit malformed checklist child artifact", snapshot.ActiveTaskLine)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "Include at least 4 exchanges") {
+		t.Fatalf("ActiveTaskLine = %q, should omit malformed checklist child artifact", snapshot.ActiveTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "task 297 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations)") {
+		t.Fatalf("FocusTaskLine = %q, want parent task restored as focus", snapshot.FocusTaskLine)
+	}
+
+	count, err := fixture.engine.countProjectDraftTasks(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("countProjectDraftTasks: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("countProjectDraftTasks = %d, want 1 actionable parent after ignoring malformed checklist child artifacts", count)
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

@@ -1602,3 +1602,17 @@
       - inside result `tasks[]` after auto-decomposition
   - impact:
     - PM turns could create the correct replacement child lane and still keep spending the same turn on rediscovery tools, causing another blocked-stop loop and increasing the chance of malformed follow-on decomposition
+- 2026-03-30 13:41 MDT - The decomposition guard still allowed checklist-style requirement fragments to become executable child tasks under replacement parent `297`.
+  - fresh live evidence:
+    - task `297` produced child tasks:
+      - `299` `in_progress`: `Show SamBot responding with precise technical depth — referencing specific architectures, tradeoffs, code-level concepts, and Sam Hotchkiss's authentic views and experience`
+      - `300` `blocked`: `Include at least 4 exchanges (user/SamBot turns) per conversation`
+    - neither task named its own concrete output path or independent deliverable, but both were treated as child work instead of malformed fragments
+  - bug:
+    - [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go) in `isInstructionOnlyDeliverable(...)` / `TaskLooksProceduralInstructionArtifact(...)` did not classify:
+      - `Show ... responding with ...`
+      - `Include at least ...`
+      as procedural artifacts
+    - because those patterns were not rejected, PM and worker continuation snapshots still had to reason around them after they were created
+  - impact:
+    - replacement-child decomposition can turn a single bounded file task into multiple junk lanes that consume task sessions, muddy PM focus, and reopen validation churn under the wrong parent

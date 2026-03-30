@@ -4934,3 +4934,20 @@
     - preserved the unfocused-create guard coverage
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation(StopsForFocusedDraftChildCreate|StopsForFocusedDraftChildCreateBatch|IgnoresUnfocusedDraftChildCreate|RequiresObservedQueuedState|ForMissingDependencyPrompt|ForFocusPrerequisiteRepair|RequiresReplacementChildPrompt)?$|TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation$' -count=1`
+- 2026-03-30 13:41 MDT - Rejected checklist-fragment child tasks like `Show ... responding with ...` and `Include at least ...`.
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+    - `isInstructionOnlyDeliverable(...)` now rejects:
+      - `show ... responding with ...` fragments that do not name a concrete workspace artifact
+      - `include at least ...` checklist fragments
+    - this also keeps `extractDeliverables(...)` from rediscovering those same lines as executable child deliverables
+  - changed [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go):
+    - added coverage for both new malformed title families
+    - added `TestExtractDeliverablesIgnoresProceduralChecklistFragments`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestProjectExecutionContinuationSnapshotIgnoresMalformedChecklistFragmentChildren`
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedChecklistFragmentChildren`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(TaskLooksProceduralInstructionArtifact|ExtractDeliverablesIgnores(ReferenceOnlyInstructionLines|ProceduralChecklistFragments))$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshotIgnoresMalformed(Procedural|ReferenceOnly|ChecklistFragment)Children$|TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation(StopsForFocusedDraftChildCreate|StopsForFocusedDraftChildCreateBatch|IgnoresUnfocusedDraftChildCreate|RequiresObservedQueuedState|ForMissingDependencyPrompt|ForFocusPrerepair|RequiresReplacementChildPrompt)?$|TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformed(ReferenceOnly|ChecklistFragment|DuplicateSharedFile)Children$' -count=1`

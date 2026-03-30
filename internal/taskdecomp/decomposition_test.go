@@ -152,6 +152,16 @@ func TestTaskLooksProceduralInstructionArtifact(t *testing.T) {
 	if !TaskLooksProceduralInstructionArtifact("Require statements: express, fs, path, and a placeholder const Anthropic = require('@anthropic-ai/sdk');", &requireStatementsDescription) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for single-file checklist require fragment")
 	}
+
+	showResponseDescription := "Show SamBot responding with precise technical depth — referencing specific architectures, tradeoffs, code-level concepts, and Sam Hotchkiss's authentic views and experience."
+	if !TaskLooksProceduralInstructionArtifact("Show SamBot responding with precise technical depth — referencing specific architectures, tradeoffs, code-level concepts, and Sam Hotchkiss's authentic views and experience", &showResponseDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for response-quality checklist fragment")
+	}
+
+	includeExchangesDescription := "Include at least 4 exchanges (user/SamBot turns) per conversation."
+	if !TaskLooksProceduralInstructionArtifact("Include at least 4 exchanges (user/SamBot turns) per conversation", &includeExchangesDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for minimum-count checklist fragment")
+	}
 }
 
 func TestExtractDeliverablesIgnoresReferenceOnlyInstructionLines(t *testing.T) {
@@ -183,6 +193,23 @@ func TestExtractDeliverablesIgnoresReferenceOnlyInstructionLines(t *testing.T) {
 		if strings.HasPrefix(strings.ToLower(item), "reference planning/sambot-feature-spec.md") {
 			t.Fatalf("reference-only instruction leaked into deliverables: %q", item)
 		}
+	}
+}
+
+func TestExtractDeliverablesIgnoresProceduralChecklistFragments(t *testing.T) {
+	description := strings.Join([]string{
+		"Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical test conversations.",
+		"",
+		"Deliverable: planning/sambot-prompts/test-conversations-level3.md",
+		"",
+		"Checklist:",
+		"- Show SamBot responding with precise technical depth — referencing specific architectures, tradeoffs, code-level concepts, and Sam Hotchkiss's authentic views and experience",
+		"- Include at least 4 exchanges (user/SamBot turns) per conversation",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	if len(items) != 1 || !strings.Contains(items[0], "planning/sambot-prompts/test-conversations-level3.md") {
+		t.Fatalf("extractDeliverables = %v, want only the primary deliverable item", items)
 	}
 }
 
