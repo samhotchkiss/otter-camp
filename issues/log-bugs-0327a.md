@@ -733,3 +733,22 @@
   - impact:
     - the runtime burns a model turn on child lanes that are not executable contracts at all
     - metrics show the cost as a wide fan-out of one-turn validation blocks rather than a tight retry loop
+- 2026-03-29 18:53 MDT - After the section-scoped prompt fix went live, the remaining task-195 failure shape became clearer.
+  - fresh live evidence:
+    - task `195` session `7e8994a3-a3c0-4fcd-bac6-d36503008d45` now receives both `Owned section: Voice & Tone Profile` and `Do not inspect sibling child outputs first...`
+    - the assistant still responded with `Let me read the target file first, then edit in the Voice & Tone Profile section.` and then emitted another blocked `file.write`
+  - bug:
+    - the runtime now provides the correct section-scoped recovery contract, but some shared-doc child lanes still ignore that contract and try a whole-file write anyway
+  - impact:
+    - this is no longer a prompt-missing-context problem
+    - the remaining waste is a follow-through / suppression problem on already-correct recovery guidance
+- 2026-03-29 18:56 MDT - PM/runtime reporting still conflated implementation completion with proof in the same visible signal.
+  - fresh codepath evidence:
+    - project continuation snapshots labeled `Recently completed bounded tasks...` purely from `work_status=done`
+    - PM guidance then used those lines as if they represented validated prior work, even when no recorded review approval existed
+  - bug:
+    - `work_status=done` was carrying both “artifact lane finished” and “this is proven/approved enough to trust as prior evidence”
+    - the runtime had persisted review-decision metadata on `flow_node_execution`, but the continuation snapshot did not surface that distinction
+  - impact:
+    - PM/operator prompts can over-trust implementation-complete work that has not actually been proven by a recorded review decision
+    - this shows up as false-positive confidence rather than a direct crash or loop

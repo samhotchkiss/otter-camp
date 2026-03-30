@@ -23179,10 +23179,16 @@ func TestProjectExecutionContinuationSnapshotIncludesRelevantCompletedBatchCover
 	taskHintsByTask := buildProjectContinuationTaskHints(projectTasks, map[uuid.UUID]string{
 		blockedBatchID: "flow rejection max visits exceeded",
 	})
+	doneHints := taskHintsByTask[doneBatchID]
+	doneHints.ProofState = "approved"
+	taskHintsByTask[doneBatchID] = doneHints
 
 	snapshot, _ := buildProjectExecutionContinuationSnapshot(projectTasks, taskHintsByTask, nil)
 	if !strings.Contains(snapshot.CompletedTaskLine, "task 67 (Fetch posts 25-35") || !strings.Contains(snapshot.CompletedTaskLine, "batch_range=25-35") {
 		t.Fatalf("CompletedTaskLine = %q, want recent completed batch surfaced for same delivery family", snapshot.CompletedTaskLine)
+	}
+	if !strings.Contains(snapshot.CompletedTaskLine, "Recently implementation-complete bounded tasks already in the tree:") || !strings.Contains(snapshot.CompletedTaskLine, "proof_state=approved") {
+		t.Fatalf("CompletedTaskLine = %q, want implementation/proof state surfaced", snapshot.CompletedTaskLine)
 	}
 }
 
@@ -24554,7 +24560,7 @@ func TestBuildProjectExecutionContinuationPromptIncludesCompletedBatchSupersessi
 
 	prompt := buildProjectExecutionContinuationPrompt(task, 2, projectExecutionContinuationSnapshot{
 		ProjectLine:          "Active project id: 123",
-		CompletedTaskLine:    "Recently completed bounded tasks already in the tree: task 67 (Fetch posts 25-35) id=bbb work_status=done deliverable_root=content/posts depends_on_path=content/technonymous-index.json batch_range=25-35",
+		CompletedTaskLine:    "Recently implementation-complete bounded tasks already in the tree: task 67 (Fetch posts 25-35) id=bbb work_status=done deliverable_root=content/posts depends_on_path=content/technonymous-index.json batch_range=25-35 proof_state=approved",
 		ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 44 (Replacement scrape batch) id=aaa title=\"Replacement scrape batch\" work_status=draft deliverable_root=content/posts batch_range=25-35 replaceable_blocked_child_tasks=1",
 	})
 
@@ -24573,11 +24579,14 @@ func TestBuildProjectExecutionContinuationPromptIncludesCompletedBatchSupersessi
 	if !strings.Contains(prompt, "Do not call task.list with status=done or other broad project filters just to verify batch_range=25-35") {
 		t.Fatalf("prompt = %q, want no broad task.list verification guidance for completed batch", prompt)
 	}
-	if !strings.Contains(prompt, "Recently completed bounded tasks already in the tree: task 67") {
+	if !strings.Contains(prompt, "Recently implementation-complete bounded tasks already in the tree: task 67") {
 		t.Fatalf("prompt = %q, want completed batch coverage surfaced in prompt body", prompt)
 	}
 	if !strings.Contains(prompt, "Do not create or queue replacement work for a batch_range already listed in the completed-task snapshot above") {
 		t.Fatalf("prompt = %q, want completed batch replacement suppression guidance", prompt)
+	}
+	if !strings.Contains(prompt, "proof_state=approved means that implementation-complete task also has a recorded review approval") {
+		t.Fatalf("prompt = %q, want explicit proof-state guidance", prompt)
 	}
 }
 

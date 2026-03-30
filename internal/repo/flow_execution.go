@@ -176,6 +176,50 @@ func (r *FlowNodeExecutionRepo) ListByTask(ctx context.Context, taskID uuid.UUID
 	return executions, nil
 }
 
+func (r *FlowNodeExecutionRepo) LatestReviewDecisionsByTask(ctx context.Context, taskIDs []uuid.UUID) (map[uuid.UUID]FlowExecutionReviewDecision, error) {
+	decisions := make(map[uuid.UUID]FlowExecutionReviewDecision)
+	if len(taskIDs) == 0 {
+		return decisions, nil
+	}
+
+	rows, err := r.pool.Query(ctx, `
+		SELECT DISTINCT ON (task_id) task_id, metadata
+		FROM flow_node_execution
+		WHERE task_id = ANY($1)
+		  AND metadata ? $2
+		ORDER BY task_id, COALESCE(completed_at, started_at) DESC, started_at DESC, id DESC
+	`, taskIDs, FlowExecutionMetadataReviewDecision)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			taskID   uuid.UUID
+			metadata json.RawMessage
+		)
+		if err := rows.Scan(&taskID, &metadata); err != nil {
+			return nil, mapDBError(err)
+		}
+		decision, ok := FlowExecutionReviewDecisionFromMetadata(metadata)
+		if !ok || decision == nil {
+			continue
+		}
+		trimmed := strings.TrimSpace(decision.Decision)
+		if trimmed == "" {
+			continue
+		}
+		copyValue := *decision
+		copyValue.Decision = trimmed
+		decisions[taskID] = copyValue
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return decisions, nil
+}
+
 func (r *FlowNodeExecutionRepo) Complete(ctx context.Context, id uuid.UUID) (FlowNodeExecution, error) {
 	return r.updateStatus(ctx, nil, id, "completed")
 }

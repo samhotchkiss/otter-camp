@@ -222,7 +222,7 @@ func TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompletedBatchS
 		2,
 		projectExecutionContinuationSnapshotForWorker{
 			ProjectLine:          "Active project id: 123",
-			CompletedTaskLine:    "Recently completed bounded tasks already in the tree: task 67 (Fetch posts 25-35) id=bbb work_status=done deliverable_root=content/posts depends_on_path=content/technonymous-index.json batch_range=25-35",
+			CompletedTaskLine:    "Recently implementation-complete bounded tasks already in the tree: task 67 (Fetch posts 25-35) id=bbb work_status=done deliverable_root=content/posts depends_on_path=content/technonymous-index.json batch_range=25-35 proof_state=approved",
 			ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 44 (Replacement scrape batch) id=aaa title=\"Replacement scrape batch\" work_status=draft deliverable_root=content/posts batch_range=25-35 replaceable_blocked_child_tasks=1",
 		},
 	)
@@ -242,11 +242,14 @@ func TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompletedBatchS
 	if !strings.Contains(prompt, "Do not call task.list with status=done or other broad project filters just to verify batch_range=25-35") {
 		t.Fatalf("prompt = %q, want no broad task.list verification guidance for completed batch", prompt)
 	}
-	if !strings.Contains(prompt, "Recently completed bounded tasks already in the tree: task 67") {
+	if !strings.Contains(prompt, "Recently implementation-complete bounded tasks already in the tree: task 67") {
 		t.Fatalf("prompt = %q, want completed batch coverage surfaced in prompt body", prompt)
 	}
 	if !strings.Contains(prompt, "Do not create or queue replacement work for a batch_range already listed in the completed-task snapshot above") {
 		t.Fatalf("prompt = %q, want completed batch replacement suppression guidance", prompt)
+	}
+	if !strings.Contains(prompt, "proof_state=approved means that implementation-complete task also has a recorded review approval") {
+		t.Fatalf("prompt = %q, want explicit proof-state guidance", prompt)
 	}
 }
 
@@ -255,7 +258,7 @@ func TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompletedCloseo
 		ProjectLine:       "Active project id: 123",
 		DraftTaskLine:     "Actionable draft tasks already in the tree: task 44 (Produce content/technonymous-index.json by crawling technonymous.org) id=aaa title=\"Produce content/technonymous-index.json by crawling technonymous.org\" work_status=draft deliverable_path=content/technonymous-index.json malformed_child_tasks=3 completed_closeout_child_tasks=1",
 		FocusTaskLine:     "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 44 (Produce content/technonymous-index.json by crawling technonymous.org) id=aaa title=\"Produce content/technonymous-index.json by crawling technonymous.org\" work_status=draft deliverable_path=content/technonymous-index.json malformed_child_tasks=3 completed_closeout_child_tasks=1",
-		CompletedTaskLine: "Recently completed bounded tasks already in the tree: task 75 (Verify content/technonymous-index.json delivered - close parent OC-44) id=bbb work_status=done deliverable_path=content/technonymous-index.json",
+		CompletedTaskLine: "Recently implementation-complete bounded tasks already in the tree: task 75 (Verify content/technonymous-index.json delivered - close parent OC-44) id=bbb work_status=done deliverable_path=content/technonymous-index.json proof_state=approved",
 	})
 
 	if !strings.Contains(prompt, "use that completed child proof to advance or close the parent instead of creating another replacement child") {

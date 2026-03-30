@@ -21366,7 +21366,7 @@ func TestJobWorkerProjectExecutionContinuationSnapshotPrefersReviewGuardAndCompl
 	if err != nil {
 		t.Fatalf("create older blocked batch task: %v", err)
 	}
-	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+	completedBatchTask, err := taskRepo.Create(ctx, repo.ProjectTask{
 		OrganizationID: org.ID,
 		ProjectID:      project.ID,
 		TaskNumber:     67,
@@ -21380,8 +21380,20 @@ func TestJobWorkerProjectExecutionContinuationSnapshotPrefersReviewGuardAndCompl
 		}(),
 		CreatedByType: "system",
 		CreatedByID:   &agent.ID,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create completed batch task: %v", err)
+	}
+	if _, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      completedBatchTask.ID,
+		FlowNodeID:  uuid.New(),
+		VisitNumber: 1,
+		Status:      "completed",
+		Metadata: repo.FlowExecutionMetadataWithReviewDecision(nil, &repo.FlowExecutionReviewDecision{
+			Decision: "approve",
+		}),
+	}); err != nil {
+		t.Fatalf("create completed batch review execution: %v", err)
 	}
 	if _, err := eventRepo.Record(ctx, repo.ProjectTaskEvent{
 		TaskID:    blockedTask.ID,
@@ -21411,6 +21423,9 @@ func TestJobWorkerProjectExecutionContinuationSnapshotPrefersReviewGuardAndCompl
 	}
 	if !strings.Contains(snapshot.CompletedTaskLine, "Fetch posts 25-35") || !strings.Contains(snapshot.CompletedTaskLine, "batch_range=25-35") {
 		t.Fatalf("CompletedTaskLine = %q, want completed batch coverage surfaced", snapshot.CompletedTaskLine)
+	}
+	if !strings.Contains(snapshot.CompletedTaskLine, "Recently implementation-complete bounded tasks already in the tree:") || !strings.Contains(snapshot.CompletedTaskLine, "proof_state=approved") {
+		t.Fatalf("CompletedTaskLine = %q, want implementation/proof state surfaced", snapshot.CompletedTaskLine)
 	}
 }
 

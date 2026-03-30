@@ -3903,4 +3903,24 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildRecoveryResumeStateMessageIncludes(SharedSectionTargetHint|TaskAcceptanceCriteriaFallback|StructuredReviewDecisionContext)|RecoveryResumeSharedSectionTarget(MatchesInheritedSharedPath|FromTextMatchesMarkdownHeading))$' -count=1`
   - deploy / proof status:
     - rebuilt and hot-reloaded locally
-    - live task-195 traffic has not yet produced a fresh post-patch retry, so direct production proof is still pending at this checkpoint
+    - live proof landed immediately after deploy on task `195` session `7e8994a3-a3c0-4fcd-bac6-d36503008d45`
+    - the fresh `[Recovery resume state]` now contains `Owned section: Voice & Tone Profile`
+    - the paired synthetic recovery prompt now says not to inspect sibling child outputs first unless the current file body is missing that section entirely
+- 2026-03-29 18:56 MDT - Picked up the first narrow `add-0328d` work-complete-vs-proven slice at the PM/runtime reporting layer.
+  - changed [`internal/repo/flow_execution.go`](/Users/sam/dev/otter-camp/internal/repo/flow_execution.go):
+    - added `LatestReviewDecisionsByTask(...)` so higher layers can cheaply read the latest persisted review decision per task
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - project continuation task hints now carry `ProofState`
+    - completed-task snapshot wording now says `Recently implementation-complete bounded tasks already in the tree`
+    - completed task refs can surface `proof_state=approved|rejected|unrecorded`
+    - prompt guidance now explicitly explains that `proof_state=unrecorded` means `work_status=done` is not, by itself, proof that the work is validated
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - worker-side continuation snapshot/task refs mirror the same `proof_state` and implementation-complete wording
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - [`internal/jobqueue/worker_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_test.go)
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshotSummarizesProjectState|BuildProjectExecutionContinuationPromptIncludesCompletedBatchSupersessionGuidance|ProjectExecutionContinuationSnapshotIgnoresMalformedNoDecomposeChildren)$' -count=1`
+    - `GOFLAGS='' go test ./internal/jobqueue -run 'TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompleted(BatchSupersessionGuidance|CloseoutGuidance)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(UsesReviewProofStateForCompletedTasks|KeepsHumanContinuationPolicyOverStaleReviewGuard)$' -count=1`

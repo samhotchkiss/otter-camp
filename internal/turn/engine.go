@@ -8597,6 +8597,12 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 	if completedLine := strings.TrimSpace(snapshot.CompletedTaskLine); completedLine != "" {
 		lines = append(lines, completedLine)
 		lines = append(lines, "Do not create or queue replacement work for a batch_range already listed in the completed-task snapshot above unless that completed task failed to produce its deliverables.")
+		if strings.Contains(completedLine, "proof_state=approved") {
+			lines = append(lines, "proof_state=approved means that implementation-complete task also has a recorded review approval. Reuse it as proven prior work instead of re-validating the same batch from scratch.")
+		}
+		if strings.Contains(completedLine, "proof_state=unrecorded") {
+			lines = append(lines, "proof_state=unrecorded means the task is implementation-complete in the tree, but this snapshot does not yet show a recorded review approval for it. Do not treat work_status=done alone as proof that the batch is validated.")
+		}
 	}
 	if leafLine := strings.TrimSpace(snapshot.LeafActiveTaskLine); leafLine != "" {
 		lines = append(lines, leafLine)
@@ -20671,6 +20677,7 @@ type projectContinuationTaskHints struct {
 	DeliverableRoot string
 	DependsOnPath   string
 	BatchRange      string
+	ProofState      string
 }
 
 const projectContinuationBlockerExcerptLimit = 120
@@ -20798,7 +20805,7 @@ func buildProjectExecutionContinuationSnapshot(
 		snapshot.ActiveTaskLine = "Already-active non-terminal tasks in the tree: " + strings.Join(activeTasks, "; ")
 	}
 	if len(completedTasks) > 0 {
-		snapshot.CompletedTaskLine = "Recently completed bounded tasks already in the tree: " + strings.Join(completedTasks, "; ")
+		snapshot.CompletedTaskLine = "Recently implementation-complete bounded tasks already in the tree: " + strings.Join(completedTasks, "; ")
 	}
 	if len(leafActiveTasks) > 0 {
 		snapshot.LeafActiveTaskLine = "Active leaf tasks already have no child tasks to inspect: " + strings.Join(leafActiveTasks, "; ")
@@ -20882,7 +20889,42 @@ func (e *TurnEngine) projectContinuationTaskHintsByTask(ctx context.Context, tas
 	if err != nil {
 		return nil, err
 	}
-	return buildProjectContinuationTaskHints(tasks, blockedReasons), nil
+	hintsByTask := buildProjectContinuationTaskHints(tasks, blockedReasons)
+	reviewDecisions, err := e.projectContinuationReviewDecisionsByTask(ctx, tasks)
+	if err != nil {
+		return nil, err
+	}
+	for _, task := range tasks {
+		hints := hintsByTask[task.ID]
+		hints.ProofState = projectContinuationTaskProofState(task, reviewDecisions[task.ID])
+		hintsByTask[task.ID] = hints
+	}
+	return hintsByTask, nil
+}
+
+func (e *TurnEngine) projectContinuationReviewDecisionsByTask(ctx context.Context, tasks []repo.ProjectTask) (map[uuid.UUID]*repo.FlowExecutionReviewDecision, error) {
+	decisions := make(map[uuid.UUID]*repo.FlowExecutionReviewDecision)
+	if e == nil || e.pool == nil || len(tasks) == 0 {
+		return decisions, nil
+	}
+	taskIDs := make([]uuid.UUID, 0, len(tasks))
+	for _, task := range tasks {
+		if task.ID != uuid.Nil {
+			taskIDs = append(taskIDs, task.ID)
+		}
+	}
+	if len(taskIDs) == 0 {
+		return decisions, nil
+	}
+	items, err := repo.NewFlowNodeExecutionRepo(e.pool).LatestReviewDecisionsByTask(ctx, taskIDs)
+	if err != nil {
+		return nil, err
+	}
+	for taskID, decision := range items {
+		copyValue := decision
+		decisions[taskID] = &copyValue
+	}
+	return decisions, nil
 }
 
 func (e *TurnEngine) projectContinuationBlockedReasonsByTask(ctx context.Context, tasks []repo.ProjectTask) (map[uuid.UUID]string, error) {
@@ -20978,6 +21020,21 @@ func projectContinuationTaskResumePolicy(task repo.ProjectTask, blockedReason st
 		case "review_action_required", "review_decision_required":
 			return "resume_review_decision"
 		}
+	}
+	return ""
+}
+
+func projectContinuationTaskProofState(task repo.ProjectTask, decision *repo.FlowExecutionReviewDecision) string {
+	if decision != nil {
+		switch strings.ToLower(strings.TrimSpace(decision.Decision)) {
+		case "approve", "approved":
+			return "approved"
+		case "reject", "rejected":
+			return "rejected"
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "done") {
+		return "unrecorded"
 	}
 	return ""
 }
@@ -21578,6 +21635,9 @@ func projectExecutionContinuationTaskRef(task repo.ProjectTask, activity project
 	}
 	if batchRange := strings.TrimSpace(hints.BatchRange); batchRange != "" {
 		parts = append(parts, "batch_range="+batchRange)
+	}
+	if proofState := strings.TrimSpace(hints.ProofState); proofState != "" {
+		parts = append(parts, "proof_state="+proofState)
 	}
 	if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
 		parts = append(parts, "assigned_agent_id="+task.AssignedAgentID.String())
