@@ -26367,6 +26367,56 @@ func TestShouldBlockProjectContinuationTaskOwnedDeliverableMutationToolBlocksAct
 	}
 }
 
+func TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fixture := newUnitFixture(t, "async")
+	fingerprint := projectExecutionContinuationPromptFingerprint(uuid.Nil, "replacement child retry prompt")
+
+	priorTurn, err := fixture.chat.CreateTurn(ctx, fixture.session.ID, fixture.chat.participants[0].ParticipantID)
+	if err != nil {
+		t.Fatalf("CreateTurn prior: %v", err)
+	}
+	if err := fixture.chat.StartTurn(ctx, priorTurn.ID); err != nil {
+		t.Fatalf("StartTurn prior: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	if _, err := fixture.chat.SetStopReason(ctx, priorTurn.ID, &stopReason); err != nil {
+		t.Fatalf("SetStopReason prior: %v", err)
+	}
+	if err := fixture.chat.FailTurn(ctx, priorTurn.ID, "replacement child still not created"); err != nil {
+		t.Fatalf("FailTurn prior: %v", err)
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurn.ID,
+		Role:      "user",
+		Status:    "failed",
+		Content:   "replacement child retry prompt",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":                            projectExecutionContinuationSource,
+			"auto_continue":                     true,
+			"continuation_snapshot_fingerprint": fingerprint,
+		}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurn.ID,
+		Role:      "system",
+		Status:    "final",
+		Content:   projectContinuationReplacementHandoffPrefix + " Do not reread sibling artifacts from the project lane; create the fresh replacement child now or use only task.list(parent_task_id=...) if child-lane verification is still required.]",
+	})
+
+	suppress, err := fixture.engine.shouldSuppressRepeatedProjectExecutionContinuation(ctx, fixture.session.ID, uuid.Nil, fingerprint)
+	if err != nil {
+		t.Fatalf("shouldSuppressRepeatedProjectExecutionContinuation: %v", err)
+	}
+	if !suppress {
+		t.Fatal("expected repeated replacement-handoff continuation fingerprint to be suppressed")
+	}
+}
+
 func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksFileRead(t *testing.T) {
 	t.Parallel()
 

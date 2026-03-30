@@ -228,6 +228,7 @@ const reviewRepeatedFileReadNotFoundTurnStopSubstring = "[Repeated identical fil
 const projectContinuationRediscoveryGuardPrefix = "[Project continuation rediscovery guard blocked only broad rereads."
 const projectContinuationMissingDependencyGuardPrefix = "[Project continuation found that prerequisite artifact `"
 const projectContinuationTaskLaneBoundaryGuardPrefix = "[Project continuation found that task-owned active lane work must stay inside its project_task session."
+const projectContinuationReplacementHandoffPrefix = "[Project continuation already has a focused replacement-parent handoff."
 const projectContinuationSuccessfulHandoffPrefix = "[Project continuation successfully handed off the focused replacement child work."
 const projectContinuationReviewLaneResumePrefix = "[Project continuation resumed blocked review lane "
 
@@ -8845,6 +8846,9 @@ func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx cont
 				return true, nil
 			}
 			if strings.HasPrefix(trimmed, projectContinuationTaskLaneBoundaryGuardPrefix) {
+				return true, nil
+			}
+			if strings.HasPrefix(trimmed, projectContinuationReplacementHandoffPrefix) {
 				return true, nil
 			}
 			if _, ok := projectContinuationMissingDependencyStopPathFromSystemMessage(trimmed); ok {

@@ -1178,3 +1178,17 @@
     - it did not include the focused replacement-parent handoff stop prefix, even though the stop reason and continuation fingerprint were already stable across retries
   - impact:
     - the PM lane can sit in a pure worker-driven rearm loop, paying for the same blocked `file.read` plus stop message indefinitely instead of draining the repeated continuation family
+- 2026-03-30 22:18 MDT - The turn engine also failed to suppress repeated focused replacement-parent retry prompts with the same fingerprint.
+  - fresh live evidence:
+    - after deploying the worker-side suppression (`75e44374`), PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` still advanced through `11841-11899`
+    - every turn still ended on the same focused replacement-parent handoff system stop after another blocked `file.read`
+    - user rows were being marked `superseded stale pending message after terminal turn`, which proved worker recovery was no longer the main source of the churn
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) already suppressed repeated continuation fingerprints for:
+      - rediscovery-only stops
+      - missing-dependency stops
+      - task-lane-boundary stops
+      - successful handoff / review-lane resume waits
+    - it did not suppress the focused replacement-parent handoff stop prefix, so `appendProjectExecutionContinuationMessage(...)` kept creating a fresh continuation after every identical blocked turn
+  - impact:
+    - even after worker cleanup, the PM lane could still self-rearm the same blocked continuation family from inside the turn engine itself

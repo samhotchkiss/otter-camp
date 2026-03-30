@@ -756,3 +756,14 @@ They need sharper stopping rules than ordinary execution lanes.
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerEnsureProjectContinuationMessageSuppresses(RepeatedConsumedReplacementHandoffContinuation|StalePendingReplacementHandoffDuplicate)$' -count=1`
   - next live proof target:
     - after redeploy, the PM session should stop rearming identical focused replacement-parent continuations with the same fingerprint
+- 2026-03-30 22:18 MDT - The same family also needed engine-side stop suppression, not just worker-side cleanup.
+  - fresh live evidence:
+    - after deploying the worker fix, PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` still emitted `11841-11899`
+    - the user rows were being marked `superseded stale pending message after terminal turn`, which proved worker cleanup was firing
+    - but each blocked turn still appended a new identical continuation from inside the turn engine
+  - landed fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now suppresses repeated continuation fingerprints when the prior `validation_loop_blocked` turn ended with the focused replacement-parent handoff stop
+    - added focused coverage in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+      - `TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop|HandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionStopWithLiveOpenChild|HandleCompletedProjectExecutionContinuationTurnRetriesFocusedPrerequisiteRepairStopWithFreshMessage)$' -count=1`
