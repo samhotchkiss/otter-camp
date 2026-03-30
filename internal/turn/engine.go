@@ -11547,6 +11547,17 @@ func reviewActionMetadataSource(ctx context.Context, messages messageRepository,
 	return message.Metadata
 }
 
+func recoveryResumeMetadataSource(ctx context.Context, messages messageRepository, rt *turnRuntime) json.RawMessage {
+	if messages == nil || rt == nil || rt.initialMessageID == uuid.Nil {
+		return nil
+	}
+	message, err := messages.GetByID(ctx, rt.initialMessageID)
+	if err != nil || !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+		return nil
+	}
+	return message.Metadata
+}
+
 func (e *TurnEngine) completeTurn(ctx context.Context, rt *turnRuntime) error {
 	if err := e.recordStopReason(ctx, rt); err != nil {
 		return err
@@ -19667,7 +19678,7 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 			TurnID:    &rt.turn.ID,
 			Role:      "user",
 			Content:   buildRecoveryResumeActionPrompt(state),
-			Metadata:  syntheticContinuationActionMessageMetadata(rt.session, "task_recovery_resume"),
+			Metadata:  e.syntheticContinuationActionMessageMetadataWithCarryForward(ctx, rt.session, "task_recovery_resume", recoveryResumeMetadataSource(ctx, e.messages, rt)),
 		})
 		if actionErr != nil {
 			return false, actionErr
@@ -19784,6 +19795,9 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 			state.contextNotes = append(state.contextNotes, "- "+reviewRepairNote)
 		}
 	}
+	if strings.TrimSpace(state.inheritedSharedPath) == "" {
+		state.inheritedSharedPath = e.recoveryResumeInheritedSharedDeliverablePathFromInitialMessage(ctx, rt, *checkpoint)
+	}
 	if draft, found := e.readRecoveryWorkspaceText(ctx, rt, state.targetPath); found {
 		state.targetDraft, state.targetDraftRejectedReason = recoveryResumeDraftForPrompt(state.failureReason, state.targetPath, draft)
 	}
@@ -19878,6 +19892,39 @@ func (e *TurnEngine) recoveryResumeInheritedSharedDeliverablePath(taskRecord rep
 	failureCode := strings.TrimSpace(stringValue(guard["failure_code"]))
 	failureReason := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(stringValue(guard["failure_reason"]))), " "))
 	checkpointReason := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(checkpoint.FailureReason)), " "))
+	if failureCode == "inherited_shared_deliverable_write_blocked" ||
+		strings.Contains(failureReason, "inherits shared parent deliverable") ||
+		strings.Contains(checkpointReason, "inherits shared parent deliverable") {
+		return targetPath
+	}
+	return ""
+}
+
+func (e *TurnEngine) recoveryResumeInheritedSharedDeliverablePathFromInitialMessage(ctx context.Context, rt *turnRuntime, checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) string {
+	if e == nil || e.messages == nil || rt == nil || rt.initialMessageID == uuid.Nil {
+		return ""
+	}
+	message, err := e.messages.GetByID(ctx, rt.initialMessageID)
+	if err != nil {
+		return ""
+	}
+	return recoveryResumeInheritedSharedDeliverablePathFromMetadata(messageMetadataMap(message.Metadata), checkpoint)
+}
+
+func recoveryResumeInheritedSharedDeliverablePathFromMetadata(metadata map[string]any, checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	targetPath := normalizeWorkspaceRelativePath(strings.TrimSpace(checkpoint.TargetPath))
+	if targetPath == "" {
+		targetPath = normalizeWorkspaceRelativePath(strings.TrimSpace(stringValue(metadata["recovery_checkpoint_target_path"])))
+	}
+	if targetPath == "" {
+		return ""
+	}
+	failureCode := strings.TrimSpace(stringValue(metadata["validation_failure_code"]))
+	failureReason := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(stringValue(metadata["validation_failure_reason"]))), " "))
+	checkpointReason := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(stringValue(metadata["recovery_checkpoint_failure_reason"]))), " "))
 	if failureCode == "inherited_shared_deliverable_write_blocked" ||
 		strings.Contains(failureReason, "inherits shared parent deliverable") ||
 		strings.Contains(checkpointReason, "inherits shared parent deliverable") {
@@ -28136,6 +28183,7 @@ func syntheticContinuationActionMessageMetadata(session *chat.ChatSession, sourc
 }
 
 func syntheticContinuationActionMessageMetadataWithCarryForward(session *chat.ChatSession, source string, existing json.RawMessage) json.RawMessage {
+	keys := syntheticContinuationCarryForwardKeys(source)
 	payload := map[string]any{
 		"source":                 strings.TrimSpace(source),
 		"repo_version":           strings.TrimSpace(versionpkg.RepoVersion),
@@ -28144,7 +28192,7 @@ func syntheticContinuationActionMessageMetadataWithCarryForward(session *chat.Ch
 	if len(existing) != 0 && json.Valid(existing) {
 		var prior map[string]any
 		if err := json.Unmarshal(existing, &prior); err == nil {
-			for _, key := range []string{"run_id", "run_step_id", "run_attempt_id", "task_id"} {
+			for _, key := range keys {
 				if value, ok := prior[key]; ok && strings.TrimSpace(fmt.Sprintf("%v", value)) != "" {
 					payload[key] = value
 				}
@@ -28162,6 +28210,7 @@ func (e *TurnEngine) syntheticContinuationActionMessageMetadataWithCarryForward(
 	if payloadHasRunAttribution(payload) || e == nil || e.messages == nil || session == nil || session.ID == uuid.Nil {
 		return mustJSONRaw(payload)
 	}
+	keys := syntheticContinuationCarryForwardKeys(source)
 	messages, err := e.messages.ListBySession(ctx, session.ID)
 	if err != nil {
 		return mustJSONRaw(payload)
@@ -28175,7 +28224,7 @@ func (e *TurnEngine) syntheticContinuationActionMessageMetadataWithCarryForward(
 		if !payloadHasRunAttribution(prior) {
 			continue
 		}
-		for _, key := range []string{"run_id", "run_step_id", "run_attempt_id", "task_id"} {
+		for _, key := range keys {
 			if value, ok := prior[key]; ok && strings.TrimSpace(fmt.Sprintf("%v", value)) != "" {
 				payload[key] = value
 			}
@@ -28183,6 +28232,24 @@ func (e *TurnEngine) syntheticContinuationActionMessageMetadataWithCarryForward(
 		break
 	}
 	return mustJSONRaw(payload)
+}
+
+func syntheticContinuationCarryForwardKeys(source string) []string {
+	keys := []string{"run_id", "run_step_id", "run_attempt_id", "task_id"}
+	switch strings.TrimSpace(source) {
+	case "task_recovery_action", "task_recovery_resume":
+		keys = append(keys,
+			"recovery_action",
+			"recovery_checkpoint_target_path",
+			"recovery_checkpoint_artifact_path",
+			"recovery_blocker_class",
+			"recovery_checkpoint_failure_reason",
+			"recovery_checkpoint_prior_failure_reasons",
+			"validation_failure_code",
+			"validation_failure_reason",
+		)
+	}
+	return keys
 }
 
 func payloadHasRunAttribution(payload map[string]any) bool {

@@ -703,3 +703,13 @@
   - impact:
     - repeated shared-doc child retries can ignore the weaker kickoff improvements and immediately spend another blocked whole-file write
     - the system already knows the correct next-step rule, but the most immediate retry prompt was not carrying it
+- 2026-03-29 18:22 MDT - The recovery-state prompt fix still had one missing hop on live traffic.
+  - fresh live evidence:
+    - fresh `repo_version=3639` sessions like `08b0f0df-7ca9-46f0-8ab6-20fe14ca6ef2` (task `161`) and `44c16b33-4e5f-4a69-a0f3-ce3fade40098` (task `177`) still showed generic synthetic user prompt `4` with no inherited shared-file rule, even though the queue kickoff metadata had already recorded `validation_failure_code=inherited_shared_deliverable_write_blocked`
+    - querying the latest active retry showed the current turn was rooted at the synthetic `task_recovery_resume` user message, not the original queue kickoff
+  - bug:
+    - synthetic `task_recovery_resume` prompts were only preserving generic run/task attribution
+    - they were dropping `validation_failure_code`, `validation_failure_reason`, and `recovery_checkpoint_*`, so the next recovery turn could not reconstruct the inherited shared-parent-file boundary from its own initial message
+  - impact:
+    - live shared-doc child lanes could still reopen with a generic recovery prompt one turn later
+    - even after the engine knew the lane must stay in bounded `file.edit` mode, the next retry turn could lose that signal and pay another blocked `file.write`

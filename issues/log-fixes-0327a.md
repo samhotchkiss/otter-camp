@@ -3840,3 +3840,19 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildRecoveryResumeStateMessageIncludes(StructuredReviewDecisionContext|InheritedSharedDeliverableHint)|RecoveryResumeInheritedSharedDeliverablePathUsesTaskGuard)$' -count=1`
   - deploy / proof status:
     - local and green at this checkpoint; next step is rebuild/restart and confirm the next live shared-doc retry sees the new bounded-edit rule in `[Recovery resume state]`
+- 2026-03-29 18:22 MDT - Closed the last recovery-prompt propagation gap for shared-doc child lanes.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `loadRecoveryResumeState(...)` now falls back to the initial recovery message metadata when deriving `inheritedSharedPath`
+    - added `recoveryResumeInheritedSharedDeliverablePathFromInitialMessage(...)` / `recoveryResumeInheritedSharedDeliverablePathFromMetadata(...)`
+    - synthetic `task_recovery_resume` prompts now use `syntheticContinuationActionMessageMetadataWithCarryForward(...)` plus `recoveryResumeMetadataSource(...)`, so `validation_failure_code`, `validation_failure_reason`, and `recovery_checkpoint_*` survive into the next retry turn
+    - generalized `syntheticContinuationCarryForwardKeys(...)` for recovery-specific carry-forward keys
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestLoadRecoveryResumeStateFallsBackToInitialMessageForInheritedSharedDeliverable`
+    - added `TestSyntheticContinuationActionMessageMetadataWithCarryForwardPreservesRecoveryValidationKeys`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildRecoveryResumeStateMessageIncludesInheritedSharedDeliverableHint|RecoveryResumeInheritedSharedDeliverablePathUsesTaskGuard|LoadRecoveryResumeStateFallsBackToInitialMessageForInheritedSharedDeliverable|SyntheticContinuationActionMessageMetadataWithCarryForwardPreservesRecoveryValidationKeys|BuildRecoveryResumeActionPromptIncludesInheritedSharedDeliverableRule)$' -count=1`
+  - live proof:
+    - rebuilt/restarted on `repo_version=3640`
+    - fresh recovery state messages now contain `Shared parent file: ...` / `Bounded edit rule: ...`
+    - fresh synthetic `task_recovery_resume` prompts now contain `This child lane inherits the shared parent file ... Do not use file.write ... use file.edit ...`
+    - example fresh session: `e8c87d61-2cb1-4bc7-91f0-c707172b7b0e`

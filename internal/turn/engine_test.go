@@ -40494,6 +40494,94 @@ func TestRecoveryResumeInheritedSharedDeliverablePathUsesTaskGuard(t *testing.T)
 	}
 }
 
+func TestLoadRecoveryResumeStateFallsBackToInitialMessageForInheritedSharedDeliverable(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	description := "Update the shared architecture file with the bounded child-lane edit only."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				TaskNumber:     160,
+				Title:          "Shared architecture update",
+				Description:    &description,
+				WorkStatus:     "in_progress",
+				Metadata: mustRawJSON(t, map[string]any{
+					"decomposition_parent_task_id": uuid.New().String(),
+					"recovery_file_write_checkpoint": map[string]any{
+						"version":       1,
+						"target_path":   "planning/sambot-architecture.md",
+						"blocker_class": "durable_recovery_checkpoint",
+					},
+				}),
+			},
+		},
+	}
+	if _, err := fixture.messages.UpdateMetadata(context.Background(), fixture.userMessageID, mustRawJSON(t, map[string]any{
+		"source":                             "task_queue_processor",
+		"recovery_action":                    recoveryActionValidationResume,
+		"validation_failure_code":            "inherited_shared_deliverable_write_blocked",
+		"validation_failure_reason":          "recovery halted because the decomposed child lane inherits shared parent deliverable planning/sambot-architecture.md; resume only with bounded file.edit updates on the current shared file or by moving integration back to the parent task",
+		"recovery_checkpoint_target_path":    "planning/sambot-architecture.md",
+		"recovery_checkpoint_failure_reason": "resume validation blocked task",
+	})); err != nil {
+		t.Fatalf("UpdateMetadata: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		recoveryTurn:     true,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	state, ok := fixture.engine.loadRecoveryResumeState(context.Background(), rt)
+	if !ok {
+		t.Fatal("loadRecoveryResumeState(...) = false, want true")
+	}
+	if got := state.inheritedSharedPath; got != "planning/sambot-architecture.md" {
+		t.Fatalf("state.inheritedSharedPath = %q, want %q", got, "planning/sambot-architecture.md")
+	}
+}
+
+func TestSyntheticContinuationActionMessageMetadataWithCarryForwardPreservesRecoveryValidationKeys(t *testing.T) {
+	t.Parallel()
+
+	metadata := syntheticContinuationActionMessageMetadataWithCarryForward(&chat.ChatSession{}, "task_recovery_resume", mustRawJSON(t, map[string]any{
+		"recovery_action":                    recoveryActionValidationResume,
+		"recovery_checkpoint_target_path":    "planning/sambot-architecture.md",
+		"recovery_checkpoint_failure_reason": "repeated read-only recovery discovery",
+		"validation_failure_code":            "inherited_shared_deliverable_write_blocked",
+		"validation_failure_reason":          "inherits shared parent deliverable planning/sambot-architecture.md",
+	}))
+	payload := messageMetadataMap(metadata)
+
+	if got := stringValue(payload["recovery_action"]); got != recoveryActionValidationResume {
+		t.Fatalf("recovery_action = %q, want %q", got, recoveryActionValidationResume)
+	}
+	if got := stringValue(payload["recovery_checkpoint_target_path"]); got != "planning/sambot-architecture.md" {
+		t.Fatalf("recovery_checkpoint_target_path = %q, want %q", got, "planning/sambot-architecture.md")
+	}
+	if got := stringValue(payload["validation_failure_code"]); got != "inherited_shared_deliverable_write_blocked" {
+		t.Fatalf("validation_failure_code = %q, want inherited_shared_deliverable_write_blocked", got)
+	}
+	if got := stringValue(payload["validation_failure_reason"]); !strings.Contains(got, "inherits shared parent deliverable") {
+		t.Fatalf("validation_failure_reason = %q, want inherited shared deliverable guidance", got)
+	}
+}
+
 func TestRecoveryTargetPathForSessionPrefersParentExplicitDeliverableOverWrongCheckpoint(t *testing.T) {
 	t.Parallel()
 
