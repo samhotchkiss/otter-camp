@@ -157,3 +157,10 @@ func TestRecoveryFileWriteFailureIsMissingContentRecognizesCorrectionReason(t *t
 		t.Fatalf("RecoveryFileWriteFailureIsMissingContent(%q) = false, want true", reason)
 	}
 }
+
+func TestRecoveryFileWriteFailureIsMissingCommandRecognizesCorrectionReason(t *testing.T) {
+	reason := "cli.execute for templates/template-08-replace.html was emitted without `command`; the next retry must provide a concrete cli.execute.command string or a populated file.write call"
+	if !RecoveryFileWriteFailureIsMissingCommand(reason) {
+		t.Fatalf("RecoveryFileWriteFailureIsMissingCommand(%q) = false, want true", reason)
+	}
+}

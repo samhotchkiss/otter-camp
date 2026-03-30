@@ -946,3 +946,55 @@
   - impact:
     - PM turns could still waste one or more same-turn hops after the right replacement-child handoff was already in place
     - template-08 progress remained slower than necessary even after the stale-child/root-focus issues were fixed
+- 2026-03-29 23:33 MDT - Task continuations could lose a stronger direct-write checkpoint as soon as a later transient tool-validation guard drifted to a different failure.
+  - fresh live evidence:
+    - task `241` already had a durable `recovery_file_write_checkpoint` on `templates/template-08-replace.html` from `file.write` without `content`
+    - the very next continuation then bounced into `cli.execute` without `command`
+    - once that happened, the continuation snapshot stopped surfacing `direct_write_only=true`, even though the durable checkpoint still proved the right next move was “write the file body directly”
+  - bug:
+    - `taskExecutionContinuationSnapshot(...)` only derived `direct_write_only=true` from the latest `agent_turn_validation_guard.failure_code=content_required`
+    - it ignored a same-target `recovery_file_write_checkpoint` that still preserved the authoritative direct-write state
+  - impact:
+    - the next task continuation prompt could regress from body-first write guidance back into shell-write narration or another empty `file.write`
+    - task `241` stayed in avoidable `content_required` / `command_is_required` churn even after the runtime had already learned the exact target file and direct-write correction
+- 2026-03-29 23:40 MDT - Fresh single-file kickoff tasks could still waste their very first step on workspace rereads and empty shell writes, even when the task description already prescribed a one-pass file-generation command.
+  - fresh live evidence:
+    - task `242` kickoff explicitly said:
+      - single file `templates/template-08-replace.html`
+      - use `cli_execute` with python3 in a SINGLE pass
+      - do not use `file_write`
+    - the lane still did `git.status`, then `file.list templates`, then emitted `cli.execute` without `command`
+  - bug:
+    - kickoff builders had no special first-step rule for this exact single-file / single-pass `cli_execute` shape
+    - the stronger direct-write / no-reread rules only appeared later in recovery, after the first turn had already been wasted
+  - impact:
+    - every fresh replacement task for template-08 could burn a predictable opener on narration and empty shell-write calls before any recovery hardening got a chance to help
+- 2026-03-29 23:48 MDT - Consumed pending `task_queue_processor` kickoff messages were still being reused as active execution recovery roots.
+  - fresh live evidence:
+    - task `242` session `38a6f713-a252-4c38-bd96-5579a8113b22` still held pending kickoff `20ad53ca-c32a-4153-b5fd-6e42e8ef3e95`
+    - that kickoff had already triggered failed/completed turns, but worker recovery still selected it and never synthesized a fresh recovered kickoff
+  - bug:
+    - `RequeueActiveExecutionSessionsWithoutTurns(...)` only treated consumed supervisor resumes as stale enough to regenerate
+    - `ensureTaskExecutionKickoffMessage(...)` reused any pending `task_queue_processor` kickoff row without checking whether it had already been consumed by a completed/failed/cancelled turn
+  - impact:
+    - new kickoff/recovery prompt improvements could stay dormant in production because the worker kept replaying an older stale kickoff message
+    - task `242` could remain pinned to pre-fix kickoff wording even after multiple redeploys
+- 2026-03-29 23:51 MDT - Even after the stale-kickoff repair moved task `242` onto `task_recovery_resume`, the recovery prompt itself was still too generic for the missing-command failure family.
+  - fresh live evidence:
+    - pending recovery prompt `c06b6583-d023-4256-b78c-725052a1a62c` still only said the next retry must provide a concrete `cli.execute.command` string or populated `file.write`
+    - it did not yet include the stronger command-first/no-narration instructions now coded locally
+    - latest failed assistant message was still `I'll write the template file now using cli_execute as instructed.`
+  - bug:
+    - the hot lane had moved onto the correct recovery path, but the deployed prompt contract still left room for narration-first replies before a real shell command
+  - impact:
+    - task `242` could keep burning recovery turns on intent statements even after the runtime had already learned that the exact failure mode was missing `cli.execute.command`
+- 2026-03-29 23:54 MDT - After the command-first prompt redeploy, the remaining bug shifted into the halt path itself.
+  - fresh live evidence:
+    - new recovery prompt `607277ec-ca50-45f3-88b1-18107ec1cf6d` explicitly forbade narration-first openers and required a concrete `cli.execute.command`
+    - the lane still replied `I'll write the template file now using cli_execute with a concrete command.`
+    - runtime emitted another correction instead of halting immediately
+  - bug:
+    - `handleRecoveryCLIExecuteWithoutCommand(...)` only consulted `checkpoint.FailureReason`
+    - it ignored missing-command reasons stored in `PriorFailureReasons`, even though prompt construction already used that history
+  - impact:
+    - the lane could still spend one more bounded correction hop after the runtime already had enough history to know this was a repeated missing-command family

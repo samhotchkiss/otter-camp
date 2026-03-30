@@ -205,7 +205,9 @@ func RecoveryFileWriteFailureIsMissingCommand(reason string) bool {
 	lower := strings.ToLower(strings.TrimSpace(reason))
 	return strings.Contains(lower, "cli.execute") &&
 		(strings.Contains(lower, "retried without `command`") ||
+			strings.Contains(lower, "emitted without `command`") ||
 			strings.Contains(lower, "retried without command") ||
+			strings.Contains(lower, "emitted without command") ||
 			strings.Contains(lower, "without command"))
 }
 

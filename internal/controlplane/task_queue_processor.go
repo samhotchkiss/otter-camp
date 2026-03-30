@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
@@ -492,6 +493,8 @@ func (p *TaskQueueProcessor) createAsyncDecisionArtifact(ctx context.Context, ta
 	})
 	return err
 }
+
+var taskQueueSinglePassCLIWritePathPattern = regexp.MustCompile("(?is)(?:single\\s+file|write\\s+a\\s+single\\s+complete[^`\\n]*?at)\\s*:?\\s*`([^`]+)`")
 
 func buildAsyncDecisionArtifact(taskRecord repo.ProjectTask, decision taskplan.AsyncDecision) (string, string) {
 	taskLabel := fmt.Sprintf("task #%d", taskRecord.TaskNumber)
@@ -1271,6 +1274,9 @@ func buildQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 	if instruction := inheritedSharedDeliverableKickoffInstruction(taskRecord); instruction != "" {
 		base += "\n\nExecution instruction:\n" + instruction
 	}
+	if instruction := singlePassCLIWriteKickoffInstruction(taskRecord); instruction != "" {
+		base += "\n\nExecution instruction:\n" + instruction
+	}
 	return base
 }
 
@@ -1312,6 +1318,26 @@ func inheritedSharedDeliverableKickoffInstruction(taskRecord repo.ProjectTask) s
 	}
 	targetPath := strings.TrimSpace(checkpoint.TargetPath)
 	return fmt.Sprintf("This decomposed child task inherits the shared parent deliverable `%s`. Do not use file.write to replace the whole shared file from this lane. Read `%s` and use file.edit for the bounded section update instead; if the child still needs the whole document rewritten, move that work back to the parent task.", targetPath, targetPath)
+}
+
+func singlePassCLIWriteKickoffInstruction(taskRecord repo.ProjectTask) string {
+	description := strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+	lower := strings.ToLower(description)
+	if !strings.Contains(lower, "cli_execute") || !strings.Contains(lower, "single pass") {
+		return ""
+	}
+	if !strings.Contains(lower, "do not use file_write") && !strings.Contains(lower, "do not use file.write") {
+		return ""
+	}
+	match := taskQueueSinglePassCLIWritePathPattern.FindStringSubmatch(description)
+	if len(match) != 2 {
+		return ""
+	}
+	targetPath := strings.TrimSpace(match[1])
+	if targetPath == "" {
+		return ""
+	}
+	return fmt.Sprintf("This task already specifies a single-pass cli_execute write for `%s`. Do not begin with git.status, file.list, file.read, or readiness narration. Your next assistant message must contain one concrete non-empty cli.execute.command that writes `%s`, or one concrete blocker sentence if that exact write is impossible.", targetPath, targetPath)
 }
 
 func taskQueueMetadataMap(metadata json.RawMessage) map[string]any {

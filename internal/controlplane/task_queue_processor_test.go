@@ -877,6 +877,25 @@ func TestBuildQueueKickoffMessageForInheritedSharedDeliverableChild(t *testing.T
 	}
 }
 
+func TestBuildQueueKickoffMessageForSinglePassCLIWriteTask(t *testing.T) {
+	description := "## Deliverable\nSingle file: `templates/template-08-replace.html`\n\n## Instructions\nUse `cli_execute` with python3 to write the file in a SINGLE pass. Do NOT use file_write. Do NOT build incrementally."
+	taskRecord := repo.ProjectTask{
+		Title:       "Write templates/template-08-replace.html — Dark Mode Editorial layout (fresh attempt)",
+		Description: &description,
+	}
+
+	message := buildQueueKickoffMessage(taskRecord)
+	if !strings.Contains(message, "single-pass cli_execute write for `templates/template-08-replace.html`") {
+		t.Fatalf("kickoff message = %q, want single-pass cli_execute instruction", message)
+	}
+	if !strings.Contains(message, "Do not begin with git.status, file.list, file.read, or readiness narration") {
+		t.Fatalf("kickoff message = %q, want no-reread kickoff guidance", message)
+	}
+	if !strings.Contains(message, "must contain one concrete non-empty cli.execute.command") {
+		t.Fatalf("kickoff message = %q, want concrete cli.execute command requirement", message)
+	}
+}
+
 func TestBuildFlowTransitionKickoffMessageForRejectedOrchestrationOnlyParent(t *testing.T) {
 	description := "Parent/orchestration task for wave gating validation. Validates that child tasks exercise the gating behavior correctly. Does not do execution work itself."
 	taskRecord := repo.ProjectTask{

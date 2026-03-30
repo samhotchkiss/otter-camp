@@ -155,6 +155,25 @@ func TestBuildRecoveredTaskQueueKickoffMessageForInheritedSharedDeliverableChild
 	}
 }
 
+func TestBuildRecoveredTaskQueueKickoffMessageForSinglePassCLIWriteTask(t *testing.T) {
+	description := "## Deliverable\nSingle file: `templates/template-08-replace.html`\n\n## Instructions\nUse `cli_execute` with python3 to write the file in a SINGLE pass. Do NOT use file_write. Do NOT build incrementally."
+	taskRecord := repo.ProjectTask{
+		Title:       "Write templates/template-08-replace.html — Dark Mode Editorial layout (fresh attempt)",
+		Description: &description,
+	}
+
+	message := buildRecoveredTaskQueueKickoffMessage(taskRecord)
+	if !strings.Contains(message, "single-pass cli_execute write for `templates/template-08-replace.html`") {
+		t.Fatalf("kickoff message = %q, want single-pass cli_execute instruction", message)
+	}
+	if !strings.Contains(message, "Do not begin with git.status, file.list, file.read, or readiness narration") {
+		t.Fatalf("kickoff message = %q, want no-reread kickoff guidance", message)
+	}
+	if !strings.Contains(message, "must contain one concrete non-empty cli.execute.command") {
+		t.Fatalf("kickoff message = %q, want concrete cli.execute command requirement", message)
+	}
+}
+
 func TestJobWorkerProcessesBatchConcurrently(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -31375,6 +31394,196 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsCreatesMissingTaskQu
 	}
 	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["flow_node_execution_id"])); got != execution.ID.String() {
 		t.Fatalf("flow_node_execution_id = %q, want %s", got, execution.ID)
+	}
+}
+
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsRefreshesConsumedPendingTaskQueueKickoff(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-execution-refresh-consumed-kickoff",
+		DisplayName: "Requeue Active Execution Refresh Consumed Kickoff",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Refresh Consumed Kickoff Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You resume task work after queue recovery.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-execution-refresh-consumed-kickoff-project",
+		DisplayName:    "Requeue Active Execution Refresh Consumed Kickoff Project",
+		Description:    "Project for stale kickoff refresh repair",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "requeue-active-execution-refresh-consumed-kickoff-template",
+		DisplayName:    "Requeue Active Execution Refresh Consumed Kickoff Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	description := "## Deliverable\nSingle file: `templates/template-08-replace.html`\n\n## Instructions\nUse `cli_execute` with python3 to write the file in a SINGLE pass. Do NOT use file_write. Do NOT build incrementally."
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Write templates/template-08-replace.html — Dark Mode Editorial layout (fresh attempt)",
+		Description:     &description,
+		WorkStatus:      "in_progress",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+		Metadata: json.RawMessage(`{
+			"agent_turn_validation_guard":{
+				"tool_name":"cli.execute",
+				"failure_code":"command_is_required",
+				"failure_reason":"command is required",
+				"count":1,
+				"blocked":false
+			}
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active flow node execution: %v", err)
+	}
+	staleKickoff, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Start work on task: stale kickoff",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"task_queue_processor","flow_node_execution_id":"%s"}`, execution.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create stale pending kickoff: %v", err)
+	}
+	completedAt := time.Now()
+	if _, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		TriggerMessageID: &staleKickoff.ID,
+		RetryCount:       0,
+		CompletedAt:      &completedAt,
+	}); err != nil {
+		t.Fatalf("create completed kickoff turn: %v", err)
+	}
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1", requeued)
+	}
+
+	messages, err := repo.NewChatMessageRepo(pool).ListBySession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list session messages: %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(messages))
+	}
+	latest := messages[len(messages)-1]
+	if latest.ID == staleKickoff.ID {
+		t.Fatalf("latest kickoff id = %s, want fresh recovered kickoff", latest.ID)
+	}
+	if latest.Status != "pending" {
+		t.Fatalf("latest kickoff status = %q, want pending", latest.Status)
+	}
+	if !strings.Contains(latest.Content, "single-pass cli_execute write for `templates/template-08-replace.html`") {
+		t.Fatalf("latest kickoff content = %q, want refreshed single-pass kickoff instruction", latest.Content)
+	}
+
+	var metadata map[string]any
+	if err := json.Unmarshal(latest.Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal latest kickoff metadata: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["recovered_missing_kickoff"])); got != "true" {
+		t.Fatalf("recovered_missing_kickoff = %q, want true", got)
+	}
+
+	var (
+		jobStatus   string
+		requeuedMsg uuid.UUID
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, (payload->>'message_id')::uuid
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, session.ID).Scan(&jobStatus, &requeuedMsg); err != nil {
+		t.Fatalf("query requeued job: %v", err)
+	}
+	if jobStatus != "pending" {
+		t.Fatalf("requeued job status = %q, want pending", jobStatus)
+	}
+	if requeuedMsg != latest.ID {
+		t.Fatalf("requeued message_id = %s, want %s", requeuedMsg, latest.ID)
 	}
 }
 

@@ -80,6 +80,8 @@ const (
 	taskInheritedSharedDeliverableGuardPrefix = "[Task shared-deliverable guard blocked a decomposed child lane from replacing the inherited parent file with file.write."
 )
 
+var taskQueueSinglePassCLIWritePathPattern = regexp.MustCompile("(?is)(?:single\\s+file|write\\s+a\\s+single\\s+complete[^`\\n]*?at)\\s*:?\\s*`([^`]+)`")
+
 var explicitDeliverablePathPatternsForWorker = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
@@ -1820,7 +1822,9 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 				continue
 			}
 		}
-		if messageID == uuid.Nil || (strings.EqualFold(strings.TrimSpace(messageSource), "supervisor") && messageConsumed) {
+		if messageID == uuid.Nil ||
+			(strings.EqualFold(strings.TrimSpace(messageSource), "supervisor") && messageConsumed) ||
+			(strings.EqualFold(strings.TrimSpace(messageSource), "task_queue_processor") && messageConsumed) {
 			synthMessageID, synthErr := w.ensureTaskExecutionKickoffMessage(ctx, sessionID, executionID)
 			if synthErr != nil {
 				return repaired, fmt.Errorf("ensure task execution kickoff message for session %s: %w", sessionID, synthErr)
@@ -3056,6 +3060,13 @@ func (w *Worker) ensureTaskExecutionKickoffMessage(ctx context.Context, sessionI
 		  AND COALESCE(metadata->'agent_turn_dispatch'->>'cancelled_at', '') = ''
 		  AND COALESCE(metadata->>'source', '') = 'task_queue_processor'
 		  AND COALESCE(metadata->>'flow_node_execution_id', '') = $2
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    WHERE ct.session_id = chat_message.session_id
+		      AND ct.trigger_message_id = chat_message.id
+		      AND ct.status IN ('completed', 'failed', 'cancelled')
+		  )
 		ORDER BY created_at DESC, id DESC
 		LIMIT 1
 	`, sessionID, executionID.String()).Scan(&existingMessageID)
@@ -3225,6 +3236,9 @@ func buildRecoveredTaskQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 	if instruction := recoveredInheritedSharedDeliverableKickoffInstruction(taskRecord); instruction != "" {
 		base += "\n\nExecution instruction:\n" + instruction
 	}
+	if instruction := recoveredSinglePassCLIWriteKickoffInstruction(taskRecord); instruction != "" {
+		base += "\n\nExecution instruction:\n" + instruction
+	}
 	return base
 }
 
@@ -3246,6 +3260,26 @@ func recoveredInheritedSharedDeliverableKickoffInstruction(taskRecord repo.Proje
 	}
 	targetPath := strings.TrimSpace(checkpoint.TargetPath)
 	return fmt.Sprintf("This decomposed child task inherits the shared parent deliverable `%s`. Do not replay a whole-file file.write from this lane. Read `%s` and use file.edit for the bounded section update instead; if the task still needs the whole document rewritten, move that work back to the parent task.", targetPath, targetPath)
+}
+
+func recoveredSinglePassCLIWriteKickoffInstruction(taskRecord repo.ProjectTask) string {
+	description := strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+	lower := strings.ToLower(description)
+	if !strings.Contains(lower, "cli_execute") || !strings.Contains(lower, "single pass") {
+		return ""
+	}
+	if !strings.Contains(lower, "do not use file_write") && !strings.Contains(lower, "do not use file.write") {
+		return ""
+	}
+	match := taskQueueSinglePassCLIWritePathPattern.FindStringSubmatch(description)
+	if len(match) != 2 {
+		return ""
+	}
+	targetPath := strings.TrimSpace(match[1])
+	if targetPath == "" {
+		return ""
+	}
+	return fmt.Sprintf("This task already specifies a single-pass cli_execute write for `%s`. Do not begin with git.status, file.list, file.read, or readiness narration. Your next assistant message must contain one concrete non-empty cli.execute.command that writes `%s`, or one concrete blocker sentence if that exact write is impossible.", targetPath, targetPath)
 }
 
 func workerMessageMetadataMap(metadata json.RawMessage) map[string]any {

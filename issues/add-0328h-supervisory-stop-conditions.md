@@ -600,3 +600,75 @@ They need sharper stopping rules than ordinary execution lanes.
     - prompt `7a60c9d2-d0a2-48a2-8ded-aa9b38ea60ed` now focuses parent `OC-84`, not stale child `OC-225`
     - tool result `164e8ae7-56f2-4c19-9212-14cb96e3f9aa` returned the new project-lane write guard: `Do not write deliverable files like templates/template-08-replace.html from the project session`
     - follow-up PM turn `f502ddde-359c-4860-a49e-7dd5bd8b85d3` directly assigned Casey to `OC-241` and queued it; tool result `9aa85c90-7a63-47df-a1ba-7b2457645121` shows `work_status=queued`
+- 2026-03-29 23:33 MDT - Picked up the next task-lane continuation seam immediately under the fresh replacement child `OC-241`.
+  - fresh live evidence on session `909a55c4-f23b-4f35-a19b-404a93e8d9b0`:
+    - the lane correctly narrowed to `templates/template-08-replace.html`
+    - then it repeated `file.write` without `content`, followed by `cli.execute` without `command`
+    - task metadata shows why the prompt regressed:
+      - `agent_turn_validation_guard.failure_code=command_is_required`
+      - but the durable `recovery_file_write_checkpoint` still points at the same target with `failure_reason=file.write ... emitted without content`
+  - local fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now preserves `direct_write_only=true` from the durable recovery file-write checkpoint when it still targets the same deliverable path, even if a later transient guard has drifted to `cli.execute:command_is_required`
+    - this keeps task-continuation prompts in the stronger “body-first write” state for the next natural resume instead of reopening shell-write narration
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(TaskExecutionContinuationSnapshot(IncludesParentContractAndSiblingHints|KeepsDirectWriteOnlyFromDurableCheckpoint)|BuildTaskContinuationActionPromptIncludesChildTaskSnapshotGuidance)$' -count=1`
+  - deploy / proof target:
+    - after rebuild, the next `OC-241` continuation should surface `direct_write_only=true` in the current-task snapshot and tell the lane to begin with the first character of the deliverable body instead of another “Let me write...” preamble
+- 2026-03-29 23:40 MDT - The next fresh template-08 canary showed the remaining seam had shifted earlier, into kickoff itself.
+  - fresh live evidence on `OC-242` (`session_id=38a6f713-a252-4c38-bd96-5579a8113b22`):
+    - the task description already specified a single-file one-pass `cli_execute` write for `templates/template-08-replace.html`
+    - the lane still opened with `git.status`, `file.list`, and then an empty `cli.execute`
+  - local fix:
+    - [`internal/controlplane/task_queue_processor.go`](/Users/sam/dev/otter-camp/internal/controlplane/task_queue_processor.go) and [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now append a stronger kickoff instruction for that exact single-file/single-pass `cli_execute` pattern
+    - the instruction explicitly forbids `git.status`, `file.list`, `file.read`, and readiness narration before acting, and requires the next assistant message to contain one concrete non-empty `cli.execute.command` or one concrete blocker sentence
+  - verified with:
+    - `GOFLAGS='' go test ./internal/controlplane -run 'TestBuildQueueKickoffMessageFor(SinglePassCLIWriteTask|InheritedSharedDeliverableChild|OrchestrationOnlyParent)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestBuildRecoveredTaskQueueKickoffMessageFor(SinglePassCLIWriteTask|InheritedSharedDeliverableChild)$' -count=1`
+  - deploy / proof target:
+    - the next fresh template-08 kickoff or recovered kickoff should start with a populated `cli.execute.command` instead of another narration-first empty-command turn
+- 2026-03-29 23:48 MDT - Found and patched the worker path that was still replaying stale pre-fix kickoffs.
+  - fresh live evidence:
+    - task `242` kept the original pending `task_queue_processor` kickoff message `20ad53ca-c32a-4153-b5fd-6e42e8ef3e95` even after that kickoff had already produced failed/completed turns
+    - because of that, worker recovery never synthesized a fresh recovered kickoff with the new single-pass CLI instruction; it kept replaying the older kickoff family instead
+  - local fix:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now treats consumed `task_queue_processor` kickoff messages the same way it already treated consumed supervisor resumes: they are no longer reusable kickoff roots for active execution recovery
+    - `ensureTaskExecutionKickoffMessage(...)` now refuses to reuse a pending kickoff if that message already has a completed / failed / cancelled turn, and instead creates a fresh recovered kickoff message
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(JobWorkerRequeueActiveExecutionSessionsWithoutTurns(RefreshesConsumedPendingTaskQueueKickoff|CreatesMissingTaskQueueKickoffWithRecoveryMetadata|CreatesMissingTaskQueueKickoff)|BuildRecoveredTaskQueueKickoffMessageFor(SinglePassCLIWriteTask|InheritedSharedDeliverableChild))$' -count=1`
+  - deploy / proof target:
+    - task `242` should receive a new recovered kickoff message instead of reusing `20ad53ca-c32a-4153-b5fd-6e42e8ef3e95`, and that fresh kickoff should carry the stronger single-pass CLI instruction
+- 2026-03-29 23:56 MDT - The next live narrowing point is now the recovery prompt wording for missing `cli.execute.command`.
+  - fresh live evidence:
+    - task `242` moved onto `task_recovery_resume` prompts after the stale-kickoff repair path kicked in
+    - those prompts still told the lane its next message must be the file body or a blocker sentence, even though the recorded recovery history already said the hot failure was `cli.execute` emitted without `command`
+    - the lane kept replying with narration like `I'll write the template file now using cli_execute` instead of a real command string
+  - local fix:
+    - [`internal/taskcheckpoint/recovery_file_write.go`](/Users/sam/dev/otter-camp/internal/taskcheckpoint/recovery_file_write.go) now recognizes correction-style missing-command reasons using both `retried without command` and `emitted without command` wording
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now upgrades recovery prompts when missing-command history is present: if the lane uses `cli.execute` next, the next assistant message must contain one concrete non-empty `cli.execute.command` string for the target path, not narration
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskcheckpoint -run 'TestRecoveryFileWriteFailureIsMissingCommandRecognizesCorrectionReason$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildRecoveryResumeActionPrompt(RequiresConcreteCLICommandAfterMissingCommandHistory|HardensIntentOnlyCheckpointWithoutDraft|NoDraftContentPostTargetRequiresSourceBody)|TaskExecutionContinuationSnapshot(IncludesParentContractAndSiblingHints|KeepsDirectWriteOnlyFromDurableCheckpoint))$' -count=1`
+  - deploy / proof target:
+    - the next `task_recovery_resume` prompt for template-08 should explicitly require the command string itself, and the next assistant opener should stop saying `I'll write...`
+- 2026-03-29 23:51 MDT - Fresh pre-redeploy confirmation on session `38a6f713-a252-4c38-bd96-5579a8113b22` showed the runtime is already in the right recovery family, but the live prompt contract is still the old one.
+  - latest pending recovery prompt `c06b6583-d023-4256-b78c-725052a1a62c` still ends at “the next retry must provide a concrete cli.execute.command string or a populated file.write call”
+  - the stronger local wording from [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) has not been redeployed yet:
+    - if the lane uses `cli.execute` next, the next assistant message must contain one concrete non-empty `cli.execute.command` string for the target path itself
+    - do not begin with `git.status`, `file.list`, `file.read`, or readiness narration before that command
+    - do not start with `I`, `I'll`, `Let me`, or similar narration-first filler
+  - current pending turn `69493390-c58f-454b-985d-44077aeaaaf9` is therefore still a clean before/after canary for the rebuild
+- 2026-03-29 23:59 MDT - Follow-on supervisory stop fix: the prompt hardening was live, but the runtime halt path still only looked at the current checkpoint failure reason, not the prior failure history.
+  - fresh live evidence after the prompt redeploy:
+    - turn `15231d7e-b113-4d7a-812f-72051fbc2d9f` carried the new command-first/no-narration prompt
+    - the lane still answered `I'll write the template file now using cli_execute with a concrete command.`
+    - runtime issued another bounded correction instead of halting immediately, because the current checkpoint reason was still the read-only-discovery family while missing-command only lived in `PriorFailureReasons`
+  - local fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now treats any missing-command reason in `RecoveryFileWriteFailureHistory(checkpoint)` as enough to trigger the immediate halt path for another empty `cli.execute`
+    - the new regression in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) reproduces the exact live shape: current failure reason is read-only rediscovery, prior history already includes `cli.execute ... emitted without command`, and the next empty `cli.execute` must halt without another correction hop
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleRecoveryCLIExecuteWithoutCommand(StopsAfterRepeatedResumeFailure|StopsAfterPriorMissingCommandHistory|StopsAfterRepeatedSuccessfulFileWriteChurn|PersistsCheckpointOnFirstCorrection)$|TestBuildRecoveryResumeActionPromptRequiresConcreteCLICommandAfterMissingCommandHistory$' -count=1`
+  - live proof:
+    - task `242` is now `blocked`
+    - task session `38a6f713-a252-4c38-bd96-5579a8113b22` is now `closed`
+    - halt turn `b9bd2a34-72c0-40da-b9eb-f39f2683eddb` ended with `[Recovery turn halted: cli.execute for templates/template-08-replace.html was retried without command after one correction ...]`
+    - persisted checkpoint now records `failure_reason=repeated recovery cli.execute without command for templates/template-08-replace.html across explicit resume attempts; latest retry again omitted cli.execute.command`

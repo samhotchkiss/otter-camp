@@ -22627,6 +22627,93 @@ func TestTaskExecutionContinuationSnapshotIncludesParentContractAndSiblingHints(
 	}
 }
 
+func TestTaskExecutionContinuationSnapshotKeepsDirectWriteOnlyFromDurableCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentID := uuid.New()
+	currentID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+	flowTemplateID := uuid.New()
+	parentDescription := "Write a single complete HTML file at templates/template-08-replace.html"
+	currentDescription := "Write a single complete HTML file at templates/template-08-replace.html"
+
+	currentMetadata, err := mergeTaskValidationGuardMetadata(
+		mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentID.String()}),
+		taskValidationGuardState{
+			InitialMessageID:   uuid.NewString(),
+			Fingerprint:        "cli.execute:command_is_required",
+			AttemptFingerprint: "cli.execute:command_is_required:attempt",
+			ToolName:           "cli.execute",
+			FailureClass:       "tool_validation",
+			FailureCode:        "command_is_required",
+			FailureReason:      "command is required",
+			Count:              2,
+			BlockThreshold:     validationLoopBlockThreshold,
+		},
+	)
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+	currentMetadata, err = taskcheckpoint.MergeRecoveryFileWriteCheckpoint(currentMetadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    "templates/template-08-replace.html",
+		FailureReason: "file.write for `templates/template-08-replace.html` was emitted without `content`",
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:              parentID,
+				ProjectID:       projectID,
+				TaskNumber:      240,
+				Title:           "Write templates/template-08-replace.html — Dark Mode Editorial layout (standalone replacement)",
+				Description:     &parentDescription,
+				WorkStatus:      "draft",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+				Metadata: mustRawJSON(t, map[string]any{
+					"decomposition": map[string]any{
+						"applied":             true,
+						"orchestration_only":  true,
+						"primary_deliverable": "Write a single complete HTML file at templates/template-08-replace.html",
+						"source_description":  "Write a single complete HTML file at templates/template-08-replace.html.",
+						"deliverables": []any{
+							"Write a single complete HTML file at templates/template-08-replace.html",
+						},
+					},
+				}),
+			},
+			currentID: {
+				ID:              currentID,
+				ProjectID:       projectID,
+				TaskNumber:      241,
+				Title:           "Write complete templates/template-08-replace.html — Dark Mode Editorial layout",
+				Description:     &currentDescription,
+				WorkStatus:      "in_progress",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  &flowTemplateID,
+				Metadata:        currentMetadata,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+
+	snapshot, err := fixture.engine.taskExecutionContinuationSnapshot(context.Background(), currentID)
+	if err != nil {
+		t.Fatalf("taskExecutionContinuationSnapshot: %v", err)
+	}
+	if !strings.Contains(snapshot.CurrentTaskLine, "deliverable_path=templates/template-08-replace.html") {
+		t.Fatalf("CurrentTaskLine = %q, want template deliverable path", snapshot.CurrentTaskLine)
+	}
+	if !strings.Contains(snapshot.CurrentTaskLine, "direct_write_only=true") {
+		t.Fatalf("CurrentTaskLine = %q, want direct-write-only hint preserved from durable checkpoint", snapshot.CurrentTaskLine)
+	}
+}
+
 func TestTaskExecutionRetryPromptForMissingPreferredDeliverable(t *testing.T) {
 	t.Parallel()
 
@@ -26034,6 +26121,32 @@ func TestBuildRecoveryResumeActionPromptNoDraftContentPostTargetRequiresSourceBo
 	}
 	if !strings.Contains(prompt, "No recovered draft body is available above.") {
 		t.Fatalf("prompt = %q, want no-recovered-draft guidance", prompt)
+	}
+}
+
+func TestBuildRecoveryResumeActionPromptRequiresConcreteCLICommandAfterMissingCommandHistory(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildRecoveryResumeActionPrompt(recoveryResumeState{
+		targetPath:    "templates/template-08-replace.html",
+		blockerClass:  taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint,
+		failureReason: "repeated read-only recovery discovery for templates/template-08-replace.html within the same recovery turn; write the deliverable or resume from the durable artifact instead of rereading context again",
+		priorFailureReasons: []string{
+			"cli.execute for templates/template-08-replace.html was emitted without `command`; the next retry must provide a concrete cli.execute.command string or a populated file.write call",
+		},
+	})
+
+	if !strings.Contains(prompt, "A prior recovery retry already failed because cli.execute was emitted without `command`.") {
+		t.Fatalf("prompt = %q, want missing-command recovery guidance", prompt)
+	}
+	if !strings.Contains(prompt, "must contain one concrete non-empty cli.execute.command string for templates/template-08-replace.html itself") {
+		t.Fatalf("prompt = %q, want concrete cli.execute.command requirement", prompt)
+	}
+	if !strings.Contains(prompt, "Do not begin with git.status, file.list, file.read, or readiness narration before that command") {
+		t.Fatalf("prompt = %q, want no-reread-before-command guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not start with phrases like 'I', 'I'll', 'I will', 'Now I'll', 'Let me', 'Good', 'Here is', or 'Below is' before the command, file body, or blocker sentence.") {
+		t.Fatalf("prompt = %q, want anti-narration command guidance", prompt)
 	}
 }
 
@@ -35802,6 +35915,80 @@ func TestHandleRecoveryCLIExecuteWithoutCommandStopsAfterRepeatedResumeFailure(t
 	}
 	if !strings.Contains(checkpoint.FailureReason, "repeated recovery cli.execute without command") {
 		t.Fatalf("checkpoint.FailureReason = %q, want repeated empty cli.execute failure", checkpoint.FailureReason)
+	}
+}
+
+func TestHandleRecoveryCLIExecuteWithoutCommandStopsAfterPriorMissingCommandHistory(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	targetPath := "templates/template-08-replace.html"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(json.RawMessage(`{"existing":"value"}`), taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:          targetPath,
+		FailureReason:       "repeated read-only recovery discovery for templates/template-08-replace.html within the same recovery turn; write the deliverable or resume from the durable artifact instead of rereading context again",
+		PriorFailureReasons: []string{"cli.execute for templates/template-08-replace.html was emitted without `command`; the next retry must provide a concrete cli.execute.command string or a populated file.write call"},
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Write template 08 replacement",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.taskTransitions = blocker
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		recoveryTurn:     true,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := ToolCall{ID: "cli-1", Name: "cli.execute", Arguments: map[string]any{}}
+
+	handled, abort, err := fixture.engine.handleRecoveryCLIExecuteWithoutCommand(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleRecoveryCLIExecuteWithoutCommand: %v", err)
+	}
+	if !handled || !abort {
+		t.Fatalf("handled=%v abort=%v, want true/true", handled, abort)
+	}
+	if rt.stopReason != stopReasonRecoveryFileRejected {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonRecoveryFileRejected)
+	}
+	if fixture.messages.containsContentSubstring("[Recovery correction: cli.execute") {
+		t.Fatal("unexpected correction retry message when prior missing-command history already exists")
+	}
+
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if !strings.Contains(checkpoint.FailureReason, "retried without `command` after one bounded correction") {
+		t.Fatalf("checkpoint.FailureReason = %q, want bounded missing-command blocker", checkpoint.FailureReason)
 	}
 }
 

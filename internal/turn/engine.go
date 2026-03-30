@@ -20684,6 +20684,7 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 	hasDurableDraft := strings.TrimSpace(state.artifactDraft) != "" ||
 		strings.TrimSpace(state.summaryDraft) != "" ||
 		(!state.preferCheckpointContext && strings.TrimSpace(state.targetDraft) != "")
+	requiresConcreteCLICommand := recoveryResumeRequiresConcreteCLICommand(state)
 
 	lines := []string{
 		"Continue the active task recovery now.",
@@ -20702,6 +20703,14 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 			lines = append(lines, "Treat "+target+" as an already-written batch-output reference unless the checkpoint context above proves that exact file still needs repair.")
 		} else {
 			lines = append(lines, "Treat "+target+" as the target file for this recovery turn.")
+		}
+		if requiresConcreteCLICommand {
+			lines = append(lines,
+				"A prior recovery retry already failed because cli.execute was emitted without `command`.",
+				"If you use cli.execute next for "+target+", your next assistant message must contain one concrete non-empty cli.execute.command string for "+target+" itself, not narration about using cli_execute.",
+				"Do not begin with git.status, file.list, file.read, or readiness narration before that command unless a concrete blocker above explicitly requires one bounded read.",
+				"Do not start with phrases like 'I', 'I'll', 'I will', 'Now I'll', 'Let me', 'Good', 'Here is', or 'Below is' before the command, file body, or blocker sentence.",
+			)
 		}
 	}
 	if len(state.reviewDecisionCriteria) != 0 {
@@ -20795,6 +20804,18 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 	lines = append(lines, "If a draft is already substantive enough, use it directly instead of re-reading workspace artifacts first.")
 	lines = append(lines, "If you truly cannot continue, report the concrete blocker in one sentence instead of switching into generic conversation.")
 	return strings.Join(lines, " ")
+}
+
+func recoveryResumeRequiresConcreteCLICommand(state recoveryResumeState) bool {
+	if taskcheckpoint.RecoveryFileWriteFailureIsMissingCommand(state.failureReason) {
+		return true
+	}
+	for _, priorReason := range state.priorFailureReasons {
+		if taskcheckpoint.RecoveryFileWriteFailureIsMissingCommand(priorReason) {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldAppendTaskContinuationActionPrompt(session *chat.ChatSession) bool {
@@ -21447,10 +21468,18 @@ func projectContinuationTaskRequiresDirectWriteOnly(task repo.ProjectTask, deliv
 		return false
 	}
 	guard, ok := tasksvc.ParseValidationGuard(task.Metadata)
+	if ok && strings.EqualFold(strings.TrimSpace(guard.FailureCode), "content_required") {
+		return true
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(task.Metadata)
 	if !ok {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(guard.FailureCode), "content_required")
+	targetPath := normalizeWorkspaceRelativePath(checkpoint.TargetPath)
+	if targetPath == "" || !sameWorkspaceRelativePath(targetPath, deliverablePath) {
+		return false
+	}
+	return taskcheckpoint.RecoveryFileWriteFailureIsMissingContent(checkpoint.FailureReason)
 }
 
 func projectContinuationTaskResumePolicy(task repo.ProjectTask, blockedReason string) string {
@@ -25494,7 +25523,12 @@ func (e *TurnEngine) recoveryCheckpointShowsMissingCommand(ctx context.Context, 
 	if !ok {
 		return false
 	}
-	return taskcheckpoint.RecoveryFileWriteFailureIsMissingCommand(checkpoint.FailureReason)
+	for _, reason := range taskcheckpoint.RecoveryFileWriteFailureHistory(checkpoint) {
+		if taskcheckpoint.RecoveryFileWriteFailureIsMissingCommand(reason) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *TurnEngine) recoveryCheckpointShowsRepeatedSuccessfulFileWriteChurn(ctx context.Context, rt *turnRuntime, targetPath string) bool {
