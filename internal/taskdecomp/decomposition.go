@@ -49,6 +49,7 @@ var (
 	timingOnlyPattern            = regexp.MustCompile(`(?i)^~?\s*\d+\s*(?:-|to\s+)?\d*\s*(?:min|mins|minute|minutes|hr|hrs|hour|hours)\b(?:[[:punct:]\s].*)?$`)
 	enumMarkerPattern            = regexp.MustCompile(`\(\d+\)`)
 	workspaceFilePathPattern     = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\.[A-Za-z0-9]+\b`)
+	genericFilePathPattern       = regexp.MustCompile(`\b[A-Za-z0-9._/\-]+\.[A-Za-z0-9]+\b`)
 	toolHeavySignals             = []string{
 		"api",
 		"cli",
@@ -755,7 +756,89 @@ func extractDeliverables(description string) []string {
 			deduped = append(deduped, strings.TrimSpace(expanded))
 		}
 	}
+	if anchor := singleFileChecklistPrimaryDeliverable(description, deduped); anchor != "" {
+		return []string{anchor}
+	}
 	return deduped
+}
+
+func singleFileChecklistPrimaryDeliverable(description string, deliverables []string) string {
+	normalizedDescription := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(description)), " "))
+	if normalizedDescription == "" {
+		return ""
+	}
+	hasChecklistMarker := false
+	for _, marker := range []string{
+		"with exactly these components",
+		"with these components",
+		"with exactly these sections",
+		"with these sections",
+		"with the following components",
+		"with the following sections",
+	} {
+		if strings.Contains(normalizedDescription, marker) {
+			hasChecklistMarker = true
+			break
+		}
+	}
+	if !hasChecklistMarker {
+		return ""
+	}
+	paths := extractWorkspaceFilePaths(description)
+	if len(paths) == 0 {
+		paths = extractGenericFilePaths(description)
+	}
+	if len(paths) != 1 {
+		return ""
+	}
+	for _, rawLine := range strings.Split(description, "\n") {
+		trimmed := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(rawLine, "`", ""), "**", ""))
+		if trimmed == "" {
+			continue
+		}
+		normalized := strings.ToLower(trimmed)
+		if !leadingTaskActionPattern.MatchString(normalized) {
+			continue
+		}
+		if strings.Contains(normalized, paths[0]) {
+			return strings.TrimSpace(strings.TrimSuffix(trimmed, ":"))
+		}
+	}
+	for _, deliverable := range deliverables {
+		trimmed := strings.TrimSpace(deliverable)
+		if trimmed == "" {
+			continue
+		}
+		normalized := strings.ToLower(trimmed)
+		if !leadingTaskActionPattern.MatchString(normalized) {
+			continue
+		}
+		if strings.Contains(normalized, paths[0]) {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func extractGenericFilePaths(text string) []string {
+	matches := genericFilePathPattern.FindAllString(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(matches))
+	out := make([]string, 0, len(matches))
+	for _, match := range matches {
+		normalized := strings.ToLower(strings.TrimSpace(match))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out
 }
 
 func descriptionSectionHeading(raw string) (string, bool) {
@@ -883,6 +966,9 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 		"must include ",
 		"save as ",
 		"save each as ",
+		"the file should ",
+		"store result in ",
+		"require statements:",
 		"embedded css",
 		"visual-first ",
 	} {

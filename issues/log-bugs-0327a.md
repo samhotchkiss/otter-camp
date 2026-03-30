@@ -855,3 +855,16 @@
     - the earlier duplicate-child matcher only keyed on phrasing like `produce the file ...`, so these children could still appear as active work in PM snapshots
   - impact:
     - PM continuation focus could drift onto malformed shared-file child shells instead of restoring the parent replacement draft task that actually owned the markdown deliverable
+- 2026-03-29 21:24 MDT - Single-file implementation checklists were still decomposing into procedural child tasks.
+  - fresh live evidence:
+    - task `213` (`Scaffold Express server with static context loader and health endpoint — sambot/api.js (1/3)`) carried one concrete file deliverable, but its decomposition metadata still split into child artifacts `214-216`
+    - those child titles were requirement/checklist fragments, not bounded deliverables:
+      - `Require statements: express, fs, path...`
+      - `Store result in a module-level STATIC_CONTEXT constant.`
+      - `The file should be ~60-80 lines...`
+  - bug:
+    - `extractDeliverables(...)` treated numbered component lists inside a single-file task spec as if they were sibling deliverables
+    - `TaskLooksProceduralInstructionArtifact(...)` did not classify those checklist fragments as procedural/non-executable
+  - impact:
+    - single-file implementation tasks could explode into malformed child lanes
+    - those malformed children could still be auto-queued and burn runtime turns, which was the next direct blocker on the SamBot API slice

@@ -4044,3 +4044,17 @@
   - proof status:
     - the prerequisite-only continuation retry logic is deployed alongside the worker wakeup repair, but the worker-side fix was the first live canary to fire after rebuild
     - the duplicate `write ... at PATH` child classifier is deployed and test-green; it is waiting on the next comparable malformed shared-file child canary for fresh production proof
+- 2026-03-29 21:24 MDT - Stopped single-file implementation checklists from turning into runnable child tasks.
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+    - `extractDeliverables(...)` now collapses `Create the file X with exactly these components` checklists back to the primary file deliverable
+    - procedural single-file checklist fragments like `Require statements: ...`, `Store result in ...`, and `The file should ...` now count as instruction-only artifacts
+  - changed [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go):
+    - added checklist-fragment procedural tests
+    - added `TestExtractDeliverablesCollapsesSingleFileChecklistToPrimaryDeliverable`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(TaskLooksProceduralInstructionArtifact|ExtractDeliverables(IgnoresCompanionInstructionAndSizingLines|CollapsesSingleFileChecklistToPrimaryDeliverable|IgnoresReferenceOnlyInstructionLines))$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshotIgnoresMalformed(Procedural|ReferenceOnly)Children$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformed(Procedural|ReferenceOnly)Children$' -count=1`
+  - live proof:
+    - on `repo_version=3653`, malformed child task `216` (`The file should be ~60-80 lines...`) moved to `blocked` and its session `983e42ad-b6bb-4309-b6f6-be58f80269ca` closed instead of remaining runnable
+    - the parent-valid child `213` remains the real draft lane for `sambot/api.js`

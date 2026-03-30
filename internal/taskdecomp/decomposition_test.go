@@ -129,6 +129,21 @@ func TestTaskLooksProceduralInstructionArtifact(t *testing.T) {
 	if TaskLooksProceduralInstructionArtifact("Use content/technonymous-index.json and write the first 12 posts as markdown files under content/posts/", &boundedSupportDescription) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = true, want false for bounded deliverable task that names source artifacts")
 	}
+
+	fileConstraintDescription := "The file should be ~60-80 lines. No POST /api/sambot/chat yet - that is a sibling task."
+	if !TaskLooksProceduralInstructionArtifact("The file should be ~60-80 lines. No POST /api/sambot/chat yet - that is a sibling task.", &fileConstraintDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for single-file checklist sizing fragment")
+	}
+
+	storeResultDescription := "Store result in a module-level STATIC_CONTEXT constant."
+	if !TaskLooksProceduralInstructionArtifact("Store result in a module-level STATIC_CONTEXT constant.", &storeResultDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for single-file checklist storage fragment")
+	}
+
+	requireStatementsDescription := "Require statements: express, fs, path, and a placeholder const Anthropic = require('@anthropic-ai/sdk');"
+	if !TaskLooksProceduralInstructionArtifact("Require statements: express, fs, path, and a placeholder const Anthropic = require('@anthropic-ai/sdk');", &requireStatementsDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for single-file checklist require fragment")
+	}
 }
 
 func TestExtractDeliverablesIgnoresReferenceOnlyInstructionLines(t *testing.T) {
@@ -495,6 +510,23 @@ func TestExtractDeliverablesIgnoresCompanionInstructionAndSizingLines(t *testing
 		"Use browser tools to navigate technonymous.org, discover the site structure, identify all blog post URLs",
 		"Research 5-7 exemplary personal brand sites (speakers, consultants, thought leaders)",
 		"Document layout patterns, navigation structures, CTA placement, typography choices, and what makes each effective",
+	}
+	if !reflect.DeepEqual(items, want) {
+		t.Fatalf("extractDeliverables() = %v, want %v", items, want)
+	}
+}
+
+func TestExtractDeliverablesCollapsesSingleFileChecklistToPrimaryDeliverable(t *testing.T) {
+	description := strings.Join([]string{
+		"Create the file `sambot/api.js` with exactly these components:",
+		"1. Require statements: express, fs, path, and a placeholder `const Anthropic = require('@anthropic-ai/sdk');`.",
+		"2. Store result in a module-level `STATIC_CONTEXT` constant.",
+		"3. The file should be ~60-80 lines. No POST /api/sambot/chat yet — that is a sibling task.",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	want := []string{
+		"Create the file sambot/api.js with exactly these components",
 	}
 	if !reflect.DeepEqual(items, want) {
 		t.Fatalf("extractDeliverables() = %v, want %v", items, want)
