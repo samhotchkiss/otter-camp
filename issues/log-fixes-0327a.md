@@ -4654,3 +4654,17 @@
     - added `TestProjectContinuationTurnEndedWithCloseoutReadyParentStopRecognizesProvedParentWording`
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(BuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker|ProjectContinuationTurnEndedWithCloseoutReadyParentStopRecognizesProvedParentWording)$' -count=1`
+- 2026-03-31 05:58 MDT - Routed closeout-ready rediscovery blocks to a focused parent-closeout retry instead of the generic PM rediscovery prompt.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `projectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStop(...)` to recognize rediscovery-only turns whose blocked tools were actually closeout-ready parent guards
+    - `handleCompletedProjectExecutionContinuationTurn(...)` now retries those turns via a focused closeout branch before the generic rediscovery path
+    - added `retryProjectExecutionContinuationForFocusedCloseoutReadyStop(...)`
+    - added `buildProjectExecutionContinuationFocusedCloseoutRetryPrompt(...)` so the retry prompt:
+      - bans `task.get`, `task.list`, `file.list`, and `file.read`
+      - repeats the focused closeout parent
+      - surfaces exact child task ids when runtime already knows them
+      - demands one narrow `task.update` or one concrete blocker sentence
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleCompletedProjectExecutionContinuationTurnRetriesFocusedCloseoutReadyRediscoveryStop`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurnRetriesFocusedCloseoutReadyRediscoveryStop|HandleCompletedProjectExecutionContinuationTurnRetriesRediscoveryStopWithFocusedMessage|HandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionStopWithCompletedChildren|ShouldStopAfterBlockedProjectExecutionBlockedMutationOnTaskLaneBoundaryErrors|ProjectExecutionBlockedMutationStopMessageOnFocused(CloseoutReady|PrerequisiteRepair)Guard)$' -count=1`

@@ -1311,3 +1311,17 @@
       - `already proved that the focused parent is closeout-ready`
   - impact:
     - worker recovery can keep regenerating the replacement-child retry prompt after a closeout-ready stop, even when the runtime already proved the parent itself should be advanced directly
+- 2026-03-31 05:58 MDT - Engine rediscovery retries still flattened closeout-ready guard stops into a generic continuation.
+  - fresh live evidence:
+    - after the worker matcher fix, the next PM continuation `ea8a3fbd-d7ad-4b47-b717-bcc45c7804bb` was no longer replacement-child handoff text
+    - but it still came back as the generic rediscovery retry:
+      - `Recently completed work may have unlocked the next wave of bounded tasks.`
+    - the immediately preceding turn had already proved a narrower failure family:
+      - `task.get` blocked with `focused closeout-ready parent`
+      - `task.list` blocked with `focused closeout-ready parent`
+      - rediscovery-guard system stop
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) handled that turn under `projectContinuationTurnEndedWithRediscoveryOnlyStop(...)` and fell through to the generic rediscovery retry path
+    - there was no dedicated branch for rediscovery-only turns whose blocked tools were specifically closeout-ready parent guards
+  - impact:
+    - PM closeout lanes can keep looping through generic rediscovery retries even after both the worker and the runtime already know the exact focused parent that should be advanced directly

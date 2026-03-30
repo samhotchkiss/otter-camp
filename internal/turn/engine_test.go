@@ -14111,6 +14111,155 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesRediscoveryStopWi
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnRetriesFocusedCloseoutReadyRediscoveryStop(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	focusTaskID := uuid.New()
+	doneChildID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	focusDescription := "Write planning/sambot-tech-architecture.md as the single technical architecture deliverable."
+	childMetadata := mustJSONRaw(map[string]any{"decomposition_parent_task_id": focusTaskID.String()})
+	focusMetadata := mustJSONRaw(map[string]any{
+		"parent_orchestration": map[string]any{
+			"outcome_assessment": map[string]any{
+				"satisfied": true,
+				"summary":   "planning/sambot-tech-architecture.md is already complete.",
+			},
+		},
+	})
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 84,
+				Title:      "Build HTML layout template 8 of 10 (Editorial Longform)",
+				WorkStatus: "done",
+			},
+			focusTaskID: {
+				ID:          focusTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  245,
+				Title:       "Write planning/sambot-tech-architecture.md",
+				Description: &focusDescription,
+				WorkStatus:  "draft",
+				Metadata:    focusMetadata,
+			},
+			doneChildID: {
+				ID:         doneChildID,
+				ProjectID:  projectID,
+				TaskNumber: 259,
+				Title:      "Verify and close out template 8",
+				WorkStatus: "done",
+				Metadata:   childMetadata,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "I'll close out task 245 now by recording the child output verifications. First, let me get the task to find its child task IDs.",
+		SequenceNumber: 11,
+	}
+	messages := []repo.ChatMessage{
+		*latestUser,
+		*assistant,
+		{
+			ID:             uuid.New(),
+			SessionID:      fixture.session.ID,
+			TurnID:         &turnID,
+			Role:           "tool_result",
+			Status:         "final",
+			Content:        `{"error":"project continuation already has a focused closeout-ready parent for the same deliverable. Do not call task.get from the project lane now; advance or close that same parent directly, and if parent_orchestration evidence is still missing record it in one narrow task.update first.","tool_name":"task.get"}`,
+			SequenceNumber: 12,
+		},
+		{
+			ID:             uuid.New(),
+			SessionID:      fixture.session.ID,
+			TurnID:         &turnID,
+			Role:           "system",
+			Status:         "final",
+			Content:        "[Project continuation rediscovery guard blocked only broad rereads. Ending this turn early so the next continuation can act directly on the named tasks instead of repeating blocked PM discovery.]",
+			SequenceNumber: 13,
+		},
+	}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected closeout-ready rediscovery stop to enqueue a focused retry")
+	}
+	if len(fixture.enqueuer.jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1", len(fixture.enqueuer.jobs))
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var retryMessage *repo.ChatMessage
+	for i := range storedMessages {
+		msg := &storedMessages[i]
+		if msg.ID == fixture.enqueuer.jobs[0].payload.MessageID {
+			retryMessage = msg
+			break
+		}
+	}
+	if retryMessage == nil {
+		t.Fatal("missing appended focused closeout retry continuation message")
+	}
+	if !strings.Contains(retryMessage.Content, "already proved that task 245") {
+		t.Fatalf("retry message = %q, want closeout-ready focus guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "Do not call task.get, task.list, file.list, or file.read") {
+		t.Fatalf("retry message = %q, want no-rediscovery guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "OC-259 task_id="+doneChildID.String()) {
+		t.Fatalf("retry message = %q, want direct child verification id", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "issue one narrow task.update for task 245") {
+		t.Fatalf("retry message = %q, want direct closeout task.update guidance", retryMessage.Content)
+	}
+	if strings.Contains(retryMessage.Content, "Do not begin with task.list without parent_task_id") {
+		t.Fatalf("retry message = %q, should not fall back to generic rediscovery retry guidance", retryMessage.Content)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnSkipsRediscoveryRetryWhenBlockedTaskAlreadyOwnsExecutionLane(t *testing.T) {
 	t.Parallel()
 

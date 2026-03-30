@@ -5118,6 +5118,11 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 			}
 		}
 		if projectContinuationTurnEndedWithRediscoveryOnlyStop(messages, completedTurn.ID) {
+			if retried, retryErr := e.retryProjectExecutionContinuationForFocusedCloseoutReadyStop(ctx, session, completedTurn, latestUser); retryErr != nil {
+				return false, retryErr
+			} else if retried {
+				return true, nil
+			}
 			if retried, retryErr := e.retryProjectExecutionContinuationForReplacementChildWork(ctx, session, completedTurn, latestUser); retryErr != nil {
 				return false, retryErr
 			} else if retried {
@@ -5701,6 +5706,88 @@ func (e *TurnEngine) retryProjectExecutionContinuationForReplacementChildWork(
 	return enqueued, nil
 }
 
+func (e *TurnEngine) retryProjectExecutionContinuationForFocusedCloseoutReadyStop(
+	ctx context.Context,
+	session *chat.ChatSession,
+	latestCompleted *repo.ChatTurn,
+	latestUser *repo.ChatMessage,
+) (bool, error) {
+	if e == nil || session == nil || latestCompleted == nil || latestUser == nil || e.tasks == nil {
+		return false, nil
+	}
+	if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
+		return false, nil
+	}
+	completedTaskID, _ := parseUUIDAny(messageMetadataMap(latestUser.Metadata)["completed_task_id"])
+	var completedTask repo.ProjectTask
+	if completedTaskID != uuid.Nil {
+		if taskRecord, err := e.tasks.GetByID(ctx, completedTaskID); err == nil {
+			completedTask = taskRecord
+		}
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	taskHintsByTask, err := e.projectContinuationTaskHintsByTask(ctx, projectTasks)
+	if err != nil {
+		return false, err
+	}
+	priorityPaths := projectContinuationPriorityPathsFromText(strings.TrimSpace(latestUser.Content))
+	childActivity, err := e.projectContinuationChildActivity(ctx, session.ScopeID, projectTasks, taskHintsByTask)
+	if err != nil {
+		return false, err
+	}
+	focusTask, ok := projectContinuationCurrentFocusTaskWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths)
+	if !ok {
+		return false, nil
+	}
+	focusActivity := childActivity[focusTask.ID]
+	if !projectContinuationDraftTaskReadyForParentClosureForTask(focusTask, focusActivity) {
+		return false, nil
+	}
+	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	snapshot, err := e.projectExecutionContinuationSnapshotForSummary(ctx, session.ScopeID, strings.TrimSpace(latestUser.Content))
+	if err != nil {
+		return false, err
+	}
+	requiredChildRefs := projectContinuationCompletedChildTaskVerificationRefs(projectTasks, focusTask.ID)
+	retryPrompt := buildProjectExecutionContinuationFocusedCloseoutRetryPrompt(
+		completedTask,
+		remainingDraftTasks,
+		snapshot,
+		focusTask,
+		focusActivity,
+		taskHintsByTask[focusTask.ID],
+		requiredChildRefs,
+	)
+	agentID := latestCompleted.RespondingID
+	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	if err != nil {
+		return false, err
+	}
+	if retryMessage == nil {
+		return true, nil
+	}
+	nextPayload := AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  retryMessage.ID,
+		RetryCount: latestCompleted.RetryCount + 1,
+	}
+	if agentID != uuid.Nil {
+		nextPayload.AgentID = &agentID
+	}
+	runAfter := e.now().Add(defaultAutoContinueDelay).UTC()
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	if err != nil {
+		return false, err
+	}
+	return enqueued, nil
+}
+
 func (e *TurnEngine) retryProjectExecutionContinuationForParentCompletionRequirements(
 	ctx context.Context,
 	session *chat.ChatSession,
@@ -6160,6 +6247,31 @@ func buildProjectExecutionContinuationParentCompletionRetryPrompt(
 	}
 	retryPrompt += fmt.Sprintf(" Your next assistant action must issue one narrow task.update for %s with child_output_verifications covering the concrete child or superseding outputs that already satisfy the deliverable, integration_check.status=passed, outcome_assessment.satisfied=true, and work_status=done.", focusLabel)
 	retryPrompt += " If the runtime still reports a missing child verification after that update, report that concrete missing child in one blocker sentence instead of rereading context again."
+	return retryPrompt
+}
+
+func buildProjectExecutionContinuationFocusedCloseoutRetryPrompt(
+	completedTask repo.ProjectTask,
+	remainingDraftTasks int,
+	snapshot projectExecutionContinuationSnapshot,
+	focusTask repo.ProjectTask,
+	focusActivity projectContinuationChildActivity,
+	focusHints projectContinuationTaskHints,
+	requiredChildRefs []string,
+) string {
+	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot)
+	focusLabel := projectBootstrapTaskLabel(focusTask)
+	focusRef := projectExecutionContinuationTaskRef(focusTask, focusActivity, focusHints)
+	retryPrompt += fmt.Sprintf(" Your last continuation turn already proved that %s is the focused closeout-ready parent for this deliverable, but then spent tool calls on blocked rediscovery.", focusRef)
+	retryPrompt += " Do not call task.get, task.list, file.list, or file.read from the project lane now."
+	if deliverablePath := strings.TrimSpace(focusHints.DeliverablePath); deliverablePath != "" {
+		retryPrompt += fmt.Sprintf(" Do not reread `%s` again from the project lane.", deliverablePath)
+	}
+	retryPrompt += fmt.Sprintf(" Do not create another replacement child beneath %s.", focusLabel)
+	if len(requiredChildRefs) > 0 {
+		retryPrompt += fmt.Sprintf(" If child_output_verifications are still required, use these exact child task ids now: %s.", strings.Join(requiredChildRefs, "; "))
+	}
+	retryPrompt += fmt.Sprintf(" Your next assistant action must either issue one narrow task.update for %s with the missing parent_orchestration / child_output_verifications evidence and work_status=done, or report one concrete blocker sentence naming the exact missing child verification.", focusLabel)
 	return retryPrompt
 }
 
@@ -8709,6 +8821,33 @@ func projectContinuationTurnEndedWithReplacementHandoffStop(messages []repo.Chat
 
 func projectContinuationTurnEndedWithTaskLaneBoundaryStop(messages []repo.ChatMessage, turnID uuid.UUID) bool {
 	return turnHasSystemMessageContaining(messages, turnID, projectContinuationTaskLaneBoundaryGuardPrefix)
+}
+
+func projectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStop(messages []repo.ChatMessage, turnID uuid.UUID) bool {
+	if turnID == uuid.Nil || !projectContinuationTurnEndedWithRediscoveryOnlyStop(messages, turnID) {
+		return false
+	}
+	for _, message := range messagesForTurn(messages, turnID) {
+		switch strings.ToLower(strings.TrimSpace(message.Role)) {
+		case "tool_result":
+			_, _, errText, ok := parseToolResultMessage(message.Content)
+			if !ok {
+				continue
+			}
+			normalized := strings.ToLower(strings.TrimSpace(errText))
+			if strings.Contains(normalized, "focused closeout-ready parent") ||
+				strings.Contains(normalized, "closeout-ready state for the same deliverable") {
+				return true
+			}
+		case "system":
+			normalized := strings.ToLower(strings.TrimSpace(message.Content))
+			if strings.Contains(normalized, "already proved that the focused parent is closeout-ready") ||
+				strings.Contains(normalized, "closeout-ready parent still needs parent_orchestration evidence") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func projectContinuationMissingDependencyStopPath(messages []repo.ChatMessage, turnID uuid.UUID) (string, bool) {
