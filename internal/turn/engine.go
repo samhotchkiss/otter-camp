@@ -5110,6 +5110,13 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 		if projectContinuationTurnEndedWithTaskLaneBoundaryStop(messages, completedTurn.ID) {
 			return true, nil
 		}
+		if projectContinuationTurnEndedWithReplacementHandoffStop(messages, completedTurn.ID) {
+			if retried, retryErr := e.retryProjectExecutionContinuationForReplacementChildWork(ctx, session, completedTurn, latestUser); retryErr != nil {
+				return false, retryErr
+			} else if retried {
+				return true, nil
+			}
+		}
 		if projectContinuationTurnEndedWithRediscoveryOnlyStop(messages, completedTurn.ID) {
 			if retried, retryErr := e.retryProjectExecutionContinuationForReplacementChildWork(ctx, session, completedTurn, latestUser); retryErr != nil {
 				return false, retryErr
@@ -6081,7 +6088,20 @@ func buildProjectExecutionContinuationReplacementChildRetryPrompt(
 	focusActivity projectContinuationChildActivity,
 	focusHints projectContinuationTaskHints,
 ) string {
-	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot)
+	var retryPrompt strings.Builder
+	retryPrompt.WriteString("Continue the active project execution now.")
+	if completedTask.TaskNumber > 0 {
+		retryPrompt.WriteString(" The latest completed task was ")
+		retryPrompt.WriteString(projectBootstrapTaskLabel(completedTask))
+		retryPrompt.WriteString(".")
+	}
+	if remainingDraftTasks > 0 {
+		retryPrompt.WriteString(fmt.Sprintf(" There are %d remaining draft project tasks, but ignore every other draft parent until this focused replacement handoff is advanced.", remainingDraftTasks))
+	}
+	if projectLine := strings.TrimSpace(snapshot.ProjectLine); projectLine != "" {
+		retryPrompt.WriteByte(' ')
+		retryPrompt.WriteString(projectLine)
+	}
 	focusLabel := projectBootstrapTaskLabel(focusTask)
 	focusRef := projectExecutionContinuationTaskRef(focusTask, focusActivity, focusHints)
 	laneReason := "terminally blocked or malformed child lanes"
@@ -6093,20 +6113,21 @@ func buildProjectExecutionContinuationReplacementChildRetryPrompt(
 	case focusActivity.malformedChildTaskCount > 0:
 		laneReason = "blocked or malformed child lanes"
 	}
-	retryPrompt += " Your last continuation turn was blocked after broad rediscovery even though the next bounded work was already named."
-	retryPrompt += fmt.Sprintf(" Current focus parent: %s.", focusRef)
-	retryPrompt += fmt.Sprintf(" That draft parent only has %s.", laneReason)
+	retryPrompt.WriteString(" Your last continuation turn was blocked after broad rediscovery even though the next bounded work was already named.")
+	retryPrompt.WriteString(fmt.Sprintf(" Current focus parent: %s.", focusRef))
+	retryPrompt.WriteString(fmt.Sprintf(" That draft parent only has %s.", laneReason))
 	if dependsOnPath := strings.TrimSpace(focusHints.DependsOnPath); dependsOnPath != "" {
-		retryPrompt += fmt.Sprintf(" Do not reread prerequisite artifact `%s` first.", dependsOnPath)
+		retryPrompt.WriteString(fmt.Sprintf(" Do not reread prerequisite artifact `%s` first.", dependsOnPath))
 	}
 	if deliverableRoot := strings.TrimSpace(focusHints.DeliverableRoot); deliverableRoot != "" {
-		retryPrompt += fmt.Sprintf(" Keep the replacement child scoped to deliverable root `%s`.", deliverableRoot)
+		retryPrompt.WriteString(fmt.Sprintf(" Keep the replacement child scoped to deliverable root `%s`.", deliverableRoot))
 	}
-	retryPrompt += " Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting."
-	retryPrompt += fmt.Sprintf(" Do not queue parent task %s again from the project lane.", focusLabel)
-	retryPrompt += fmt.Sprintf(" Your next assistant action must create the smallest fresh replacement child task beneath %s now, or queue an existing direct child draft there if one already fits unchanged.", focusLabel)
-	retryPrompt += fmt.Sprintf(" If you must inspect child lanes first, use only task.list(parent_task_id=%s).", focusTask.ID.String())
-	return retryPrompt
+	retryPrompt.WriteString(" Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.")
+	retryPrompt.WriteString(fmt.Sprintf(" Do not queue parent task %s again from the project lane.", focusLabel))
+	retryPrompt.WriteString(" Do not inspect or mention other draft parents until this handoff is advanced.")
+	retryPrompt.WriteString(fmt.Sprintf(" Your next assistant action must create the smallest fresh replacement child task beneath %s now, or queue an existing direct child draft there if one already fits unchanged.", focusLabel))
+	retryPrompt.WriteString(fmt.Sprintf(" If you must inspect child lanes first, use only task.list(parent_task_id=%s).", focusTask.ID.String()))
+	return retryPrompt.String()
 }
 
 func buildProjectExecutionContinuationParentCompletionRetryPrompt(
@@ -8677,6 +8698,10 @@ func projectContinuationTurnEndedWithFocusedPrerequisiteRepairStop(messages []re
 	return turnHasSystemMessageContaining(messages, turnID, "[Project continuation focus task still has explicit prerequisite fields missing.")
 }
 
+func projectContinuationTurnEndedWithReplacementHandoffStop(messages []repo.ChatMessage, turnID uuid.UUID) bool {
+	return turnHasSystemMessageContaining(messages, turnID, projectContinuationReplacementHandoffPrefix)
+}
+
 func projectContinuationTurnEndedWithTaskLaneBoundaryStop(messages []repo.ChatMessage, turnID uuid.UUID) bool {
 	return turnHasSystemMessageContaining(messages, turnID, projectContinuationTaskLaneBoundaryGuardPrefix)
 }
@@ -8861,16 +8886,6 @@ func (e *TurnEngine) shouldSuppressRepeatedProjectExecutionContinuation(ctx cont
 			if !strings.EqualFold(strings.TrimSpace(turnMessage.Role), "system") {
 				continue
 			}
-			trimmed := strings.TrimSpace(turnMessage.Content)
-			if strings.HasPrefix(trimmed, projectContinuationReplacementHandoffPrefix) {
-				if focusTaskID == uuid.Nil {
-					return true, nil
-				}
-				priorFocusTaskID := projectContinuationFocusedTaskID(message.Content)
-				if priorFocusTaskID != uuid.Nil && priorFocusTaskID == focusTaskID {
-					return true, nil
-				}
-			}
 		}
 		if strings.TrimSpace(stringValue(metadata["continuation_snapshot_fingerprint"])) != strings.TrimSpace(fingerprint) {
 			continue
@@ -9045,9 +9060,13 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		}
 		if strings.Contains(focusLine, "replaceable_blocked_child_tasks=") && !focusHasCompletedCloseout {
 			lines = append(lines, "Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.")
+			lines = append(lines, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.")
+			lines = append(lines, "Your next assistant action must create or queue the smallest fresh replacement child task beneath that focus parent now. If child inspection is strictly required first, use only task.list(parent_task_id=...).")
 		}
 		if strings.Contains(focusLine, "malformed_child_tasks=") && !focusHasCompletedCloseout {
 			lines = append(lines, "Because that focus parent only has malformed or stale child artifact lanes, do not queue the parent again from the project lane. Create the smallest fresh replacement child task under it now instead.")
+			lines = append(lines, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.")
+			lines = append(lines, "Your next assistant action must create or queue the smallest fresh replacement child task beneath that focus parent now. If child inspection is strictly required first, use only task.list(parent_task_id=...).")
 		}
 	}
 	return lines

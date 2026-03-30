@@ -1257,3 +1257,15 @@
     - unlike project-continuation blocked mutations, review turns therefore kept streaming after the guard instead of terminating with an explicit decision-now instruction
   - impact:
     - review lanes can still spend extra model turns after they already have enough bounded evidence from the preferred deliverable target
+- 2026-03-31 04:48 MDT - PM closeout-ready parent stops were still rearming as replacement-child continuations.
+  - fresh live evidence:
+    - PM turn `94e273b0-ea04-4c4a-8c81-4db4807f793c` ended with:
+      - `[Project continuation found that the focused parent is already closeout-ready but cannot jump straight from draft to done ...]`
+    - the very next active PM turn `5815cf10-5a15-4d08-9bed-83e5d09a99d6` still streamed:
+      - `I'll now create a fresh, minimal replacement child task ...`
+    - task `245` is therefore still being treated like a replacement-parent handoff even after the runtime already proved the parent itself is the correct closeout target
+  - bug:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) only had a special retry path for replacement-handoff stops, not for the newer closeout-ready parent stop family
+    - stale/generic pending continuation content could therefore survive and keep steering the PM lane back into child creation instead of direct parent advance
+  - impact:
+    - closeout-ready draft parents can keep splitting into redundant replacement children instead of recording the required `parent_orchestration` metadata and advancing through their own flow

@@ -24125,6 +24125,19 @@ func TestJobWorkerEnsureProjectContinuationMessageRequeuesAfterBlockedReviewChil
 	if pendingCount != 1 {
 		t.Fatalf("pending continuation messages = %d, want 1 fresh continuation", pendingCount)
 	}
+	var content string
+	if err := pool.QueryRow(ctx, `SELECT content FROM chat_message WHERE id = $1`, messageID).Scan(&content); err != nil {
+		t.Fatalf("query fresh continuation content: %v", err)
+	}
+	if !strings.Contains(content, "Current focus parent: task 84") {
+		t.Fatalf("fresh continuation content = %q, want focused replacement parent", content)
+	}
+	if !strings.Contains(content, "ignore every other draft parent until this focused replacement handoff is advanced") {
+		t.Fatalf("fresh continuation content = %q, want narrowed replacement-handoff retry guidance", content)
+	}
+	if strings.Contains(content, "Already-active non-terminal tasks in the tree:") {
+		t.Fatalf("fresh continuation content = %q, want narrow retry prompt without broad active-task snapshot", content)
+	}
 }
 
 func TestJobWorkerEnsureProjectContinuationMessageKeepsReplacementDraftParentsActionable(t *testing.T) {
@@ -24891,7 +24904,7 @@ func TestJobWorkerEnsureProjectContinuationMessageSuppressesStalePendingBoundedS
 	}
 }
 
-func TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedReplacementHandoffContinuation(t *testing.T) {
+func TestJobWorkerEnsureProjectContinuationMessageAllowsRepeatedConsumedReplacementHandoffContinuation(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
 		PollInterval:         time.Hour,
@@ -24977,7 +24990,7 @@ func TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedRepl
 		OrganizationID: org.ID,
 		ProjectID:      project.ID,
 		TaskNumber:     84,
-		Title:          "Build HTML layout template 8 replacement parent",
+		Title:          "Build HTML layout template 8 replacement parent at templates/template-08-replace.html",
 		WorkStatus:     "draft",
 		BlocksScope:    "task",
 		FlowTemplateID: &template.ID,
@@ -25085,14 +25098,27 @@ func TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedRepl
 	if err != nil {
 		t.Fatalf("ensureProjectContinuationMessageDecision: %v", err)
 	}
-	if !suppressed {
-		t.Fatal("suppressed = false, want true")
+	if suppressed {
+		t.Fatal("suppressed = true, want fresh continuation after failed replacement handoff")
 	}
-	if messageID != uuid.Nil {
-		t.Fatalf("messageID = %s, want nil when repeated replacement-handoff continuation is suppressed", messageID)
+	if messageID == uuid.Nil {
+		t.Fatal("messageID = nil, want fresh continuation after failed replacement handoff")
 	}
 
-	var pendingCount int
+	var (
+		pendingCount int
+		source       string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT COALESCE(metadata->>'source', '')
+		FROM chat_message
+		WHERE id = $1
+	`, messageID).Scan(&source); err != nil {
+		t.Fatalf("query fresh continuation source: %v", err)
+	}
+	if source != "project_execution_continuation" {
+		t.Fatalf("fresh continuation source = %q, want project_execution_continuation", source)
+	}
 	if err := pool.QueryRow(ctx, `
 		SELECT COUNT(*)
 		FROM chat_message
@@ -25103,12 +25129,12 @@ func TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedRepl
 	`, session.ID).Scan(&pendingCount); err != nil {
 		t.Fatalf("count pending continuation messages: %v", err)
 	}
-	if pendingCount != 0 {
-		t.Fatalf("pending continuation messages = %d, want 0 after suppression", pendingCount)
+	if pendingCount != 1 {
+		t.Fatalf("pending continuation messages = %d, want 1 fresh continuation", pendingCount)
 	}
 }
 
-func TestJobWorkerEnsureProjectContinuationMessageSuppressesStalePendingReplacementHandoffDuplicate(t *testing.T) {
+func TestJobWorkerEnsureProjectContinuationMessageAllowsStalePendingReplacementHandoffDuplicateRefresh(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
 		PollInterval:         time.Hour,
@@ -25309,29 +25335,58 @@ func TestJobWorkerEnsureProjectContinuationMessageSuppressesStalePendingReplacem
 	if err != nil {
 		t.Fatalf("ensureProjectContinuationMessageDecision: %v", err)
 	}
-	if !suppressed {
-		t.Fatal("suppressed = false, want true")
+	if suppressed {
+		t.Fatal("suppressed = true, want retryable pending continuation after stale replacement-handoff duplicate")
 	}
-	if messageID != uuid.Nil {
-		t.Fatalf("messageID = %s, want nil when stale pending replacement-handoff duplicate is suppressed", messageID)
+	if messageID == uuid.Nil {
+		t.Fatal("messageID = nil, want retryable pending continuation after stale replacement-handoff duplicate")
+	}
+	if messageID == stalePendingMessage.ID {
+		t.Fatalf("messageID = %s, want stale generic pending continuation to be replaced with a narrowed retry", messageID)
 	}
 
-	var (
-		status       string
-		errorMessage string
-	)
+	var status, content string
 	if err := pool.QueryRow(ctx, `
-		SELECT status, COALESCE(error_message, '')
+		SELECT status
 		FROM chat_message
 		WHERE id = $1
-	`, stalePendingMessage.ID).Scan(&status, &errorMessage); err != nil {
+	`, stalePendingMessage.ID).Scan(&status); err != nil {
 		t.Fatalf("query stale pending continuation message: %v", err)
 	}
 	if status != "failed" {
 		t.Fatalf("stale pending continuation status = %q, want failed", status)
 	}
-	if !strings.Contains(errorMessage, "suppressed repeated identical project continuation") {
-		t.Fatalf("stale pending continuation error = %q, want repeated replacement-handoff suppression", errorMessage)
+	if err := pool.QueryRow(ctx, `SELECT content FROM chat_message WHERE id = $1`, messageID).Scan(&content); err != nil {
+		t.Fatalf("query fresh replacement-handoff continuation content: %v", err)
+	}
+	if strings.Contains(content, "Already-active non-terminal tasks in the tree:") {
+		t.Fatalf("fresh continuation content = %q, want narrowed replacement-handoff retry prompt", content)
+	}
+}
+
+func TestBuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(t *testing.T) {
+	prompt := buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(
+		259,
+		"Verify and close out templates/template-08-replace.html (Dark Mode Editorial layout)",
+		1,
+		projectExecutionContinuationSnapshotForWorker{
+			ProjectLine: "Active project id: a6dbd331-7205-42d9-b0df-10105d5b5330",
+			FocusTaskLine: `Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 245 (Write planning/sambot-tech-architecture.md — SamBot technical architecture document (replacement for blocked OC-230/OC-235)) id=77a2d4fa-b9e9-45b9-9ba9-b251052d5011 title="Write planning/sambot-tech-architecture.md — SamBot technical architecture document (replacement for blocked OC-230/OC-235)" work_status=draft deliverable_path=planning/sambot-tech-architecture.md assigned_agent_id=61b10b32-cdc2-4d75-a84a-6c3bcf25b5ed flow_template_id=9a60dfee-1fc7-4e3a-bd05-f9da1bb97552 child_tasks=2 replaceable_blocked_child_tasks=2 malformed_child_tasks=1`,
+		},
+		"",
+	)
+
+	if !strings.Contains(prompt, "already closeout-ready for the same deliverable") {
+		t.Fatalf("prompt = %q, want closeout-ready retry guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Current focus parent: task 245") {
+		t.Fatalf("prompt = %q, want focused parent reference", prompt)
+	}
+	if !strings.Contains(prompt, "advance or close task 245") {
+		t.Fatalf("prompt = %q, want direct parent advance instruction", prompt)
+	}
+	if strings.Contains(prompt, "create the smallest fresh replacement child task") {
+		t.Fatalf("prompt = %q, want parent closeout retry instead of replacement-child retry", prompt)
 	}
 }
 

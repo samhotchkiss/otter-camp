@@ -4591,3 +4591,22 @@
     - added `TestShouldStopAfterBlockedTaskReviewPreferredTargetReread`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(TaskReviewBlockedPreferredTargetStopMessage|ShouldStopAfterBlockedTaskReviewPreferredTargetReread|ShouldBlockProjectContinuationFocusedDraftReadToolForPrerequisiteRepairWithoutReplacementHandoff|DispatchToolsCoalescesFocusedDraftReadGuardInSingleBatch|RecoveryResumeSharedSectionTarget(MatchesInheritedSharedPath)?|RecoveryResumeSharedSectionTargetFromText(MatchesMarkdownHeading|MatchesAddSectionToPath)|ProjectExecutionContinuationSnapshot(PrefersSharedDocDraftChildOverReplacementParent|PrefersSharedDocDraftChildOverBlockedSiblingFragmentsWithoutPath|PrefersDraftChildOverFreshReplacementParent)|HandleMalformedDuplicateSharedFileChildTaskPreflight|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren)$' -count=1`
+- 2026-03-31 04:48 MDT - Re-armed closeout-ready PM continuations with a parent-advance retry prompt instead of another replacement-child loop.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - added `projectContinuationTurnEndedWithCloseoutReadyParentStop(...)` to recognize the new runtime stop family
+    - added `projectContinuationTurnCloseoutReadyTaskLabel(...)` to recover the focused `task N (...)` label from the prior tool-result block
+    - added `buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(...)` so worker recovery can requeue a direct `advance or close` prompt with explicit `parent_orchestration` guidance
+    - added content-based continuation prompt fingerprinting so stale generic pending continuations get failed/replaced by the narrowed retry content
+    - stopped suppressing repeated replacement-handoff continuations so failed handoffs remain retryable with fresh content
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - replacement-handoff completions now requeue a fresh focused retry message
+    - narrowed the engine-authored replacement-child retry prompt so it bans broad rereads and tells the PM lane to ignore unrelated draft parents until the focused handoff is advanced
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - widened the replacement-handoff recovery regressions to expect fresh retry continuations instead of suppression
+    - added `TestBuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleCompletedProjectExecutionContinuationTurnRetriesReplacementHandoffStopWithFreshMessage`
+    - widened the replacement-handoff suppression regressions to keep those turns retryable
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurnRetriesReplacementHandoffStopWithFreshMessage$|TestShouldNotSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop(ViaTriggerMessageID)?$|TestBuildProjectContinuationActionPromptAddsReplacementChildGuidanceFor(Blocked|Malformed)Children$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(JobWorkerEnsureProjectContinuationMessage(AllowsRepeatedConsumedReplacementHandoffContinuation|AllowsStalePendingReplacementHandoffDuplicateRefresh|RequeuesAfterBlockedReviewChildReplacementHandoff)|BuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker)$' -count=1`

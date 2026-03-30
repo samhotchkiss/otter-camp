@@ -15091,6 +15091,142 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesFocusedPrerequisi
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnRetriesReplacementHandoffStopWithFreshMessage(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	focusTaskID := uuid.New()
+	malformedChildID := uuid.New()
+	turnID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	focusDescription := "Create the SamBot technical architecture document at planning/sambot-tech-architecture.md."
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 208,
+				Title:      "Recover SamBot planning continuation",
+				WorkStatus: "done",
+			},
+			focusTaskID: {
+				ID:          focusTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  245,
+				Title:       "Write planning/sambot-tech-architecture.md",
+				Description: &focusDescription,
+				WorkStatus:  "draft",
+			},
+			malformedChildID: {
+				ID:         malformedChildID,
+				ProjectID:  projectID,
+				TaskNumber: 257,
+				Title:      "Require statements: capture the key architecture decisions in planning/sambot-tech-architecture.md",
+				WorkStatus: "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition_parent_task_id": focusTaskID.String(),
+				}),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 245 (Write planning/sambot-tech-architecture.md) id=" + focusTaskID.String() + " work_status=draft deliverable_path=planning/sambot-tech-architecture.md malformed_child_tasks=1 assigned_agent_id=missing flow_template_id=missing.",
+			"Because that focus parent only has malformed child artifact lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.",
+		}, " "),
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "Let me reread the planning doc before I decide what replacement child to create.",
+		SequenceNumber: 11,
+	}
+	systemMessage := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "system",
+		Status:         "final",
+		Content:        projectContinuationReplacementHandoffPrefix + " Do not reread sibling artifacts from the project lane; create the fresh replacement child now or use only task.list(parent_task_id=...) if child-lane verification is still required.]",
+		SequenceNumber: 12,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant, *systemMessage}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected replacement-handoff stop to enqueue a fresh retry message")
+	}
+
+	jobs := fixture.enqueuer.jobs
+	if len(jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload.MessageID == userMessageID {
+		t.Fatal("retry reused original continuation message, want fresh message id")
+	}
+	if jobs[0].payload.RetryCount != 1 {
+		t.Fatalf("retry_count = %d, want 1", jobs[0].payload.RetryCount)
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var retryMessage *repo.ChatMessage
+	for i := range storedMessages {
+		msg := &storedMessages[i]
+		if msg.ID == jobs[0].payload.MessageID {
+			retryMessage = msg
+			break
+		}
+	}
+	if retryMessage == nil {
+		t.Fatal("missing appended replacement-handoff retry message")
+	}
+	if !strings.Contains(retryMessage.Content, "Your last continuation turn was blocked after broad rediscovery even though the next bounded work was already named.") {
+		t.Fatalf("retry message = %q, want replacement-handoff retry guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "Current focus parent: task 245") {
+		t.Fatalf("retry message = %q, want focused parent task reference", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "Your next assistant action must create the smallest fresh replacement child task beneath task 245") {
+		t.Fatalf("retry message = %q, want direct replacement child instruction", retryMessage.Content)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnKeepsBoundedSizeContextWhenFocusedDeliverableIsMissing(t *testing.T) {
 	t.Parallel()
 
@@ -23450,6 +23586,12 @@ func TestBuildProjectContinuationActionPromptAddsReplacementChildGuidanceForBloc
 	if !strings.Contains(prompt, "Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now") {
 		t.Fatalf("prompt = %q, want focus replacement-child guidance", prompt)
 	}
+	if !strings.Contains(prompt, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.") {
+		t.Fatalf("prompt = %q, want focused replacement-child anti-reread guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Your next assistant action must create or queue the smallest fresh replacement child task beneath that focus parent now.") {
+		t.Fatalf("prompt = %q, want focused replacement-child direct-action guidance", prompt)
+	}
 }
 
 func TestBuildProjectContinuationActionPromptPrioritizesMissingFocusPrerequisites(t *testing.T) {
@@ -23483,6 +23625,12 @@ func TestBuildProjectContinuationActionPromptAddsReplacementChildGuidanceForMalf
 
 	if !strings.Contains(prompt, "malformed or stale child artifact lanes") {
 		t.Fatalf("prompt = %q, want malformed-child focus guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.") {
+		t.Fatalf("prompt = %q, want malformed-child anti-reread guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Your next assistant action must create or queue the smallest fresh replacement child task beneath that focus parent now.") {
+		t.Fatalf("prompt = %q, want malformed-child direct-action guidance", prompt)
 	}
 }
 
@@ -26589,7 +26737,7 @@ func TestShouldBlockProjectContinuationTaskOwnedDeliverableMutationToolBlocksAct
 	}
 }
 
-func TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop(t *testing.T) {
+func TestShouldNotSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -26651,12 +26799,12 @@ func TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoff
 	if err != nil {
 		t.Fatalf("shouldSuppressRepeatedProjectExecutionContinuation: %v", err)
 	}
-	if !suppress {
-		t.Fatal("expected repeated replacement-handoff continuation fingerprint to be suppressed")
+	if suppress {
+		t.Fatal("expected failed replacement-handoff continuation fingerprint to remain retryable")
 	}
 }
 
-func TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStopViaTriggerMessageID(t *testing.T) {
+func TestShouldNotSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStopViaTriggerMessageID(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -26720,8 +26868,8 @@ func TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoff
 	if err != nil {
 		t.Fatalf("shouldSuppressRepeatedProjectExecutionContinuation: %v", err)
 	}
-	if !suppress {
-		t.Fatal("expected repeated replacement-handoff continuation linked by trigger_message_id to be suppressed")
+	if suppress {
+		t.Fatal("expected failed replacement-handoff continuation linked by trigger_message_id to remain retryable")
 	}
 }
 

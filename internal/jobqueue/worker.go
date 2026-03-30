@@ -84,6 +84,8 @@ const (
 )
 
 var taskQueueSinglePassCLIWritePathPattern = regexp.MustCompile("(?is)(?:single\\s+file|write\\s+a\\s+single\\s+complete[^`\\n]*?at)\\s*:?\\s*`([^`]+)`")
+var projectContinuationTaskRefIDPatternForWorker = regexp.MustCompile(`\bid=([0-9a-fA-F-]{36})\b`)
+var projectContinuationCloseoutReadyLabelPatternForWorker = regexp.MustCompile(`(?i)project continuation already has focused draft task (task \d+ .*?) in a closeout-ready state`)
 
 var explicitDeliverablePathPatternsForWorker = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:deliverable|output|file)\b(?:[*_]+)?\s*:\s*(?:[*_]+)?\s*([^\s,;]+)`),
@@ -2614,6 +2616,13 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 	expectedCompletedTaskID := ""
 	expectedSnapshotFingerprint := ""
 	allowSuccessfulHandoffSuppression := false
+	var (
+		completedTaskID    uuid.UUID
+		completedTaskNum   int
+		completedTaskTitle string
+		remainingDrafts    int
+		snapshot           projectExecutionContinuationSnapshotForWorker
+	)
 	if activeBootstrap {
 		source = "project_bootstrap"
 		content = strings.Join([]string{
@@ -2625,13 +2634,6 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		}, " ")
 		metadataMap["source"] = source
 	} else if projectID != uuid.Nil {
-		var (
-			completedTaskID    uuid.UUID
-			completedTaskNum   int
-			completedTaskTitle string
-			remainingDrafts    int
-			err                error
-		)
 		if err := lockConn.QueryRow(ctx, `
 			WITH latest_completed AS (
 				SELECT id, task_number, title
@@ -2716,6 +2718,30 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		`, sessionID, source, expectedCompletedTaskID, projectContinuationSnapshotFingerprintKey, expectedSnapshotFingerprint).Scan(&latestConsumedMatchingMessageID, &latestConsumedMatchingRepoVersion)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, false, fmt.Errorf("query latest consumed matching project continuation message: %w", err)
+		}
+	}
+	if source == "project_execution_continuation" && completedTaskID != uuid.Nil && latestConsumedSameCompletedTaskMessageID != uuid.Nil {
+		closeoutReadyRetry, retryErr := w.projectContinuationTurnEndedWithCloseoutReadyParentStop(ctx, latestConsumedSameCompletedTaskMessageID)
+		if retryErr != nil {
+			return uuid.Nil, false, fmt.Errorf("check latest consumed closeout-ready project continuation: %w", retryErr)
+		}
+		if closeoutReadyRetry {
+			focusLabelOverride, labelErr := w.projectContinuationTurnCloseoutReadyTaskLabel(ctx, latestConsumedSameCompletedTaskMessageID)
+			if labelErr != nil {
+				return uuid.Nil, false, fmt.Errorf("load latest consumed closeout-ready task label: %w", labelErr)
+			}
+			content = buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, focusLabelOverride)
+			expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
+			metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+		}
+		replacementHandoffRetry, retryErr := w.projectContinuationTurnEndedWithReplacementHandoff(ctx, latestConsumedSameCompletedTaskMessageID)
+		if retryErr != nil {
+			return uuid.Nil, false, fmt.Errorf("check latest consumed replacement-handoff continuation: %w", retryErr)
+		}
+		if !closeoutReadyRetry && replacementHandoffRetry {
+			content = buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot)
+			expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
+			metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
 		}
 	}
 
@@ -2915,6 +2941,112 @@ func (w *Worker) shouldSuppressProjectContinuationAfterSuccessfulHandoff(ctx con
 	return suppressed, nil
 }
 
+func (w *Worker) projectContinuationTurnEndedWithReplacementHandoff(ctx context.Context, referenceMessageID uuid.UUID) (bool, error) {
+	if w == nil || w.pool == nil || referenceMessageID == uuid.Nil {
+		return false, nil
+	}
+
+	var matched bool
+	if err := w.pool.QueryRow(ctx, `
+		WITH latest_turn AS (
+			SELECT ct.id
+			FROM chat_turn ct
+			WHERE ct.trigger_message_id = $1
+			  AND ct.status IN ('completed', 'failed', 'cancelled')
+			ORDER BY ct.retry_count DESC,
+			         COALESCE(ct.completed_at, ct.created_at) DESC,
+			         ct.id DESC
+			LIMIT 1
+		)
+		SELECT EXISTS (
+			SELECT 1
+			FROM latest_turn lt
+			JOIN chat_message sm
+			  ON sm.turn_id = lt.id
+			 AND sm.role = 'system'
+			WHERE sm.content LIKE $2
+		)
+	`, referenceMessageID, projectContinuationReplacementHandoffPrefix+"%").Scan(&matched); err != nil {
+		return false, err
+	}
+	return matched, nil
+}
+
+func (w *Worker) projectContinuationTurnEndedWithCloseoutReadyParentStop(ctx context.Context, referenceMessageID uuid.UUID) (bool, error) {
+	if w == nil || w.pool == nil || referenceMessageID == uuid.Nil {
+		return false, nil
+	}
+
+	var matched bool
+	if err := w.pool.QueryRow(ctx, `
+		WITH latest_turn AS (
+			SELECT ct.id
+			FROM chat_turn ct
+			WHERE ct.trigger_message_id = $1
+			  AND ct.status IN ('completed', 'failed', 'cancelled')
+			ORDER BY ct.retry_count DESC,
+			         COALESCE(ct.completed_at, ct.created_at) DESC,
+			         ct.id DESC
+			LIMIT 1
+		)
+		SELECT EXISTS (
+			SELECT 1
+			FROM latest_turn lt
+			JOIN chat_message tm
+			  ON tm.turn_id = lt.id
+			 AND tm.role = 'tool_result'
+			WHERE tm.content LIKE $2
+		)
+	`, referenceMessageID, `%in a closeout-ready state for the same deliverable%`).Scan(&matched); err != nil {
+		return false, err
+	}
+	return matched, nil
+}
+
+func (w *Worker) projectContinuationTurnCloseoutReadyTaskLabel(ctx context.Context, referenceMessageID uuid.UUID) (string, error) {
+	if w == nil || w.pool == nil || referenceMessageID == uuid.Nil {
+		return "", nil
+	}
+
+	rows, err := w.pool.Query(ctx, `
+		WITH latest_turn AS (
+			SELECT ct.id
+			FROM chat_turn ct
+			WHERE ct.trigger_message_id = $1
+			  AND ct.status IN ('completed', 'failed', 'cancelled')
+			ORDER BY ct.retry_count DESC,
+			         COALESCE(ct.completed_at, ct.created_at) DESC,
+			         ct.id DESC
+			LIMIT 1
+		)
+		SELECT tm.content
+		FROM latest_turn lt
+		JOIN chat_message tm
+		  ON tm.turn_id = lt.id
+		 AND tm.role = 'tool_result'
+		ORDER BY tm.sequence_number ASC, tm.id ASC
+	`, referenceMessageID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var content string
+		if err := rows.Scan(&content); err != nil {
+			return "", err
+		}
+		match := projectContinuationCloseoutReadyLabelPatternForWorker.FindStringSubmatch(content)
+		if len(match) == 2 {
+			return strings.TrimSpace(match[1]), nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return "", nil
+}
+
 func (w *Worker) projectContinuationTurnShowsProgress(ctx context.Context, referenceMessageID uuid.UUID) (bool, error) {
 	if w == nil || w.pool == nil || referenceMessageID == uuid.Nil {
 		return false, nil
@@ -3020,7 +3152,6 @@ func (w *Worker) suppressRepeatedIdenticalPendingProjectContinuation(ctx context
 			         OR sm.content LIKE $4
 			         OR (sm.content LIKE $5 AND sm.content LIKE $6)
 			         OR sm.content LIKE $7
-			         OR sm.content LIKE $10
 			       )
 			  )
 			   OR (
@@ -3037,7 +3168,6 @@ func (w *Worker) suppressRepeatedIdenticalPendingProjectContinuation(ctx context
 		projectContinuationTaskLaneBoundaryPrefix+"%",
 		allowSuccessfulHandoffSuppression,
 		projectContinuationSuccessfulHandoffPrefix+"%",
-		projectContinuationReplacementHandoffPrefix+"%",
 	).Scan(&blocked); err != nil {
 		return false, err
 	}
@@ -5013,6 +5143,49 @@ func projectExecutionContinuationFingerprintForWorker(completedTaskID uuid.UUID,
 	return strconv.FormatUint(hasher.Sum64(), 16)
 }
 
+func projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID uuid.UUID, content string) string {
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(strings.TrimSpace(versionpkg.RepoVersion)))
+	_, _ = hasher.Write([]byte{0})
+	_, _ = hasher.Write([]byte(completedTaskID.String()))
+	_, _ = hasher.Write([]byte{0})
+	_, _ = hasher.Write([]byte(strings.TrimSpace(content)))
+	return strconv.FormatUint(hasher.Sum64(), 16)
+}
+
+func projectContinuationFocusRefFromLineForWorker(line string) (string, string, string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "", "", ""
+	}
+	if _, after, ok := strings.Cut(line, ": "); ok {
+		line = strings.TrimSpace(after)
+	}
+	taskID := ""
+	if match := projectContinuationTaskRefIDPatternForWorker.FindStringSubmatch(line); len(match) == 2 {
+		taskID = strings.TrimSpace(match[1])
+	}
+	label := strings.TrimSpace(line)
+	if taskID != "" {
+		label = strings.TrimSpace(strings.Split(line, " id="+taskID)[0])
+	}
+	return label, line, taskID
+}
+
+func projectContinuationFirstTaskRefFromLineForWorker(line string) (string, string, string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "", "", ""
+	}
+	if _, after, ok := strings.Cut(line, ": "); ok {
+		line = strings.TrimSpace(after)
+	}
+	if idx := strings.Index(line, "; "); idx >= 0 {
+		line = strings.TrimSpace(line[:idx])
+	}
+	return projectContinuationFocusRefFromLineForWorker(line)
+}
+
 func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot projectExecutionContinuationSnapshotForWorker) []string {
 	if projectLine := strings.TrimSpace(snapshot.ProjectLine); projectLine != "" {
 		lines = append(lines, projectLine)
@@ -5110,9 +5283,13 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 		}
 		if strings.Contains(focusLine, "replaceable_blocked_child_tasks=") && !focusHasCompletedCloseout {
 			lines = append(lines, "Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.")
+			lines = append(lines, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.")
+			lines = append(lines, "Your next assistant action must create or queue the smallest fresh replacement child task beneath that focus parent now. If child inspection is strictly required first, use only task.list(parent_task_id=...).")
 		}
 		if strings.Contains(focusLine, "malformed_child_tasks=") && !focusHasCompletedCloseout {
 			lines = append(lines, "Because that focus parent only has malformed or stale child artifact lanes, do not queue the parent again from the project lane. Create the smallest fresh replacement child task under it now instead.")
+			lines = append(lines, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.")
+			lines = append(lines, "Your next assistant action must create or queue the smallest fresh replacement child task beneath that focus parent now. If child inspection is strictly required first, use only task.list(parent_task_id=...).")
 		}
 	}
 	return lines
@@ -5141,6 +5318,13 @@ func projectExecutionSnapshotContainsBatchRangeForWorker(snapshot projectExecuti
 }
 
 func buildProjectExecutionContinuationPromptForWorker(completedTaskNumber int, completedTaskTitle string, remainingDraftTasks int, snapshot projectExecutionContinuationSnapshotForWorker) string {
+	focusLine := strings.TrimSpace(snapshot.FocusTaskLine)
+	if focusLine != "" &&
+		!strings.Contains(focusLine, "completed_closeout_child_tasks=") &&
+		(strings.Contains(focusLine, "replaceable_blocked_child_tasks=") || strings.Contains(focusLine, "malformed_child_tasks=")) {
+		return buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNumber, completedTaskTitle, remainingDraftTasks, snapshot)
+	}
+
 	lines := []string{
 		"Continue the active project execution now.",
 		"Recently completed work may have unlocked the next wave of bounded tasks.",
@@ -5187,6 +5371,100 @@ func buildProjectExecutionContinuationPromptForWorker(completedTaskNumber int, c
 			"Do not call task.list with status=done or other broad project filters just to verify batch_range="+completedBatchRange+". The named task refs above already show which batches are complete, blocked, or still actionable.",
 		)
 	}
+	return strings.Join(lines, " ")
+}
+
+func buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNumber int, completedTaskTitle string, remainingDraftTasks int, snapshot projectExecutionContinuationSnapshotForWorker) string {
+	lines := []string{
+		"Continue the active project execution now.",
+	}
+	if completedTaskNumber > 0 || strings.TrimSpace(completedTaskTitle) != "" {
+		label := strings.TrimSpace(completedTaskTitle)
+		if completedTaskNumber > 0 && label != "" {
+			label = fmt.Sprintf("task %d (%s)", completedTaskNumber, label)
+		} else if completedTaskNumber > 0 {
+			label = fmt.Sprintf("task %d", completedTaskNumber)
+		}
+		lines = append(lines, fmt.Sprintf("The latest completed task was %s.", label))
+	}
+	if remainingDraftTasks > 0 {
+		lines = append(lines, fmt.Sprintf("There are %d remaining draft project tasks, but ignore every other draft parent until this focused replacement handoff is advanced.", remainingDraftTasks))
+	}
+	if projectLine := strings.TrimSpace(snapshot.ProjectLine); projectLine != "" {
+		lines = append(lines, projectLine)
+	}
+	focusLabel, focusRef, focusTaskID := projectContinuationFocusRefFromLineForWorker(snapshot.FocusTaskLine)
+	laneSource := strings.TrimSpace(snapshot.FocusTaskLine)
+	if focusRef == "" {
+		focusLabel, focusRef, focusTaskID = projectContinuationFirstTaskRefFromLineForWorker(snapshot.ReplacementDraftLine)
+		laneSource = strings.TrimSpace(snapshot.ReplacementDraftLine)
+	}
+	if focusRef == "" {
+		return strings.Join(lines, " ")
+	}
+	laneReason := "terminally blocked or malformed child lanes"
+	switch {
+	case strings.Contains(laneSource, "malformed_child_tasks=") && !strings.Contains(laneSource, "replaceable_blocked_child_tasks="):
+		laneReason = "malformed or stale child artifact lanes"
+	case strings.Contains(laneSource, "replaceable_blocked_child_tasks=") && !strings.Contains(laneSource, "malformed_child_tasks="):
+		laneReason = "terminally blocked child lanes"
+	case strings.Contains(laneSource, "malformed_child_tasks="):
+		laneReason = "blocked or malformed child lanes"
+	}
+	lines = append(lines,
+		"Your last continuation turn was blocked after broad rediscovery even though the next bounded work was already named.",
+		fmt.Sprintf("Current focus parent: %s.", focusRef),
+		fmt.Sprintf("That draft parent only has %s.", laneReason),
+		"Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.",
+		fmt.Sprintf("Do not queue parent task %s again from the project lane.", focusLabel),
+		"Do not inspect or mention other draft parents until this handoff is advanced.",
+		fmt.Sprintf("Your next assistant action must create the smallest fresh replacement child task beneath %s now, or queue an existing direct child draft there if one already fits unchanged.", focusLabel),
+	)
+	if focusTaskID != "" {
+		lines = append(lines, fmt.Sprintf("If you must inspect child lanes first, use only task.list(parent_task_id=%s).", focusTaskID))
+	}
+	return strings.Join(lines, " ")
+}
+
+func buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(completedTaskNumber int, completedTaskTitle string, remainingDraftTasks int, snapshot projectExecutionContinuationSnapshotForWorker, focusLabelOverride string) string {
+	lines := []string{
+		"Continue the active project execution now.",
+	}
+	if completedTaskNumber > 0 || strings.TrimSpace(completedTaskTitle) != "" {
+		label := strings.TrimSpace(completedTaskTitle)
+		if completedTaskNumber > 0 && label != "" {
+			label = fmt.Sprintf("task %d (%s)", completedTaskNumber, label)
+		} else if completedTaskNumber > 0 {
+			label = fmt.Sprintf("task %d", completedTaskNumber)
+		}
+		lines = append(lines, fmt.Sprintf("The latest completed task was %s.", label))
+	}
+	if remainingDraftTasks > 0 {
+		lines = append(lines, fmt.Sprintf("There are %d remaining draft project tasks, but ignore every other draft parent until this focused closeout is advanced.", remainingDraftTasks))
+	}
+	if projectLine := strings.TrimSpace(snapshot.ProjectLine); projectLine != "" {
+		lines = append(lines, projectLine)
+	}
+	focusLabel, focusRef, _ := projectContinuationFocusRefFromLineForWorker(snapshot.FocusTaskLine)
+	if focusRef == "" {
+		focusLabel, focusRef, _ = projectContinuationFirstTaskRefFromLineForWorker(snapshot.ReplacementDraftLine)
+	}
+	if focusRef == "" && strings.TrimSpace(focusLabelOverride) != "" {
+		focusLabel = strings.TrimSpace(focusLabelOverride)
+		focusRef = focusLabel
+	}
+	if focusRef == "" {
+		return strings.Join(lines, " ")
+	}
+	lines = append(lines,
+		"Your last continuation turn confirmed this focused parent is already closeout-ready for the same deliverable.",
+		fmt.Sprintf("Current focus parent: %s.", focusRef),
+		"Do not call task.get, project.list, file.list, file.read, or any other broad rediscovery tool before acting.",
+		fmt.Sprintf("Do not create another replacement child beneath %s from the project lane.", focusLabel),
+		"Do not inspect or mention other draft parents until this closeout is advanced.",
+		fmt.Sprintf("Your next assistant action must advance or close %s directly now.", focusLabel),
+		fmt.Sprintf("If the parent still needs closeout metadata, update %s with parent_orchestration.child_verifications, parent_orchestration.integration_check.status=passed, and parent_orchestration.outcome_assessment.satisfied=true before closing it.", focusLabel),
+	)
 	return strings.Join(lines, " ")
 }
 
