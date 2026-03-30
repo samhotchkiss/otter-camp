@@ -17077,6 +17077,34 @@ func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnCloseoutReadyDra
 	}
 }
 
+func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnFocusedCloseoutReadyDraftDoneError(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageText: "Continue the active project execution now. Your last continuation turn confirmed this focused parent is already closeout-ready for the same deliverable. Current focus parent: task 294 (Verify planning/sambot-personality-spec.md completeness — read-only checklist verification) id=focus work_status=draft deliverable_path=planning/sambot-personality-spec.md",
+	}
+	result := ToolResult{
+		Name: "task.update",
+		Output: map[string]any{
+			"error": "task can only be marked done when its flow reaches a terminal node",
+		},
+	}
+	if !shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, []ToolResult{result}) {
+		t.Fatal("expected focused closeout-ready draft done rejection to stop the turn")
+	}
+	message := projectExecutionBlockedMutationStopMessage(rt, []ToolResult{result})
+	if !strings.Contains(message, "cannot jump straight from draft to done") {
+		t.Fatalf("message = %q, want draft-to-done guidance", message)
+	}
+	if !strings.Contains(message, "work_status=queued") {
+		t.Fatalf("message = %q, want queue guidance", message)
+	}
+}
+
 func TestShouldStopAfterBlockedTaskReviewPreferredTargetReread(t *testing.T) {
 	t.Parallel()
 

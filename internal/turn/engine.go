@@ -31304,9 +31304,11 @@ func projectContinuationCloseoutReadyParentPromptActive(rt *turnRuntime) bool {
 	if initial == "" {
 		return false
 	}
+	lower := strings.ToLower(initial)
 	return strings.Contains(initial, "outcome_satisfied=true") ||
 		strings.Contains(initial, "completed_closeout_child_tasks=") ||
-		strings.Contains(strings.ToLower(initial), "closeout-ready parent")
+		strings.Contains(lower, "closeout-ready parent") ||
+		projectContinuationFocusedCloseoutReadyActive(lower)
 }
 
 func shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt *turnRuntime, calls []ToolCall, results []ToolResult) bool {

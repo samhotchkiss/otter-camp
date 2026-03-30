@@ -4798,3 +4798,10 @@
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'TestShouldBlockProjectContinuationFocusedDraftTaskCreate(ForCloseoutReadyParent|ForWorkspaceDeliverableCloseoutParent|WhenDirectChildDraftsAlreadyExist)$' -count=1`
     - `GOFLAGS='' go test ./internal/turn -run 'TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation(DoesNotStopForDraftChildCreate|ForMissingDependencyPrompt|ForFocusPrerequisiteRepair|IgnoresAssignmentOnlyUpdate|RequiresObservedQueuedState|IgnoresUnfocusedDraftChildCreate|RequiresReplacementChildPrompt)?$|TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation$' -count=1`
+- 2026-03-30 10:42 MDT - Made the closeout-ready PM stop detector recognize the live focused-parent wording.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `projectContinuationCloseoutReadyParentPromptActive(...)` now also treats the focused closeout-ready prompt wording (`already closeout-ready for the same deliverable`) as active closeout-ready state
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnFocusedCloseoutReadyDraftDoneError`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShouldStopAfterBlockedProjectExecutionBlockedMutationOn(FocusedCloseoutReadyDraftDoneError|CloseoutReadyDraftDoneError)$' -count=1`

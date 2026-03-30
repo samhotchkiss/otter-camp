@@ -1475,3 +1475,16 @@
     - it did not block project-lane child creation when the focused parent already had direct child drafts beneath it, even though the continuation prompt had already said to queue an existing direct child draft if one fit unchanged
   - impact:
     - PM retries can spend turns rediscovering and re-creating the same child lane beneath one parent instead of advancing the existing child drafts already present in the tree
+- 2026-03-30 10:42 MDT - The closeout-ready PM stop detector missed the live prompt wording and allowed one extra rediscovery hop after a flow-owned done rejection.
+  - fresh live evidence:
+    - PM retries on focus parent `294` hit `task can only be marked done when its flow reaches a terminal node`
+    - those same turns still continued into `task.get` before the runtime finally stopped them
+    - the prompt text said `this focused parent is already closeout-ready for the same deliverable`
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) in `projectContinuationCloseoutReadyParentPromptActive(...)` only recognized:
+      - `outcome_satisfied=true`
+      - `completed_closeout_child_tasks=`
+      - the narrower contiguous phrase `closeout-ready parent`
+    - it did not match the live wording `focused parent is already closeout-ready for the same deliverable`
+  - impact:
+    - closeout-ready PM retries can pay an unnecessary extra tool/model hop after the first flow-owned `draft -> done` rejection instead of ending immediately with the queued-parent guidance
