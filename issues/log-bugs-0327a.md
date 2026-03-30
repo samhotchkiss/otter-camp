@@ -1588,3 +1588,17 @@
     - because `blocked` children are non-terminal, the service re-entered the “queue children and keep parent draft” path even after the parent had already reached a satisfied closeout-ready state
   - impact:
     - PM continuations can keep telling the model to queue the closeout-ready parent while the task service silently leaves that same parent in `draft`, trapping the lane in repeated closeout retries instead of finishing the parent and moving on
+- 2026-03-30 13:27 MDT - PM successful-handoff stopping did not recognize focused `task.create` calls that returned replacement children through `tasks[]` batch output.
+  - fresh live evidence:
+    - PM turn `18a83cef-d12e-42f9-9f5f-ea78e4d3b7d6` created task `297` under focused parent `286`, but the runtime continued into blocked `task.list` rediscovery because it did not count the draft child create as a successful handoff
+    - PM turn `0b10bd1e-4d56-46fa-9373-0366cce2349c` auto-decomposed task `297` into `298/299/300`, then still issued `task.get` and hit the PM rediscovery guard because the result came back in `tasks[]` rather than `task`
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) in `shouldStopAfterSuccessfulProjectExecutionHandoffMutation(...)` only stopped for:
+      - explicit prerequisite-repair success
+      - the older replacement-child phrasing detector
+      - generic mutation success paths
+    - it did not recognize focused `task.create` results with a matching `parent_task_id` when the replacement child appeared either:
+      - as a single `task.id` in `draft|queued|in_progress|review`, or
+      - inside result `tasks[]` after auto-decomposition
+  - impact:
+    - PM turns could create the correct replacement child lane and still keep spending the same turn on rediscovery tools, causing another blocked-stop loop and increasing the chance of malformed follow-on decomposition

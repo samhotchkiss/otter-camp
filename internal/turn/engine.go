@@ -31401,6 +31401,9 @@ func shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt *turnRuntime, c
 		if prerequisiteRepairActive && projectExecutionFocusPrerequisiteRepairSucceeded(call, results[idx], focusTaskID) {
 			return true
 		}
+		if projectExecutionFocusedDraftChildCreateSucceeded(call, results[idx], focusTaskID) {
+			return true
+		}
 		if projectExecutionHandoffMutationSucceeded(call, results[idx]) {
 			return true
 		}
@@ -31457,6 +31460,49 @@ func projectExecutionHandoffMutationSucceeded(call ToolCall, result ToolResult) 
 		}
 	}
 	return false
+}
+
+func projectExecutionFocusedDraftChildCreateSucceeded(call ToolCall, result ToolResult, focusTaskID uuid.UUID) bool {
+	if focusTaskID == uuid.Nil || strings.TrimSpace(toolResultErrorCode(result)) != "" {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(call.Name), "task.create") {
+		return false
+	}
+	parentTaskID, ok := parseUUIDAny(call.Arguments["parent_task_id"])
+	if !ok || parentTaskID != focusTaskID {
+		return false
+	}
+	status := projectExecutionResultWorkStatus(call.Arguments, result)
+	switch status {
+	case "draft", "queued", "in_progress", "review":
+		if taskOutput, ok := result.Output["task"].(map[string]any); ok {
+			taskID, ok := parseUUIDAny(taskOutput["id"])
+			return ok && taskID != uuid.Nil
+		}
+		taskID, ok := parseUUIDAny(result.Output["task_id"])
+		return ok && taskID != uuid.Nil
+	default:
+		taskOutputs, ok := result.Output["tasks"].([]any)
+		if !ok || len(taskOutputs) == 0 {
+			return false
+		}
+		for _, item := range taskOutputs {
+			taskOutput, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			taskID, ok := parseUUIDAny(taskOutput["id"])
+			if !ok || taskID == uuid.Nil {
+				continue
+			}
+			switch strings.ToLower(strings.TrimSpace(stringValue(taskOutput["work_status"]))) {
+			case "draft", "queued", "in_progress", "review":
+				return true
+			}
+		}
+		return false
+	}
 }
 
 func projectExecutionResultWorkStatus(arguments map[string]any, result ToolResult) string {

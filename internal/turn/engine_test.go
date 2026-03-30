@@ -16979,7 +16979,7 @@ func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationForFocusPrerequ
 	}
 }
 
-func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationDoesNotStopForDraftChildCreate(t *testing.T) {
+func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationStopsForFocusedDraftChildCreate(t *testing.T) {
 	t.Parallel()
 
 	focusTaskID := uuid.New()
@@ -17006,8 +17006,40 @@ func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationDoesNotStopForD
 		},
 	}}
 
-	if shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
-		t.Fatal("draft child creation should not stop the PM turn before the child lane is actually runnable")
+	if !shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
+		t.Fatal("expected focused draft child creation to stop the PM turn once the replacement child exists")
+	}
+}
+
+func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationStopsForFocusedDraftChildCreateBatch(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText:   "Current focus parent: task 297 (Write planning/sambot-prompts/test-conversations-level3.md) id=" + focusTaskID.String() + ". Your next assistant action must create the smallest fresh replacement child task beneath task 297 (Write planning/sambot-prompts/test-conversations-level3.md) now, or queue an existing direct child draft there if one already fits unchanged.",
+	}
+
+	calls := []ToolCall{{
+		Name:      "task.create",
+		Arguments: map[string]any{"parent_task_id": focusTaskID.String()},
+	}}
+	results := []ToolResult{{
+		Name: "task.create",
+		Output: map[string]any{
+			"tasks": []any{
+				map[string]any{"id": uuid.NewString(), "work_status": "draft"},
+				map[string]any{"id": uuid.NewString(), "work_status": "draft"},
+			},
+		},
+	}}
+
+	if !shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
+		t.Fatal("expected focused draft child batch creation to stop the PM turn once replacement children exist")
 	}
 }
 

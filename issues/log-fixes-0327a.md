@@ -4920,3 +4920,17 @@
   - live proof:
     - after restart, task `286` advanced cleanly to `done`
     - the PM lane moved past the old closeout loop and immediately began handling the next actual deliverable gap instead of reissuing another `work_status=queued` retry
+- 2026-03-30 13:27 MDT - Stopped PM turns after focused replacement-child creation, including `task.create` batch output.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `shouldStopAfterSuccessfulProjectExecutionHandoffMutation(...)` now also stops when focused replacement-child creation succeeds
+    - added `projectExecutionFocusedDraftChildCreateSucceeded(...)`, which:
+      - requires a non-error `task.create`
+      - requires `parent_task_id` to match the current PM focus task
+      - accepts single-child results in `task.id` / `task_id` with `draft|queued|in_progress|review`
+      - accepts auto-decomposition batch results in `tasks[]` when any created child is in one of those runnable states
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - renamed the old non-stopping draft-child test to assert the new stopping behavior
+    - added `TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationStopsForFocusedDraftChildCreateBatch`
+    - preserved the unfocused-create guard coverage
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation(StopsForFocusedDraftChildCreate|StopsForFocusedDraftChildCreateBatch|IgnoresUnfocusedDraftChildCreate|RequiresObservedQueuedState|ForMissingDependencyPrompt|ForFocusPrerequisiteRepair|RequiresReplacementChildPrompt)?$|TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation$' -count=1`
