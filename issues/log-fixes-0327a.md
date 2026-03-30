@@ -4542,3 +4542,13 @@
     - added `TestShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStopViaTriggerMessageID`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStop|ShouldSuppressRepeatedProjectExecutionContinuationForReplacementHandoffStopViaTriggerMessageID|ShouldSuppressRepeatedProjectExecutionContinuationAfterChildLaneWaitState|HandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionStopWithLiveOpenChild|HandleCompletedProjectExecutionContinuationTurnRetriesFocusedPrerequisiteRepairStopWithFreshMessage)$' -count=1`
+- 2026-03-30 22:58 MDT - Stopped misclassifying shared-doc section children as duplicate full-file owners.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `taskClaimsWholeSharedFileOwnership(...)` now requires standalone action-word matches, so `overwrite` no longer counts as `write`
+    - `buildProjectExecutionContinuationSnapshotWithActivity(...)` now keeps superseded draft parents in `ChildActiveDraftLine` when they already have real child work, while still moving actionable focus to the child draft
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestProjectExecutionContinuationSnapshotPrefersSharedDocDraftChildOverReplacementParent`
+    - kept the older draft-child snapshot regression green:
+      - `TestProjectExecutionContinuationSnapshotPrefersDraftChildOverFreshReplacementParent`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshot(PrefersSharedDocDraftChildOverReplacementParent|PrefersDraftChildOverFreshReplacementParent)|HandleMalformedDuplicateSharedFileChildTaskPreflight|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren)$' -count=1`

@@ -1203,3 +1203,14 @@
     - that works in some unit fixtures, but not in the live schema for user trigger messages
   - impact:
     - repeated focused replacement-parent continuation families can survive both worker cleanup and engine-side stop suppression because the engine fails to find the already-completed blocked turn in production
+- 2026-03-30 22:58 MDT - Shared-doc section children were being misclassified as malformed duplicate full-file lanes.
+  - fresh live evidence:
+    - parent task `246` still showed `malformed_child_tasks=1` and “needs fresh replacement child work”
+    - the only non-blocked child under it was task `249`, a legitimate bounded section-append child for `planning/sambot-personality-spec.md`
+    - its description included `Do NOT overwrite existing content — append/insert only`
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) used substring matches inside `taskClaimsWholeSharedFileOwnership(...)`
+    - that let `overwrite` accidentally satisfy the `write` action test, so the child looked like it claimed the whole shared file even though it was explicitly a bounded insert/append section task
+  - impact:
+    - PM continuations can keep treating a parent with a legitimate draft section child as if all children are still terminally blocked/malformed
+    - that reopens replacement-parent handoff churn instead of advancing the existing draft child

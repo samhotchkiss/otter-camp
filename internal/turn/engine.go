@@ -11096,13 +11096,27 @@ func taskClaimsWholeSharedFileOwnership(taskRecord repo.ProjectTask, sharedPath 
 		if strings.Contains(text, action+" a single file") || strings.Contains(text, action+" single file") {
 			return true
 		}
-		if !strings.Contains(text, action+" ") {
+		if !containsStandaloneActionWord(text, action) {
 			continue
 		}
 		for _, connector := range []string{" at ", " to ", " into ", ": "} {
-			if strings.Contains(text, action+" ") && strings.Contains(text, connector+sharedPath) {
+			if strings.Contains(text, connector+sharedPath) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func containsStandaloneActionWord(text, action string) bool {
+	normalizedAction := strings.TrimSpace(strings.ToLower(action))
+	if normalizedAction == "" {
+		return false
+	}
+	for _, field := range strings.Fields(strings.ToLower(text)) {
+		candidate := strings.Trim(field, ".,:;!?()[]{}<>\"'`")
+		if candidate == normalizedAction {
+			return true
 		}
 	}
 	return false
@@ -21497,10 +21511,18 @@ func buildProjectExecutionContinuationSnapshotWithActivity(
 		if filterByPriority {
 			matchedPriority = true
 		}
-		if _, superseded := supersededDraftTaskIDs[task.ID]; superseded {
+		taskRef := projectExecutionContinuationTaskRef(task, activity, hints)
+		_, superseded := supersededDraftTaskIDs[task.ID]
+		if superseded &&
+			isActionableProjectDraftTask(task) &&
+			!projectContinuationDraftTaskNeedsFreshReplacementChildWorkForTask(task, activity) &&
+			projectContinuationDraftTaskHasExistingChildWork(activity) &&
+			len(childActiveDraftTasks) < 4 {
+			childActiveDraftTasks = append(childActiveDraftTasks, taskRef)
+		}
+		if superseded {
 			continue
 		}
-		taskRef := projectExecutionContinuationTaskRef(task, activity, hints)
 		if status == "done" {
 			if projectContinuationTaskMatchesCompletedBatchFamilies(hints, completedBatchFamilies) && len(completedTasks) < 4 {
 				completedTasks = append(completedTasks, taskRef)
@@ -21527,7 +21549,7 @@ func buildProjectExecutionContinuationSnapshotWithActivity(
 					}
 					continue
 				}
-				if activity.activeChildTaskCount > 0 && len(childActiveDraftTasks) < 4 {
+				if projectContinuationDraftTaskHasExistingChildWork(activity) && len(childActiveDraftTasks) < 4 {
 					childActiveDraftTasks = append(childActiveDraftTasks, taskRef)
 				}
 				continue
@@ -22127,6 +22149,13 @@ func projectContinuationDraftTaskReadyForParentClosureForTask(task repo.ProjectT
 		return false
 	}
 	return activity.childTaskCount == 0 || activity.childTaskCount == activity.blockedChildTaskCount
+}
+
+func projectContinuationDraftTaskHasExistingChildWork(activity projectContinuationChildActivity) bool {
+	if activity.activeChildTaskCount > 0 {
+		return true
+	}
+	return activity.childTaskCount > activity.blockedChildTaskCount
 }
 
 func projectContinuationDraftTaskOutcomeSatisfied(task repo.ProjectTask) bool {

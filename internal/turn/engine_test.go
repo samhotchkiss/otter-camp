@@ -24769,6 +24769,94 @@ func TestProjectExecutionContinuationSnapshotPrefersDraftChildOverFreshReplaceme
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotPrefersSharedDocDraftChildOverReplacementParent(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+	parentDescription := "Create the SamBot personality and tone specification at planning/sambot-personality-spec.md."
+	blockedSectionDescription := "Write the CTA & Conversion Behavior section of planning/sambot-personality-spec.md. This is \u00a75 of the spec."
+	draftSectionDescription := "Add a \"Technical Depth Calibration\" section to planning/sambot-personality-spec.md that specifies how SamBot matches the visitor's level. The file already exists at planning/sambot-personality-spec.md. Do NOT overwrite existing content \u2014 append/insert only."
+
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:              parentDraftID,
+				ProjectID:       projectID,
+				TaskNumber:      246,
+				Title:           "Write planning/sambot-personality-spec.md — SamBot personality & tone specification (replacement for blocked OC-190)",
+				Description:     &parentDescription,
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+			uuid.New(): {
+				ID:              uuid.New(),
+				ProjectID:       projectID,
+				TaskNumber:      247,
+				Title:           "Write the CTA & Conversion Behavior section of planning/sambot-personality-spec.md. This is §5 of the spec.",
+				Description:     &blockedSectionDescription,
+				WorkStatus:      "blocked",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+				Metadata:        json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+			uuid.New(): {
+				ID:              uuid.New(),
+				ProjectID:       projectID,
+				TaskNumber:      248,
+				Title:           "Natural CTAs: How SamBot weaves in relevant calls-to-action without being pushy",
+				Description:     &blockedSectionDescription,
+				WorkStatus:      "blocked",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+				Metadata:        json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+			uuid.New(): {
+				ID:              uuid.New(),
+				ProjectID:       projectID,
+				TaskNumber:      249,
+				Title:           "Technical depth: Match the visitor's level — if they ask simple questions, keep it accessible; if they go deep, go deep back",
+				Description:     &draftSectionDescription,
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+				Metadata:        json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+			uuid.New(): {
+				ID:              uuid.New(),
+				ProjectID:       projectID,
+				TaskNumber:      250,
+				Title:           "Include 3-4 short example exchanges showing good tone vs. bad tone.",
+				Description:     &blockedSectionDescription,
+				WorkStatus:      "blocked",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+				Metadata:        json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.ReplacementDraftLine, "task 246 (Write planning/sambot-personality-spec.md") {
+		t.Fatalf("ReplacementDraftLine = %q, should not keep parent 246 in fresh replacement-child work once draft child 249 exists", snapshot.ReplacementDraftLine)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "task 249 (Technical depth: Match the visitor's level") {
+		t.Fatalf("ActiveTaskLine = %q, should not treat draft child 249 as malformed blocked work", snapshot.ActiveTaskLine)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "task 249 (Technical depth: Match the visitor's level") {
+		t.Fatalf("DraftTaskLine = %q, want draft child 249 surfaced as actionable work", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "task 249 (Technical depth: Match the visitor's level") {
+		t.Fatalf("FocusTaskLine = %q, want focus to move from parent 246 to draft child 249", snapshot.FocusTaskLine)
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotIgnoresOlderDraftsSupersededByNewerOpenSamePathTask(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()
