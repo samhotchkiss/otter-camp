@@ -4562,3 +4562,16 @@
     - added `TestRecoveryResumeSharedSectionTargetFromTextMatchesAddSectionToPath`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(RecoveryResumeSharedSectionTarget(MatchesInheritedSharedPath)?|RecoveryResumeSharedSectionTargetFromText(MatchesMarkdownHeading|MatchesAddSectionToPath)|ProjectExecutionContinuationSnapshot(PrefersSharedDocDraftChildOverReplacementParent|PrefersSharedDocDraftChildOverBlockedSiblingFragmentsWithoutPath|PrefersDraftChildOverFreshReplacementParent)|HandleMalformedDuplicateSharedFileChildTaskPreflight|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren)$' -count=1`
+- 2026-03-30 23:34 MDT - Aligned worker-authored PM continuations with the engine-side shared-doc child logic.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - added worker-side parsing for `Add a "X" section to PATH ...` shared-doc child wording
+    - duplicate shared-file detection now ignores bounded section-scoped children and requires standalone action-word matches
+    - shared-doc sibling proof checks now compare concrete section targets before suppressing a draft child on the same file
+    - superseded draft parents can now be displaced by newer open child drafts on the same deliverable, while still remaining visible in `ChildActiveDraftLine`
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerProjectExecutionContinuationSnapshotPrefersSharedDocDraftChildOverBlockedSiblingFragmentsWithoutPath`
+    - kept duplicate shared-file worker regressions green:
+      - `TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren`
+      - `TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildrenUsingSingleFileWording`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(PrefersSharedDocDraftChildOverBlockedSiblingFragmentsWithoutPath|IgnoresMalformedDuplicateSharedFileChildren|IgnoresMalformedDuplicateSharedFileChildrenUsingSingleFileWording)$' -count=1`

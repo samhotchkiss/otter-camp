@@ -1225,3 +1225,16 @@
   - impact:
     - task `249` resolved to no section target, so blocked siblings on the same shared file still counted as proof against it
     - PM continuations kept reopening the replacement-parent handoff loop for `246` instead of advancing the real draft child
+- 2026-03-30 23:34 MDT - Worker recovery was still authoring PM continuations from the stale shared-doc snapshot branch.
+  - fresh live evidence:
+    - continuation `11920` on `repo_version=3686` still focused parent `246` even after the engine-side parser/sibling fix was deployed
+    - that prompt was authored by worker recovery, not a turn-engine retry, and still omitted the draft child `249`
+  - bug:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) had its own older copies of:
+      - duplicate shared-file child detection
+      - shared section-target parsing
+      - shared-doc sibling proof handling
+      - draft-parent supersession by newer open child tasks
+    - the worker path therefore kept building the stale replacement-parent snapshot even after the engine path was fixed
+  - impact:
+    - PM session recovery can continue reopening replacement-parent handoff churn from worker-authored continuations even when the turn engine would already focus the real draft child

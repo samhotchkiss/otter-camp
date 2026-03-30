@@ -22142,6 +22142,170 @@ func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateS
 	}
 }
 
+func TestJobWorkerProjectExecutionContinuationSnapshotPrefersSharedDocDraftChildOverBlockedSiblingFragmentsWithoutPath(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "project-continuation-snapshot-prefers-shared-doc-draft-child",
+		DisplayName: "Project Continuation Snapshot Prefers Shared Doc Draft Child",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "project-continuation-snapshot-prefers-shared-doc-draft-child-project",
+		DisplayName:    "Project Continuation Snapshot Prefers Shared Doc Draft Child Project",
+		Description:    "Project for shared-doc draft child snapshot coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "project-continuation-snapshot-prefers-shared-doc-draft-child-template",
+		DisplayName:    "Project Continuation Snapshot Prefers Shared Doc Draft Child Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	parentDescription := "Create the SamBot personality and tone specification at planning/sambot-personality-spec.md. This replaces terminally-blocked task OC-190."
+	parentMetadata, err := json.Marshal(map[string]any{
+		"decomposition": map[string]any{
+			"applied":             true,
+			"mode":                "parallel_children",
+			"orchestration_only":  true,
+			"source_description":  parentDescription,
+			"primary_deliverable": "planning/sambot-personality-spec.md",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal parent metadata: %v", err)
+	}
+	parentTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     246,
+		Title:          "Write planning/sambot-personality-spec.md — SamBot personality & tone specification (replacement for blocked OC-190)",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+		Metadata:       parentMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	draftSectionDescription := `Add a "Technical Depth Calibration" section to planning/sambot-personality-spec.md that specifies how SamBot matches the visitor's level. The file already exists at planning/sambot-personality-spec.md (10,884 bytes). Do NOT overwrite existing content — append/insert only.`
+	for _, child := range []repo.ProjectTask{
+		{
+			OrganizationID: org.ID,
+			ProjectID:      project.ID,
+			TaskNumber:     247,
+			Title:          "Write the CTA & Conversion Behavior section of planning/sambot-personality-spec.md. This is §5 of the spec.",
+			WorkStatus:     "blocked",
+			BlocksScope:    "task",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "system",
+			CreatedByID:    &agent.ID,
+			Metadata:       childMetadata,
+		},
+		{
+			OrganizationID: org.ID,
+			ProjectID:      project.ID,
+			TaskNumber:     248,
+			Title:          "Natural CTAs: How SamBot weaves in relevant calls-to-action without being pushy — e.g., \"If you're interested in having me talk about this at your event, there's a speaking inquiry form on the site\"",
+			WorkStatus:     "blocked",
+			BlocksScope:    "task",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "system",
+			CreatedByID:    &agent.ID,
+			Metadata:       childMetadata,
+		},
+		{
+			OrganizationID: org.ID,
+			ProjectID:      project.ID,
+			TaskNumber:     249,
+			Title:          "Technical depth: Match the visitor's level — if they ask simple questions, keep it accessible; if they go deep, go deep back",
+			Description:    &draftSectionDescription,
+			WorkStatus:     "draft",
+			BlocksScope:    "task",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "system",
+			CreatedByID:    &agent.ID,
+			Metadata:       childMetadata,
+		},
+		{
+			OrganizationID: org.ID,
+			ProjectID:      project.ID,
+			TaskNumber:     250,
+			Title:          "Include 3-4 short example exchanges showing good tone vs. bad tone.",
+			WorkStatus:     "blocked",
+			BlocksScope:    "task",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "system",
+			CreatedByID:    &agent.ID,
+			Metadata:       childMetadata,
+		},
+	} {
+		if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, child); err != nil {
+			t.Fatalf("create child task %d: %v", child.TaskNumber, err)
+		}
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "Technical depth: Match the visitor's level") {
+		t.Fatalf("DraftTaskLine = %q, want technical-depth child actionable draft", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "Technical depth: Match the visitor's level") {
+		t.Fatalf("FocusTaskLine = %q, want focus on technical-depth child", snapshot.FocusTaskLine)
+	}
+	if strings.Contains(snapshot.ReplacementDraftLine, "Write planning/sambot-personality-spec.md") {
+		t.Fatalf("ReplacementDraftLine = %q, should not keep personality-spec parent in replacement-child lane", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ChildActiveDraftLine, "Write planning/sambot-personality-spec.md") {
+		t.Fatalf("ChildActiveDraftLine = %q, want personality-spec parent retained as child-active context", snapshot.ChildActiveDraftLine)
+	}
+}
+
 func TestJobWorkerProjectExecutionContinuationSnapshotIgnoresCancelledChildren(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

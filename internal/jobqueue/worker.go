@@ -118,6 +118,7 @@ var bareExplicitDeliverableFileNamesForWorker = map[string]struct{}{
 
 var projectContinuationBatchRangePatternForWorker = regexp.MustCompile(`(?i)\bposts?\s+(\d{1,3})\s*[–-]\s*(\d{1,3})\b`)
 var projectContinuationWorkspacePathPatternForWorker = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\b`)
+var sharedDeliverableSectionTargetPatternForWorker = regexp.MustCompile("(?i)^(?:(?:write|draft|create|update)\\s+the\\s+|add\\s+(?:a|an)\\s+\"?)(.+?)\"?\\s+section\\s+(?:of|to)\\s+`?([A-Za-z0-9._/-]+)`?(?:\\b.*)?$")
 
 var preferredDeliverableRootPatternsForWorker = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:under|in)\s+/?((?:content(?:/[A-Za-z0-9._-]+)+)/?)`),
@@ -3573,6 +3574,13 @@ func projectContinuationDraftTaskReadyForParentClosureForWorker(activity project
 	return activity.childTaskCount == 0 || activity.childTaskCount == activity.blockedChildTaskCount
 }
 
+func projectContinuationDraftTaskHasExistingChildWorkForWorker(activity projectContinuationChildActivityForWorker) bool {
+	if activity.activeChildTaskCount > 0 {
+		return true
+	}
+	return activity.childTaskCount > activity.blockedChildTaskCount
+}
+
 func projectContinuationSupersededDraftTaskIDsForWorker(
 	projectTasks []repo.ProjectTask,
 	taskHintsByTask map[uuid.UUID]projectContinuationTaskHintsForWorker,
@@ -3615,6 +3623,25 @@ func projectContinuationSupersededDraftTaskIDsForWorker(
 				break
 			}
 		}
+		if _, already := superseded[draftTask.ID]; already {
+			continue
+		}
+		for _, openTask := range projectTasks {
+			if openTask.ID == draftTask.ID {
+				continue
+			}
+			if _, malformed := malformedChildTaskIDs[openTask.ID]; malformed {
+				continue
+			}
+			if !projectContinuationOpenTaskSupersedesDraftForWorker(draftTask, draftHints, openTask, taskHintsByTask[openTask.ID]) {
+				continue
+			}
+			if superseded == nil {
+				superseded = make(map[uuid.UUID]struct{})
+			}
+			superseded[draftTask.ID] = struct{}{}
+			break
+		}
 	}
 	return superseded
 }
@@ -3626,6 +3653,10 @@ func projectContinuationDraftHasOpenRejectedProofForSameDeliverableForWorker(
 	taskHintsByTask map[uuid.UUID]projectContinuationTaskHintsForWorker,
 	malformedChildTaskIDs map[uuid.UUID]struct{},
 ) bool {
+	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(projectTasks))
+	for _, task := range projectTasks {
+		tasksByID[task.ID] = task
+	}
 	for _, openTask := range projectTasks {
 		if openTask.ID == draftTask.ID {
 			continue
@@ -3642,11 +3673,54 @@ func projectContinuationDraftHasOpenRejectedProofForSameDeliverableForWorker(
 		if !projectContinuationTaskHintsShareDeliverableIdentityForWorker(draftHints, openHints) {
 			continue
 		}
+		if projectContinuationSharedDocSectionTasksConflictForWorker(draftTask, draftHints, openTask, openHints, tasksByID) {
+			continue
+		}
 		if status == "blocked" || strings.EqualFold(strings.TrimSpace(openHints.ProofState), "rejected") {
 			return true
 		}
 	}
 	return false
+}
+
+func projectContinuationSharedDocSectionTasksConflictForWorker(
+	draftTask repo.ProjectTask,
+	draftHints projectContinuationTaskHintsForWorker,
+	openTask repo.ProjectTask,
+	openHints projectContinuationTaskHintsForWorker,
+	tasksByID map[uuid.UUID]repo.ProjectTask,
+) bool {
+	sharedPath := normalizeWorkspaceRelativePathForWorker(draftHints.DeliverablePath)
+	openPath := normalizeWorkspaceRelativePathForWorker(openHints.DeliverablePath)
+	if sharedPath == "" || openPath == "" || !sameWorkspaceRelativePathForWorker(sharedPath, openPath) {
+		return false
+	}
+	draftSection := projectContinuationTaskSharedSectionTargetForWorker(draftTask, sharedPath, tasksByID)
+	if draftSection == "" {
+		return false
+	}
+	openSection := projectContinuationTaskSharedSectionTargetForWorker(openTask, sharedPath, tasksByID)
+	return openSection == "" || !strings.EqualFold(strings.TrimSpace(openSection), strings.TrimSpace(draftSection))
+}
+
+func projectContinuationTaskSharedSectionTargetForWorker(task repo.ProjectTask, sharedPath string, tasksByID map[uuid.UUID]repo.ProjectTask) string {
+	if section := recoveryResumeSharedSectionTargetForWorker(task, sharedPath); section != "" {
+		return section
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(task.Metadata, &metadata); err != nil {
+		return ""
+	}
+	parentIDText := strings.TrimSpace(fmt.Sprint(metadata["decomposition_parent_task_id"]))
+	parentID, err := uuid.Parse(parentIDText)
+	if err != nil || parentID == uuid.Nil {
+		return ""
+	}
+	parentTask, ok := tasksByID[parentID]
+	if !ok {
+		return ""
+	}
+	return recoveryResumeSharedSectionTargetForWorker(parentTask, sharedPath)
 }
 
 func projectContinuationTaskHintsShareDeliverableIdentityForWorker(
@@ -3661,6 +3735,28 @@ func projectContinuationTaskHintsShareDeliverableIdentityForWorker(
 	leftRoot := normalizeWorkspaceRelativePathForWorker(left.DeliverableRoot)
 	rightRoot := normalizeWorkspaceRelativePathForWorker(right.DeliverableRoot)
 	return leftRoot != "" && rightRoot != "" && sameWorkspaceRelativePathForWorker(leftRoot, rightRoot)
+}
+
+func projectContinuationOpenTaskSupersedesDraftForWorker(
+	draftTask repo.ProjectTask,
+	draftHints projectContinuationTaskHintsForWorker,
+	openTask repo.ProjectTask,
+	openHints projectContinuationTaskHintsForWorker,
+) bool {
+	if openTask.TaskNumber <= draftTask.TaskNumber {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(openTask.WorkStatus)) {
+	case "draft", "queued", "in_progress", "review":
+	default:
+		return false
+	}
+	draftPath := normalizeWorkspaceRelativePathForWorker(draftHints.DeliverablePath)
+	openPath := normalizeWorkspaceRelativePathForWorker(openHints.DeliverablePath)
+	if draftPath == "" || openPath == "" {
+		return false
+	}
+	return sameWorkspaceRelativePathForWorker(draftPath, openPath)
 }
 
 func projectContinuationDoneTaskSupersedesDraftForWorker(
@@ -3766,11 +3862,17 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 		if status == "" || status == "cancelled" {
 			continue
 		}
-		if _, superseded := supersededDraftTaskIDs[task.ID]; superseded {
-			continue
-		}
 		activity := childActivity[task.ID]
 		hints := taskHintsByTask[task.ID]
+		if _, superseded := supersededDraftTaskIDs[task.ID]; superseded {
+			if isActionableProjectDraftTaskForWorker(task) &&
+				!projectContinuationDraftTaskNeedsFreshReplacementChildWorkForWorker(activity) &&
+				projectContinuationDraftTaskHasExistingChildWorkForWorker(activity) &&
+				len(childActiveDraftTasks) < 4 {
+				childActiveDraftTasks = append(childActiveDraftTasks, projectExecutionContinuationTaskRefForWorker(task, activity, hints))
+			}
+			continue
+		}
 		taskRef := projectExecutionContinuationTaskRefForWorker(task, activity, hints)
 		if status == "done" {
 			if projectContinuationTaskMatchesCompletedBatchFamiliesForWorker(hints, completedBatchFamilies) && len(completedTasks) < 4 {
@@ -3798,7 +3900,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 					}
 					continue
 				}
-				if activity.activeChildTaskCount > 0 && len(childActiveDraftTasks) < 4 {
+				if projectContinuationDraftTaskHasExistingChildWorkForWorker(activity) && len(childActiveDraftTasks) < 4 {
 					childActiveDraftTasks = append(childActiveDraftTasks, taskRef)
 				}
 				continue
@@ -4342,8 +4444,8 @@ func projectContinuationMalformedChildTaskIDsForWorker(tasks []repo.ProjectTask)
 }
 
 func projectContinuationMalformedDuplicateSharedFileChildForWorker(task, parentTask repo.ProjectTask) bool {
-	parentPath := normalizeWorkspaceRelativePathForWorker(explicitDeliverablePathForWorker(parentTask))
-	childPath := normalizeWorkspaceRelativePathForWorker(explicitDeliverablePathForWorker(task))
+	parentPath := taskDuplicateSharedFileDeliverablePathForWorker(parentTask)
+	childPath := taskDuplicateSharedFileDeliverablePathForWorker(task)
 	if parentPath == "" || childPath == "" || !sameWorkspaceRelativePathForWorker(parentPath, childPath) {
 		return false
 	}
@@ -4358,21 +4460,27 @@ func taskClaimsWholeSharedFileOwnershipForWorker(taskRecord repo.ProjectTask, sh
 	if sharedPath == "" || !strings.Contains(filepath.Base(sharedPath), ".") {
 		return false
 	}
-	description := ""
-	if taskRecord.Description != nil {
-		description = *taskRecord.Description
+	for _, raw := range taskSharedFileOwnershipTextsForWorker(taskRecord) {
+		if recoveryResumeSharedSectionTargetFromTextForWorker(raw, sharedPath) != "" {
+			return false
+		}
 	}
-	text := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(taskRecord.Title+" "+description)), " "))
+	text := strings.ToLower(strings.Join(strings.Fields(strings.Join(taskSharedFileOwnershipTextsForWorker(taskRecord), " ")), " "))
 	if text == "" {
 		return false
 	}
 	for _, prefix := range []string{
 		"produce the file ",
 		"write the file ",
+		"write the complete file ",
 		"draft the file ",
 		"create the file ",
 		"update the file ",
+		"update the complete file ",
 		"replace the file ",
+		"replace the complete file ",
+		"deliver the file ",
+		"deliver the complete file ",
 	} {
 		if strings.Contains(text, prefix+sharedPath) {
 			return true
@@ -4385,7 +4493,7 @@ func taskClaimsWholeSharedFileOwnershipForWorker(taskRecord repo.ProjectTask, sh
 		if strings.Contains(text, action+" a single file") || strings.Contains(text, action+" single file") {
 			return true
 		}
-		if !strings.Contains(text, action+" ") {
+		if !containsStandaloneActionWordForWorker(text, action) {
 			continue
 		}
 		for _, connector := range []string{" at ", " to ", " into ", ": "} {
@@ -4395,6 +4503,98 @@ func taskClaimsWholeSharedFileOwnershipForWorker(taskRecord repo.ProjectTask, sh
 		}
 	}
 	return false
+}
+
+func containsStandaloneActionWordForWorker(text, action string) bool {
+	normalizedAction := strings.TrimSpace(strings.ToLower(action))
+	if normalizedAction == "" {
+		return false
+	}
+	for _, field := range strings.Fields(strings.ToLower(text)) {
+		candidate := strings.Trim(field, ".,:;!?()[]{}<>\"'`")
+		if candidate == normalizedAction {
+			return true
+		}
+	}
+	return false
+}
+
+func taskSharedFileOwnershipTextsForWorker(taskRecord repo.ProjectTask) []string {
+	texts := []string{strings.TrimSpace(taskRecord.Title)}
+	if taskRecord.Description != nil {
+		texts = append(texts, strings.TrimSpace(*taskRecord.Description))
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(taskRecord.Metadata, &metadata); err == nil {
+		if decomposition, _ := metadata["decomposition"].(map[string]any); decomposition != nil {
+			if sourceDescription := strings.TrimSpace(fmt.Sprint(decomposition["source_description"])); sourceDescription != "" {
+				texts = append(texts, sourceDescription)
+			}
+		}
+	}
+	filtered := texts[:0]
+	for _, text := range texts {
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		filtered = append(filtered, text)
+	}
+	return filtered
+}
+
+func taskDuplicateSharedFileDeliverablePathForWorker(taskRecord repo.ProjectTask) string {
+	for _, text := range taskSharedFileOwnershipTextsForWorker(taskRecord) {
+		if explicit := normalizeWorkspaceRelativePathForWorker(projectContinuationExplicitDeliverablePathFromTextForWorker(text)); explicit != "" {
+			return explicit
+		}
+	}
+	if explicit := normalizeWorkspaceRelativePathForWorker(explicitDeliverablePathForWorker(taskRecord)); explicit != "" && strings.Contains(filepath.Base(explicit), ".") {
+		return explicit
+	}
+	return normalizeWorkspaceRelativePathForWorker(projectContinuationExplicitDeliverablePathFromTextForWorker(strings.Join(taskSharedFileOwnershipTextsForWorker(taskRecord), " ")))
+}
+
+func recoveryResumeSharedSectionTargetForWorker(taskRecord repo.ProjectTask, sharedPath string) string {
+	sharedPath = normalizeWorkspaceRelativePathForWorker(sharedPath)
+	if sharedPath == "" {
+		return ""
+	}
+	description := ""
+	if taskRecord.Description != nil {
+		description = strings.TrimSpace(*taskRecord.Description)
+	}
+	for _, raw := range []string{strings.TrimSpace(taskRecord.Title), description} {
+		if section := recoveryResumeSharedSectionTargetFromTextForWorker(raw, sharedPath); section != "" {
+			return section
+		}
+	}
+	return ""
+}
+
+func recoveryResumeSharedSectionTargetFromTextForWorker(raw, sharedPath string) string {
+	sharedPath = normalizeWorkspaceRelativePathForWorker(sharedPath)
+	raw = strings.TrimSpace(raw)
+	if sharedPath == "" || raw == "" {
+		return ""
+	}
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "#"))
+		if line == "" {
+			continue
+		}
+		match := sharedDeliverableSectionTargetPatternForWorker.FindStringSubmatch(line)
+		if len(match) != 3 {
+			continue
+		}
+		targetPath := normalizeWorkspaceRelativePathForWorker(strings.TrimSpace(match[2]))
+		if !sameWorkspaceRelativePathForWorker(targetPath, sharedPath) {
+			continue
+		}
+		if section := strings.TrimSpace(match[1]); section != "" {
+			return section
+		}
+	}
+	return ""
 }
 
 func projectContinuationParentForbidsDecompositionForWorker(task repo.ProjectTask) bool {
