@@ -26919,6 +26919,32 @@ func TestDispatchToolsCoalescesFocusedDraftReadGuardInSingleBatch(t *testing.T) 
 	}
 }
 
+func TestShouldBlockProjectContinuationFocusedDraftReadToolForPrerequisiteRepairWithoutReplacementHandoff(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Actionable draft tasks already in the tree: task 259 (Verify and close out templates/template-08-replace.html) id=" + focusTaskID.String() + " work_status=draft deliverable_path=templates/template-08-replace.html assigned_agent_id=missing flow_template_id=ft-1",
+			"Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 259 (Verify and close out templates/template-08-replace.html) id=" + focusTaskID.String() + " work_status=draft deliverable_path=templates/template-08-replace.html assigned_agent_id=missing flow_template_id=ft-1",
+			"Because that focus parent still has explicit prerequisite fields missing, do not inspect deliverables or sibling artifacts first. Repair the named assigned_agent_id / flow_template_id gaps on that exact task with one narrow task.update, or report one blocker sentence if the required value is still unknown.",
+		}, " "),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, "file.read", map[string]any{"path": "templates/template-08-replace.html"})
+	if !blocked {
+		t.Fatal("expected file.read to be blocked during focused prerequisite repair")
+	}
+	if !strings.Contains(reason, "repair the missing prerequisite fields first") {
+		t.Fatalf("reason = %q, want focused prerequisite repair guidance", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksCompanionPlanningArtifactRead(t *testing.T) {
 	t.Parallel()
 

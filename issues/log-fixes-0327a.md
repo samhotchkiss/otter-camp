@@ -4575,3 +4575,10 @@
       - `TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildrenUsingSingleFileWording`
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(PrefersSharedDocDraftChildOverBlockedSiblingFragmentsWithoutPath|IgnoresMalformedDuplicateSharedFileChildren|IgnoresMalformedDuplicateSharedFileChildrenUsingSingleFileWording)$' -count=1`
+- 2026-03-30 23:49 MDT - Extended the focused prerequisite-repair read guard beyond replacement-parent handoff prompts.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `shouldBlockProjectContinuationFocusedDraftReadTool(...)` now blocks `file.read`, `file.list`, `task.get`, and off-target `task.list` whenever the focus draft still has missing prerequisite fields, even if the continuation is not in the replacement-child handoff family
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldBlockProjectContinuationFocusedDraftReadToolForPrerequisiteRepairWithoutReplacementHandoff`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationFocusedDraftReadToolForPrerequisiteRepairWithoutReplacementHandoff|DispatchToolsCoalescesFocusedDraftReadGuardInSingleBatch|RecoveryResumeSharedSectionTarget(MatchesInheritedSharedPath)?|RecoveryResumeSharedSectionTargetFromText(MatchesMarkdownHeading|MatchesAddSectionToPath)|ProjectExecutionContinuationSnapshot(PrefersSharedDocDraftChildOverReplacementParent|PrefersSharedDocDraftChildOverBlockedSiblingFragmentsWithoutPath|PrefersDraftChildOverFreshReplacementParent)|HandleMalformedDuplicateSharedFileChildTaskPreflight|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren)$' -count=1`

@@ -1238,3 +1238,12 @@
     - the worker path therefore kept building the stale replacement-parent snapshot even after the engine path was fixed
   - impact:
     - PM session recovery can continue reopening replacement-parent handoff churn from worker-authored continuations even when the turn engine would already focus the real draft child
+- 2026-03-30 23:49 MDT - The focus-task prerequisite-repair tool guard only worked inside replacement-parent handoff prompts.
+  - fresh live evidence:
+    - continuation `11924` focused draft task `259` with `assigned_agent_id=missing`
+    - after `agent.list` was blocked with “retry task.update”, the same turn still reread `templates/template-08-replace.html`, `planning/sambot-tech-architecture.md`, and `planning/sambot-personality-spec.md`
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) only activated `shouldBlockProjectContinuationFocusedDraftReadTool(...)` when `projectContinuationReplacementChildHandoffActive(rt)` was true
+    - plain focus-draft prerequisite-repair prompts were therefore missing the same `file.read` / `file.list` guard even though the prompt already required one narrow `task.update`
+  - impact:
+    - PM continuations can still waste a full turn on deliverable rereads after an `agent.list` or `flow.list_templates` prerequisite block, instead of stopping immediately and retrying the narrow task mutation

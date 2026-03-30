@@ -34367,24 +34367,25 @@ func shouldBlockProjectContinuationFocusedDraftReadTool(rt *turnRuntime, toolNam
 		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
 		return false, ""
 	}
-	if !projectContinuationReplacementChildHandoffActive(rt) {
+	initial := strings.TrimSpace(rt.initialMessageText)
+	prerequisiteRepairActive := projectContinuationFocusedPrerequisiteRepairActive(initial)
+	if !projectContinuationReplacementChildHandoffActive(rt) && !prerequisiteRepairActive {
 		return false, ""
 	}
-	initial := strings.TrimSpace(rt.initialMessageText)
-	if !projectContinuationFocusedDraftReadGuardActive(initial) {
+	if !projectContinuationFocusedDraftReadGuardActive(initial) && !prerequisiteRepairActive {
 		return false, ""
 	}
 	focusTaskID := projectContinuationFocusedTaskID(initial)
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "file.read", "file.list", "task.get":
-		if projectContinuationFocusedPrerequisiteRepairActive(initial) {
+		if prerequisiteRepairActive {
 			return true, buildProjectContinuationFocusedPrerequisiteRepairGuardError(focusTaskID, toolName)
 		}
 		return true, buildProjectContinuationFocusedDraftReadGuardError(focusTaskID, toolName)
 	case "task.list":
 		parentTaskID, ok := parseUUIDAny(arguments["parent_task_id"])
 		if !ok || parentTaskID == uuid.Nil || focusTaskID == uuid.Nil || parentTaskID != focusTaskID {
-			if projectContinuationFocusedPrerequisiteRepairActive(initial) {
+			if prerequisiteRepairActive {
 				return true, buildProjectContinuationFocusedPrerequisiteRepairGuardError(focusTaskID, toolName)
 			}
 			return true, buildProjectContinuationFocusedDraftReadGuardError(focusTaskID, toolName)
