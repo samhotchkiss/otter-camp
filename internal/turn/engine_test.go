@@ -34865,6 +34865,182 @@ func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdReadOnlyDiscover
 	}
 }
 
+func TestHandleToolValidationResultsStopsRecoveryTurnAfterReadingTargetThenBroadRediscovery(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "templates/template-08-replace.html"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Build a fresh, distinctive template",
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "read the target draft first",
+		Metadata: mustMarshalJSON(t, map[string]any{
+			"tool_calls": []map[string]any{{
+				"id":   "read-1",
+				"name": "file_read",
+				"arguments": map[string]any{
+					"path": targetPath,
+				},
+			}},
+		}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		ToolCallID: func() *string {
+			id := "read-1"
+			return &id
+		}(),
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":       targetPath,
+				"byte_size":  8455,
+				"bytes_read": 8455,
+				"content":    "<!doctype html>",
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session:            fixture.session,
+		initialMessageID:   fixture.userMessageID,
+		recoveryTurn:       true,
+		recoveryTargetPath: targetPath,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{
+		{ID: "list-1", Name: "file.list", Arguments: map[string]any{"path": "templates"}},
+		{ID: "task-1", Name: "task.get", Arguments: map[string]any{"task_id": taskID.String()}},
+	}
+	results := []ToolResult{
+		{ToolCallID: "list-1", Name: "file.list", Output: map[string]any{
+			"path":             "templates",
+			"error":            "recovery_target_focus_required",
+			"deliverable_path": targetPath,
+			"message":          "Recovery already identified `templates/template-08-replace.html` as the target deliverable. Do not reread `templates` now. Continue from the recovery target and write the deliverable body directly.",
+		}},
+		{ToolCallID: "task-1", Name: "task.get", Output: map[string]any{
+			"task": map[string]any{"task_number": 253},
+		}},
+	}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if !fixture.messages.containsContentSubstring("Repeated same-turn read-only discovery churn") {
+		t.Fatal("expected same-turn read-only discovery early-stop validation message")
+	}
+}
+
+func TestClassifyRepeatedReadOnlyDiscoveryRoundChurnStopsRecoveryAfterReadingTargetThenBroadRediscovery(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	turnID := uuid.New()
+	targetPath := "templates/template-08-replace.html"
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "read the target draft first",
+		Metadata: mustMarshalJSON(t, map[string]any{
+			"tool_calls": []map[string]any{{
+				"id":   "read-1",
+				"name": "file_read",
+				"arguments": map[string]any{
+					"path": targetPath,
+				},
+			}},
+		}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		ToolCallID: func() *string {
+			id := "read-1"
+			return &id
+		}(),
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":       targetPath,
+				"byte_size":  8455,
+				"bytes_read": 8455,
+				"content":    "<!doctype html>",
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session:            fixture.session,
+		recoveryTurn:       true,
+		recoveryTargetPath: targetPath,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	turnMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	calls := []ToolCall{
+		{ID: "list-1", Name: "file.list", Arguments: map[string]any{"path": "templates"}},
+		{ID: "task-1", Name: "task.get", Arguments: map[string]any{"task_id": uuid.New().String()}},
+	}
+
+	failure, ok := classifyRepeatedReadOnlyDiscoveryRoundChurn(rt, repo.ProjectTask{}, turnMessages, calls)
+	if !ok {
+		t.Fatal("expected recovery target reread + broad rediscovery to classify as same-turn churn")
+	}
+	if failure.FailureCode != duplicateReadOnlyDiscoveryRoundChurnCode {
+		t.Fatalf("failure code = %q, want %q", failure.FailureCode, duplicateReadOnlyDiscoveryRoundChurnCode)
+	}
+	if failure.ObservedCount != validationLoopTurnStopThreshold {
+		t.Fatalf("ObservedCount = %d, want %d", failure.ObservedCount, validationLoopTurnStopThreshold)
+	}
+}
+
 func TestHandleToolValidationResultsIgnoresReadOnlyDiscoveryRoundChurnAfterMutationInSameTurn(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

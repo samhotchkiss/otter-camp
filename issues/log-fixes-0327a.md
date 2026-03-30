@@ -4422,3 +4422,18 @@
   - live caveat after redeploy:
     - task `253` reopened on a fresh session (`337791a8-2c57-4b2d-8447-7fcda1209dc0`), but the first post-redeploy turn was already in progress and did not provide a clean preflight boundary
     - fresh production proof of the new malformed-child halt is therefore still pending the next clean kickoff/recovery turn for that lane
+- 2026-03-30 02:11 MDT - Stopped recovery turns after they reread the exact target file and then immediately reopen broad discovery in the same turn.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `collectAsyncTaskToolResultChurnFailures(...)` now allows recovery turns through to the shared same-turn read-only discovery churn classifier while keeping the non-recovery churn families gated off
+    - `classifyRepeatedReadOnlyDiscoveryRoundChurn(...)` now short-circuits recovery turns that:
+      - already successfully read `recoveryTargetPath`
+      - then reopen broad read-only discovery
+      - and still have no successful mutation in the same turn
+    - `shouldPromoteImmediateTaskValidationTurnStop(...)` now promotes an immediate stop for `duplicate_read_only_discovery_round_churn` once the threshold is reached, even if another validation failure already exists in the current batch
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleToolValidationResultsStopsRecoveryTurnAfterReadingTargetThenBroadRediscovery`
+    - added `TestClassifyRepeatedReadOnlyDiscoveryRoundChurnStopsRecoveryAfterReadingTargetThenBroadRediscovery`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ClassifyRepeatedReadOnlyDiscoveryRoundChurnStopsRecoveryAfterReadingTargetThenBroadRediscovery|HandleToolValidationResults(StopsRecoveryTurnAfterReadingTargetThenBroadRediscovery|StopsAsyncTaskTurnAfterThirdReadOnlyDiscoveryRoundInSameTurn|IgnoresReadOnlyDiscoveryRoundChurnAfterMutationInSameTurn))$' -count=1`
+  - live context:
+    - task `253` ultimately closed via the malformed-child halt, so this slice is a forward guard for the narrower already-running recovery-turn shape that was still paying for one broad rediscovery round before the halt landed

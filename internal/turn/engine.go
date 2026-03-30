@@ -26878,8 +26878,7 @@ func (e *TurnEngine) collectAsyncTaskToolResultChurnFailures(ctx context.Context
 	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
 		return nil, nil
 	}
-	if rt.recoveryTurn ||
-		!strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
 		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
 		return nil, nil
 	}
@@ -26892,36 +26891,38 @@ func (e *TurnEngine) collectAsyncTaskToolResultChurnFailures(ctx context.Context
 	assistantCalls := parseTurnAssistantToolCalls(turnMessages)
 	failures := make([]toolValidationFailure, 0, len(results))
 	seen := make(map[string]struct{}, len(results))
-	for _, result := range results {
-		candidates := make([]toolValidationFailure, 0, 3)
-		if failure, ok := classifyRepeatedSuccessfulFileWriteChurn(turnMessages, result); ok {
-			candidates = append(candidates, failure)
-		}
-		if failure, ok := classifyRepeatedRedirectedFileWriteChurn(turnMessages, assistantCalls, result); ok {
-			candidates = append(candidates, failure)
-		}
-		if failure, ok := classifyRepeatedPackageInstallChurn(turnMessages, assistantCalls, result); ok {
-			candidates = append(candidates, failure)
-		}
-		if failure, ok := classifyRepeatedShellFileBuildChurn(turnMessages, assistantCalls, result); ok {
-			candidates = append(candidates, failure)
-		}
-		if failure, ok := classifyRepeatedShellFileReadbackChurn(turnMessages, assistantCalls, result); ok {
-			candidates = append(candidates, failure)
-		}
-		if failure, ok := classifyRepeatedWrittenFileReadbackChurn(turnMessages, assistantCalls, result); ok {
-			candidates = append(candidates, failure)
-		}
-		for _, failure := range candidates {
-			key := strings.TrimSpace(failure.AttemptFingerprint)
-			if key == "" {
-				key = strings.TrimSpace(failure.Fingerprint)
+	if !rt.recoveryTurn {
+		for _, result := range results {
+			candidates := make([]toolValidationFailure, 0, 3)
+			if failure, ok := classifyRepeatedSuccessfulFileWriteChurn(turnMessages, result); ok {
+				candidates = append(candidates, failure)
 			}
-			if _, exists := seen[key]; exists {
-				continue
+			if failure, ok := classifyRepeatedRedirectedFileWriteChurn(turnMessages, assistantCalls, result); ok {
+				candidates = append(candidates, failure)
 			}
-			seen[key] = struct{}{}
-			failures = append(failures, failure)
+			if failure, ok := classifyRepeatedPackageInstallChurn(turnMessages, assistantCalls, result); ok {
+				candidates = append(candidates, failure)
+			}
+			if failure, ok := classifyRepeatedShellFileBuildChurn(turnMessages, assistantCalls, result); ok {
+				candidates = append(candidates, failure)
+			}
+			if failure, ok := classifyRepeatedShellFileReadbackChurn(turnMessages, assistantCalls, result); ok {
+				candidates = append(candidates, failure)
+			}
+			if failure, ok := classifyRepeatedWrittenFileReadbackChurn(turnMessages, assistantCalls, result); ok {
+				candidates = append(candidates, failure)
+			}
+			for _, failure := range candidates {
+				key := strings.TrimSpace(failure.AttemptFingerprint)
+				if key == "" {
+					key = strings.TrimSpace(failure.Fingerprint)
+				}
+				if _, exists := seen[key]; exists {
+					continue
+				}
+				seen[key] = struct{}{}
+				failures = append(failures, failure)
+			}
 		}
 	}
 	if failure, ok := classifyRepeatedReadOnlyDiscoveryRoundChurn(rt, taskRecord, turnMessages, calls); ok {
@@ -27373,6 +27374,28 @@ func classifyRepeatedReadOnlyDiscoveryRoundChurn(rt *turnRuntime, taskRecord rep
 	if !currentReadOnly {
 		return toolValidationFailure{}, false
 	}
+	targetPath := normalizeWorkspaceRelativePath(strings.TrimSpace(rt.recoveryTargetPath))
+	if rt.recoveryTurn &&
+		currentHasBroadContext &&
+		targetPath != "" &&
+		!turnMessagesContainSuccessfulMutation(turnMessages) &&
+		turnMessagesContainSuccessfulTargetRead(turnMessages, targetPath) {
+		toolNames, _, _ := summarizeReadOnlyDiscoveryCallBatch(calls)
+		reason := fmt.Sprintf("reopened broad discovery after reading recovery target `%s` in the same turn", targetPath)
+		if len(toolNames) > 0 {
+			reason = fmt.Sprintf("reopened broad discovery after reading recovery target `%s` in the same turn using %s and no mutation tools", targetPath, joinQuotedStrings(toolNames))
+		}
+		failure := buildToolValidationFailure(
+			"task.discovery",
+			duplicateReadOnlyDiscoveryRoundChurnCode,
+			reason,
+			"",
+			targetPath,
+		)
+		failure.Fingerprint = readOnlyDiscoveryRoundChurnFingerprint(rt.turn.ID)
+		failure.ObservedCount = validationLoopTurnStopThreshold
+		return failure, true
+	}
 	if !currentHasBroadContext && len(calls) < 2 {
 		return toolValidationFailure{}, false
 	}
@@ -27456,6 +27479,56 @@ func summarizeSameTurnReadOnlyDiscoveryRounds(turnMessages []repo.ChatMessage) (
 		return 0, nil, false
 	}
 	return rounds, sortedSetValues(toolNames), true
+}
+
+func turnMessagesContainSuccessfulMutation(turnMessages []repo.ChatMessage) bool {
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || strings.TrimSpace(errText) != "" {
+			continue
+		}
+		if strings.TrimSpace(anyString(output["error"])) != "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "file.write":
+			if anyInt(output["byte_size"]) > 0 {
+				return true
+			}
+		case "file.edit":
+			if anyInt(output["replacements_made"]) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func turnMessagesContainSuccessfulTargetRead(turnMessages []repo.ChatMessage, targetPath string) bool {
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	if targetPath == "" {
+		return false
+	}
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || !strings.EqualFold(strings.TrimSpace(toolName), "file.read") || strings.TrimSpace(errText) != "" {
+			continue
+		}
+		if strings.TrimSpace(anyString(output["error"])) != "" {
+			continue
+		}
+		path := normalizeWorkspaceRelativePath(anyString(output["path"]))
+		if sameWorkspaceRelativePath(path, targetPath) && anyInt(output["byte_size"]) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeReadOnlyDiscoveryToolCall(name string, arguments map[string]any) (string, bool, bool) {
@@ -28328,13 +28401,17 @@ func nextTaskValidationGuardState(current taskValidationGuardState, initialMessa
 }
 
 func shouldPromoteImmediateTaskValidationTurnStop(current taskValidationGuardState, failure toolValidationFailure) bool {
-	if current.Count != 0 {
+	switch strings.TrimSpace(failure.FailureCode) {
+	case duplicateSuccessfulFileWriteChurnCode:
+		if current.Count != 0 {
+			return false
+		}
+		return failure.ObservedCount >= validationLoopTurnStopThreshold
+	case duplicateReadOnlyDiscoveryRoundChurnCode:
+		return failure.ObservedCount >= validationLoopTurnStopThreshold
+	default:
 		return false
 	}
-	if !strings.EqualFold(strings.TrimSpace(failure.FailureCode), duplicateSuccessfulFileWriteChurnCode) {
-		return false
-	}
-	return failure.ObservedCount >= validationLoopTurnStopThreshold
 }
 
 func normalizeImmediateTaskValidationTurnStopState(current, next taskValidationGuardState, failure toolValidationFailure) taskValidationGuardState {

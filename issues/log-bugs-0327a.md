@@ -1101,3 +1101,13 @@
     - [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go) recognized voice-only and requirement-only support fragments, but not template-style support fragments that still lacked their own bounded output
   - impact:
     - pre-fix decomposition junk from task `251` could still reopen recovery and same-turn discovery churn even after the splitter was fixed for future tasks
+- 2026-03-30 02:11 MDT - Recovery turns could still reopen broad read-only discovery after already rereading the exact recovery target in the same turn.
+  - fresh live evidence:
+    - task `253` session `337791a8-2c57-4b2d-8447-7fcda1209dc0` first reread `templates/template-08-replace.html`
+    - the same turn then issued `file.list templates` and `task.get`, hit `recovery_target_focus_required`, and only later settled via the malformed-child halt
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) skipped recovery turns entirely in `collectAsyncTaskToolResultChurnFailures(...)`, so the higher-level same-turn `duplicate_read_only_discovery_round_churn` guard never promoted an immediate stop for this recovery shape
+    - even when the churn classifier later detected the pattern, `shouldPromoteImmediateTaskValidationTurnStop(...)` refused to escalate because the batch already contained an earlier tool-validation failure
+  - impact:
+    - a recovery lane that already has its exact target file in hand can still spend the rest of the turn on avoidable broad rediscovery calls
+    - that delays the stop signal and pays for extra read-only tool work inside the same provider turn
