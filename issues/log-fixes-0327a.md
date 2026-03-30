@@ -4169,3 +4169,18 @@
   - live proof:
     - after rebuild/restart, task `212` session `4f4a673a-2b9f-4957-8aeb-124633bb5a6a` closed at `2026-03-29 22:39:17 MDT`
     - its three `memory_extract_turn` jobs are now `dead_letter`, confirming the blocked-tail cleanup now settles in the same recovery cycle
+- 2026-03-29 22:47 MDT - Stopped `Template concept:` support text from becoming executable child tasks.
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+    - widened `isInstructionOnlyDeliverable(...)` so `Template concept:` lines are treated as support-only description text rather than additional deliverables
+    - this keeps single explicit-file template tasks from decomposing into one real file child plus one fake concept child
+  - changed [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go):
+    - added `TestPrepareQueueDecompositionSkipsConcreteDeliverableWithTemplateConceptLine`
+  - changed [`internal/task/service_integration_test.go`](/Users/sam/dev/otter-camp/internal/task/service_integration_test.go):
+    - added `TestTaskServiceIntegrationQueueAllowsSingleConcreteTemplateWithTemplateConceptLine`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(PrepareQueueDecompositionSkipsConcreteDeliverableWithTemplateConceptLine|PrepareQueueDecompositionSkipsConcreteDeliverableWithProceduralSections|ValidateBoundedTaskSizeAllowsSingleConcreteTemplateWithRequirements)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/task -run 'TestTaskServiceIntegrationQueueAllowsSingleConcreteTemplateWith(Requirements|TemplateConceptLine)$' -count=1`
+  - live proof:
+    - pre-fix, task `225` decomposed into blocked children `226` (`Produce a single self-contained HTML5 file...`) and `227` (`Template concept: Editorial Longform ...`)
+    - post-fix, the PM lane created single bounded child `228` (`Write templates/template-08-replace.html — single-pass HTML layout template 8 of 10`) and then handed off fresh replacement lane `229`
+    - there was no new `Template concept:` child after deploy, which confirms the parser now keeps that support text out of the executable task tree

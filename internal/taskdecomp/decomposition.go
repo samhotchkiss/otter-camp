@@ -969,6 +969,7 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 		"the file should ",
 		"store result in ",
 		"require statements:",
+		"template concept:",
 		"embedded css",
 		"visual-first ",
 	} {

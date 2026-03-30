@@ -915,6 +915,43 @@ func TestPrepareQueueDecompositionSkipsConcreteDeliverableWithProceduralSections
 	}
 }
 
+func TestPrepareQueueDecompositionSkipsConcreteDeliverableWithTemplateConceptLine(t *testing.T) {
+	description := strings.Join([]string{
+		"Produce a single self-contained HTML5 file at `templates/template-08-replace.html` for Sam.blog.",
+		"",
+		"Template concept: Editorial Longform — a clean, elegant reading layout for Sam's long-form essays.",
+		"",
+		"Requirements:",
+		"1. Typography-first: 18-20px body text, line-height 1.6-1.8, ~720px content column",
+		"2. Hero header: post title, subtitle, author byline, date, reading time estimate",
+		"3. Valid HTML5, viewable directly in a browser",
+		"",
+		"Deliverable: templates/template-08-replace.html",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	want := []string{"Produce a single self-contained HTML5 file at templates/template-08-replace.html for Sam.blog."}
+	if !reflect.DeepEqual(items, want) {
+		t.Fatalf("extractDeliverables() = %v, want %v", items, want)
+	}
+
+	result, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        "Write templates/template-08-replace.html — Editorial Longform HTML template",
+		Description:  &description,
+		Metadata:     json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("PrepareQueueDecomposition: %v", err)
+	}
+	if result.Applied {
+		t.Fatalf("Applied = true, want false for single-file template with concept line: %+v", result)
+	}
+	if len(result.ChildDrafts) != 0 {
+		t.Fatalf("ChildDrafts len = %d, want 0", len(result.ChildDrafts))
+	}
+}
+
 func TestPrepareQueueDecompositionSkipsSingleConcreteTemplateWithRequirements(t *testing.T) {
 	description := strings.Join([]string{
 		"Create a single self-contained HTML file at `templates/template-08-replace.html` for Sam.blog. This is template 8 of 10, replacing the blocked OC-38.",

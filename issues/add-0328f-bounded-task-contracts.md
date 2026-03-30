@@ -80,3 +80,9 @@ Many expensive failures come from tasks that were never truly executable:
 - 2026-03-29 19:33 MDT - Deploy/live-proof status:
   - rebuilt and hot-reloaded locally for verification
   - fresh natural post-patch canary turn has not fired yet, so this section-target hint is still local/deployed-test-green but not production-proven at this checkpoint
+- 2026-03-29 22:47 MDT - Picked up the next bounded-contract leak from the template-8 replacement path. Even after the earlier procedural-fragment filtering, a single-file template task could still decompose if the description included support text like `Template concept: Editorial Longform — ...`. That phrase is useful design guidance, but it is not a second executable deliverable.
+- 2026-03-29 22:47 MDT - I widened the same malformed-support classifier in [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go) so `Template concept:` lines stay descriptive and do not spawn child tasks. Focused `internal/taskdecomp` and `internal/task` integration coverage is green.
+- 2026-03-29 22:47 MDT - Fresh production proof landed immediately after deploy:
+  - pre-fix, task `225` split into blocked children `226` and `227`, where `227` was only the `Template concept:` line
+  - post-fix, the PM lane created bounded child `228` (`Write templates/template-08-replace.html — single-pass HTML layout template 8 of 10`) and then fresh replacement lane `229`
+  - no new `Template concept:` child appeared, which is the contract behavior we wanted for single explicit-file template work

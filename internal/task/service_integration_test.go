@@ -3051,6 +3051,52 @@ func TestTaskServiceIntegrationQueueAllowsSingleConcreteTemplateWithRequirements
 	}
 }
 
+func TestTaskServiceIntegrationQueueAllowsSingleConcreteTemplateWithTemplateConceptLine(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	description := strings.Join([]string{
+		"Produce a single self-contained HTML5 file at `templates/template-08-replace.html` for Sam.blog.",
+		"",
+		"Template concept: Editorial Longform — a clean, elegant reading layout for Sam's long-form essays.",
+		"",
+		"Requirements:",
+		"1. Typography-first: 18-20px body text, line-height 1.6-1.8, ~720px content column",
+		"2. Hero header: post title, subtitle, author byline, date, reading time estimate",
+		"3. Valid HTML5, viewable directly in a browser",
+		"",
+		"Deliverable: templates/template-08-replace.html",
+	}, "\n")
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Write templates/template-08-replace.html — Editorial Longform HTML template",
+		Description:    &description,
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	queued, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus queued err = %v, want nil", err)
+	}
+	if got := strings.TrimSpace(queued.WorkStatus); !strings.EqualFold(got, "queued") {
+		t.Fatalf("queued.WorkStatus = %q, want queued", got)
+	}
+	if parentID := taskdecomp.ParseParentTaskID(queued.Metadata); parentID != uuid.Nil {
+		t.Fatalf("queued task unexpectedly has decomposition_parent_task_id = %s", parentID)
+	}
+	if len(taskdecomp.ParseChildTaskIDs(queued.Metadata)) != 0 {
+		t.Fatalf("queued task unexpectedly has decomposition children: %v", taskdecomp.ParseChildTaskIDs(queued.Metadata))
+	}
+}
+
 func TestTaskServiceIntegrationQueueAllowsConcreteCrawlerTaskWithExactStepsAndNoDecompose(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
