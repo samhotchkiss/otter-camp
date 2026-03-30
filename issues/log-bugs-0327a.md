@@ -1299,3 +1299,15 @@
     - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) was still telling parent-completion retries to use `task.list(parent_task_id=...)` if child ids were unknown, even when runtime had already loaded the exact completed child tasks from the project tree
   - impact:
     - closeout-ready parent retries can still waste one model/tool step on child lookup before issuing the final narrow `task.update`
+- 2026-03-31 05:41 MDT - Worker closeout-ready retry detection still missed the live system stop wording.
+  - fresh live evidence:
+    - new continuation `e6901c14-6756-4e07-b645-b55a908123b8` came back as the replacement-child handoff prompt even though the prior consumed turn had already emitted:
+      - `[Project continuation already proved that the focused parent is closeout-ready for this deliverable ...]`
+  - bug:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) matched:
+      - `focused parent is already closeout-ready`
+      - `closeout-ready parent still needs parent_orchestration evidence`
+    - but not the actual live wording:
+      - `already proved that the focused parent is closeout-ready`
+  - impact:
+    - worker recovery can keep regenerating the replacement-child retry prompt after a closeout-ready stop, even when the runtime already proved the parent itself should be advanced directly

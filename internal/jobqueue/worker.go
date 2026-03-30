@@ -3037,8 +3037,9 @@ func (w *Worker) projectContinuationTurnEndedWithCloseoutReadyParentStop(ctx con
 			 AND tm.role = 'system'
 			WHERE tm.content LIKE $2
 			   OR tm.content LIKE $3
+			   OR tm.content LIKE $4
 		)
-	`, referenceMessageID, `%focused parent is already closeout-ready%`, `%closeout-ready parent still needs parent_orchestration evidence%`).Scan(&matched); err != nil {
+	`, referenceMessageID, `%focused parent is already closeout-ready%`, `%already proved that the focused parent is closeout-ready%`, `%closeout-ready parent still needs parent_orchestration evidence%`).Scan(&matched); err != nil {
 		return false, err
 	}
 	return matched, nil

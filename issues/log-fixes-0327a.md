@@ -4646,3 +4646,11 @@
     - widened the parent-completion retry regression to expect exact child ids and to reject the old child-list lookup hint when those ids are already known
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionStopWithCompletedChildren|HandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionStopWithLiveOpenChild|ShouldStopAfterBlockedProjectExecutionBlockedMutationOnTaskLaneBoundaryErrors|ProjectExecutionBlockedMutationStopMessageOnFocused(CloseoutReady|PrerequisiteRepair)Guard|ShouldBlockProjectContinuationFocusedDraftReadTool(BlocksCloseoutReadyTaskGet|BlocksCloseoutReadyTaskListWithoutExplicitAllowance|BlocksFileRead|AllowsParentScopedTaskList|BlocksTaskListWithoutParent|BlocksGeneralFocusPromptFileRead|BlocksPrerequisiteRepairFocusFileRead|AllowsParentScopedTaskListForGeneralFocusPrompt))$' -count=1`
+- 2026-03-31 05:41 MDT - Corrected worker closeout-ready retry detection for the live proved-parent system stop wording.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `projectContinuationTurnEndedWithCloseoutReadyParentStop(...)` now also matches the runtime stop text:
+      - `already proved that the focused parent is closeout-ready`
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestProjectContinuationTurnEndedWithCloseoutReadyParentStopRecognizesProvedParentWording`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(BuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker|ProjectContinuationTurnEndedWithCloseoutReadyParentStopRecognizesProvedParentWording)$' -count=1`
