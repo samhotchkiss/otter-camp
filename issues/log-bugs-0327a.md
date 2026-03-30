@@ -1336,3 +1336,11 @@
     - the bounded-size retry prompt also ignored `workspaceDeliverablePresent`, so it kept appending split-the-parent instructions even when the deliverable body was already on disk
   - impact:
     - PM continuations can keep reopening replacement-child / split-authoring loops against an already-present deliverable instead of converging on closeout or narrow verification work
+- 2026-03-31 06:19 MDT - Worker replacement-handoff prompts still ignored `workspace_deliverable_present=true`.
+  - fresh live evidence:
+    - worker continuation `79732a9e-1c35-4f24-be11-c008275eccdb` still said `create the smallest fresh replacement child task` even though the focus task line already included `workspace_deliverable_present=true`
+  - bug:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) only chose between blocked/malformed child-lane reasons in `buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(...)`
+    - it never promoted on-disk deliverables into a closeout/verification retry family
+  - impact:
+    - even after the engine prompt precedence is fixed, worker recovery can still reopen fresh replacement-child loops for an already-written deliverable

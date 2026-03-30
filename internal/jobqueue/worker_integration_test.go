@@ -25390,6 +25390,34 @@ func TestBuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(t *t
 	}
 }
 
+func TestBuildProjectExecutionContinuationReplacementChildRetryPromptForWorkerTreatsWorkspaceDeliverableAsVerification(t *testing.T) {
+	prompt := buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(
+		84,
+		"Build HTML layout template 8 of 10 (Editorial Longform)",
+		1,
+		projectExecutionContinuationSnapshotForWorker{
+			ProjectLine:   "Active project id: a6dbd331-7205-42d9-b0df-10105d5b5330",
+			FocusTaskLine: `Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 245 (Write planning/sambot-tech-architecture.md — SamBot technical architecture document (replacement for blocked OC-230/OC-235)) id=77a2d4fa-b9e9-45b9-9ba9-b251052d5011 title="Write planning/sambot-tech-architecture.md — SamBot technical architecture document (replacement for blocked OC-230/OC-235)" work_status=draft deliverable_path=planning/sambot-tech-architecture.md workspace_deliverable_present=true malformed_child_tasks=1`,
+		},
+	)
+
+	if !strings.Contains(prompt, "deliverable body is already on disk") {
+		t.Fatalf("prompt = %q, want on-disk deliverable guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Treat that parent as closeout/verification work") {
+		t.Fatalf("prompt = %q, want closeout/verification guidance", prompt)
+	}
+	if !strings.Contains(prompt, "create the smallest closeout/verification child task beneath task 245") {
+		t.Fatalf("prompt = %q, want verification-child guidance", prompt)
+	}
+	if strings.Contains(prompt, "create the smallest fresh replacement child task") {
+		t.Fatalf("prompt = %q, should not keep fresh replacement-child wording", prompt)
+	}
+	if strings.Contains(prompt, "If you must inspect child lanes first") {
+		t.Fatalf("prompt = %q, should not keep child-inspection fallback for on-disk deliverable focus", prompt)
+	}
+}
+
 func TestProjectContinuationTurnEndedWithCloseoutReadyParentStopRecognizesProvedParentWording(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

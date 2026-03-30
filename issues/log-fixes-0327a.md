@@ -4677,3 +4677,11 @@
     - added `TestBuildProjectExecutionContinuationBoundedSizeRetryPromptTreatsWorkspaceDeliverableAsCloseout`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectContinuationActionPromptTreatsWorkspaceDeliverableFocusAsCloseoutReady|BuildProjectExecutionContinuationBoundedSizeRetryPromptTreatsWorkspaceDeliverableAsCloseout|HandleCompletedProjectExecutionContinuationTurnRetriesFocusedCloseoutReadyRediscoveryStop|BuildProjectContinuationActionPromptAddsCompletedCloseoutGuidance)$' -count=1`
+- 2026-03-31 06:19 MDT - Gave worker replacement-handoff prompts the same on-disk-deliverable precedence.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(...)` now treats `workspace_deliverable_present=true` as closeout/verification work
+    - that prompt now tells the PM lane to create the smallest closeout/verification child or advance the parent directly, and it removes the child-list inspection fallback
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestBuildProjectExecutionContinuationReplacementChildRetryPromptForWorkerTreatsWorkspaceDeliverableAsVerification`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(BuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker|BuildProjectExecutionContinuationReplacementChildRetryPromptForWorkerTreatsWorkspaceDeliverableAsVerification|ProjectContinuationTurnEndedWithCloseoutReadyParentStopRecognizesProvedParentWording)$' -count=1`

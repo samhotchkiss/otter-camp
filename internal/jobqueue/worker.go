@@ -5461,6 +5461,18 @@ func buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(compl
 	if focusRef == "" {
 		return strings.Join(lines, " ")
 	}
+	if strings.Contains(laneSource, "workspace_deliverable_present=true") {
+		lines = append(lines,
+			"Your last continuation turn was blocked after broad rediscovery even though the deliverable body is already on disk.",
+			fmt.Sprintf("Current focus parent: %s.", focusRef),
+			"Treat that parent as closeout/verification work, not as fresh replacement-writing work.",
+			"Do not call task.list, task.get, file.list, or file.read before acting.",
+			fmt.Sprintf("Do not create another broad authoring child beneath %s from the project lane.", focusLabel),
+			"Do not inspect or mention other draft parents until this closeout handoff is advanced.",
+			fmt.Sprintf("Your next assistant action must either create the smallest closeout/verification child task beneath %s, advance %s directly if it is already fully proven, or report one concrete blocker sentence naming the exact missing review or verification evidence.", focusLabel, focusLabel),
+		)
+		return strings.Join(lines, " ")
+	}
 	laneReason := "terminally blocked or malformed child lanes"
 	switch {
 	case strings.Contains(laneSource, "malformed_child_tasks=") && !strings.Contains(laneSource, "replaceable_blocked_child_tasks="):
