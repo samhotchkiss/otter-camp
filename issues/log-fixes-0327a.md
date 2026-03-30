@@ -4761,3 +4761,14 @@
     - widened `TestMaybeContinueProjectExecutionAfterTaskCompletionIgnoresBlockedTasksForWakeup` so it includes an active async session on the blocked sibling task
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(MaybeContinueProjectExecutionAfterTaskCompletionIgnoresBlockedTasksForWakeup|MaybeContinueProjectExecutionAfterTaskCompletionUsesLatestCompletedTaskForBlockedTail|HandleTaskStatusChangedEventBlockedWakesProjectContinuation)$' -count=1`
+- 2026-03-30 10:49 MDT - Corrected recovery-resume target carry-forward for explicit single-file tasks.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `explicitDeliverablePath(...)` now recognizes `Write the file \`PATH\`` as an explicit deliverable-path contract
+    - `appendRecoveryResumeState(...)` now overlays normalized recovery state into the synthetic `task_recovery_resume` metadata so retries carry the current `recovery_checkpoint_target_path` / artifact / blocker instead of stale initial-message checkpoint fields
+    - added `recoveryResumeStateMetadataSource(...)`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestExplicitDeliverablePathDetectsWriteTheFilePath`
+    - added `TestLoadRecoveryResumeStatePrefersTaskExplicitDeliverableOverWrongCheckpointTarget`
+    - added `TestRecoveryResumeStateMetadataSourceOverridesCheckpointTargetFromNormalizedState`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ExplicitDeliverablePathDetectsWriteTheFilePath|LoadRecoveryResumeStatePrefersTaskExplicitDeliverableOverWrongCheckpointTarget|RecoveryResumeStateMetadataSourceOverridesCheckpointTargetFromNormalizedState|RecoveryTargetPathForSessionPrefersParentExplicitDeliverableOverWrongCheckpoint|MaybeContinueProjectExecutionAfterTaskCompletionIgnoresBlockedTasksForWakeup)$' -count=1`

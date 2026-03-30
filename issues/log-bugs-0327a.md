@@ -1437,3 +1437,13 @@
     - so a stale active blocked tail could prevent the PM lane from waking even though all actionable child work was finished
   - impact:
     - PM wakeups after real child completion can be delayed until the worker repair loop, adding a full stale-scan interval of avoidable latency
+- 2026-03-30 10:49 MDT - Recovery resume retries could inherit a stale sibling checkpoint target even when the task brief named a different explicit deliverable.
+  - fresh live evidence:
+    - task `288` was explicitly assigned `planning/sambot-prompts/test-conversations-technical.md`
+    - its recovery resume state still surfaced `Target file: planning/sambot-example-conversations.md`
+    - the same lane then emitted `file.write` correction text for `planning/sambot-conversations.md`, showing stale sibling target drift before the retry even started
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) did not parse the common deliverable phrase `Write the file \`PATH\``
+    - synthetic `task_recovery_resume` user messages also carried forward raw initial-message recovery checkpoint metadata instead of the normalized current recovery state
+  - impact:
+    - recovery retries can steer a task into the wrong artifact family, reuse the wrong draft body, and keep paying file-mutation corrections against sibling deliverables

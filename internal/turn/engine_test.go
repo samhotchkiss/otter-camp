@@ -43531,6 +43531,21 @@ func TestExplicitDeliverablePathDetectsOutputWriteAsPath(t *testing.T) {
 	}
 }
 
+func TestExplicitDeliverablePathDetectsWriteTheFilePath(t *testing.T) {
+	t.Parallel()
+
+	description := "## Deliverable\n\nWrite the file `planning/sambot-prompts/test-conversations-technical.md` — a set of moderately technical test conversations."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  288,
+		Title:       "Write level-2 (moderately technical) test conversations",
+		Description: &description,
+	}
+
+	if got := explicitDeliverablePath(taskRecord); got != "planning/sambot-prompts/test-conversations-technical.md" {
+		t.Fatalf("explicitDeliverablePath(...) = %q, want %q", got, "planning/sambot-prompts/test-conversations-technical.md")
+	}
+}
+
 func TestContentMigrationCheckpointPreferredOutputPathSkipsExplicitSingleFileDeliverable(t *testing.T) {
 	t.Parallel()
 
@@ -44145,6 +44160,34 @@ func TestSyntheticContinuationActionMessageMetadataWithCarryForwardPreservesReco
 	}
 }
 
+func TestRecoveryResumeStateMetadataSourceOverridesCheckpointTargetFromNormalizedState(t *testing.T) {
+	t.Parallel()
+
+	existing := mustRawJSON(t, map[string]any{
+		"recovery_action":                    recoveryActionValidationResume,
+		"recovery_checkpoint_target_path":    "planning/sambot-example-conversations.md",
+		"recovery_checkpoint_failure_reason": "old failure",
+	})
+	state := recoveryResumeState{
+		targetPath:          "planning/sambot-prompts/test-conversations-technical.md",
+		artifactPath:        ".ottercamp/recovery/planning/sambot-prompts/test-conversations-technical.md",
+		blockerClass:        "durable_recovery_checkpoint",
+		failureReason:       "content_required",
+		priorFailureReasons: []string{"old failure"},
+	}
+
+	metadata := messageMetadataMap(recoveryResumeStateMetadataSource(existing, state))
+	if got := stringValue(metadata["recovery_checkpoint_target_path"]); got != "planning/sambot-prompts/test-conversations-technical.md" {
+		t.Fatalf("recovery_checkpoint_target_path = %q, want normalized target", got)
+	}
+	if got := stringValue(metadata["recovery_checkpoint_artifact_path"]); got != ".ottercamp/recovery/planning/sambot-prompts/test-conversations-technical.md" {
+		t.Fatalf("recovery_checkpoint_artifact_path = %q, want normalized artifact", got)
+	}
+	if got := stringValue(metadata["recovery_checkpoint_failure_reason"]); got != "content_required" {
+		t.Fatalf("recovery_checkpoint_failure_reason = %q, want state failure reason", got)
+	}
+}
+
 func TestRecoveryTargetPathForSessionPrefersParentExplicitDeliverableOverWrongCheckpoint(t *testing.T) {
 	t.Parallel()
 
@@ -44181,6 +44224,68 @@ func TestRecoveryTargetPathForSessionPrefersParentExplicitDeliverableOverWrongCh
 
 	if got := fixture.engine.recoveryTargetPathForSession(context.Background(), fixture.session); got != "planning/sambot-feature-spec.md" {
 		t.Fatalf("recoveryTargetPathForSession(...) = %q, want %q", got, "planning/sambot-feature-spec.md")
+	}
+}
+
+func TestLoadRecoveryResumeStatePrefersTaskExplicitDeliverableOverWrongCheckpointTarget(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	orgID := fixture.session.OrganizationID
+	projectSlug := "resume-state-explicit-deliverable"
+	orgSlug := "test-org"
+	description := "## Deliverable\n\nWrite the file `planning/sambot-prompts/test-conversations-technical.md` — a set of moderately technical test conversations."
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				TaskNumber:     288,
+				Title:          "Write level-2 (moderately technical) test conversations in planning/sambot-prompts/test-conversations-technical.md",
+				Description:    &description,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				WorkStatus:     "blocked",
+				Metadata: mustRawJSON(t, map[string]any{
+					"recovery_file_write_checkpoint": map[string]any{
+						"version":        1,
+						"blocker_class":  "durable_recovery_checkpoint",
+						"target_path":    "planning/sambot-example-conversations.md",
+						"failure_reason": "repeated read-only recovery discovery for planning/sambot-example-conversations.md within the same recovery turn",
+					},
+				}),
+			},
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: orgID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		orgID: {ID: orgID, Slug: orgSlug},
+	}}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	state, ok := fixture.engine.loadRecoveryResumeState(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery resume state")
+	}
+	if state.targetPath != "planning/sambot-prompts/test-conversations-technical.md" {
+		t.Fatalf("targetPath = %q, want normalized explicit deliverable path", state.targetPath)
 	}
 }
 

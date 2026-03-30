@@ -193,6 +193,7 @@ var explicitDeliverablePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:deliverable|output|file)\b(?:[*_]+)?\s*:\s*(?:[*_]+)?\s*(?:write|create|produce|append|add|update)\b[^.;:\n]{0,240}?\s+as\s+([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\b(?:write|create|produce)\b[^.;:\n]{0,240}?\s+(?:at|to)\s+([^\s,;]+)`),
+	regexp.MustCompile("(?i)\\b(?:write|create|produce|append|add|update)\\b[^.;:\\n]{0,80}?\\b(?:the\\s+)?file\\s+[`\"']?([^\\s,;`\"']+)[`\"']?"),
 	regexp.MustCompile(`(?i)\b(?:append|add|update)\b[^.;:\n]{0,120}?\s+(?:to|into)\s+(?:the\s+existing\s+)?([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\bsave\s+as\s+([^\s,;]+)`),
 }
@@ -12502,6 +12503,29 @@ func recoveryResumeMetadataSource(ctx context.Context, messages messageRepositor
 	return message.Metadata
 }
 
+func recoveryResumeStateMetadataSource(existing json.RawMessage, state recoveryResumeState) json.RawMessage {
+	payload := messageMetadataMap(existing)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	if target := strings.TrimSpace(state.targetPath); target != "" {
+		payload["recovery_checkpoint_target_path"] = target
+	}
+	if artifact := strings.TrimSpace(state.artifactPath); artifact != "" {
+		payload["recovery_checkpoint_artifact_path"] = artifact
+	}
+	if blockerClass := strings.TrimSpace(state.blockerClass); blockerClass != "" {
+		payload["recovery_blocker_class"] = blockerClass
+	}
+	if failureReason := strings.TrimSpace(state.failureReason); failureReason != "" {
+		payload["recovery_checkpoint_failure_reason"] = failureReason
+	}
+	if len(state.priorFailureReasons) > 0 {
+		payload["recovery_checkpoint_prior_failure_reasons"] = append([]string(nil), state.priorFailureReasons...)
+	}
+	return mustJSONRaw(payload)
+}
+
 func (e *TurnEngine) completeTurn(ctx context.Context, rt *turnRuntime) error {
 	if err := e.recordStopReason(ctx, rt); err != nil {
 		return err
@@ -20761,12 +20785,13 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 	var actionMessage *chat.ChatMessage
 	var actionErr error
 	if shouldAppend {
+		metadataSource := recoveryResumeStateMetadataSource(recoveryResumeMetadataSource(ctx, e.messages, rt), state)
 		actionMessage, actionErr = e.chat.AppendMessage(ctx, chat.AppendMessageInput{
 			SessionID: rt.session.ID,
 			TurnID:    &rt.turn.ID,
 			Role:      "user",
 			Content:   buildRecoveryResumeActionPrompt(state),
-			Metadata:  e.syntheticContinuationActionMessageMetadataWithCarryForward(ctx, rt.session, "task_recovery_resume", recoveryResumeMetadataSource(ctx, e.messages, rt)),
+			Metadata:  e.syntheticContinuationActionMessageMetadataWithCarryForward(ctx, rt.session, "task_recovery_resume", metadataSource),
 		})
 		if actionErr != nil {
 			return false, actionErr
