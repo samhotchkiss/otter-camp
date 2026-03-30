@@ -5280,6 +5280,7 @@
     - added `projectContinuationTurnEndedWithExecutableContractStop(...)`
     - added `projectContinuationTurnEndedWithBoundedSizeStop(...)` so bounded-size retries only fire when the latest turn actually contains the bounded-size stop markers
     - `ensureProjectContinuationMessageDecision(...)` now refreshes executable-contract stops with `buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(...)` instead of dropping back to the default broad continuation
+    - the newest consumed continuation message now wins for executable-contract retries, so older bounded-size history cannot override a fresher same-deliverable repair stop after deploy
   - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
     - added `TestJobWorkerEnsureProjectContinuationMessageRefreshesFailedExecutableContractContinuation`
     - kept the adjacent stale-pending replacement-handoff refresh canary green alongside the new executable-contract case

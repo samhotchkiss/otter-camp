@@ -21313,6 +21313,39 @@ func TestJobWorkerEnsureProjectContinuationMessageSuppressesRepeatedConsumedRedi
 	if err != nil {
 		t.Fatalf("marshal continuation metadata: %v", err)
 	}
+	olderBoundedMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "failed",
+		Metadata:  metadata,
+	})
+	if err != nil {
+		t.Fatalf("create older bounded-size continuation message: %v", err)
+	}
+	olderStopReason := "validation_loop_blocked"
+	olderBoundedTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StopReason:       &olderStopReason,
+		TriggerMessageID: &olderBoundedMessage.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create older bounded-size continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &olderBoundedTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation found remaining draft task 328 (Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations.) but could not auto-queue it because it violates the bounded size policy: task exceeds bounded size policy (estimated 95 minutes > 60 minute limit): split the work into smaller reviewable tasks before queueing]",
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create older bounded-size stop message: %v", err)
+	}
 	staleMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
 		SessionID: session.ID,
 		Role:      "user",

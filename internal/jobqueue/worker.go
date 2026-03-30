@@ -2816,9 +2816,28 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			appendRetryReference(messageID)
 		}
 
+		latestExecutableContractRetry := false
+		if latestConsumedProjectContinuationMessageID != uuid.Nil {
+			var contractErr error
+			latestExecutableContractRetry, contractErr = w.projectContinuationTurnEndedWithExecutableContractStop(ctx, latestConsumedProjectContinuationMessageID)
+			if contractErr != nil {
+				return uuid.Nil, false, fmt.Errorf("check latest consumed executable-contract continuation: %w", contractErr)
+			}
+			if latestExecutableContractRetry {
+				content = buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot)
+				expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
+				metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+				latestConsumedMatchingMessageID = uuid.Nil
+				latestConsumedMatchingRepoVersion = ""
+			}
+		}
+
 		focusedCloseoutReadyRetry := false
 		focusedCloseoutReadyReferenceMessageID := uuid.Nil
 		for _, referenceMessageID := range retryReferenceMessageIDs {
+			if latestExecutableContractRetry {
+				break
+			}
 			var retryErr error
 			focusedCloseoutReadyRetry, retryErr = w.projectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStop(ctx, referenceMessageID)
 			if retryErr != nil {
@@ -2832,7 +2851,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 
 		closeoutReadyQueueRetry := false
 		closeoutReadyQueueReferenceMessageID := uuid.Nil
-		if !focusedCloseoutReadyRetry {
+		if !latestExecutableContractRetry && !focusedCloseoutReadyRetry {
 			for _, referenceMessageID := range retryReferenceMessageIDs {
 				var retryErr error
 				closeoutReadyQueueRetry, retryErr = w.projectContinuationTurnEndedWithCloseoutReadyQueueRequiredStop(ctx, referenceMessageID)
@@ -2848,7 +2867,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 
 		closeoutReadyRetry := false
 		closeoutReadyReferenceMessageID := uuid.Nil
-		if !focusedCloseoutReadyRetry && !closeoutReadyQueueRetry {
+		if !latestExecutableContractRetry && !focusedCloseoutReadyRetry && !closeoutReadyQueueRetry {
 			for _, referenceMessageID := range retryReferenceMessageIDs {
 				var retryErr error
 				closeoutReadyRetry, retryErr = w.projectContinuationTurnEndedWithCloseoutReadyParentStop(ctx, referenceMessageID)
@@ -2929,7 +2948,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		}
 		boundedSizeRetry := false
 		boundedSizeReferenceMessageID := uuid.Nil
-		if !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry {
+		if !latestExecutableContractRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry {
 			for _, referenceMessageID := range retryReferenceMessageIDs {
 				isBoundedSizeStop, boundedErr := w.projectContinuationTurnEndedWithBoundedSizeStop(ctx, referenceMessageID)
 				if boundedErr != nil {
@@ -2965,7 +2984,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			return uuid.Nil, false, fmt.Errorf("check latest consumed replacement-handoff continuation: %w", retryErr)
 		}
 		executableContractRetry := false
-		if !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && !boundedSizeRetry {
+		if !latestExecutableContractRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && !boundedSizeRetry {
 			for _, referenceMessageID := range retryReferenceMessageIDs {
 				var contractErr error
 				executableContractRetry, contractErr = w.projectContinuationTurnEndedWithExecutableContractStop(ctx, referenceMessageID)
@@ -2982,7 +3001,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 				}
 			}
 		}
-		if !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && !boundedSizeRetry && !executableContractRetry && replacementHandoffRetry {
+		if !latestExecutableContractRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && !boundedSizeRetry && !executableContractRetry && replacementHandoffRetry {
 			content = buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot)
 			expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
 			metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint

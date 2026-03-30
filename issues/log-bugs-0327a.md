@@ -1965,6 +1965,7 @@
   - bug:
     - worker missing-continuation recovery had no dedicated `ErrExecutableTaskContractRequired` continuation refresh path
     - worker bounded-size retry detection relied on the stop task label alone instead of verifying the bounded-size stop markers first
+    - worker retry precedence still let an older bounded-size stop override a newer executable-contract stop because stop families were scanned by type before recency
   - impact:
     - the PM lane could still oscillate between:
       - focused engine retry
