@@ -211,6 +211,7 @@ var preferredDeliverableRootPatterns = []*regexp.Regexp{
 }
 
 var reviewPromptDescriptionOutputPathPattern = regexp.MustCompile(`(?i)\b(content(?:/[A-Za-z0-9._-]+)+\.(?:md|markdown|html|txt|json|ya?ml))\b`)
+var sharedDeliverableSectionTargetPattern = regexp.MustCompile("(?i)^(?:write|draft|create|update)\\s+the\\s+(.+?)\\s+section\\s+of\\s+`?([A-Za-z0-9._/-]+)`?\\.?$")
 
 const reviewRepeatedFileReadNotFoundTurnStopSubstring = "[Repeated identical file.read validation failure in this turn (2/3): not_found."
 const projectContinuationRediscoveryGuardPrefix = "[Project continuation rediscovery guard blocked only broad rereads."
@@ -19584,6 +19585,7 @@ func reportTargetSlug(title string) string {
 type recoveryResumeState struct {
 	targetPath                  string
 	inheritedSharedPath         string
+	sharedSectionTarget         string
 	targetDraft                 string
 	targetDraftRejectedReason   string
 	artifactPath                string
@@ -19785,6 +19787,7 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 	if haveTaskRecord {
 		state.taskAcceptanceCriteria = reviewPromptAcceptanceCriteria(taskRecord)
 		state.inheritedSharedPath = e.recoveryResumeInheritedSharedDeliverablePath(taskRecord, *checkpoint)
+		state.sharedSectionTarget = recoveryResumeSharedSectionTarget(taskRecord, state.inheritedSharedPath)
 		if decision, ok := e.flowExecutionReviewDecisionForSession(ctx, rt.session); ok {
 			state.reviewDecisionSummary, state.reviewDecisionCriteria, state.reviewDecisionEvidenceRefs = structuredReviewDecisionPromptContext(decision)
 		}
@@ -19864,6 +19867,14 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 		state.summaryDraftRejectedReason = "task-brief scaffold omitted because prior review already identified a concrete deliverable repair"
 		state.inferredSummaryDraft = false
 	}
+	if strings.TrimSpace(state.sharedSectionTarget) == "" {
+		for _, candidate := range []string{state.summaryDraft, state.targetDraft, state.artifactDraft} {
+			if section := recoveryResumeSharedSectionTargetFromText(candidate, state.inheritedSharedPath); section != "" {
+				state.sharedSectionTarget = section
+				break
+			}
+		}
+	}
 	if strings.TrimSpace(state.targetPath) == "" &&
 		strings.TrimSpace(state.targetDraft) == "" &&
 		strings.TrimSpace(state.targetDraftRejectedReason) == "" &&
@@ -19931,6 +19942,50 @@ func recoveryResumeInheritedSharedDeliverablePathFromMetadata(metadata map[strin
 		strings.Contains(failureReason, "inherits shared parent deliverable") ||
 		strings.Contains(checkpointReason, "inherits shared parent deliverable") {
 		return targetPath
+	}
+	return ""
+}
+
+func recoveryResumeSharedSectionTarget(taskRecord repo.ProjectTask, sharedPath string) string {
+	sharedPath = normalizeWorkspaceRelativePath(sharedPath)
+	if sharedPath == "" {
+		return ""
+	}
+	description := ""
+	if taskRecord.Description != nil {
+		description = strings.TrimSpace(*taskRecord.Description)
+	}
+	for _, raw := range []string{strings.TrimSpace(taskRecord.Title), description} {
+		if section := recoveryResumeSharedSectionTargetFromText(raw, sharedPath); section != "" {
+			return section
+		}
+	}
+	return ""
+}
+
+func recoveryResumeSharedSectionTargetFromText(raw, sharedPath string) string {
+	sharedPath = normalizeWorkspaceRelativePath(sharedPath)
+	raw = strings.TrimSpace(raw)
+	if sharedPath == "" || raw == "" {
+		return ""
+	}
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "#"))
+		if line == "" {
+			continue
+		}
+		match := sharedDeliverableSectionTargetPattern.FindStringSubmatch(line)
+		if len(match) != 3 {
+			continue
+		}
+		targetPath := normalizeWorkspaceRelativePath(strings.TrimSpace(match[2]))
+		if !sameWorkspaceRelativePath(targetPath, sharedPath) {
+			continue
+		}
+		section := strings.TrimSpace(match[1])
+		if section != "" {
+			return section
+		}
 	}
 	return ""
 }
@@ -20233,6 +20288,12 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 			"Shared parent file: "+sharedPath,
 			fmt.Sprintf("Bounded edit rule: do not use file.write to replace `%s` from this child lane. Read `%s` and use file.edit for the bounded section update instead.", sharedPath, sharedPath),
 		)
+		if section := strings.TrimSpace(state.sharedSectionTarget); section != "" {
+			lines = append(lines,
+				"Owned section: "+section,
+				fmt.Sprintf("Section focus rule: edit only the `%s` section inside `%s`. Do not inspect sibling child outputs first unless the current file body is missing that section entirely.", section, sharedPath),
+			)
+		}
 	}
 	if taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(state.failureReason) {
 		lines = append(lines,
@@ -20376,6 +20437,10 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 			fmt.Sprintf("This child lane inherits the shared parent file `%s`.", sharedPath),
 			fmt.Sprintf("Do not use file.write to replace `%s` from this child lane. Read `%s` and use file.edit for the bounded section update instead.", sharedPath, sharedPath),
 		)
+		if section := strings.TrimSpace(state.sharedSectionTarget); section != "" {
+			lines = append(lines, fmt.Sprintf("Your owned scope is only the `%s` section inside `%s`.", section, sharedPath))
+			lines = append(lines, fmt.Sprintf("Do not inspect sibling child outputs before editing `%s` unless `%s` is missing that section entirely.", section, sharedPath))
+		}
 	}
 	if note := strings.TrimSpace(state.reviewRepairNote); note != "" {
 		lines = append(lines, "Prior review already identified the concrete deliverable defect below. Repair that exact issue directly instead of rereading workspace roots, listings, or checkpoints.")

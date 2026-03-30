@@ -3889,3 +3889,18 @@
   - verified with:
     - `GOFLAGS='' go test ./internal/taskdecomp -run 'TestTaskLooksProceduralInstructionArtifact$' -count=1`
     - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationMalformedSupport(ChildKickoffPreflightBlocksBeforeModelCall|RequirementFragmentChildKickoffPreflightBlocksBeforeModelCall)$' -count=1`
+- 2026-03-29 19:33 MDT - Followed that with a narrower shared-doc recovery-prompt precision slice for valid section children.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `recoveryResumeState` now carries `sharedSectionTarget`
+    - added `recoveryResumeSharedSectionTarget(...)` and `recoveryResumeSharedSectionTargetFromText(...)`
+    - recovery state/action prompts now surface the owned section name and explicitly say not to inspect sibling child outputs before editing that section
+    - the parser now falls back to inferred recovery summary text, which is necessary for live retries where the section wording only survives in the summary draft
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestBuildRecoveryResumeStateMessageIncludesSharedSectionTargetHint`
+    - added `TestRecoveryResumeSharedSectionTargetMatchesInheritedSharedPath`
+    - added `TestRecoveryResumeSharedSectionTargetFromTextMatchesMarkdownHeading`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildRecoveryResumeStateMessageIncludes(SharedSectionTargetHint|TaskAcceptanceCriteriaFallback|StructuredReviewDecisionContext)|RecoveryResumeSharedSectionTarget(MatchesInheritedSharedPath|FromTextMatchesMarkdownHeading))$' -count=1`
+  - deploy / proof status:
+    - rebuilt and hot-reloaded locally
+    - live task-195 traffic has not yet produced a fresh post-patch retry, so direct production proof is still pending at this checkpoint

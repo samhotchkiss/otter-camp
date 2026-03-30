@@ -40475,6 +40475,54 @@ func TestBuildRecoveryResumeStateMessageIncludesTaskAcceptanceCriteriaFallback(t
 	}
 }
 
+func TestBuildRecoveryResumeStateMessageIncludesSharedSectionTargetHint(t *testing.T) {
+	t.Parallel()
+
+	message := buildRecoveryResumeStateMessage(recoveryResumeState{
+		targetPath:          "planning/sambot-personality-spec.md",
+		inheritedSharedPath: "planning/sambot-personality-spec.md",
+		sharedSectionTarget: "Voice & Tone Profile",
+	})
+	actionPrompt := buildRecoveryResumeActionPrompt(recoveryResumeState{
+		targetPath:          "planning/sambot-personality-spec.md",
+		inheritedSharedPath: "planning/sambot-personality-spec.md",
+		sharedSectionTarget: "Voice & Tone Profile",
+	})
+
+	if !strings.Contains(message, "Owned section: Voice & Tone Profile") {
+		t.Fatalf("message = %q, want owned section hint", message)
+	}
+	if !strings.Contains(message, "Do not inspect sibling child outputs first") {
+		t.Fatalf("message = %q, want sibling-output focus guard", message)
+	}
+	if !strings.Contains(actionPrompt, "Your owned scope is only the `Voice & Tone Profile` section") {
+		t.Fatalf("actionPrompt = %q, want section scope guidance", actionPrompt)
+	}
+}
+
+func TestRecoveryResumeSharedSectionTargetMatchesInheritedSharedPath(t *testing.T) {
+	t.Parallel()
+
+	taskRecord := repo.ProjectTask{
+		Title: "Write the Voice & Tone Profile section of planning/sambot-personality-spec.md.",
+	}
+	if got := recoveryResumeSharedSectionTarget(taskRecord, "planning/sambot-personality-spec.md"); got != "Voice & Tone Profile" {
+		t.Fatalf("shared section target = %q, want %q", got, "Voice & Tone Profile")
+	}
+	if got := recoveryResumeSharedSectionTarget(taskRecord, "planning/other.md"); got != "" {
+		t.Fatalf("shared section target = %q, want empty for mismatched shared path", got)
+	}
+}
+
+func TestRecoveryResumeSharedSectionTargetFromTextMatchesMarkdownHeading(t *testing.T) {
+	t.Parallel()
+
+	raw := "# Write the Voice & Tone Profile section of planning/sambot-personality-spec.md.\n\n## Objective\nWrite the Voice & Tone Profile section of planning/sambot-personality-spec.md."
+	if got := recoveryResumeSharedSectionTargetFromText(raw, "planning/sambot-personality-spec.md"); got != "Voice & Tone Profile" {
+		t.Fatalf("shared section target from text = %q, want %q", got, "Voice & Tone Profile")
+	}
+}
+
 func TestBuildRecoveryResumeStateMessageIncludesInheritedSharedDeliverableHint(t *testing.T) {
 	t.Parallel()
 

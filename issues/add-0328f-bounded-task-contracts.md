@@ -70,3 +70,13 @@ Many expensive failures come from tasks that were never truly executable:
   - `GOFLAGS='' go test ./internal/taskdecomp -run 'TestTaskLooksProceduralInstructionArtifact$' -count=1`
   - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationMalformedSupport(ChildKickoffPreflightBlocksBeforeModelCall|RequirementFragmentChildKickoffPreflightBlocksBeforeModelCall)$' -count=1`
 - 2026-03-29 19:14 MDT - Next step is deploy + live proof. The target outcome is that the next requirement/style-fragment child lane blocks immediately in kickoff preflight with `model calls = 0`, just like the earlier reference-only support-child family.
+- 2026-03-29 19:33 MDT - The next hardening cut on that same family is for the valid section-scoped shared-doc children, not the malformed ones. Fresh live canary task `195` (`Write the Voice & Tone Profile section of planning/sambot-personality-spec.md.`) still entered recovery with only a generic shared-file warning, then immediately narrated “read the current state of the target file and the sibling task outputs” and retried `file.write`.
+- 2026-03-29 19:33 MDT - Local fix in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+  - recovery state now derives `sharedSectionTarget` for titles/descriptions like `Write the Voice & Tone Profile section of planning/sambot-personality-spec.md`
+  - the same parser now falls back to inferred recovery summary text, which matters for the live path because some retries only carry the section wording in the summary draft
+  - recovery state/action prompts now add section-scoped guidance: owned section name plus “do not inspect sibling child outputs before editing this section”
+- 2026-03-29 19:33 MDT - Focused turn coverage is green:
+  - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildRecoveryResumeStateMessageIncludes(SharedSectionTargetHint|TaskAcceptanceCriteriaFallback|StructuredReviewDecisionContext)|RecoveryResumeSharedSectionTarget(MatchesInheritedSharedPath|FromTextMatchesMarkdownHeading))$' -count=1`
+- 2026-03-29 19:33 MDT - Deploy/live-proof status:
+  - rebuilt and hot-reloaded locally for verification
+  - fresh natural post-patch canary turn has not fired yet, so this section-target hint is still local/deployed-test-green but not production-proven at this checkpoint
