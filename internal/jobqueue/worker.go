@@ -2423,7 +2423,7 @@ func (w *Worker) RequeueActiveProjectSessionsMissingContinuation(ctx context.Con
 		    JOIN project_task pt
 		      ON pt.id = e.task_id
 		    WHERE pt.project_id = cs.scope_id
-		      AND lower(trim(pt.work_status)) NOT IN ('done', 'cancelled')
+		      AND lower(trim(pt.work_status)) NOT IN ('done', 'cancelled', 'blocked')
 		      AND e.status = 'active'
 		  )
 		  AND NOT EXISTS (
@@ -2435,7 +2435,7 @@ func (w *Worker) RequeueActiveProjectSessionsMissingContinuation(ctx context.Con
 		      AND task_session.mode = 'async'
 		      AND task_session.status = 'active'
 		      AND pt.project_id = cs.scope_id
-		      AND lower(trim(pt.work_status)) NOT IN ('done', 'cancelled')
+		      AND lower(trim(pt.work_status)) NOT IN ('done', 'cancelled', 'blocked')
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1

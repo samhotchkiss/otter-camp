@@ -829,3 +829,29 @@
     - explicit deliverable parsing still treated bare mixed-case single-segment labels as path-like enough to preserve them
   - impact:
     - shared-doc child recovery could keep anchoring on a bogus directory token instead of the parent markdown deliverable, reopening the same malformed write/recovery path if those child lanes woke again
+- 2026-03-29 21:11 MDT - Missing-continuation PM recovery still counted blocked child shells as active runnable work.
+  - fresh live evidence:
+    - task `212` was `blocked` but still had an `active` async session `4f4a673a-2b9f-4957-8aeb-124633bb5a6a`
+    - draft task `207` remained after a successful prerequisite-only `task.update`
+    - task `208` had already reached `done`
+    - despite that, the PM session had no fresh continuation/job until a restart forced worker recovery
+  - bug:
+    - `RequeueActiveProjectSessionsMissingContinuation(...)` excluded any project with active task sessions / active flow executions whose task status was merely `not in ('done','cancelled')`
+    - that accidentally treated `blocked` shells as if they still owned runnable lane work
+  - impact:
+    - PM continuation recovery could strand remaining draft work behind stale blocked child sessions even when the next correct action was another PM continuation
+    - this was a direct manual-test blocker for finishing the SamBot replacement architecture/API split
+- 2026-03-29 21:11 MDT - Successful prerequisite-only PM mutations could still terminate the continuation loop too early.
+  - fresh live evidence:
+    - the PM lane successfully assigned task `207`, but the resulting `task.update` left it in `draft`
+    - the completed continuation then stopped on a narrative assistant summary instead of minting the next PM continuation immediately
+  - bug:
+    - `handleCompletedProjectExecutionContinuationTurn(...)` treated every successful mutating tool result as terminal progress, even when the mutation only repaired a prerequisite and left runnable draft work untouched
+  - impact:
+    - PM task trees could stall after bounded prerequisite repair until some separate worker recovery path happened to wake the project session again
+- 2026-03-29 21:11 MDT - Duplicate shared-file child detection still missed `write ... at PATH` malformed architecture children.
+  - fresh live evidence:
+    - tasks like `209` used whole-file duplicate wording in the form `Write the SamBot technical architecture spec at planning/sambot-tech-architecture.md...`
+    - the earlier duplicate-child matcher only keyed on phrasing like `produce the file ...`, so these children could still appear as active work in PM snapshots
+  - impact:
+    - PM continuation focus could drift onto malformed shared-file child shells instead of restoring the parent replacement draft task that actually owned the markdown deliverable

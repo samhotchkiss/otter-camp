@@ -5081,6 +5081,9 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 		}
 	}
 	if turnHasSuccessfulMutatingToolResult(messages, completedTurn.ID) {
+		if turnHasSuccessfulPrerequisiteOnlyProjectMutation(messages, completedTurn.ID) {
+			return e.retryProjectExecutionContinuationAfterPrerequisiteRepair(ctx, session, completedTurn, latestUser)
+		}
 		return false, nil
 	}
 	preferredResumeTaskIDs := projectContinuationPromptNamedTaskIDs(strings.TrimSpace(latestUser.Content))
@@ -5232,6 +5235,64 @@ func (e *TurnEngine) retryGenericProjectExecutionContinuation(
 		" Your last continuation turn returned a generic non-action reply instead of advancing the project." +
 		" Do not ask which function to call, do not offer to format JSON or tool calls, and do not ask the user for more parameters." +
 		" Your next assistant action must either emit the concrete tool calls that advance the project or report one concrete blocker sentence."
+	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	if err != nil {
+		return false, err
+	}
+	if retryMessage == nil {
+		return true, nil
+	}
+	nextPayload := AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  retryMessage.ID,
+		RetryCount: latestCompleted.RetryCount + 1,
+	}
+	if agentID != uuid.Nil {
+		nextPayload.AgentID = &agentID
+	}
+	runAfter := e.now().Add(defaultAutoContinueDelay).UTC()
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	if err != nil {
+		return false, err
+	}
+	return enqueued, nil
+}
+
+func (e *TurnEngine) retryProjectExecutionContinuationAfterPrerequisiteRepair(
+	ctx context.Context,
+	session *chat.ChatSession,
+	latestCompleted *repo.ChatTurn,
+	latestUser *repo.ChatMessage,
+) (bool, error) {
+	if e == nil || session == nil || latestCompleted == nil || latestUser == nil {
+		return false, nil
+	}
+	if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
+		return false, nil
+	}
+	completedTaskID, _ := parseUUIDAny(messageMetadataMap(latestUser.Metadata)["completed_task_id"])
+	var completedTask repo.ProjectTask
+	if completedTaskID != uuid.Nil && e.tasks != nil {
+		if taskRecord, err := e.tasks.GetByID(ctx, completedTaskID); err == nil {
+			completedTask = taskRecord
+		}
+	}
+	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	if remainingDraftTasks == 0 {
+		return false, nil
+	}
+	snapshot, err := e.projectExecutionContinuationSnapshot(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	agentID := latestCompleted.RespondingID
+	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot) +
+		" Your last continuation repaired one project prerequisite with a direct mutation, but remaining draft work still needs advancement." +
+		" Do not stop with a status summary after a prerequisite-only task.update or task.create." +
+		" Continue immediately from the updated task tree and take the next bounded project action."
 	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
 	if err != nil {
 		return false, err
@@ -6356,6 +6417,56 @@ func turnHasSuccessfulMutatingToolResult(messages []repo.ChatMessage, turnID uui
 		return true
 	}
 	return false
+}
+
+func turnHasSuccessfulPrerequisiteOnlyProjectMutation(messages []repo.ChatMessage, turnID uuid.UUID) bool {
+	if turnID == uuid.Nil {
+		return false
+	}
+	turnMessages := messagesForTurn(messages, turnID)
+	if len(turnMessages) == 0 {
+		return false
+	}
+	foundMutation := false
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || strings.TrimSpace(errText) != "" {
+			continue
+		}
+		normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
+		if successfulToolResultIsReadOnly(normalizedToolName, message, parseTurnAssistantToolCalls(turnMessages)) {
+			continue
+		}
+		foundMutation = true
+		switch normalizedToolName {
+		case "task.update", "task.create", "subtask.create":
+			if workStatus := successfulProjectExecutionMutationWorkStatus(output); workStatus != "" &&
+				workStatus != "draft" &&
+				workStatus != "blocked" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return foundMutation
+}
+
+func successfulProjectExecutionMutationWorkStatus(output map[string]any) string {
+	if len(output) == 0 {
+		return ""
+	}
+	if status := strings.ToLower(strings.TrimSpace(anyString(output["work_status"]))); status != "" {
+		return status
+	}
+	taskOutput, _ := output["task"].(map[string]any)
+	if len(taskOutput) == 0 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(anyString(taskOutput["work_status"])))
 }
 
 func successfulToolResultIsReadOnly(toolName string, message repo.ChatMessage, toolCalls map[string]storedAssistantToolCall) bool {
@@ -10631,6 +10742,11 @@ func taskClaimsWholeSharedFileOwnership(taskRecord repo.ProjectTask, sharedPath 
 	if taskRecord.Description != nil {
 		description = *taskRecord.Description
 	}
+	for _, raw := range []string{strings.TrimSpace(taskRecord.Title), strings.TrimSpace(description)} {
+		if recoveryResumeSharedSectionTargetFromText(raw, sharedPath) != "" {
+			return false
+		}
+	}
 	text := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(taskRecord.Title+" "+description)), " "))
 	if text == "" {
 		return false
@@ -10645,6 +10761,19 @@ func taskClaimsWholeSharedFileOwnership(taskRecord repo.ProjectTask, sharedPath 
 	} {
 		if strings.Contains(text, prefix+sharedPath) {
 			return true
+		}
+	}
+	if !strings.Contains(text, sharedPath) {
+		return false
+	}
+	for _, action := range []string{"produce", "write", "draft", "create", "update", "replace"} {
+		if !strings.Contains(text, action+" ") {
+			continue
+		}
+		for _, connector := range []string{" at ", " to ", " into "} {
+			if strings.Contains(text, action+" ") && strings.Contains(text, connector+sharedPath) {
+				return true
+			}
 		}
 	}
 	return false

@@ -4021,3 +4021,26 @@
   - live proof:
     - on `repo_version=3651`, PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` produced tool-result `4f9347aa-e05b-408d-9028-754a4384d111`, which blocked `agent.list` with the already-named assignee id `61b10b32-cdc2-4d75-a84a-6c3bcf25b5ed`
     - the bare-`SamBot` parser hardening is deployed and test-green; it is still waiting on the next natural shared-doc child recovery canary for direct production proof because tasks `202-206` were already terminally blocked before the new binary came up
+- 2026-03-29 21:11 MDT - Unblocked PM missing-continuation recovery when only blocked child shells remain active.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `RequeueActiveProjectSessionsMissingContinuation(...)` now ignores active task sessions / active flow executions for tasks already in `blocked`, so blocked child shells no longer suppress PM continuation recovery for remaining draft work
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - widened `TestJobWorkerRequeueActiveProjectSessionsMissingContinuation` to include an active blocked child task session and assert the PM continuation is still recreated
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRequeueActiveProjectSessionsMissingContinuation(IgnoresPendingProjectContinuationResume|IgnoresSupersededCloseoutDrafts)?$|TestJobWorkerRequeueActiveProjectSessionsMissingContinuation$' -count=1`
+  - live proof:
+    - on `repo_version=3652`, startup recovery minted new PM continuation messages `24458dcb-777e-4cc3-abe1-9378a7f28635` and `2bd2f949-5232-4dac-9cf4-4d63deb1b27a` for session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`
+    - task `212` remained blocked with its stale active child session, but draft task `207` was no longer stranded; the PM lane resumed from latest completed task `208`
+- 2026-03-29 21:11 MDT - Carried prerequisite-only PM progress forward and widened duplicate shared-file child detection.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `handleCompletedProjectExecutionContinuationTurn(...)` now enqueues a fresh continuation after successful prerequisite-only `task.update` / `task.create` mutations that leave the tree in `draft` or `blocked`
+    - duplicate shared-file child detection now also catches `write|create|update ... at|to|into PATH` whole-file ownership wording while still exempting section-scoped shared-doc children
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleCompletedProjectExecutionContinuationTurnRetriesAfterPrerequisiteOnlyMutation`
+    - added `TestProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildrenUsingAtPathWording`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurn(IgnoresMutatingToolResults|RetriesAfterPrerequisiteOnlyMutation|RetriesGenericReplyWithFreshMessage|RetriesReplacementChildWorkWithFreshMessage|HandlesTaskLaneBoundaryStopWithoutRetry)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren(UsingAtPathWording)?|HandleCompletedProjectExecutionContinuationTurn(RetriesAfterPrerequisiteOnlyMutation|IgnoresMutatingToolResults))$' -count=1`
+  - proof status:
+    - the prerequisite-only continuation retry logic is deployed alongside the worker wakeup repair, but the worker-side fix was the first live canary to fire after rebuild
+    - the duplicate `write ... at PATH` child classifier is deployed and test-green; it is waiting on the next comparable malformed shared-file child canary for fresh production proof

@@ -452,3 +452,16 @@ They need sharper stopping rules than ordinary execution lanes.
   - live / proof status:
     - live-proven on PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`: post-redeploy tool-result `4f9347aa-e05b-408d-9028-754a4384d111` blocked `agent.list` with `project continuation already has active project assignee id(s) 61b10b32-cdc2-4d75-a84a-6c3bcf25b5ed`
     - the bare-`SamBot` parser fix is deployed and test-green, but it is still waiting on the next natural shared-doc child recovery canary because tasks `202-206` were already terminally blocked before the new binary came up
+- 2026-03-29 21:11 MDT - Followed the next PM stall into the worker-side missing-continuation recovery gate.
+  - fresh live evidence before the fix:
+    - draft task `207` still needed PM advancement
+    - task `208` had already settled `done`
+    - blocked child task `212` still owned an `active` async session, and that single blocked shell prevented the worker from recreating a missing PM continuation
+  - local / deployed fix:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now ignores `blocked` task sessions / active executions in `RequeueActiveProjectSessionsMissingContinuation(...)`
+    - widened [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go) so the recovery canary includes an active blocked child session and still expects a recreated PM continuation
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRequeueActiveProjectSessionsMissingContinuation(IgnoresPendingProjectContinuationResume|IgnoresSupersededCloseoutDrafts)?$|TestJobWorkerRequeueActiveProjectSessionsMissingContinuation$' -count=1`
+  - live proof:
+    - after rebuild to `repo_version=3652`, startup recovery minted fresh PM continuation messages `24458dcb-777e-4cc3-abe1-9378a7f28635` and `2bd2f949-5232-4dac-9cf4-4d63deb1b27a` for session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`
+    - one completed and one is in-progress, both now anchored on latest completed task `208`, which confirms the PM lane is no longer stranded behind blocked child session `4f4a673a-2b9f-4957-8aeb-124633bb5a6a`

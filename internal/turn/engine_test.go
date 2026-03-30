@@ -12741,6 +12741,113 @@ func TestHandleCompletedProjectExecutionContinuationTurnIgnoresMutatingToolResul
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnRetriesAfterPrerequisiteOnlyMutation(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	assignedAgentID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 16,
+				Title:      "Close review path validation",
+				WorkStatus: "done",
+			},
+			draftTaskID: {
+				ID:              draftTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      19,
+				Title:           "Build SamBot Express.js API - sambot/api.js",
+				WorkStatus:      "draft",
+				AssignedAgentID: &assignedAgentID,
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	toolResult := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "tool_result",
+		Status:         "final",
+		SequenceNumber: 11,
+		Content:        `{"tool_name":"task.update","output":{"task":{"id":"` + draftTaskID.String() + `","work_status":"draft"}}}`,
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "OC-19 now has an assigned agent. It remains draft until the next bounded project action runs.",
+		SequenceNumber: 12,
+	}
+	messages := []repo.ChatMessage{*latestUser, *toolResult, *assistant}
+	completedTurn := &repo.ChatTurn{ID: turnID, SessionID: fixture.session.ID}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected prerequisite-only mutation to enqueue a fresh continuation")
+	}
+	if len(fixture.enqueuer.jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1 fresh continuation", len(fixture.enqueuer.jobs))
+	}
+	if fixture.enqueuer.jobs[0].payload.MessageID == userMessageID {
+		t.Fatal("fresh continuation reused the original user message id")
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var retryMessage *repo.ChatMessage
+	for i := range storedMessages {
+		msg := &storedMessages[i]
+		if msg.ID == fixture.enqueuer.jobs[0].payload.MessageID {
+			retryMessage = msg
+			break
+		}
+	}
+	if retryMessage == nil {
+		t.Fatal("missing appended continuation retry message")
+	}
+	if !strings.Contains(retryMessage.Content, "repaired one project prerequisite with a direct mutation") {
+		t.Fatalf("retry message = %q, want prerequisite-repair guidance", retryMessage.Content)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnConsumesBoundedSizeQueueFailure(t *testing.T) {
 	t.Parallel()
 
@@ -23479,6 +23586,64 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFile
 		t.Fatalf("ChildActiveDraftLine = %q, should not treat malformed duplicate shared-file child as active child work", snapshot.ChildActiveDraftLine)
 	}
 	if !strings.Contains(snapshot.ReplacementDraftLine, "task 154") {
+		t.Fatalf("ReplacementDraftLine = %q, want parent restored as replacement draft", snapshot.ReplacementDraftLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=1") {
+		t.Fatalf("ReplacementDraftLine = %q, want malformed child count", snapshot.ReplacementDraftLine)
+	}
+}
+
+func TestProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildrenUsingAtPathWording(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	parentDescription := "Write the SamBot technical architecture spec at planning/sambot-tech-architecture.md. This replaces the blocked OC-198 and its stuck child tasks (OC-203 through OC-206)."
+	childDescription := "Write the SamBot technical architecture spec at planning/sambot-tech-architecture.md. This replaces the blocked OC-198 and its stuck child tasks (OC-203 through OC-206)."
+	childID := uuid.New()
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:          parentDraftID,
+				ProjectID:   projectID,
+				TaskNumber:  208,
+				Title:       "Write SamBot technical architecture spec - planning/sambot-tech-architecture.md (replacement)",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"applied":             true,
+						"mode":                "parallel_children",
+						"orchestration_only":  true,
+						"source_description":  parentDescription,
+						"primary_deliverable": "planning/sambot-tech-architecture.md",
+					},
+				}),
+			},
+			childID: {
+				ID:          childID,
+				ProjectID:   projectID,
+				TaskNumber:  209,
+				Title:       "Write the SamBot technical architecture spec at planning/sambot-tech-architecture.md. This replaces the blocked OC-198 and its stuck child tasks (OC-203 through OC-206).",
+				Description: &childDescription,
+				WorkStatus:  "review",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentDraftID.String())),
+			},
+		},
+	}
+	parentTask := fixture.engine.tasks.(*fakeTaskRepo).items[parentDraftID]
+	childTask := fixture.engine.tasks.(*fakeTaskRepo).items[childID]
+	if !projectContinuationMalformedDuplicateSharedFileChild(childTask, parentTask) {
+		t.Fatalf("duplicate shared-file matcher = false; parentPath=%q childPath=%q", taskDuplicateSharedFileDeliverablePath(parentTask), taskDuplicateSharedFileDeliverablePath(childTask))
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if strings.Contains(snapshot.ActiveTaskLine, "task 209") {
+		t.Fatalf("ActiveTaskLine = %q, should omit duplicate at-path shared-file child artifact", snapshot.ActiveTaskLine)
+	}
+	if !strings.Contains(snapshot.ReplacementDraftLine, "task 208") {
 		t.Fatalf("ReplacementDraftLine = %q, want parent restored as replacement draft", snapshot.ReplacementDraftLine)
 	}
 	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=1") {

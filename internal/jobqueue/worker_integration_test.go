@@ -12449,7 +12449,7 @@ func TestJobWorkerRequeueActiveProjectSessionsMissingContinuation(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("create draft task: %v", err)
 	}
-	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+	blockedTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
 		OrganizationID:  org.ID,
 		ProjectID:       project.ID,
 		Title:           "Downstream validation still blocked on replacement output",
@@ -12459,8 +12459,20 @@ func TestJobWorkerRequeueActiveProjectSessionsMissingContinuation(t *testing.T) 
 		AssignedAgentID: &agent.ID,
 		CreatedByType:   "system",
 		CreatedByID:     &agent.ID,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create blocked task: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        blockedTask.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	}); err != nil {
+		t.Fatalf("create blocked task session: %v", err)
 	}
 
 	requeued, err := worker.RequeueActiveProjectSessionsMissingContinuation(ctx)
