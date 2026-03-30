@@ -1291,3 +1291,11 @@
     - the newer closeout-ready parent-advance prompt family had no matching tool-level guard, so the PM turn could ignore the prompt and spend a full turn rediscovering child/sibling state anyway
   - impact:
     - closeout-ready parents can still burn `task.get` / `task.list` / `file.read` churn after the runtime already proved the next valid action is one narrow parent mutation or closeout step
+- 2026-03-31 05:27 MDT - Closeout-ready parent-completion retries still allowed one unnecessary child-id lookup even after the new guard landed.
+  - fresh live evidence:
+    - retry turn `ac50862e-8ade-4fd7-ae86-b2d69cae994d` on message `4753799c-a976-4de6-bdf9-91ba17591388` avoided the old broad rediscovery, but it still spent one `task.list(parent_task_id=245)` call first
+    - the assistant then tried to create another replacement child and the closeout-ready guard stopped it
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) was still telling parent-completion retries to use `task.list(parent_task_id=...)` if child ids were unknown, even when runtime had already loaded the exact completed child tasks from the project tree
+  - impact:
+    - closeout-ready parent retries can still waste one model/tool step on child lookup before issuing the final narrow `task.update`

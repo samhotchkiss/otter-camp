@@ -13484,8 +13484,17 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionR
 	if !strings.Contains(retryMessage.Content, "OC-115, OC-124, OC-130") {
 		t.Fatalf("retry message = %q, want required child labels", retryMessage.Content)
 	}
-	if !strings.Contains(retryMessage.Content, "task.list(parent_task_id="+focusTaskID.String()+")") {
-		t.Fatalf("retry message = %q, want narrow child inspection guidance", retryMessage.Content)
+	if !strings.Contains(retryMessage.Content, "OC-115 task_id="+doneChildID.String()) {
+		t.Fatalf("retry message = %q, want first child verification task id", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "OC-124 task_id="+secondDoneChildID.String()) {
+		t.Fatalf("retry message = %q, want second child verification task id", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "OC-130 task_id="+thirdDoneChildID.String()) {
+		t.Fatalf("retry message = %q, want third child verification task id", retryMessage.Content)
+	}
+	if strings.Contains(retryMessage.Content, "task.list(parent_task_id="+focusTaskID.String()+")") {
+		t.Fatalf("retry message = %q, should not need child inspection guidance when task ids are already known", retryMessage.Content)
 	}
 	if !strings.Contains(retryMessage.Content, "child_output_verifications") {
 		t.Fatalf("retry message = %q, want parent verification update guidance", retryMessage.Content)

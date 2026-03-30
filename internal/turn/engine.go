@@ -5746,6 +5746,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForParentCompletionRequire
 	if len(requiredChildLabels) == 0 {
 		requiredChildLabels = projectContinuationCompletedChildTaskLabels(projectTasks, focusTask.ID)
 	}
+	requiredChildRefs := projectContinuationCompletedChildTaskVerificationRefs(projectTasks, focusTask.ID)
 	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
 	if err != nil {
 		return false, err
@@ -5775,6 +5776,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForParentCompletionRequire
 			focusActivity,
 			taskHintsByTask[focusTask.ID],
 			requiredChildLabels,
+			requiredChildRefs,
 		)
 	}
 	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
@@ -6138,6 +6140,7 @@ func buildProjectExecutionContinuationParentCompletionRetryPrompt(
 	focusActivity projectContinuationChildActivity,
 	focusHints projectContinuationTaskHints,
 	requiredChildLabels []string,
+	requiredChildRefs []string,
 ) string {
 	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot)
 	focusLabel := projectBootstrapTaskLabel(focusTask)
@@ -6150,8 +6153,10 @@ func buildProjectExecutionContinuationParentCompletionRetryPrompt(
 	if len(requiredChildLabels) > 0 {
 		retryPrompt += fmt.Sprintf(" The completion gate specifically named direct child task evidence for %s.", strings.Join(requiredChildLabels, ", "))
 	}
-	if focusTask.ID != uuid.Nil {
-		retryPrompt += fmt.Sprintf(" If any required child task IDs are still unknown, use only task.list(parent_task_id=%s) once to fetch them.", focusTask.ID.String())
+	if len(requiredChildRefs) > 0 {
+		retryPrompt += fmt.Sprintf(" Use these exact child task ids in child_output_verifications now: %s.", strings.Join(requiredChildRefs, "; "))
+	} else if focusTask.ID != uuid.Nil {
+		retryPrompt += fmt.Sprintf(" Only if the runtime has not already named the completed child task ids above, use task.list(parent_task_id=%s) once to fetch them.", focusTask.ID.String())
 	}
 	retryPrompt += fmt.Sprintf(" Your next assistant action must issue one narrow task.update for %s with child_output_verifications covering the concrete child or superseding outputs that already satisfy the deliverable, integration_check.status=passed, outcome_assessment.satisfied=true, and work_status=done.", focusLabel)
 	retryPrompt += " If the runtime still reports a missing child verification after that update, report that concrete missing child in one blocker sentence instead of rereading context again."
@@ -8780,6 +8785,42 @@ func projectContinuationCompletedChildTaskLabels(projectTasks []repo.ProjectTask
 	}
 	sort.Strings(labels)
 	return labels
+}
+
+func projectContinuationCompletedChildTaskVerificationRefs(projectTasks []repo.ProjectTask, parentTaskID uuid.UUID) []string {
+	if parentTaskID == uuid.Nil || len(projectTasks) == 0 {
+		return nil
+	}
+	type childRef struct {
+		taskNumber int
+		text       string
+	}
+	refs := make([]childRef, 0, 4)
+	for _, task := range projectTasks {
+		if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "done") || task.TaskNumber <= 0 || task.ID == uuid.Nil {
+			continue
+		}
+		metadata := messageMetadataMap(task.Metadata)
+		parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+		if !ok || parentID != parentTaskID {
+			continue
+		}
+		refs = append(refs, childRef{
+			taskNumber: task.TaskNumber,
+			text:       fmt.Sprintf("OC-%d task_id=%s", task.TaskNumber, task.ID.String()),
+		})
+	}
+	sort.SliceStable(refs, func(i, j int) bool {
+		if refs[i].taskNumber == refs[j].taskNumber {
+			return refs[i].text < refs[j].text
+		}
+		return refs[i].taskNumber < refs[j].taskNumber
+	})
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, ref.text)
+	}
+	return out
 }
 
 func projectContinuationMissingDependencyStopPathFromSystemMessage(content string) (string, bool) {
