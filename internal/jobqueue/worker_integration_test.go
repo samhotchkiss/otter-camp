@@ -32666,6 +32666,183 @@ func TestJobWorkerRequeueActiveProjectSessionsMissingContinuationIgnoresSupersed
 	}
 }
 
+func TestJobWorkerRequeueActiveProjectSessionsMissingContinuationKeepsReplacementDraftWhenBlockedSamePathTaskRemains(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "worker-project-session-keeps-replacement-draft-when-blocked-same-path-remains",
+		DisplayName: "Worker Project Session Keeps Replacement Draft When Blocked Same Path Remains",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "worker-project-session-keeps-replacement-draft-when-blocked-same-path-remains-project",
+		DisplayName:    "Worker Project Session Keeps Replacement Draft When Blocked Same Path Remains Project",
+		Description:    "Project for replacement draft continuation recovery coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "worker-project-session-keeps-replacement-draft-when-blocked-same-path-remains-template",
+		DisplayName:    "Worker Project Session Keeps Replacement Draft When Blocked Same Path Remains Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	doneDescription := "Write planning/sambot-tech-architecture.md as the implementation-complete architecture spec."
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     200,
+		Title:          "Write SamBot technical architecture spec — planning/sambot-tech-architecture.md",
+		Description:    &doneDescription,
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata: json.RawMessage(`{
+			"parent_orchestration": {
+				"outcome_assessment": {
+					"satisfied": true,
+					"summary": "planning/sambot-tech-architecture.md already exists and is implementation-complete."
+				}
+			}
+		}`),
+	}); err != nil {
+		t.Fatalf("create done architecture task: %v", err)
+	}
+	blockedDescription := "Verify planning/sambot-tech-architecture.md against the PRD acceptance criteria."
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     230,
+		Title:          "planning/sambot-tech-architecture.md — verified complete against PRD acceptance criteria.",
+		Description:    &blockedDescription,
+		WorkStatus:     "blocked",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	}); err != nil {
+		t.Fatalf("create blocked verification task: %v", err)
+	}
+	draftDescription := "Write planning/sambot-tech-architecture.md as the replacement architecture document for the blocked verification lane."
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     245,
+		Title:          "Write planning/sambot-tech-architecture.md — SamBot technical architecture document (replacement for blocked OC-230/OC-235)",
+		Description:    &draftDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	}); err != nil {
+		t.Fatalf("create replacement draft task: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	label := "Write planning/sambot-tech-architecture.md — SamBot technical architecture document (replacement for blocked OC-230/OC-235)"
+	if !strings.Contains(snapshot.DraftTaskLine, label) {
+		t.Fatalf("snapshot = %+v, want replacement draft to stay actionable while blocked same-path task remains", snapshot)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, label) {
+		t.Fatalf("snapshot = %+v, want focus to stay on replacement draft while blocked same-path task remains", snapshot)
+	}
+
+	count, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("countActionableProjectDraftTasks = %d, want 1 actionable replacement draft while blocked same-path task remains", count)
+	}
+
+	repaired, err := worker.RequeueActiveProjectSessionsMissingContinuation(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveProjectSessionsMissingContinuation: %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired = %d, want 1 when actionable replacement draft remains", repaired)
+	}
+
+	var pendingMessages int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_message
+		WHERE session_id = $1
+		  AND role = 'user'
+		  AND status = 'pending'
+	`, session.ID).Scan(&pendingMessages); err != nil {
+		t.Fatalf("count pending continuation messages: %v", err)
+	}
+	if pendingMessages != 1 {
+		t.Fatalf("pending continuation messages = %d, want 1", pendingMessages)
+	}
+}
+
 func createOrgForJobQueue(t *testing.T, pool *pgxpool.Pool, slug string) repo.Organization {
 	t.Helper()
 

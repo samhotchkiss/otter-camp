@@ -1111,3 +1111,14 @@
   - impact:
     - a recovery lane that already has its exact target file in hand can still spend the rest of the turn on avoidable broad rediscovery calls
     - that delays the stop signal and pays for extra read-only tool work inside the same provider turn
+- 2026-03-30 02:37 MDT - PM continuation snapshotting could hide fresh replacement drafts behind older done tasks for the same deliverable path.
+  - fresh live evidence:
+    - session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` kept emitting blocked-only summaries around tasks `230`, `235`, `190`, and `181`
+    - meanwhile replacement drafts `245-250` still existed in the project tree, but the PM prompt omitted them and claimed there was effectively no actionable draft work left
+  - bug:
+    - both [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) and [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) let an older `done` task supersede a newer draft purely because they shared the same deliverable path/root
+    - that supersede logic ignored the presence of still-open blocked same-path tasks, so replacement drafts created specifically to work around blocked verification/review lanes disappeared from the PM snapshot
+    - the draft counters also used a reduced hint set that did not stay aligned with the full continuation snapshot logic
+  - impact:
+    - the PM lane can conclude “all remaining work is blocked” and suppress/retry continuations even though a fresh replacement draft is actually available
+    - that strands the project in a false blocked-only state until an unrelated deploy or recovery path reopens the continuation

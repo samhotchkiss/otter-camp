@@ -3377,7 +3377,10 @@ func (w *Worker) countActionableProjectDraftTasks(ctx context.Context, projectID
 	if err != nil {
 		return 0, err
 	}
-	taskHintsByTask := buildProjectContinuationTaskHintsForWorker(projectTasks, nil)
+	taskHintsByTask, err := w.projectContinuationTaskHintsByTask(ctx, projectTasks)
+	if err != nil {
+		return 0, err
+	}
 	childActivity := projectContinuationChildTaskActivityForWorker(projectTasks, taskHintsByTask)
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDsForWorker(projectTasks)
 	supersededDraftTaskIDs := projectContinuationSupersededDraftTaskIDsForWorker(projectTasks, taskHintsByTask, childActivity, malformedChildTaskIDs)
@@ -3588,27 +3591,73 @@ func projectContinuationSupersededDraftTaskIDsForWorker(
 		if !projectContinuationTaskHasDeliverableIdentityForWorker(draftHints.DeliverablePath, draftHints.DeliverableRoot) {
 			continue
 		}
-		for _, doneTask := range projectTasks {
-			if doneTask.ID == draftTask.ID {
-				continue
+		if !projectContinuationDraftHasOpenRejectedProofForSameDeliverableForWorker(projectTasks, draftTask, draftHints, taskHintsByTask, malformedChildTaskIDs) {
+			for _, doneTask := range projectTasks {
+				if doneTask.ID == draftTask.ID {
+					continue
+				}
+				if _, malformed := malformedChildTaskIDs[doneTask.ID]; malformed {
+					continue
+				}
+				if !strings.EqualFold(strings.TrimSpace(doneTask.WorkStatus), "done") {
+					continue
+				}
+				if !projectContinuationDoneTaskSupersedesDraftForWorker(doneTask, draftHints, taskHintsByTask[doneTask.ID], childActivity[doneTask.ID]) {
+					continue
+				}
+				if superseded == nil {
+					superseded = make(map[uuid.UUID]struct{})
+				}
+				superseded[draftTask.ID] = struct{}{}
+				break
 			}
-			if _, malformed := malformedChildTaskIDs[doneTask.ID]; malformed {
-				continue
-			}
-			if !strings.EqualFold(strings.TrimSpace(doneTask.WorkStatus), "done") {
-				continue
-			}
-			if !projectContinuationDoneTaskSupersedesDraftForWorker(doneTask, draftHints, taskHintsByTask[doneTask.ID], childActivity[doneTask.ID]) {
-				continue
-			}
-			if superseded == nil {
-				superseded = make(map[uuid.UUID]struct{})
-			}
-			superseded[draftTask.ID] = struct{}{}
-			break
 		}
 	}
 	return superseded
+}
+
+func projectContinuationDraftHasOpenRejectedProofForSameDeliverableForWorker(
+	projectTasks []repo.ProjectTask,
+	draftTask repo.ProjectTask,
+	draftHints projectContinuationTaskHintsForWorker,
+	taskHintsByTask map[uuid.UUID]projectContinuationTaskHintsForWorker,
+	malformedChildTaskIDs map[uuid.UUID]struct{},
+) bool {
+	for _, openTask := range projectTasks {
+		if openTask.ID == draftTask.ID {
+			continue
+		}
+		if _, malformed := malformedChildTaskIDs[openTask.ID]; malformed {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(openTask.WorkStatus))
+		switch status {
+		case "", "done", "cancelled", "draft":
+			continue
+		}
+		openHints := taskHintsByTask[openTask.ID]
+		if !projectContinuationTaskHintsShareDeliverableIdentityForWorker(draftHints, openHints) {
+			continue
+		}
+		if status == "blocked" || strings.EqualFold(strings.TrimSpace(openHints.ProofState), "rejected") {
+			return true
+		}
+	}
+	return false
+}
+
+func projectContinuationTaskHintsShareDeliverableIdentityForWorker(
+	left projectContinuationTaskHintsForWorker,
+	right projectContinuationTaskHintsForWorker,
+) bool {
+	leftPath := normalizeWorkspaceRelativePathForWorker(left.DeliverablePath)
+	rightPath := normalizeWorkspaceRelativePathForWorker(right.DeliverablePath)
+	if leftPath != "" && rightPath != "" && sameWorkspaceRelativePathForWorker(leftPath, rightPath) {
+		return true
+	}
+	leftRoot := normalizeWorkspaceRelativePathForWorker(left.DeliverableRoot)
+	rightRoot := normalizeWorkspaceRelativePathForWorker(right.DeliverableRoot)
+	return leftRoot != "" && rightRoot != "" && sameWorkspaceRelativePathForWorker(leftRoot, rightRoot)
 }
 
 func projectContinuationDoneTaskSupersedesDraftForWorker(

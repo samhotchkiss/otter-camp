@@ -24742,6 +24742,79 @@ func TestProjectExecutionContinuationSnapshotIgnoresSupersededSatisfiedOutcomeDr
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotKeepsReplacementDraftWhenBlockedSamePathTaskRemains(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	doneTaskID := uuid.New()
+	blockedTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	doneDescription := "Write planning/sambot-tech-architecture.md as the implementation-complete architecture spec."
+	blockedDescription := "Verify planning/sambot-tech-architecture.md against the PRD acceptance criteria."
+	draftDescription := "Write planning/sambot-tech-architecture.md as the replacement architecture document for the blocked verification lane."
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			doneTaskID: {
+				ID:          doneTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  200,
+				Title:       "Write SamBot technical architecture spec — planning/sambot-tech-architecture.md",
+				Description: &doneDescription,
+				WorkStatus:  "done",
+				Metadata: mustJSONRaw(map[string]any{
+					"parent_orchestration": map[string]any{
+						"outcome_assessment": map[string]any{
+							"satisfied": true,
+							"summary":   "planning/sambot-tech-architecture.md already exists and is implementation-complete.",
+						},
+					},
+				}),
+			},
+			blockedTaskID: {
+				ID:          blockedTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  230,
+				Title:       "planning/sambot-tech-architecture.md — verified complete against PRD acceptance criteria.",
+				Description: &blockedDescription,
+				WorkStatus:  "blocked",
+			},
+			draftTaskID: {
+				ID:          draftTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  245,
+				Title:       "Write planning/sambot-tech-architecture.md — SamBot technical architecture document (replacement for blocked OC-230/OC-235)",
+				Description: &draftDescription,
+				WorkStatus:  "draft",
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshotForSummary(context.Background(), projectID, "planning/sambot-tech-architecture.md")
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshotForSummary: %v", err)
+	}
+	label := "task 245 (Write planning/sambot-tech-architecture.md — SamBot technical architecture document (replacement for blocked OC-230/OC-235))"
+	if !strings.Contains(snapshot.DraftTaskLine, label) {
+		t.Fatalf("DraftTaskLine = %q, want replacement draft to stay actionable while blocked same-path task remains", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, label) {
+		t.Fatalf("FocusTaskLine = %q, want focus to stay on replacement draft while blocked same-path task remains", snapshot.FocusTaskLine)
+	}
+
+	count, err := fixture.engine.countProjectDraftTasks(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("countProjectDraftTasks: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("countProjectDraftTasks = %d, want 1 actionable replacement draft while blocked same-path task remains", count)
+	}
+}
+
 func TestShouldBlockProjectContinuationFocusedDraftMutationForMalformedChildParent(t *testing.T) {
 	t.Parallel()
 

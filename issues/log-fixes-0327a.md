@@ -4437,3 +4437,25 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ClassifyRepeatedReadOnlyDiscoveryRoundChurnStopsRecoveryAfterReadingTargetThenBroadRediscovery|HandleToolValidationResults(StopsRecoveryTurnAfterReadingTargetThenBroadRediscovery|StopsAsyncTaskTurnAfterThirdReadOnlyDiscoveryRoundInSameTurn|IgnoresReadOnlyDiscoveryRoundChurnAfterMutationInSameTurn))$' -count=1`
   - live context:
     - task `253` ultimately closed via the malformed-child halt, so this slice is a forward guard for the narrower already-running recovery-turn shape that was still paying for one broad rediscovery round before the halt landed
+- 2026-03-30 02:37 MDT - Kept replacement drafts visible when the same deliverable path still has open blocked work, instead of letting older done tasks hide them.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `countProjectDraftTasks(...)` now uses full continuation hints, including blocked reasons and review/proof state, before computing superseded draft counts
+    - `projectContinuationSupersededDraftTaskIDs(...)` now refuses to let a `done` task supersede a draft when the same deliverable path/root still has an open blocked or rejected-proof lane
+    - added `projectContinuationDraftHasOpenRejectedProofForSameDeliverable(...)`
+    - added `projectContinuationTaskHintsShareDeliverableIdentity(...)`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `countActionableProjectDraftTasks(...)` now uses the full worker continuation hint set instead of the stripped helper-only hints
+    - `projectContinuationSupersededDraftTaskIDsForWorker(...)` now keeps a draft actionable when the same deliverable path/root still has open blocked work
+    - added the worker equivalents of the same-path blocked-lane helpers
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+      - added `TestProjectExecutionContinuationSnapshotKeepsReplacementDraftWhenBlockedSamePathTaskRemains`
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+      - added `TestJobWorkerRequeueActiveProjectSessionsMissingContinuationKeepsReplacementDraftWhenBlockedSamePathTaskRemains`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshot(KeepsReplacementDraftWhenBlockedSamePathTaskRemains|IgnoresSupersededSatisfiedOutcomeDrafts)|ClassifyRepeatedReadOnlyDiscoveryRoundChurnStopsRecoveryAfterReadingTargetThenBroadRediscovery|HandleToolValidationResults(StopsRecoveryTurnAfterReadingTargetThenBroadRediscovery|StopsAsyncTaskTurnAfterThirdReadOnlyDiscoveryRoundInSameTurn|IgnoresReadOnlyDiscoveryRoundChurnAfterMutationInSameTurn))$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RequeueActiveProjectSessionsMissingContinuation(KeepsReplacementDraftWhenBlockedSamePathTaskRemains|IgnoresSupersededSatisfiedOutcomeDrafts)|RequeueActiveExecutionSessionsWithoutTurnsSuppresses(DirectWriteOnlyGuard|InheritedSharedDeliverableGuard)|RequeueTerminalRecoveryResumeSessionsWithoutLiveExecutionSuppresses(DirectWriteOnlyGuard|InheritedSharedDeliverableGuard|SiblingResponsibilityGuard)|PurgeStaleAgentTurnJobsPurges(DirectWriteOnlyRecoveryResume|TerminalBlockedRecoveryResume))$' -count=1`
+  - live proof after redeploy on `repo_version=3675`:
+    - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` immediately got a new continuation message (`d5d32c8e-fe05-4d52-b36a-eb551cffc208`) instead of staying blocked-only idle
+    - that prompt now surfaces the previously hidden replacement/personality drafts instead of claiming no actionable draft work remained
+    - the next PM turn queued task `250` and repaired task `245` with the correct agent/template, proving the hidden-draft recovery path is working live
