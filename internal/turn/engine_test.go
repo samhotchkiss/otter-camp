@@ -15801,6 +15801,7 @@ func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnTaskLaneBoundary
 		{Name: "task.update", Error: "flow_owned_status_blocked: this task is flow-owned"},
 		{Name: "task.update", Error: "parent task requires child verification and passed integration before completion: verify child outputs for OC-66; record a passed integration or end-to-end check"},
 		{Name: "file.write", Error: "deliverable_path_required: continue the concrete deliverable instead"},
+		{Name: "file.read", Error: "project continuation already has focused draft parent task id=123 and the prompt already required a direct replacement-child handoff. Do not call file.read from the project lane now; create the smallest fresh replacement child beneath that parent instead."},
 		{Name: "task.update", Error: "task must remain orchestration-only while executable child tasks exist"},
 	}
 
@@ -15868,6 +15869,22 @@ func TestProjectExecutionBlockedMutationStopMessageOnParentCompletionRequirement
 	}
 }
 
+func TestProjectExecutionBlockedMutationStopMessageOnFocusedDraftReadGuard(t *testing.T) {
+	t.Parallel()
+
+	message := projectExecutionBlockedMutationStopMessage([]ToolResult{{
+		Name:  "file.read",
+		Error: "project continuation already has focused draft parent task id=123 and the prompt already required a direct replacement-child handoff. Do not call file.read from the project lane now; create the smallest fresh replacement child beneath that parent, or if child-lane verification is still required use only task.list(parent_task_id=123).",
+	}})
+
+	if !strings.Contains(message, "focused replacement-parent handoff") {
+		t.Fatalf("message = %q, want focused handoff summary", message)
+	}
+	if !strings.Contains(message, "task.list(parent_task_id=...)") {
+		t.Fatalf("message = %q, want narrow parent-scoped task.list guidance", message)
+	}
+}
+
 func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation(t *testing.T) {
 	t.Parallel()
 
@@ -15920,6 +15937,38 @@ func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationForMissingDepen
 	}
 }
 
+func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationForDraftChildCreate(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText:   "Current focus parent: task 84 (Replacement template) id=" + focusTaskID.String() + ". Your next assistant action must create the smallest fresh replacement child task beneath task 84 (Replacement template) now, or queue an existing direct child draft there if one already fits unchanged.",
+	}
+
+	calls := []ToolCall{{
+		Name:      "task.create",
+		Arguments: map[string]any{"parent_task_id": focusTaskID.String()},
+	}}
+	results := []ToolResult{{
+		Name: "task.create",
+		Output: map[string]any{
+			"task": map[string]any{
+				"id":          uuid.NewString(),
+				"work_status": "draft",
+			},
+		},
+	}}
+
+	if !shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
+		t.Fatal("expected focused draft child creation to stop the PM turn")
+	}
+}
+
 func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationIgnoresAssignmentOnlyUpdate(t *testing.T) {
 	t.Parallel()
 
@@ -15943,6 +15992,37 @@ func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationIgnoresAssignme
 
 	if shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
 		t.Fatal("assignment-only update should not stop the PM turn as a successful handoff")
+	}
+}
+
+func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationIgnoresUnfocusedDraftChildCreate(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText:   "Current focus parent: task 84 (Replacement template) id=" + uuid.NewString() + ". Your next assistant action must create the smallest fresh replacement child task beneath task 84 (Replacement template) now, or queue an existing direct child draft there if one already fits unchanged.",
+	}
+
+	calls := []ToolCall{{
+		Name:      "task.create",
+		Arguments: map[string]any{"parent_task_id": uuid.NewString()},
+	}}
+	results := []ToolResult{{
+		Name: "task.create",
+		Output: map[string]any{
+			"task": map[string]any{
+				"id":          uuid.NewString(),
+				"work_status": "draft",
+			},
+		},
+	}}
+
+	if shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
+		t.Fatal("unfocused draft child creation should not stop the PM turn")
 	}
 }
 
@@ -25460,6 +25540,182 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksTerminalBloc
 	}
 	if !strings.Contains(reason, "keep the blocked lane blocked") {
 		t.Fatalf("reason = %q, want blocked-lane guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationTaskOwnedDeliverableMutationToolBlocksTerminalBlockedFileWrite(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	blockedLeafID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Continue the active project execution now.", projectExecutionContinuationSnapshot{
+			ProjectLine: "Active project id: " + projectID.String(),
+			ActiveTaskLine: strings.Join([]string{
+				"Already-active non-terminal tasks in the tree:",
+				`task 129 (Append "Overview & Purpose" section) id=` + blockedLeafID.String() + ` title="Append Overview & Purpose" work_status=blocked deliverable_path=planning/sambot-feature-spec.md assigned_agent_id=worker-1 resume_policy=terminal_keep_blocked blocker="flow rejection max visits exceeded"`,
+			}, " "),
+			LeafActiveTaskLine: "Active leaf tasks already have no child tasks to inspect: task 129 (Append Overview & Purpose) leaf_task_id=" + blockedLeafID.String(),
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationTaskOwnedDeliverableMutationTool(rt, "file.write", map[string]any{
+		"path":    "planning/sambot-feature-spec.md",
+		"content": "# replacement",
+	})
+	if !blocked {
+		t.Fatal("expected PM file.write on terminally blocked task-owned deliverable path to be blocked")
+	}
+	if !strings.Contains(reason, "terminally blocked task-owned deliverable") || !strings.Contains(reason, "file.write") {
+		t.Fatalf("reason = %q, want blocked deliverable mutation guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationTaskOwnedDeliverableMutationToolBlocksTerminalBlockedCLIExecuteBuild(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	blockedLeafID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Continue the active project execution now.", projectExecutionContinuationSnapshot{
+			ProjectLine: "Active project id: " + projectID.String(),
+			ActiveTaskLine: strings.Join([]string{
+				"Already-active non-terminal tasks in the tree:",
+				`task 220 (Write templates/template-08-replace.html) id=` + blockedLeafID.String() + ` title="Write templates/template-08-replace.html" work_status=blocked deliverable_path=templates/template-08-replace.html assigned_agent_id=worker-1 resume_policy=terminal_keep_blocked blocker="flow rejection max visits exceeded"`,
+			}, " "),
+			LeafActiveTaskLine: "Active leaf tasks already have no child tasks to inspect: task 220 (Write templates/template-08-replace.html) leaf_task_id=" + blockedLeafID.String(),
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationTaskOwnedDeliverableMutationTool(rt, "cli.execute", map[string]any{
+		"command": "python3 - <<'PY'\nfrom pathlib import Path\nPath('templates/template-08-replace.html').write_text('<html></html>')\nPY",
+	})
+	if !blocked {
+		t.Fatal("expected PM cli.execute shell build on blocked task-owned deliverable path to be blocked")
+	}
+	if !strings.Contains(reason, "terminally blocked task-owned deliverable") || !strings.Contains(reason, "cli.execute") {
+		t.Fatalf("reason = %q, want blocked deliverable cli.execute guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationTaskOwnedDeliverableMutationToolBlocksActiveDeliverableEdit(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Continue the active project execution now.", projectExecutionContinuationSnapshot{
+			ProjectLine: "Active project id: " + projectID.String(),
+			ActiveTaskLine: strings.Join([]string{
+				"Already-active non-terminal tasks in the tree:",
+				`task 85 (Write templates/template-08-replace.html) id=` + uuid.NewString() + ` title="Write templates/template-08-replace.html" work_status=in_progress deliverable_path=templates/template-08-replace.html assigned_agent_id=worker-1`,
+			}, " "),
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationTaskOwnedDeliverableMutationTool(rt, "file.edit", map[string]any{
+		"path":       "templates/template-08-replace.html",
+		"old_string": "old",
+		"new_string": "new",
+	})
+	if !blocked {
+		t.Fatal("expected PM file.edit on active task-owned deliverable path to be blocked")
+	}
+	if !strings.Contains(reason, "task-owned active lane work") || !strings.Contains(reason, "file.edit") {
+		t.Fatalf("reason = %q, want active deliverable mutation guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksFileRead(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Current focus parent: task 84 (Replacement template) id=" + focusTaskID.String() + ".",
+			"Your next assistant action must create the smallest fresh replacement child task beneath task 84 (Replacement template) now, or queue an existing direct child draft there if one already fits unchanged.",
+			"Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.",
+		}, " "),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, "file.read", map[string]any{
+		"path": "templates/template-01.html",
+	})
+	if !blocked {
+		t.Fatal("expected focused-draft file.read to be blocked")
+	}
+	if !strings.Contains(reason, focusTaskID.String()) || !strings.Contains(reason, "file.read") {
+		t.Fatalf("reason = %q, want focused parent handoff guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftReadToolAllowsParentScopedTaskList(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Current focus parent: task 84 (Replacement template) id=" + focusTaskID.String() + ".",
+			"Your next assistant action must create the smallest fresh replacement child task beneath task 84 (Replacement template) now, or queue an existing direct child draft there if one already fits unchanged.",
+			"Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.",
+		}, " "),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, "task.list", map[string]any{
+		"parent_task_id": focusTaskID.String(),
+	})
+	if blocked {
+		t.Fatalf("expected parent-scoped task.list to remain allowed, got %q", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksTaskListWithoutParent(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Current focus parent: task 84 (Replacement template) id=" + focusTaskID.String() + ".",
+			"Your next assistant action must create the smallest fresh replacement child task beneath task 84 (Replacement template) now, or queue an existing direct child draft there if one already fits unchanged.",
+			"Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.",
+		}, " "),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, "task.list", nil)
+	if !blocked {
+		t.Fatal("expected unscoped task.list to be blocked")
+	}
+	if !strings.Contains(reason, "task.list") || !strings.Contains(reason, focusTaskID.String()) {
+		t.Fatalf("reason = %q, want focused parent task.list guidance", reason)
 	}
 }
 

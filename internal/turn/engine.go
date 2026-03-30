@@ -15259,6 +15259,22 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := shouldBlockProjectContinuationTaskOwnedDeliverableMutationTool(rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
+		if blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if blocked, reason := shouldBlockProjectContinuationDependencyFocusedExternalTool(rt, name); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -27543,6 +27559,10 @@ func looksLikeShellFileBuildCommand(command, targetPath string) bool {
 	switch {
 	case strings.Contains(command, "with open('"+path+"'"),
 		strings.Contains(command, "with open(\""+path+"\""),
+		strings.Contains(command, "path('"+path+"').write_text"),
+		strings.Contains(command, "path(\""+path+"\").write_text"),
+		strings.Contains(command, "path('"+path+"').write_bytes"),
+		strings.Contains(command, "path(\""+path+"\").write_bytes"),
 		strings.Contains(command, "cat > "+path),
 		strings.Contains(command, "cat >> "+path),
 		strings.Contains(command, "tee "+path),
@@ -30096,6 +30116,7 @@ func shouldStopAfterBlockedProjectExecutionBlockedMutation(rt *turnRuntime, resu
 			"deliverable_path_required",
 			"parent task requires child verification and passed integration before completion",
 			"project continuation already has focused draft task",
+			"prompt already required a direct replacement-child handoff",
 			"task must remain orchestration-only while executable child tasks exist",
 		) {
 			return true
@@ -30136,11 +30157,18 @@ func shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt *turnRuntime, c
 	if !projectContinuationReplacementChildHandoffActive(rt) {
 		return false
 	}
+	focusTaskID := uuid.Nil
+	if rt != nil {
+		focusTaskID = projectContinuationPromptCurrentFocusParentTaskID(strings.TrimSpace(rt.initialMessageText))
+	}
 	for idx, call := range calls {
 		if idx >= len(results) {
 			break
 		}
 		if projectExecutionHandoffMutationSucceeded(call, results[idx]) {
+			return true
+		}
+		if projectExecutionDraftChildHandoffSucceeded(call, results[idx], focusTaskID) {
 			return true
 		}
 	}
@@ -30205,6 +30233,20 @@ func projectExecutionResultWorkStatus(arguments map[string]any, result ToolResul
 	return strings.ToLower(strings.TrimSpace(stringValue(taskOutput["work_status"])))
 }
 
+func projectExecutionDraftChildHandoffSucceeded(call ToolCall, result ToolResult, focusTaskID uuid.UUID) bool {
+	if focusTaskID == uuid.Nil || strings.TrimSpace(toolResultErrorCode(result)) != "" {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(call.Name), "task.create") {
+		return false
+	}
+	parentTaskID, ok := parseUUIDAny(call.Arguments["parent_task_id"])
+	if !ok || parentTaskID == uuid.Nil || parentTaskID != focusTaskID {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(projectExecutionResultWorkStatus(call.Arguments, result)), "draft")
+}
+
 func projectExecutionBlockedMutationStopMessage(results []ToolResult) string {
 	for _, result := range results {
 		errText := strings.ToLower(strings.TrimSpace(toolResultErrorCode(result)))
@@ -30216,6 +30258,9 @@ func projectExecutionBlockedMutationStopMessage(results []ToolResult) string {
 		}
 		if strings.Contains(errText, "project continuation already has focused draft task") {
 			return "[Project continuation already has a narrower focused draft task. Create or advance the smallest fresh child work beneath that focus task instead of re-queueing it or promoting its ancestors from the project lane.]"
+		}
+		if strings.Contains(errText, "prompt already required a direct replacement-child handoff") {
+			return "[Project continuation already has a focused replacement-parent handoff. Do not reread sibling artifacts from the project lane; create the fresh replacement child now or use only task.list(parent_task_id=...) if child-lane verification is still required.]"
 		}
 		if strings.Contains(errText, "parent task requires child verification and passed integration before completion") {
 			return "[Project continuation found that the closeout-ready parent still needs parent_orchestration evidence before it can finish. Record parent_orchestration.child_verifications for the concrete child or superseding outputs that already satisfy the deliverable, set parent_orchestration.integration_check.status=passed, and set parent_orchestration.outcome_assessment.satisfied=true on the parent task itself. Do not cancel blocked stale child lanes from the project session first.]"
@@ -33577,6 +33622,121 @@ func buildProjectContinuationTerminalBlockedDeliverableReadGuardError(path strin
 	return fmt.Sprintf("project continuation already named terminally blocked task-owned deliverable `%s` in the continuation prompt. Do not reread that blocked deliverable from the project lane; keep the blocked lane blocked and create the smallest replacement, closeout, or parent-update action instead.", normalized)
 }
 
+func projectContinuationMutationTargetPath(toolName string, arguments map[string]any) string {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "file.write", "file.edit":
+		return normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+	case "cli.execute":
+		return projectContinuationCLIExecuteMutationTargetPath(arguments)
+	}
+	return ""
+}
+
+func projectContinuationCLIExecuteMutationTargetPath(arguments map[string]any) string {
+	if path, ok := shellFileBuildTargetFromCLIExecuteArguments(arguments); ok {
+		return normalizeWorkspaceRelativePath(path)
+	}
+	if len(arguments) == 0 {
+		return ""
+	}
+	normalized := toolargs.Normalize("cli.execute", cloneMap(arguments))
+	command := strings.TrimSpace(anyString(normalized["command"]))
+	if command == "" {
+		return ""
+	}
+	targetPath := normalizeWorkspaceRelativePath(projectContinuationExplicitDeliverablePathFromText(command))
+	if targetPath == "" {
+		return ""
+	}
+	if !looksLikeShellFileBuildCommand(strings.ToLower(command), targetPath) {
+		return ""
+	}
+	return targetPath
+}
+
+func buildProjectContinuationTaskOwnedDeliverableMutationGuardError(path, toolName string, terminalBlocked bool) string {
+	normalized := normalizeWorkspaceRelativePath(path)
+	if normalized == "" {
+		normalized = strings.TrimSpace(path)
+	}
+	tool := strings.TrimSpace(toolName)
+	if terminalBlocked {
+		switch strings.ToLower(tool) {
+		case "cli.execute":
+			return fmt.Sprintf("project continuation already named terminally blocked task-owned deliverable `%s` in the continuation prompt. Do not build or overwrite that file from the project lane with %s; keep the blocked lane blocked and create or advance the smallest replacement, closeout, or parent-update action instead.", normalized, tool)
+		default:
+			return fmt.Sprintf("project continuation already named terminally blocked task-owned deliverable `%s` in the continuation prompt. Do not mutate that file from the project lane with %s; keep the blocked lane blocked and create or advance the smallest replacement, closeout, or parent-update action instead.", normalized, tool)
+		}
+	}
+	switch strings.ToLower(tool) {
+	case "cli.execute":
+		return fmt.Sprintf("project continuation already named task-owned active lane work at `%s` in the continuation prompt. Do not build or overwrite that file from the project lane with %s; queue or advance the owning project_task lane instead.", normalized, tool)
+	default:
+		return fmt.Sprintf("project continuation already named task-owned active lane work at `%s` in the continuation prompt. Do not mutate that file from the project lane with %s; queue or advance the owning project_task lane instead.", normalized, tool)
+	}
+}
+
+func shouldBlockProjectContinuationTaskOwnedDeliverableMutationTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if rt == nil || rt.session == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, ""
+	}
+	path := projectContinuationMutationTargetPath(toolName, arguments)
+	if path == "" {
+		return false, ""
+	}
+	initialMessage := strings.TrimSpace(rt.initialMessageText)
+	if blockedDeliverables := projectContinuationPromptTerminalBlockedDeliverablePaths(initialMessage); len(blockedDeliverables) > 0 {
+		if _, ok := blockedDeliverables[path]; ok {
+			return true, buildProjectContinuationTaskOwnedDeliverableMutationGuardError(path, toolName, true)
+		}
+	}
+	if activeDeliverables := projectContinuationPromptLiveDeliverablePaths(initialMessage); len(activeDeliverables) > 0 {
+		if _, ok := activeDeliverables[path]; ok {
+			return true, buildProjectContinuationTaskOwnedDeliverableMutationGuardError(path, toolName, false)
+		}
+	}
+	return false, ""
+}
+
+func buildProjectContinuationFocusedDraftReadGuardError(focusTaskID uuid.UUID, toolName string) string {
+	if focusTaskID != uuid.Nil {
+		return fmt.Sprintf("project continuation already has focused draft parent task id=%s and the prompt already required a direct replacement-child handoff. Do not call %s from the project lane now; create the smallest fresh replacement child beneath that parent, or if child-lane verification is still required use only task.list(parent_task_id=%s).", focusTaskID.String(), strings.TrimSpace(toolName), focusTaskID.String())
+	}
+	return fmt.Sprintf("project continuation already has a focused draft parent and the prompt already required a direct replacement-child handoff. Do not call %s from the project lane now; create the smallest fresh replacement child beneath the current focus parent instead.", strings.TrimSpace(toolName))
+}
+
+func shouldBlockProjectContinuationFocusedDraftReadTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if rt == nil || rt.session == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, ""
+	}
+	if !projectContinuationReplacementChildHandoffActive(rt) {
+		return false, ""
+	}
+	initial := strings.TrimSpace(rt.initialMessageText)
+	if !strings.Contains(initial, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.") {
+		return false, ""
+	}
+	focusTaskID := projectContinuationPromptCurrentFocusParentTaskID(initial)
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "file.read", "file.list", "task.get":
+		return true, buildProjectContinuationFocusedDraftReadGuardError(focusTaskID, toolName)
+	case "task.list":
+		parentTaskID, ok := parseUUIDAny(arguments["parent_task_id"])
+		if !ok || parentTaskID == uuid.Nil || focusTaskID == uuid.Nil || parentTaskID != focusTaskID {
+			return true, buildProjectContinuationFocusedDraftReadGuardError(focusTaskID, toolName)
+		}
+	}
+	return false, ""
+}
+
 func shouldBlockProjectContinuationDependencyFocusedExternalTool(rt *turnRuntime, toolName string) (bool, string) {
 	if rt == nil || rt.session == nil {
 		return false, ""
@@ -33816,6 +33976,23 @@ func buildProjectContinuationFocusedDraftAncestorPromotionGuardError(targetTask,
 
 func projectContinuationPromptFocusTaskID(initialMessage string) uuid.UUID {
 	const marker = "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step:"
+	idx := strings.Index(initialMessage, marker)
+	if idx < 0 {
+		return uuid.Nil
+	}
+	match := projectContinuationPromptTaskIDPattern.FindStringSubmatch(initialMessage[idx:])
+	if len(match) != 2 {
+		return uuid.Nil
+	}
+	focusTaskID, err := uuid.Parse(strings.TrimSpace(match[1]))
+	if err != nil {
+		return uuid.Nil
+	}
+	return focusTaskID
+}
+
+func projectContinuationPromptCurrentFocusParentTaskID(initialMessage string) uuid.UUID {
+	const marker = "Current focus parent:"
 	idx := strings.Index(initialMessage, marker)
 	if idx < 0 {
 		return uuid.Nil

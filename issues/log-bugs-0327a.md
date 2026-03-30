@@ -935,3 +935,14 @@
   - impact:
     - PM focus could stay anchored on a stale intermediate child instead of collapsing back to the real parent replacement task
     - the project lane could keep creating more children beneath that stale draft even though the whole subtree was already known-bad shared-file decomposition
+- 2026-03-29 23:27 MDT - Focused replacement-parent prompts still allowed PM-side file mutation and same-turn rediscovery after the handoff was already explicit.
+  - fresh live evidence:
+    - once the template-08 prompt finally focused `OC-84`, the PM lane still tried `file.write` on `templates/template-08-replace.html` from the project session and then drifted into sibling/template reference reads
+    - after creating child `OC-241`, the PM lane still tried `agent.list` in the same turn even though the prompt already named usable project assignee ids
+  - bug:
+    - project continuation had no tool guard for PM-side mutation of task-owned deliverables already named in the prompt
+    - the bounded-size/focused-draft prompt said “do not call file.read/file.list before acting,” but there was no enforcement hook for those focused-draft reads
+    - successful `task.create` of the fresh focused child only counted as a handoff stop if the created child was already `queued` / `in_progress`, not if the PM had correctly created the child as `draft`
+  - impact:
+    - PM turns could still waste one or more same-turn hops after the right replacement-child handoff was already in place
+    - template-08 progress remained slower than necessary even after the stale-child/root-focus issues were fixed

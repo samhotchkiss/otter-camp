@@ -583,3 +583,20 @@ They need sharper stopping rules than ordinary execution lanes.
   - proof status:
     - rebuilt/restarted on local `repo_version=3662` and runtime health is `ok`
     - direct post-deploy PM proof is still pending the next natural template-08 continuation; the expected outcome is that `OC-225` disappears as a focus candidate and the lane escalates back to parent `OC-84` instead of creating more children beneath `OC-225`
+- 2026-03-29 23:27 MDT - Stopped PM turns from mutating or rereading task-owned deliverables once the replacement-child handoff is already explicit.
+  - fresh live evidence:
+    - after the stale-child fix, the PM prompt correctly focused parent `OC-84`, but the lane still tried to:
+      - `file.write` `templates/template-08-replace.html` from the project session
+      - fall back to sibling template/reference reads after that write block
+      - keep the same turn alive after successfully creating child draft `OC-241`
+  - local / deployed fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now blocks project-lane `file.write`, `file.edit`, and shell file-build `cli.execute` calls when the continuation prompt already names that path as task-owned blocked or active lane work
+    - the same file now blocks `file.read`, `file.list`, `task.get`, and unscoped `task.list` when the bounded-size/focused-draft prompt already says “create the replacement child now”; only `task.list(parent_task_id=<focus>)` remains allowed
+    - successful focused `task.create` handoffs now stop the PM turn even when the new child is still `draft`, so the next continuation can resume from that created child instead of drifting into `agent.list` or more rediscovery
+    - blocked focused-draft read errors now flow into the existing `validation_loop_blocked` PM early-stop path with a dedicated summary message
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterSuccessfulProjectExecutionHandoffMutation(ForMissingDependencyPrompt|ForDraftChildCreate|IgnoresAssignmentOnlyUpdate|IgnoresUnfocusedDraftChildCreate|RequiresReplacementChildPrompt)?|ShouldStopAfterBlockedProjectExecutionBlockedMutationOnTaskLaneBoundaryErrors|ProjectExecutionBlockedMutationStopMessageOn(FocusedDraftReadGuard|TaskExecutionRequired|TaskLaneBoundary|ParentCompletionRequirements)|ShouldBlockProjectContinuation(FocusedDraftReadTool(BlocksFileRead|AllowsParentScopedTaskList|BlocksTaskListWithoutParent)|TaskOwnedDeliverableMutationToolBlocks(TerminalBlockedFileWrite|TerminalBlockedCLIExecuteBuild|ActiveDeliverableEdit)|SnapshotRediscoveryToolBlocks(TerminalBlockedLeafDeliverableRead|ActiveDeliverableRead|CompanionPlanningArtifactRead|PlanningRootBrowseWhenPlanningTargetsNamed|CompletedBatchDependencyRead))|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildrenUsingSourceDescriptionOnly)$' -count=1`
+  - live proof:
+    - prompt `7a60c9d2-d0a2-48a2-8ded-aa9b38ea60ed` now focuses parent `OC-84`, not stale child `OC-225`
+    - tool result `164e8ae7-56f2-4c19-9212-14cb96e3f9aa` returned the new project-lane write guard: `Do not write deliverable files like templates/template-08-replace.html from the project session`
+    - follow-up PM turn `f502ddde-359c-4860-a49e-7dd5bd8b85d3` directly assigned Casey to `OC-241` and queued it; tool result `9aa85c90-7a63-47df-a1ba-7b2457645121` shows `work_status=queued`

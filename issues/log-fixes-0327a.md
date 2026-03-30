@@ -4215,3 +4215,26 @@
     - rebuilt/restarted on local `repo_version=3662`; runtime health is `ok`
     - directly driven by live PM focus on stale draft `OC-225`
     - the next expected canary is that `OC-225` no longer appears as actionable PM work and the lane moves back to the correct parent-level replacement path under `OC-84`
+- 2026-03-29 23:27 MDT - Hardened focused replacement-parent continuations after the stale-child fix.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `shouldBlockProjectContinuationTaskOwnedDeliverableMutationTool(...)` so PM cannot `file.write`, `file.edit`, or shell-build `cli.execute` a task-owned blocked/active deliverable already named in the prompt
+    - added `shouldBlockProjectContinuationFocusedDraftReadTool(...)` so focused replacement-parent prompts enforce their own “do not call file.read/file.list before acting” rule; only `task.list(parent_task_id=<focus>)` remains allowed
+    - widened `looksLikeShellFileBuildCommand(...)` and CLI path extraction so the mutation guard also catches `Path(...).write_text(...)` style shell writes
+    - extended `shouldStopAfterBlockedProjectExecutionBlockedMutation(...)` / `projectExecutionBlockedMutationStopMessage(...)` to stop PM turns immediately on the new focused-draft read guard family
+    - extended `shouldStopAfterSuccessfulProjectExecutionHandoffMutation(...)` so focused `task.create` into a `draft` child beneath the current focus parent now counts as a successful handoff stop
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldBlockProjectContinuationTaskOwnedDeliverableMutationToolBlocksTerminalBlockedFileWrite`
+    - added `TestShouldBlockProjectContinuationTaskOwnedDeliverableMutationToolBlocksTerminalBlockedCLIExecuteBuild`
+    - added `TestShouldBlockProjectContinuationTaskOwnedDeliverableMutationToolBlocksActiveDeliverableEdit`
+    - added `TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksFileRead`
+    - added `TestShouldBlockProjectContinuationFocusedDraftReadToolAllowsParentScopedTaskList`
+    - added `TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksTaskListWithoutParent`
+    - added `TestProjectExecutionBlockedMutationStopMessageOnFocusedDraftReadGuard`
+    - added `TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationForDraftChildCreate`
+    - added `TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationIgnoresUnfocusedDraftChildCreate`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterSuccessfulProjectExecutionHandoffMutation(ForMissingDependencyPrompt|ForDraftChildCreate|IgnoresAssignmentOnlyUpdate|IgnoresUnfocusedDraftChildCreate|RequiresReplacementChildPrompt)?|ShouldStopAfterBlockedProjectExecutionBlockedMutationOnTaskLaneBoundaryErrors|ProjectExecutionBlockedMutationStopMessageOn(FocusedDraftReadGuard|TaskExecutionRequired|TaskLaneBoundary|ParentCompletionRequirements)|ShouldBlockProjectContinuation(FocusedDraftReadTool(BlocksFileRead|AllowsParentScopedTaskList|BlocksTaskListWithoutParent)|TaskOwnedDeliverableMutationToolBlocks(TerminalBlockedFileWrite|TerminalBlockedCLIExecuteBuild|ActiveDeliverableEdit)|SnapshotRediscoveryToolBlocks(TerminalBlockedLeafDeliverableRead|ActiveDeliverableRead|CompanionPlanningArtifactRead|PlanningRootBrowseWhenPlanningTargetsNamed|CompletedBatchDependencyRead))|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildrenUsingSourceDescriptionOnly)$' -count=1`
+  - live proof:
+    - prompt `7a60c9d2-d0a2-48a2-8ded-aa9b38ea60ed` now focuses `OC-84` instead of `OC-225`
+    - tool result `164e8ae7-56f2-4c19-9212-14cb96e3f9aa` shows the new PM-side write guard for `templates/template-08-replace.html`
+    - turn `f502ddde-359c-4860-a49e-7dd5bd8b85d3` assigned Casey to `OC-241` and queued it successfully, moving the live template-08 canary out of the old same-turn PM rediscovery/write loop family
