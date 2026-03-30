@@ -162,6 +162,16 @@ func TestTaskLooksProceduralInstructionArtifact(t *testing.T) {
 	if !TaskLooksProceduralInstructionArtifact("Include at least 4 exchanges (user/SamBot turns) per conversation", &includeExchangesDescription) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for minimum-count checklist fragment")
 	}
+
+	conversationQualityDescription := "Conversations should demonstrate SamBot operating at deeply technical depth — referencing specific architectures, protocols, implementation details, tradeoffs, and advanced concepts."
+	if !TaskLooksProceduralInstructionArtifact("Conversations should demonstrate SamBot operating at deeply technical depth — referencing specific architectures, protocols, implementation details, tradeoffs, and advanced concepts", &conversationQualityDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for conversation-quality requirement fragment")
+	}
+
+	followupDescription := "Include realistic follow-up questions that push into edge cases or implementation specifics."
+	if !TaskLooksProceduralInstructionArtifact("Include realistic follow-up questions that push into edge cases or implementation specifics", &followupDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for conversation follow-up requirement fragment")
+	}
 }
 
 func TestExtractDeliverablesIgnoresReferenceOnlyInstructionLines(t *testing.T) {
@@ -205,6 +215,22 @@ func TestExtractDeliverablesIgnoresProceduralChecklistFragments(t *testing.T) {
 		"Checklist:",
 		"- Show SamBot responding with precise technical depth — referencing specific architectures, tradeoffs, code-level concepts, and Sam Hotchkiss's authentic views and experience",
 		"- Include at least 4 exchanges (user/SamBot turns) per conversation",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	if len(items) != 1 || !strings.Contains(items[0], "planning/sambot-prompts/test-conversations-level3.md") {
+		t.Fatalf("extractDeliverables = %v, want only the primary deliverable item", items)
+	}
+}
+
+func TestExtractDeliverablesIgnoresConversationRequirementFragments(t *testing.T) {
+	description := strings.Join([]string{
+		"Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical test conversations.",
+		"",
+		"Deliverable: planning/sambot-prompts/test-conversations-level3.md",
+		"",
+		"- Conversations should demonstrate SamBot operating at deeply technical depth — referencing specific architectures, protocols, implementation details, tradeoffs, and advanced concepts",
+		"- Include realistic follow-up questions that push into edge cases or implementation specifics",
 	}, "\n")
 
 	items := extractDeliverables(description)

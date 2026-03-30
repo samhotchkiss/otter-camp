@@ -5082,3 +5082,20 @@
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(RecoveryFileWriteDraftRejectReasonRejectsPromptConversationPlaceholder|InferredTaskDeliverableDraft(BuildsExplicitMarkdownStarter|SkipsSourceBackedContentPostsTask|SkipsPromptConversationCorpusTask|SkipsRootPromptConversationCorpusTask)|MaybeSynthesizeTaskExecutionFileWriteToolCalls(UsesExplicitMarkdownDeliverableDraft|SkipsSourceBackedContentPostsTask|SkipsPromptConversationCorpusTask|SkipsRootPromptConversationCorpusTask))$' -count=1`
     - `GOFLAGS='' go test ./internal/tools/native -run 'Test(File(ReadRejectsPromptConversationPlaceholderAtRootConversationCorpusPath|WriteRejectsPromptConversationPlaceholderInConversationCorpusPath)|WriteRejectsTaskBriefEchoPlaceholderInPlanningDeliverable|ReadRejectsTaskBriefEchoPlaceholderAtInProgressPlanningDeliverablePath|WriteRejectsNarratedTaskPlaceholderContent)$' -count=1`
+- 2026-03-30 14:29 MDT - Stopped PM decomposition from creating requirement-only conversation fragment child tasks.
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+    - added `looksLikeConversationSupportFragment(...)`
+    - `looksLikeSupportOnlyRequirementFragment(...)` now treats:
+      - `Conversations should ...`
+      - `Include realistic follow-up questions ...`
+      as non-executable support fragments when they do not own a concrete workspace artifact
+    - because `extractDeliverables(...)` already filters `isInstructionOnlyDeliverable(...)`, these lines now stop before queue decomposition creates child drafts
+  - changed [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go):
+    - added `TaskLooksProceduralInstructionArtifact` coverage for:
+      - `Conversations should demonstrate ...`
+      - `Include realistic follow-up questions ...`
+    - added `TestExtractDeliverablesIgnoresConversationRequirementFragments`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(TaskLooksProceduralInstructionArtifact|ExtractDeliverablesIgnores(ProceduralChecklistFragments|ConversationRequirementFragments|InstructionOnlyRequirementLines))$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshotIgnoresMalformed(Checklist|ReferenceOnly|Procedural)Children$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformed(ChecklistFragment|ReferenceOnly|Procedural)Children$' -count=1`

@@ -1058,6 +1058,9 @@ func looksLikeSupportOnlyRequirementFragment(normalized string) bool {
 	if looksLikeTemplateStyleSupportFragment(normalized) {
 		return true
 	}
+	if looksLikeConversationSupportFragment(normalized) {
+		return true
+	}
 	if leadingTaskActionPattern.MatchString(normalized) {
 		return false
 	}
@@ -1071,6 +1074,22 @@ func looksLikeSupportOnlyRequirementFragment(normalized string) bool {
 	}
 	if strings.HasPrefix(normalized, "opinionated,") &&
 		(strings.Contains(normalized, "writing voice") || strings.Contains(normalized, "voice")) {
+		return true
+	}
+	return false
+}
+
+func looksLikeConversationSupportFragment(normalized string) bool {
+	if normalized == "" || containsWorkspaceArtifactReference(normalized) {
+		return false
+	}
+	if strings.HasPrefix(normalized, "conversations should ") {
+		return true
+	}
+	if strings.HasPrefix(normalized, "include realistic ") &&
+		(strings.Contains(normalized, "follow-up questions") ||
+			strings.Contains(normalized, "edge cases") ||
+			strings.Contains(normalized, "implementation specifics")) {
 		return true
 	}
 	return false

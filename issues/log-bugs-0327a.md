@@ -1778,3 +1778,21 @@
   - impact:
     - recovery keeps reviving the same conversation placeholder as a “durable draft”
     - file.read/file.write do not short-circuit on this family, so the lane can still churn across recovery and review
+- 2026-03-30 14:29 MDT - PM decomposition still emitted requirement-only conversation child tasks for a single-file prompt corpus deliverable.
+  - fresh live evidence:
+    - parent task `303` decomposed into:
+      - real child `320`: write `planning/sambot-prompts/test-conversations-level3.md`
+      - malformed children `321` / `322`:
+        - `Conversations should demonstrate ...`
+        - `Include realistic follow-up questions ...`
+    - the PM lane then spent its next continuation trying to inspect those malformed children and hit the existing rediscovery guard instead of moving bounded work forward
+  - bug:
+    - the existing `internal/taskdecomp` procedural-fragment matcher caught earlier checklist/support lines like:
+      - `Show SamBot responding ...`
+      - `Include at least 4 exchanges ...`
+    - but it missed requirement-sentence variants phrased as:
+      - `Conversations should ...`
+      - `Include realistic follow-up questions ...`
+  - impact:
+    - single-file prompt-corpus tasks can still explode into non-executable support fragments
+    - those fragments then pollute PM continuation focus and burn rediscovery/validation turns even though they should never have been child lanes
