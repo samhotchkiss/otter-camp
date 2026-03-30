@@ -1047,6 +1047,9 @@ func looksLikeSupportOnlyRequirementFragment(normalized string) bool {
 	if normalized == "" {
 		return false
 	}
+	if looksLikeTemplateStyleSupportFragment(normalized) {
+		return true
+	}
 	if leadingTaskActionPattern.MatchString(normalized) {
 		return false
 	}
@@ -1060,6 +1063,20 @@ func looksLikeSupportOnlyRequirementFragment(normalized string) bool {
 	}
 	if strings.HasPrefix(normalized, "opinionated,") &&
 		(strings.Contains(normalized, "writing voice") || strings.Contains(normalized, "voice")) {
+		return true
+	}
+	return false
+}
+
+func looksLikeTemplateStyleSupportFragment(normalized string) bool {
+	if normalized == "" || containsWorkspaceArtifactReference(normalized) {
+		return false
+	}
+	if strings.HasPrefix(normalized, "build a fresh, distinctive template") {
+		return true
+	}
+	if strings.HasPrefix(normalized, "design is clearly differentiated from") &&
+		strings.Contains(normalized, "template") {
 		return true
 	}
 	return false

@@ -1092,3 +1092,12 @@
   - impact:
     - stale pending jobs and pending recovery-resume messages could survive even after the runtime had already concluded that the lane must either write the concrete file body directly or stop
     - that kept malformed template-08 child lanes eligible for unnecessary recovery churn
+- 2026-03-30 01:52 MDT - Stale template-support fragment child lanes still fell through the malformed-child preflight even after future decomposition stopped creating them.
+  - fresh live evidence:
+    - task `253` title/description is only `Build a fresh, distinctive template (e.g., a bold magazine-style or asymmetric editorial layout)`
+    - task `255` title/description is only `Design is clearly differentiated from the other 9 templates`
+    - both are support-only checklist fragments beneath the single-file replacement parent for `templates/template-08-replace.html`, yet they remained runnable async lanes
+  - bug:
+    - [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go) recognized voice-only and requirement-only support fragments, but not template-style support fragments that still lacked their own bounded output
+  - impact:
+    - pre-fix decomposition junk from task `251` could still reopen recovery and same-turn discovery churn even after the splitter was fixed for future tasks

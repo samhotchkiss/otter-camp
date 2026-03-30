@@ -4406,3 +4406,19 @@
   - live state after redeploy on `repo_version=3673`:
     - task `255` session `81feec51-2006-4dbb-8549-5bdd43011b80` is closed
     - the old direct-write-only canary no longer has any pending/claimed recovery-resume job behind it
+- 2026-03-30 01:52 MDT - Widened malformed-child detection so stale template-support fragments under a single-file parent halt before model call.
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+    - added `looksLikeTemplateStyleSupportFragment(...)`
+    - `looksLikeSupportOnlyRequirementFragment(...)` now recognizes:
+      - `Build a fresh, distinctive template ...`
+      - `Design is clearly differentiated from the other 9 templates`
+  - changed [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go):
+    - added classifier coverage for both template-support fragment phrasings
+  - changed [`internal/turn/engine_integration_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_integration_test.go):
+    - added `TestTurnEngineIntegrationMalformedTemplateSupportFragmentChildKickoffPreflightBlocksBeforeModelCall`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'TestTaskLooksProceduralInstructionArtifact$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationMalformed(TemplateSupportFragment|SupportRequirementFragment)ChildKickoffPreflightBlocksBeforeModelCall$' -count=1`
+  - live caveat after redeploy:
+    - task `253` reopened on a fresh session (`337791a8-2c57-4b2d-8447-7fcda1209dc0`), but the first post-redeploy turn was already in progress and did not provide a clean preflight boundary
+    - fresh production proof of the new malformed-child halt is therefore still pending the next clean kickoff/recovery turn for that lane

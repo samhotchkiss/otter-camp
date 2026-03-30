@@ -11882,6 +11882,102 @@ func TestTurnEngineIntegrationMalformedSupportRequirementFragmentChildKickoffPre
 	}
 }
 
+func TestTurnEngineIntegrationMalformedTemplateSupportFragmentChildKickoffPreflightBlocksBeforeModelCall(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+
+	parentDescription := "Create templates/template-08-replace.html as a complete, standalone HTML layout template for Sam.blog."
+	parentMetadata := mustJSON(t, map[string]any{
+		"decomposition": map[string]any{
+			"orchestration_only":  true,
+			"source_description":  parentDescription,
+			"primary_deliverable": "templates/template-08-replace.html",
+		},
+	})
+	parentTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "Build template-08 replacement",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		CreatedByType:  "human_user",
+		CreatedByID:    &fixture.user.ID,
+		Metadata:       parentMetadata,
+	})
+	if err != nil {
+		t.Fatalf("Create parent task: %v", err)
+	}
+
+	flowTemplate := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	childDescription := "Build a fresh, distinctive template (e.g., a bold magazine-style or asymmetric editorial layout)."
+	childTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Build a fresh, distinctive template (e.g., a bold magazine-style or asymmetric editorial layout)",
+		Description:     &childDescription,
+		WorkStatus:      "in_progress",
+		FlowTemplateID:  &flowTemplate.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+		AssignedAgentID: &fixture.agent.ID,
+		Metadata: mustJSON(t, map[string]any{
+			"decomposition_parent_task_id": parentTask.ID.String(),
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Create child task: %v", err)
+	}
+
+	taskSession, _ := mustCreateTaskSession(t, ctx, fixture, childTask, "operator opened an async template support-fragment child session before the job was enqueued")
+	authorType := "human_user"
+	kickoffMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    buildTaskQueueKickoffMessageForTest(childTask),
+		Metadata: mustJSON(t, map[string]any{
+			"source": "task_queue_processor",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage kickoff: %v", err)
+	}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		return ModelResponse{Content: "should never reach model"}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, taskSession.ID, kickoffMessage.ID, &fixture.agent.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage malformed template support fragment child kickoff: %v", err)
+	}
+	if modelCalls != 0 {
+		t.Fatalf("model calls = %d, want 0 because malformed template support child kickoff must halt in preflight", modelCalls)
+	}
+
+	refreshedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, childTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID child task: %v", err)
+	}
+	if refreshedTask.WorkStatus != "blocked" {
+		t.Fatalf("child task status = %q, want blocked", refreshedTask.WorkStatus)
+	}
+
+	blockedReasons, err := repo.NewProjectTaskEventRepo(fixture.pool).LatestBlockedReasonsByTask(ctx, []uuid.UUID{childTask.ID})
+	if err != nil {
+		t.Fatalf("LatestBlockedReasonsByTask: %v", err)
+	}
+	blockedReason := blockedReasons[childTask.ID]
+	if !strings.Contains(blockedReason, "procedural child") {
+		t.Fatalf("blocked reason = %q, want malformed template support fragment explanation", blockedReason)
+	}
+}
+
 func TestTurnEngineIntegrationMalformedDuplicateSharedFileChildKickoffPreflightBlocksBeforeModelCall(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

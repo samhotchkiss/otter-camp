@@ -125,6 +125,14 @@ func TestTaskLooksProceduralInstructionArtifact(t *testing.T) {
 	if !TaskLooksProceduralInstructionArtifact("Opinionated, direct, technically rigorous — reflects Sam's writing voice", &voiceDescription) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for voice-only support fragment child task")
 	}
+	templateSupportDescription := "Build a fresh, distinctive template (e.g., a bold magazine-style or asymmetric editorial layout)."
+	if !TaskLooksProceduralInstructionArtifact("Build a fresh, distinctive template (e.g., a bold magazine-style or asymmetric editorial layout)", &templateSupportDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for template-style support fragment child task")
+	}
+	templateDifferentiationDescription := "Design is clearly differentiated from the other 9 templates."
+	if !TaskLooksProceduralInstructionArtifact("Design is clearly differentiated from the other 9 templates", &templateDifferentiationDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for template differentiation support fragment child task")
+	}
 	boundedSupportDescription := "Use content/technonymous-index.json and write the first 12 posts as markdown files under content/posts/."
 	if TaskLooksProceduralInstructionArtifact("Use content/technonymous-index.json and write the first 12 posts as markdown files under content/posts/", &boundedSupportDescription) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = true, want false for bounded deliverable task that names source artifacts")
