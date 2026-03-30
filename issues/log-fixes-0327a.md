@@ -3964,3 +3964,29 @@
     - after the rebuilt worker came up, the SamBot PM session stopped accumulating duplicate same-fingerprint continuations
     - the duplicate backlog drained to failed terminal messages, and the next PM turn `e0fb59d1-8685-4dee-8cd5-7bd10f961bb7` made real progress by creating/queueing tasks `198` and `199`
     - steady state after that turn was `0` pending `project_execution_continuation` messages for the PM session
+- 2026-03-29 20:18 MDT - Followed that with the stale task-turn ownership repair and explicit markdown deliverable recovery fix.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - added `RecoverStaleInProgressProjectTaskTurnsWithoutOwnership(...)`
+    - wired the new repair into worker startup and inline claim processing alongside the existing PM stale-turn repair
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerRecoverStaleInProgressProjectTaskTurnsWithoutOwnership`
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - widened explicit deliverable parsing to recognize markdown `**File:** ...` labels
+  - changed [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go):
+    - `latestRecoveryTargetPathForSession(...)` now benefits from the widened `**File:**` parser
+    - `normalizeRecoveryCheckpointTargetForTask(...)` now falls back to the explicit deliverable when a checkpoint target is blank or outside the task contract
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - widened explicit deliverable parsing and session deliverable reuse to respect markdown `**File:** ...` tasks
+  - changed tests:
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go)
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go)
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RecoverStaleInProgressProjectTurnsWithoutOwnership|RecoverStaleInProgressProjectTaskTurnsWithoutOwnership)$' -count=1`
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(ParseExplicitDeliverablePathDetectsMarkdownFileLabel|LatestRecoveryTargetPathForSessionPrefersExplicitFileLabelOverHistoricalPlanningTarget|NormalizeRecoveryCheckpointTargetForTaskFallsBackToExplicitFileLabel|TaskExplicitDeliverablePathFindsMatchingParentDecompositionDeliverableForBackendChild)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(SessionTaskDeliverablePathPrefersExplicitFileLabelOverHistoricalPlanningTarget|SessionTaskDeliverablePathIgnoresHistoricalAuxiliaryTestArtifactForBackendTaskReferencingFeatureSpec|SessionTaskDeliverablePathIgnoresConflictingParentFrontendDeliverableForBackendChild)$' -count=1`
+  - live proof:
+    - on `repo_version=3649`, task `199` session `9e24faa3-a105-4d2b-9c91-e35dcc911b31` recovered from dead turn `a57229db-88de-416f-9781-cfc9c028cb11` into fresh retry turn `a6cb679e-0d99-4bd4-a15c-d6341b906c7c`
+    - that fresh retry no longer reopened `planning/sambot-architecture.md`; it went straight into writing `sambot/api.js`
+    - the next remaining seam on that lane is the narrower `non_substantive_content` file-write narration family, not wrong-deliverable recovery

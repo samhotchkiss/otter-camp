@@ -387,3 +387,34 @@ They need sharper stopping rules than ordinary execution lanes.
     - the duplicate continuation pile drained to failed terminal messages instead of growing
     - the final PM turn `e0fb59d1-8685-4dee-8cd5-7bd10f961bb7` then made real progress by creating/queueing tasks `198` and `199`
     - steady state after that turn: `0` pending `project_execution_continuation` messages on the PM session and no new duplicate same-fingerprint continuation fan-out
+- 2026-03-29 20:18 MDT - The next blocker moved from PM continuations down into task-lane ownership repair. New replacement task `199` had the right brief (`**File:** sambot/api.js`), but after a restart its async session stayed pinned to a failed pre-redeploy turn and never got a clean retry on the new binary.
+  - fresh live evidence before the fix:
+    - session `9e24faa3-a105-4d2b-9c91-e35dcc911b31` kept `current_turn_id=a57229db-88de-416f-9781-cfc9c028cb11` even after the latest `model_invocation` for that turn failed with `product_runtime_failure / context canceled`
+    - the worker already had the next `agent_turn` retry job queued, but it could not run because the dead `current_turn_id` still marked the session as actively executing
+  - local/live fix:
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) now adds `RecoverStaleInProgressProjectTaskTurnsWithoutOwnership(...)`, mirroring the existing PM/session-level stale-turn repair for `scope_type='project_task'`
+    - the worker now runs that repair both on startup and inline before claim, failing the stale turn, failing pending/streaming assistant messages for that turn, clearing `current_turn_id`, retiring same-attempt `agent_turn` dispatches, and enqueueing a fresh retry
+    - added focused integration coverage in [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go) with `TestJobWorkerRecoverStaleInProgressProjectTaskTurnsWithoutOwnership`
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RecoverStaleInProgressProjectTurnsWithoutOwnership|RecoverStaleInProgressProjectTaskTurnsWithoutOwnership)$' -count=1`
+  - live proof:
+    - on `repo_version=3649`, task `199` session `9e24faa3-a105-4d2b-9c91-e35dcc911b31` advanced from stale turn `a57229db-88de-416f-9781-cfc9c028cb11` to fresh retry turn `a6cb679e-0d99-4bd4-a15c-d6341b906c7c`
+    - sibling task `198` session `50863e66-5764-4176-9847-c7f2973caa90` also stopped holding a dead `current_turn_id`
+- 2026-03-29 20:18 MDT - While chasing that stuck task-lane repair, I found the companion deliverable-path bug that had been poisoning replacement tasks `198` and `199`.
+  - fresh live evidence before the fix:
+    - task `199` explicitly says `**File:** sambot/api.js`, but the previous turn still emitted `deliverable_path=planning/sambot-architecture.md` and blocked on `recovery_target_focus_required`
+    - task `198` explicitly says `**File:** planning/sambot-tech-architecture.md`, but its persisted `recovery_file_write_checkpoint.target_path` had collapsed to the malformed token `SamBot`
+  - local/live fix:
+    - [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go) and [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now recognize markdown `**File:** ...` labels as explicit deliverables, not just plain `Deliverable:` / `Output:`
+    - [`internal/tools/native/file_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools.go) now normalizes malformed recovery checkpoint targets back to the explicit deliverable path when the checkpoint target is blank or outside the task contract
+    - added focused coverage in:
+      - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go) with `TestParseExplicitDeliverablePathDetectsMarkdownFileLabel`
+      - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go) with `TestLatestRecoveryTargetPathForSessionPrefersExplicitFileLabelOverHistoricalPlanningTarget` and `TestNormalizeRecoveryCheckpointTargetForTaskFallsBackToExplicitFileLabel`
+      - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) with `TestSessionTaskDeliverablePathPrefersExplicitFileLabelOverHistoricalPlanningTarget`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(ParseExplicitDeliverablePathDetectsMarkdownFileLabel|LatestRecoveryTargetPathForSessionPrefersExplicitFileLabelOverHistoricalPlanningTarget|NormalizeRecoveryCheckpointTargetForTaskFallsBackToExplicitFileLabel|TaskExplicitDeliverablePathFindsMatchingParentDecompositionDeliverableForBackendChild)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(SessionTaskDeliverablePathPrefersExplicitFileLabelOverHistoricalPlanningTarget|SessionTaskDeliverablePathIgnoresHistoricalAuxiliaryTestArtifactForBackendTaskReferencingFeatureSpec|SessionTaskDeliverablePathIgnoresConflictingParentFrontendDeliverableForBackendChild)$' -count=1`
+  - live proof:
+    - after the stale-turn repair unwedged task `199`, its fresh retry on `repo_version=3649` no longer reopened `planning/sambot-architecture.md`
+    - the new turn went straight into `Let me write the complete sambot/api.js file now.`, which shows the wrong-path recovery redirect is no longer winning on that lane
+    - the next remaining seam there is narrower: repeated narrative `file.write` content (`non_substantive_content`), not deliverable-path confusion

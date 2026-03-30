@@ -302,6 +302,55 @@ func TestLatestRecoveryTargetPathForSessionIgnoresConflictingParentFrontendDeliv
 	}
 }
 
+func TestLatestRecoveryTargetPathForSessionPrefersExplicitFileLabelOverHistoricalPlanningTarget(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+
+	description := "## Deliverable\n**File:** `sambot/api.js`\n\nWrite the complete Express.js backend API for SamBot. Reference planning/sambot-personality-spec.md for tone guidance."
+	taskRecord := repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		TaskNumber:     199,
+		Title:          "Build SamBot Express.js API — sambot/api.js",
+		Description:    &description,
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{task: taskRecord}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "tool_result",
+				Content:   `{"tool_name":"file.read","output":{"path":"planning/sambot-architecture.md","deliverable_path":"planning/sambot-architecture.md","error":"recovery_target_focus_required","message":"Recovery already identified \u0060planning/sambot-architecture.md\u0060 as the target deliverable."}}`,
+				Status:    "final",
+			},
+		},
+	}
+
+	got := executor.latestRecoveryTargetPathForSession(context.Background(), workspaceScope{sessionID: &sessionID, taskID: &taskID})
+	if got != "sambot/api.js" {
+		t.Fatalf("latestRecoveryTargetPathForSession(...) = %q, want %q", got, "sambot/api.js")
+	}
+}
+
+func TestNormalizeRecoveryCheckpointTargetForTaskFallsBackToExplicitFileLabel(t *testing.T) {
+	description := "## Deliverable\n**File:** `planning/sambot-tech-architecture.md`\n\nWrite the complete SamBot technical architecture specification."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  198,
+		Title:       "Write SamBot technical architecture spec — planning/sambot-tech-architecture.md",
+		Description: &description,
+	}
+
+	if got := normalizeRecoveryCheckpointTargetForTask(taskRecord, "SamBot"); got != "planning/sambot-tech-architecture.md" {
+		t.Fatalf("normalizeRecoveryCheckpointTargetForTask(...) = %q, want %q", got, "planning/sambot-tech-architecture.md")
+	}
+}
+
 func TestTaskExplicitDeliverablePathFindsMatchingParentDecompositionDeliverableForBackendChild(t *testing.T) {
 	orgID := uuid.New()
 	projectID := uuid.New()

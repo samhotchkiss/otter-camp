@@ -906,6 +906,13 @@ func contentMigrationCheckpointPreferredOutputPath(taskRecord repo.ProjectTask, 
 
 func normalizeRecoveryCheckpointTargetForTask(taskRecord repo.ProjectTask, rawTarget string) string {
 	target := normalizeWorkspacePath(rawTarget)
+	explicit := strings.TrimSpace(parseExplicitDeliverablePath(taskRecord))
+	if explicit != "" {
+		if target == "" || !sameOrNestedWorkspacePath(target, explicit) {
+			return explicit
+		}
+		return target
+	}
 	if target == "" {
 		return ""
 	}

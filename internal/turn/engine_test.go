@@ -40417,6 +40417,42 @@ func TestSessionTaskDeliverablePathIgnoresHistoricalAuxiliaryTestArtifactForBack
 	}
 }
 
+func TestSessionTaskDeliverablePathPrefersExplicitFileLabelOverHistoricalPlanningTarget(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	sessionID := fixture.session.ID
+	taskID := uuid.New()
+	description := "## Deliverable\n**File:** `sambot/api.js`\n\nWrite the complete Express.js backend API for SamBot. Reference planning/sambot-personality-spec.md for tone guidance."
+	taskRecord := repo.ProjectTask{
+		ID:          taskID,
+		TaskNumber:  199,
+		Title:       "Build SamBot Express.js API — sambot/api.js",
+		Description: &description,
+	}
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: taskRecord,
+		},
+	}
+	messageRepo := newFakeMessageRepo()
+	messageRepo.create(repo.ChatMessage{
+		SessionID: sessionID,
+		Role:      "tool_result",
+		Content:   `{"tool_name":"file.read","output":{"path":"planning/sambot-architecture.md","deliverable_path":"planning/sambot-architecture.md","error":"recovery_target_focus_required","message":"Recovery already identified \u0060planning/sambot-architecture.md\u0060 as the target deliverable."}}`,
+		Status:    "final",
+	})
+	fixture.messages = messageRepo
+	fixture.engine.messages = messageRepo
+
+	if got := fixture.engine.sessionTaskDeliverablePath(context.Background(), sessionID, taskRecord); got != "sambot/api.js" {
+		t.Fatalf("sessionTaskDeliverablePath(...) = %q, want %q", got, "sambot/api.js")
+	}
+}
+
 func TestStructuredReviewDecisionPromptContextDedupesAndFallsBack(t *testing.T) {
 	t.Parallel()
 

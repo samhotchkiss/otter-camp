@@ -186,7 +186,7 @@ var promptFlowNodeExecutionPattern = regexp.MustCompile(`(?i)flow node execution
 var workspacePathInBackticksPattern = regexp.MustCompile("`([^`]+)`")
 var acceptanceCriteriaListItemPattern = regexp.MustCompile(`^\d+[.)]\s+(.+)$`)
 var explicitDeliverablePathPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(?:deliverable|output)\b(?:[*_]+)?\s*:\s*(?:[*_]+)?\s*([^\s,;]+)`),
+	regexp.MustCompile(`(?i)\b(?:deliverable|output|file)\b(?:[*_]+)?\s*:\s*(?:[*_]+)?\s*([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\boutput\b[^.;:\n]{0,80}?\s+(?:at|to)\s+([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\b(?:write|create|produce)\b[^.;:\n]{0,240}?\s+(?:at|to)\s+([^\s,;]+)`),
 	regexp.MustCompile(`(?i)\b(?:append|add|update)\b[^.;:\n]{0,120}?\s+(?:to|into)\s+(?:the\s+existing\s+)?([^\s,;]+)`),

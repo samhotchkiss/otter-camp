@@ -783,3 +783,23 @@
   - impact:
     - the PM lane could spin on identical same-fingerprint rediscovery continuations even after the repeated-block suppressor existed
     - this was a direct manual-test blocker because the project session looked alive but kept paying for duplicated PM turns instead of settling or making bounded progress
+- 2026-03-29 20:18 MDT - Replacement task lanes inherited the same stale-turn ownership hole the PM lane had already solved.
+  - fresh live evidence:
+    - task `199` session `9e24faa3-a105-4d2b-9c91-e35dcc911b31` still held `current_turn_id=a57229db-88de-416f-9781-cfc9c028cb11` after its latest `model_invocation` failed with `product_runtime_failure / context canceled`
+    - the next `agent_turn` retry dispatch was already queued, but it could not run while that dead in-progress turn still owned the session
+  - bug:
+    - the worker only had `RecoverStaleInProgressProjectTurnsWithoutOwnership(...)` for `scope_type='project'`
+    - there was no equivalent stale-turn repair for `scope_type='project_task'`, so a cancelled model call could strand an async task lane indefinitely
+  - impact:
+    - fresh runtime fixes never reached the hot task lane because the lane stayed pinned behind its own dead turn
+    - this was a direct manual-test blocker for replacement tasks `198` and `199`
+- 2026-03-29 20:18 MDT - Explicit deliverable parsing and checkpoint normalization still missed the markdown task brief shape used by the new replacement tasks.
+  - fresh live evidence:
+    - task `199` explicitly says `**File:** sambot/api.js`, but its pre-fix retry still emitted `deliverable_path=planning/sambot-architecture.md`
+    - task `198` explicitly says `**File:** planning/sambot-tech-architecture.md`, but its persisted `recovery_file_write_checkpoint.target_path` was malformed as just `SamBot`
+  - bug:
+    - explicit deliverable parsing recognized `Deliverable:` / `Output:` but not markdown `**File:** ...`
+    - malformed checkpoint targets that fell outside the task contract were not consistently forced back to the explicit deliverable path
+  - impact:
+    - backend and planning replacement tasks could keep inheriting stale historical targets even after the parent PM lane split them correctly
+    - this was another direct manual-test blocker because the runtime could send a fresh bounded task back into the wrong artifact family

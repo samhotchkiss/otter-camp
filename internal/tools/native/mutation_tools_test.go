@@ -1848,6 +1848,17 @@ func TestParseExplicitDeliverablePathDetectsLeadingPathTitleWithAlternates(t *te
 	}
 }
 
+func TestParseExplicitDeliverablePathDetectsMarkdownFileLabel(t *testing.T) {
+	t.Parallel()
+
+	description := "## Deliverable\n**File:** `sambot/api.js`\n\nWrite the complete Express.js backend API for SamBot."
+	taskRecord := repo.ProjectTask{Description: &description}
+
+	if got := parseExplicitDeliverablePath(taskRecord); got != "sambot/api.js" {
+		t.Fatalf("parseExplicitDeliverablePath() = %q, want %q", got, "sambot/api.js")
+	}
+}
+
 func TestParseExplicitDeliverablePathDetectsParenthesizedOptionPath(t *testing.T) {
 	t.Parallel()
 
