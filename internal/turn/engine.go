@@ -10868,6 +10868,60 @@ func (e *TurnEngine) handleMalformedDuplicateSharedFileChildTaskPreflight(ctx co
 	return true, nil
 }
 
+func (e *TurnEngine) handleMalformedDuplicateSharedFileChildSiblingGuardStop(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if e == nil || e.tasks == nil || rt == nil || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
+
+	taskRecord, err := e.tasks.GetByID(ctx, rt.session.ScopeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return true, err
+	}
+	parentTask, sharedPath, malformed, err := e.malformedDuplicateSharedFileParentTaskForChild(ctx, taskRecord)
+	if err != nil || !malformed {
+		return malformed, err
+	}
+
+	reason := buildMalformedDuplicateSharedFileChildTaskBlockedReason(taskRecord, parentTask, sharedPath)
+	systemMessage := buildMalformedDuplicateSharedFileChildTaskSystemMessage(taskRecord, parentTask, sharedPath)
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, systemMessage); err != nil {
+		return true, err
+	}
+	if e.taskTransitions == nil {
+		return true, fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
+		if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
+			var transitionErr tasksvc.ErrInvalidStatusTransition
+			if errors.As(err, &transitionErr) {
+				refreshed, refreshErr := e.tasks.GetByID(ctx, taskRecord.ID)
+				if refreshErr == nil {
+					nextStatus := strings.ToLower(strings.TrimSpace(refreshed.WorkStatus))
+					if nextStatus != "blocked" && nextStatus != "done" && nextStatus != "cancelled" {
+						return true, err
+					}
+				} else {
+					return true, err
+				}
+			} else {
+				return true, err
+			}
+		}
+	}
+	rt.stopReason = stopReasonValidationBlocked
+	if rt.recoveryTurn {
+		rt.recoveryBlockReason = reason
+		_ = e.cancelRecoveryResumeDispatch(ctx, rt, reason)
+	}
+	return true, nil
+}
+
 func (e *TurnEngine) projectBootstrapAutoContinueMessage(ctx context.Context, messageID uuid.UUID) bool {
 	if e == nil || e.messages == nil || messageID == uuid.Nil {
 		return false
@@ -15448,6 +15502,11 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return true, nil
 		}
 		if len(toolCalls) == 0 && shouldStopAfterBlockedTaskExecutionSiblingMutation(rt, blockedCalls) {
+			if handled, err := e.handleMalformedDuplicateSharedFileChildSiblingGuardStop(ctx, rt); err != nil {
+				return false, err
+			} else if handled {
+				return true, nil
+			}
 			rt.stopReason = stopReasonValidationBlocked
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Task sibling-responsibility guard blocked a discovery-only child lane from mutating the shared deliverable. Ending the turn early so the write-focused sibling can own the artifact.]")
 			return true, nil

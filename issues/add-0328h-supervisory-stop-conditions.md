@@ -479,3 +479,13 @@ They need sharper stopping rules than ordinary execution lanes.
   - proof status:
     - diagnosis is directly live-backed by task `220` / session `a8ae127f-900e-4fb1-8985-5732d1540341`
     - next post-redeploy canary should show task `220` blocking at preflight or disappearing from PM recovery focus instead of reopening another empty-`cli.execute` recovery chain
+- 2026-03-29 21:59 MDT - Followed the same canary into the already-running-lane gap.
+  - fresh live evidence:
+    - after the first redeploy, task `220` still showed only `repo_version=3654` recovery resumes and continued to hit the sibling-write guard while its old session stayed active
+  - local / deployed fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now treats the sibling-write guard as terminal when the current lane is a malformed duplicate whole-file child; it blocks the task immediately and cancels future recovery resumes for that session
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterSuccessfulProjectExecutionHandoffMutation(ForMissingDependencyPrompt|IgnoresAssignmentOnlyUpdate|RequiresReplacementChildPrompt)?|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren(UsingAtPathWording|UsingSingleFileWording)?|EnqueueTaskValidationBlockedContinuationPromptBlocksMalformedDuplicateSharedFileChild|HandleMalformedDuplicateSharedFileChildSiblingGuardStopBlocksTask)$' -count=1`
+  - proof status:
+    - this is specifically aimed at the still-live task `220` session `a8ae127f-900e-4fb1-8985-5732d1540341`
+    - the expected post-redeploy canary is that the next sibling-write stop blocks task `220` outright instead of scheduling another recovery resume

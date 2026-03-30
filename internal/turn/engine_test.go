@@ -23810,6 +23810,72 @@ func TestEnqueueTaskValidationBlockedContinuationPromptBlocksMalformedDuplicateS
 	}
 }
 
+func TestHandleMalformedDuplicateSharedFileChildSiblingGuardStopBlocksTask(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	parentID := uuid.New()
+	childID := uuid.New()
+	parentDescription := "Write the file templates/template-08-replace.html"
+	childDescription := "## Deliverable\nWrite a single file: `templates/template-08-replace.html`\n\nThis child should produce the full template."
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		parentID: {
+			ID:          parentID,
+			ProjectID:   projectID,
+			TaskNumber:  84,
+			Title:       "Build HTML layout template 8 of 10 (Editorial Longform) — replacement for blocked OC-43/OC-38",
+			Description: &parentDescription,
+			WorkStatus:  "draft",
+		},
+		childID: {
+			ID:          childID,
+			ProjectID:   projectID,
+			TaskNumber:  220,
+			Title:       "Write templates/template-08-replace.html — Editorial Longform layout template (template 8 of 10)",
+			Description: &childDescription,
+			WorkStatus:  "in_progress",
+			Metadata:    mustJSONRaw(map[string]any{"decomposition_parent_task_id": parentID.String()}),
+		},
+	}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = childID
+
+	rt := &turnRuntime{
+		session:      fixture.session,
+		turn:         &repo.ChatTurn{ID: uuid.New(), SessionID: fixture.session.ID},
+		recoveryTurn: true,
+	}
+
+	handled, err := fixture.engine.handleMalformedDuplicateSharedFileChildSiblingGuardStop(context.Background(), rt)
+	if err != nil {
+		t.Fatalf("handleMalformedDuplicateSharedFileChildSiblingGuardStop: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want malformed duplicate shared-file sibling-guard stop to be terminal")
+	}
+	if got := taskRepo.items[childID].WorkStatus; got != "blocked" {
+		t.Fatalf("child task work_status = %q, want blocked", got)
+	}
+	taskTransitions, ok := fixture.engine.taskTransitions.(*fakeTaskTransitionService)
+	if !ok {
+		t.Fatalf("taskTransitions = %T, want *fakeTaskTransitionService", fixture.engine.taskTransitions)
+	}
+	if len(taskTransitions.calls) != 1 || taskTransitions.calls[0].taskID != childID {
+		t.Fatalf("MarkBlocked calls = %+v, want single block for child task", taskTransitions.calls)
+	}
+	if !strings.Contains(taskTransitions.calls[0].reason, "duplicates the parent's shared single-file deliverable") {
+		t.Fatalf("block reason = %q, want malformed duplicate shared-file child reason", taskTransitions.calls[0].reason)
+	}
+	if !fixture.messages.containsContentSubstring("duplicates the parent shared single-file deliverable owned by OC-84") {
+		t.Fatal("expected system message explaining duplicate shared-file child halt")
+	}
+	if strings.TrimSpace(rt.recoveryBlockReason) == "" {
+		t.Fatal("expected recovery block reason to be populated")
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotPrefersDraftChildOverFreshReplacementParent(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

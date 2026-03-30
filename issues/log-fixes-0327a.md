@@ -4075,3 +4075,13 @@
   - proof status:
     - this is immediately diagnosis-backed from live task `220`, whose active recovery session `a8ae127f-900e-4fb1-8985-5732d1540341` is still spending turns on sibling-write/empty-cli churn for the parent deliverable `templates/template-08-replace.html`
     - after redeploy, the expected live canary is that task `220` blocks at preflight or disappears from PM snapshot focus instead of reopening another recovery resume
+- 2026-03-29 21:59 MDT - Made the sibling-write guard terminal for already-running malformed duplicate whole-file children.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - when a discovery-only child lane is blocked by the sibling-write guard and the task is a malformed duplicate whole-file child, the engine now marks the task `blocked` immediately and cancels further recovery resumes for that lane
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleMalformedDuplicateSharedFileChildSiblingGuardStopBlocksTask`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterSuccessfulProjectExecutionHandoffMutation(ForMissingDependencyPrompt|IgnoresAssignmentOnlyUpdate|RequiresReplacementChildPrompt)?|ProjectExecutionContinuationSnapshotIgnoresMalformedDuplicateSharedFileChildren(UsingAtPathWording|UsingSingleFileWording)?|EnqueueTaskValidationBlockedContinuationPromptBlocksMalformedDuplicateSharedFileChild|HandleMalformedDuplicateSharedFileChildSiblingGuardStopBlocksTask)$' -count=1`
+  - proof status:
+    - this follow-on fix targets the exact still-live task `220` / session `a8ae127f-900e-4fb1-8985-5732d1540341` gap observed right after the first redeploy
+    - next canary should show the sibling-write stop turning into a terminal block for task `220`, even if the lane was already running before the classifier change

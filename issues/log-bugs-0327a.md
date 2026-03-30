@@ -886,3 +886,12 @@
     - it did not treat the newer missing-prerequisite prompt form (`prerequisite artifact ... create, queue, or advance the smallest bounded ...`) as the same successful handoff condition
   - impact:
     - PM turns could still waste a post-handoff rediscovery step after already queueing the correct bounded replacement child
+- 2026-03-29 21:59 MDT - Existing malformed duplicate-child recovery lanes could still survive until a fresh preflight.
+  - fresh live evidence:
+    - even after the wider duplicate-child classifier was deployed, task `220` still had an older active recovery session `a8ae127f-900e-4fb1-8985-5732d1540341`
+    - that lane kept hitting the sibling-write guard (`do not write deliverable files from this lane`) instead of being blocked immediately
+  - bug:
+    - duplicate-child blocking only happened on new-turn preflight or later validation-block continuation handling
+    - an already-running discovery-only child lane could continue churning on sibling-write stops until another restart/resume cycle happened to re-enter preflight
+  - impact:
+    - the live template-08 canary could keep burning task-recovery turns even after the classifier fix was deployed
