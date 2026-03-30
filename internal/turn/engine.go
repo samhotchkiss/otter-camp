@@ -5191,6 +5191,11 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 					strings.TrimSpace(err.Error()),
 				),
 			)
+			if retried, retryErr := e.retryProjectExecutionContinuationForExecutableContractStop(ctx, session, completedTurn, latestUser, nextTask); retryErr != nil {
+				return false, retryErr
+			} else if retried {
+				return true, nil
+			}
 			if retried, retryErr := e.retryProjectExecutionContinuationForReplacementChildWork(ctx, session, completedTurn, latestUser); retryErr != nil {
 				return false, retryErr
 			} else if retried {
@@ -5739,6 +5744,87 @@ func (e *TurnEngine) retryProjectExecutionContinuationForReplacementChildWork(
 		snapshot,
 		focusTask,
 		focusActivity,
+		taskHintsByTask[focusTask.ID],
+	)
+	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	if err != nil {
+		return false, err
+	}
+	if retryMessage == nil {
+		return true, nil
+	}
+	nextPayload := AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  retryMessage.ID,
+		RetryCount: latestCompleted.RetryCount + 1,
+	}
+	if agentID != uuid.Nil {
+		nextPayload.AgentID = &agentID
+	}
+	runAfter := e.now().Add(defaultAutoContinueDelay).UTC()
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	if err != nil {
+		return false, err
+	}
+	return enqueued, nil
+}
+
+func (e *TurnEngine) retryProjectExecutionContinuationForExecutableContractStop(
+	ctx context.Context,
+	session *chat.ChatSession,
+	latestCompleted *repo.ChatTurn,
+	latestUser *repo.ChatMessage,
+	blockedDraft repo.ProjectTask,
+) (bool, error) {
+	if e == nil || session == nil || latestCompleted == nil || latestUser == nil || e.tasks == nil || blockedDraft.ID == uuid.Nil {
+		return false, nil
+	}
+	if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
+		return false, nil
+	}
+	completedTaskID, _ := parseUUIDAny(messageMetadataMap(latestUser.Metadata)["completed_task_id"])
+	var completedTask repo.ProjectTask
+	if completedTaskID != uuid.Nil {
+		if taskRecord, err := e.tasks.GetByID(ctx, completedTaskID); err == nil {
+			completedTask = taskRecord
+		}
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	taskHintsByTask, err := e.projectContinuationTaskHintsByTask(ctx, projectTasks)
+	if err != nil {
+		return false, err
+	}
+	childActivity, err := e.projectContinuationChildActivity(ctx, session.ScopeID, projectTasks, taskHintsByTask)
+	if err != nil {
+		return false, err
+	}
+	focusTask := blockedDraft
+	if parentID := taskdecomp.ParseParentTaskID(blockedDraft.Metadata); parentID != uuid.Nil {
+		for _, task := range projectTasks {
+			if task.ID == parentID {
+				focusTask = task
+				break
+			}
+		}
+	}
+	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	snapshot, err := e.projectExecutionContinuationSnapshotForSummary(ctx, session.ScopeID, strings.TrimSpace(latestUser.Content))
+	if err != nil {
+		return false, err
+	}
+	agentID := latestCompleted.RespondingID
+	retryPrompt := buildProjectExecutionContinuationReplacementChildRetryPrompt(
+		completedTask,
+		remainingDraftTasks,
+		snapshot,
+		focusTask,
+		childActivity[focusTask.ID],
 		taskHintsByTask[focusTask.ID],
 	)
 	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)

@@ -5238,3 +5238,12 @@
     - added `TestProjectExecutionContinuationSnapshotForSummaryFallsBackWhenPriorityFilterCollapsesToProjectLine`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshotForSummaryFallsBackWhenPriorityFilterCollapsesToProjectLine|InitialMessageTextWithContinuationSummary(PrependsRecentProjectSummary|PrefersRecentStructuredContinuationPrompt)|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskList(UnderscoreAlias)?)$' -count=1`
+- 2026-03-30 17:39 MDT - Converted executable-contract queue failures into focused PM repair retries.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `retryProjectExecutionContinuationForExecutableContractStop(...)`
+    - the `ErrExecutableTaskContractRequired` branch in `handleCompletedProjectExecutionContinuationTurn(...)` now invokes that targeted retry helper before falling back to the older generic replacement-child retry path
+    - the helper anchors the retry prompt on the failing draft and its decomposition parent when available, so PM gets `Current focus parent: ...` plus the preferred same-deliverable child repair guidance immediately
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestRetryProjectExecutionContinuationForExecutableContractStopUsesFocusedParent`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(RetryProjectExecutionContinuationForExecutableContractStopUsesFocusedParent|ProjectExecutionContinuationSnapshotForSummaryFallsBackWhenPriorityFilterCollapsesToProjectLine|InitialMessageTextWithContinuationSummary(PrependsRecentProjectSummary|PrefersRecentStructuredContinuationPrompt)|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskList(UnderscoreAlias)?)$' -count=1`

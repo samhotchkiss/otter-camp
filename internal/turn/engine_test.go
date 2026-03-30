@@ -15924,6 +15924,109 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesReplacementHandof
 	}
 }
 
+func TestRetryProjectExecutionContinuationForExecutableContractStopUsesFocusedParent(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	focusParentID := uuid.New()
+	blockedDraftID := uuid.New()
+	turnID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	parentDescription := "Write planning/sambot-prompts/test-conversations-level3.md with 3 deeply technical multi-turn conversations."
+	blockedDescription := "Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations."
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 310,
+				Title:      "Write planning/sambot-prompts/test-conversations-level3.md",
+				WorkStatus: "done",
+			},
+			focusParentID: {
+				ID:          focusParentID,
+				ProjectID:   projectID,
+				TaskNumber:  297,
+				Title:       "Write planning/sambot-prompts/test-conversations-level3.md",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+			},
+			blockedDraftID: {
+				ID:          blockedDraftID,
+				ProjectID:   projectID,
+				TaskNumber:  328,
+				Title:       "Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations.",
+				Description: &blockedDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition_parent_task_id": focusParentID.String(),
+				}),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	latestUser := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now. The latest completed task was task 310 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations (replacement)). Active project id: " + projectID.String(),
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+
+	handled, err := fixture.engine.retryProjectExecutionContinuationForExecutableContractStop(context.Background(), fixture.session, completedTurn, latestUser, taskRepo.items[blockedDraftID])
+	if err != nil {
+		t.Fatalf("retryProjectExecutionContinuationForExecutableContractStop: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected executable-contract stop to enqueue a focused retry message")
+	}
+
+	jobs := fixture.enqueuer.jobs
+	if len(jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1", len(jobs))
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var retryMessage *repo.ChatMessage
+	for i := range storedMessages {
+		msg := &storedMessages[i]
+		if msg.ID == jobs[0].payload.MessageID {
+			retryMessage = msg
+			break
+		}
+	}
+	if retryMessage == nil {
+		t.Fatal("missing appended executable-contract retry continuation message")
+	}
+	if !strings.Contains(retryMessage.Content, "Current focus parent: task 297") {
+		t.Fatalf("retry message = %q, want focused parent context", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "repair and queue the preferred existing same-deliverable child draft named above with one narrow task.update") {
+		t.Fatalf("retry message = %q, want focused executable-contract repair guidance", retryMessage.Content)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnKeepsBoundedSizeContextWhenFocusedDeliverableIsMissing(t *testing.T) {
 	t.Parallel()
 

@@ -1921,3 +1921,16 @@
   - impact:
     - PM resume prompts could degrade into generic anti-chat boilerplate plus project id only
     - broad `task.list` rediscovery remained possible even after the structured-carry-forward patch
+- 2026-03-30 17:39 MDT - Executable-contract queue failures still dropped back to a short generic PM continuation instead of preserving the named parent/child repair context.
+  - fresh live evidence:
+    - the runtime now correctly appends a system stop explaining that `OC-328` cannot be queued unchanged and that PM must resume bounded parent `OC-297`
+    - despite that, the next turn still arrived as a short `project_execution_continuation` and reopened with generic “I’ll start by gathering the current state...” narration
+  - bug:
+    - the `ErrExecutableTaskContractRequired` branch in `handleCompletedProjectExecutionContinuationTurn(...)` only emitted the system stop, then fell back to the generic replacement-child retry helper
+    - when that helper could not rediscover focus from the short trigger text, the session fell back to another ordinary continuation instead of a targeted retry message
+  - impact:
+    - PM could keep oscillating between:
+      - blocked rediscovery
+      - executable-contract stop
+      - fresh short continuation
+    - without ever getting the explicit `Current focus parent / repair this same-deliverable child` prompt the runtime already had enough information to build
