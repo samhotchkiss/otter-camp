@@ -20733,20 +20733,36 @@ func shouldSkipInferredTaskDeliverableDraft(taskRecord repo.ProjectTask, targetP
 }
 
 func shouldSkipInferredPromptConversationDraft(targetPath, lower string) bool {
-	if !strings.HasPrefix(targetPath, "planning/sambot-prompts/") {
+	if !looksLikePromptConversationCorpusTarget(targetPath) {
 		return false
 	}
 	return containsAny(lower,
 		"test conversation",
 		"test conversations",
+		"demo conversation",
+		"demo conversations",
 		"multi-turn conversation",
 		"multi-turn conversations",
 		"dialogue",
 		"dialog",
+		"user:/sambot:",
+		"user: / sambot:",
+		"6-8 turns",
+		"6 to 8 turns",
 		"adaptive complexity",
 		"append it to planning/sambot-prompts/",
 		"append to planning/sambot-prompts/",
+		"append the block to test-conversations-",
 	)
+}
+
+func looksLikePromptConversationCorpusTarget(targetPath string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(filepath.ToSlash(targetPath)))
+	if strings.HasPrefix(normalized, "planning/sambot-prompts/") {
+		return true
+	}
+	base := filepath.Base(normalized)
+	return strings.HasPrefix(base, "test-conversations-") && strings.HasSuffix(base, ".md")
 }
 
 func inferredTestExecutionSlug(title string, description *string) string {

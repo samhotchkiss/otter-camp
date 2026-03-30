@@ -6722,6 +6722,19 @@ func TestInferredTaskDeliverableDraftSkipsPromptConversationCorpusTask(t *testin
 	}
 }
 
+func TestInferredTaskDeliverableDraftSkipsRootPromptConversationCorpusTask(t *testing.T) {
+	description := "Write a fresh deeply-technical SamBot demo conversation about state machines applied to AI orchestration. Format as markdown with User:/SamBot: labels, 6-8 turns. Append the block to test-conversations-level3.md without overwriting existing content."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  318,
+		Title:       "v4 - Draft and append state-machine conversation to level-3 test file",
+		Description: &description,
+	}
+
+	if draft := inferredTaskDeliverableDraft(taskRecord); draft != "" {
+		t.Fatalf("draft = %q, want no inferred draft for root prompt conversation corpus task", draft)
+	}
+}
+
 func TestReconcileRecoveryCheckpointCandidateNormalizesExecutionFirstReportTarget(t *testing.T) {
 	t.Parallel()
 
@@ -33758,6 +33771,57 @@ func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsPromptConversationCo
 	}
 	if synthesized {
 		t.Fatalf("synthesized = true, want false for prompt conversation corpus task; toolCalls=%+v", toolCalls)
+	}
+	if toolCalls != nil {
+		t.Fatalf("toolCalls = %+v, want nil", toolCalls)
+	}
+}
+
+func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsRootPromptConversationCorpusTask(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Write a fresh deeply-technical SamBot demo conversation about state machines applied to AI orchestration. Format as markdown with User:/SamBot: labels, 6-8 turns. Append the block to test-conversations-level3.md without overwriting existing content."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     318,
+		Title:          "v4 - Draft and append state-machine conversation to level-3 test file",
+		WorkStatus:     "in_progress",
+		Description:    &description,
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskExecutionFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"Let me start by checking the current state of the target file and relevant project context.",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskExecutionFileWriteToolCalls: %v", err)
+	}
+	if synthesized {
+		t.Fatalf("synthesized = true, want false for root prompt conversation corpus task; toolCalls=%+v", toolCalls)
 	}
 	if toolCalls != nil {
 		t.Fatalf("toolCalls = %+v, want nil", toolCalls)

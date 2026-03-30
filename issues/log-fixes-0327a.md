@@ -5050,3 +5050,15 @@
     - refreshed `TestMaybeSynthesizeTaskExecutionFileWriteToolCallsUsesExplicitMarkdownDeliverableDraft` to use a planning-doc target that the current runtime still allows as a synthesized markdown starter
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(InferredTaskDeliverableDraft(BuildsExplicitMarkdownStarter|SkipsSourceBackedContentPostsTask|SkipsPromptConversationCorpusTask)|MaybeSynthesizeTaskExecutionFileWriteToolCalls(UsesExplicitMarkdownDeliverableDraft|SkipsSourceBackedContentPostsTask|SkipsPromptConversationCorpusTask))$' -count=1`
+- 2026-03-30 14:11 MDT - Extended the prompt-conversation scaffold skip to root `test-conversations-*.md` files and alternate conversation wording.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added `looksLikePromptConversationCorpusTarget(...)`
+    - `shouldSkipInferredPromptConversationDraft(...)` now matches both:
+      - `planning/sambot-prompts/...`
+      - root `test-conversations-*.md`
+    - widened the conversation-content cues to catch demo-conversation tasks with `User:/SamBot:` and `6-8 turns` wording
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestInferredTaskDeliverableDraftSkipsRootPromptConversationCorpusTask`
+    - added `TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsRootPromptConversationCorpusTask`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(InferredTaskDeliverableDraft(BuildsExplicitMarkdownStarter|SkipsSourceBackedContentPostsTask|SkipsPromptConversationCorpusTask|SkipsRootPromptConversationCorpusTask)|MaybeSynthesizeTaskExecutionFileWriteToolCalls(UsesExplicitMarkdownDeliverableDraft|SkipsSourceBackedContentPostsTask|SkipsPromptConversationCorpusTask|SkipsRootPromptConversationCorpusTask))$' -count=1`

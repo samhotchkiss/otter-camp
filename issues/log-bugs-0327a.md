@@ -1746,3 +1746,16 @@
   - impact:
     - execution lanes can manufacture their own placeholder deliverables
     - review rejects the placeholder correctly, but the runtime still pays repeated reject/reopen cycles until the flow blocks on max visits
+- 2026-03-30 14:11 MDT - The same inferred-markdown-starter bug also applied to root `test-conversations-*.md` prompt corpus files, not just `planning/sambot-prompts/...`.
+  - fresh live evidence:
+    - task `318` used `test-conversations-level3.md`
+    - execution still auto-wrote the generic scaffold there
+    - review rejected the placeholder immediately and the task blocked on `flow rejection max visits exceeded`
+  - bug:
+    - the initial skip heuristic was scoped too narrowly to `planning/sambot-prompts/`
+    - it missed root prompt-corpus targets and alternate conversation wording like:
+      - `demo conversation`
+      - `User:/SamBot:`
+      - `6-8 turns`
+  - impact:
+    - the same placeholder-write / repeated-review-reject family survives on root conversation files even after the first path-specific fix
