@@ -693,6 +693,22 @@ They need sharper stopping rules than ordinary execution lanes.
     - task session `38a6f713-a252-4c38-bd96-5579a8113b22` is now `closed`
     - halt turn `b9bd2a34-72c0-40da-b9eb-f39f2683eddb` ended with `[Recovery turn halted: cli.execute for templates/template-08-replace.html was retried without command after one correction ...]`
     - persisted checkpoint now records `failure_reason=repeated recovery cli.execute without command for templates/template-08-replace.html across explicit resume attempts; latest retry again omitted cli.execute.command`
+- 2026-03-30 03:18 MDT - PM focus-task prerequisite repair now has a dedicated supervisory retry path instead of falling back to the generic continuation summary.
+  - fresh live evidence before the fix:
+    - the runtime already emitted the correct stop:
+      - `[Project continuation focus task still has explicit prerequisite fields missing ... Repair the named assigned_agent_id / flow_template_id gaps ...]`
+    - but the next continuation forgot that exact stop condition and reopened with generic PM rediscovery language
+  - local fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now:
+      - detects the focused prerequisite-repair stop family explicitly
+      - retries with a repair-only continuation prompt
+      - forbids `file.read`, `file.list`, `task.get`, `agent.list`, and `flow.list_templates` as the first move
+      - requires one narrow `task.update` on the focus task or one blocker sentence
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectContinuationActionPromptPrioritizesMissingFocusPrerequisites|ProjectExecutionBlockedMutationStopMessageOnFocusedPrerequisiteRepairGuard|ShouldStopAfterSuccessfulProjectExecutionHandoffMutationForFocusPrerequisiteRepair|ShouldBlockProjectContinuationFocusedDraftReadToolBlocksPrerequisiteRepairFocusFileRead|HandleCompletedProjectExecutionContinuationTurnRetriesFocusedPrerequisiteRepairStopWithFreshMessage)$' -count=1`
+  - deploy / proof target:
+    - the next PM continuation after this stop should not start with “Let me check what exists on disk...”
+    - it should either update task `246` directly or emit one concrete blocker sentence
 - 2026-03-30 00:03 MDT - The next live blocker shifted from recovery command churn into deliverable-path inference for the bounded replacement child.
   - fresh live evidence on task `244`:
     - the task queue kickoff explicitly said `Output: Write the complete style block as planning/template-08-css-foundation.txt`

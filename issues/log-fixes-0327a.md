@@ -4483,3 +4483,19 @@
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationFocusedDraftReadTool(BlocksFileRead|AllowsParentScopedTaskList|BlocksTaskListWithoutParent|BlocksGeneralFocusPromptFileRead|AllowsParentScopedTaskListForGeneralFocusPrompt)|DispatchToolsCoalescesFocusedDraftReadGuardInSingleBatch|ProjectContinuationBoundedSizeSuggestedChildTitles|ProjectExecutionContinuationSnapshot(KeepsReplacementDraftWhenBlockedSamePathTaskRemains|IgnoresSupersededSatisfiedOutcomeDrafts)|ClassifyRepeatedReadOnlyDiscoveryRoundChurnStopsRecoveryAfterReadingTargetThenBroadRediscovery|HandleToolValidationResults(StopsRecoveryTurnAfterReadingTargetThenBroadRediscovery|StopsAsyncTaskTurnAfterThirdReadOnlyDiscoveryRoundInSameTurn|IgnoresReadOnlyDiscoveryRoundChurnAfterMutationInSameTurn))$' -count=1`
   - live proof after redeploy on `repo_version=3677`:
     - the next PM continuation around task `246` produced only one blocked `file.read` result (`11636`) before the focused handoff stop, instead of the paired duplicate blocked reads seen on `repo_version=3676`
+- 2026-03-30 03:18 MDT - Added a dedicated PM continuation retry path for focus-task prerequisite repair stops.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `handleCompletedProjectExecutionContinuationTurn(...)` now detects `projectContinuationTurnEndedWithFocusedPrerequisiteRepairStop(...)` and retries with a dedicated continuation message instead of falling back to the generic summary path
+    - added `retryProjectExecutionContinuationForFocusedPrerequisiteRepairStop(...)`
+    - strengthened `appendProjectExecutionSnapshotGuidance(...)` so focus snapshots with `assigned_agent_id=missing` / `flow_template_id=missing` explicitly say:
+      - repair those fields first via one narrow `task.update`
+      - reuse already-named assignee ids directly instead of calling `agent.list`
+      - reuse already-named `flow_template_id` directly instead of calling `flow.list_templates`
+    - widened the focused replacement-parent handoff family so prerequisite-repair prompts also participate in the same successful-handoff stop logic
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestHandleCompletedProjectExecutionContinuationTurnRetriesFocusedPrerequisiteRepairStopWithFreshMessage`
+    - added focused prompt/guard/handoff tests for the missing-prerequisite prompt family
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectContinuationActionPrompt(PrioritizesMissingFocusPrerequisites|AddsReplacementChildGuidanceForBlockedParent|AddsReplacementChildGuidanceForMalformedChildren|AddsCompletedCloseoutGuidance)|ProjectExecutionBlockedMutationStopMessageOnFocused(PrerequisiteRepairGuard|DraftReadGuard)|ShouldStopAfterSuccessfulProjectExecutionHandoffMutation(ForMissingDependencyPrompt|ForFocusPrerequisiteRepair|ForDraftChildCreate|IgnoresAssignmentOnlyUpdate|RequiresReplacementChildPrompt)?|ShouldBlockProjectContinuationFocusedDraftReadTool(BlocksFileRead|AllowsParentScopedTaskList|BlocksTaskListWithoutParent|BlocksGeneralFocusPromptFileRead|AllowsParentScopedTaskListForGeneralFocusPrompt|BlocksPrerequisiteRepairFocusFileRead)|DispatchToolsCoalescesFocusedDraftReadGuardInSingleBatch|ProjectContinuationBoundedSizeSuggestedChildTitles|HandleCompletedProjectExecutionContinuationTurn(RetriesAfterPrerequisiteOnlyMutation|RetriesRediscoveryStopWithFocusedMessage|RetriesMissingDependencyStopWithFreshMessage|RetriesFocusedPrerequisiteRepairStopWithFreshMessage))$' -count=1`
+  - deploy / proof target:
+    - the next post-stop PM continuation for task `246` should carry the explicit repair-only retry prompt and convert into a narrow `task.update` instead of another generic rediscovery opener

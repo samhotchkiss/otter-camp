@@ -14799,6 +14799,138 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesMissingDependency
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnRetriesFocusedPrerequisiteRepairStopWithFreshMessage(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	focusTaskID := uuid.New()
+	siblingTaskID := uuid.New()
+	turnID := uuid.New()
+	assignedAgentID := uuid.New()
+	flowTemplateID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 208,
+				Title:      "Recover SamBot planning continuation",
+				WorkStatus: "done",
+			},
+			focusTaskID: {
+				ID:         focusTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 246,
+				Title:      "Write planning/sambot-personality-spec.md",
+				WorkStatus: "draft",
+			},
+			siblingTaskID: {
+				ID:              siblingTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      245,
+				Title:           "Write planning/sambot-tech-architecture.md",
+				WorkStatus:      "blocked",
+				AssignedAgentID: uuidPtr(assignedAgentID),
+				FlowTemplateID:  uuidPtr(flowTemplateID),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "Let me check what exists on disk before I repair the task prerequisites.",
+		SequenceNumber: 11,
+	}
+	systemMessage := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "system",
+		Status:         "final",
+		Content:        "[Project continuation focus task still has explicit prerequisite fields missing. Do not inspect deliverables or sibling artifacts from the project lane. Repair the named assigned_agent_id / flow_template_id gaps on that exact task with one narrow task.update first, then continue the replacement-child handoff if it is still needed.]",
+		SequenceNumber: 12,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant, *systemMessage}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected focused prerequisite-repair stop to enqueue a fresh retry message")
+	}
+
+	jobs := fixture.enqueuer.jobs
+	if len(jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload.MessageID == userMessageID {
+		t.Fatal("retry reused original continuation message, want fresh message id")
+	}
+	if jobs[0].payload.RetryCount != 1 {
+		t.Fatalf("retry_count = %d, want 1", jobs[0].payload.RetryCount)
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var retryMessage *repo.ChatMessage
+	for i := range storedMessages {
+		msg := &storedMessages[i]
+		if msg.ID == jobs[0].payload.MessageID {
+			retryMessage = msg
+			break
+		}
+	}
+	if retryMessage == nil {
+		t.Fatal("missing appended focused prerequisite-repair retry message")
+	}
+	if !strings.Contains(retryMessage.Content, "explicit prerequisite fields missing") {
+		t.Fatalf("retry message = %q, want focused prerequisite-repair guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "Do not call file.read, file.list, task.get, agent.list, or flow.list_templates first.") {
+		t.Fatalf("retry message = %q, want anti-rediscovery prerequisite guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "issue one narrow task.update on the focus task") {
+		t.Fatalf("retry message = %q, want direct task.update instruction", retryMessage.Content)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnKeepsBoundedSizeContextWhenFocusedDeliverableIsMissing(t *testing.T) {
 	t.Parallel()
 
@@ -15939,6 +16071,22 @@ func TestProjectExecutionBlockedMutationStopMessageOnFocusedDraftReadGuard(t *te
 	}
 }
 
+func TestProjectExecutionBlockedMutationStopMessageOnFocusedPrerequisiteRepairGuard(t *testing.T) {
+	t.Parallel()
+
+	message := projectExecutionBlockedMutationStopMessage(nil, []ToolResult{{
+		Name:  "file.read",
+		Error: "project continuation already has focused draft task id=123 with assigned_agent_id / flow_template_id still missing. Do not call file.read from the project lane now; repair the missing prerequisite fields first with one narrow task.update on that exact task, or report one blocker sentence if the required value is still unknown.",
+	}})
+
+	if !strings.Contains(message, "focus task still has explicit prerequisite fields missing") {
+		t.Fatalf("message = %q, want prerequisite repair stop summary", message)
+	}
+	if !strings.Contains(message, "one narrow task.update first") {
+		t.Fatalf("message = %q, want direct prerequisite repair guidance", message)
+	}
+}
+
 func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation(t *testing.T) {
 	t.Parallel()
 
@@ -15988,6 +16136,43 @@ func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationForMissingDepen
 
 	if !shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
 		t.Fatal("expected successful missing-dependency handoff to stop the PM turn")
+	}
+}
+
+func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationForFocusPrerequisiteRepair(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText:   "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 246 (Write planning/sambot-personality-spec.md) id=" + focusTaskID.String() + " work_status=draft deliverable_path=planning/sambot-personality-spec.md assigned_agent_id=missing flow_template_id=missing child_tasks=3 replaceable_blocked_child_tasks=3 malformed_child_tasks=1. Because that focus parent still has explicit prerequisite fields missing, do not inspect deliverables or sibling artifacts first. Repair the named assigned_agent_id / flow_template_id gaps on that exact task with one narrow task.update, or report one blocker sentence if the required value is still unknown.",
+	}
+
+	calls := []ToolCall{{
+		Name: "task.update",
+		Arguments: map[string]any{
+			"task_id":           focusTaskID.String(),
+			"assigned_agent_id": uuid.NewString(),
+			"flow_template_id":  uuid.NewString(),
+		},
+	}}
+	results := []ToolResult{{
+		Name: "task.update",
+		Output: map[string]any{
+			"task": map[string]any{
+				"id":                focusTaskID.String(),
+				"assigned_agent_id": uuid.NewString(),
+				"flow_template_id":  uuid.NewString(),
+			},
+		},
+	}}
+
+	if !shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
+		t.Fatal("expected successful focus prerequisite repair to stop the PM turn")
 	}
 }
 
@@ -23060,6 +23245,28 @@ func TestBuildProjectContinuationActionPromptAddsReplacementChildGuidanceForBloc
 	}
 }
 
+func TestBuildProjectContinuationActionPromptPrioritizesMissingFocusPrerequisites(t *testing.T) {
+	prompt := buildProjectContinuationActionPrompt("Active project request: restore planning/sambot-personality-spec.md", projectExecutionContinuationSnapshot{
+		ProjectLine:          "Active project id: 123",
+		ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 250 (Include example exchanges) id=aaa title=\"Include example exchanges\" work_status=blocked deliverable_path=planning/sambot-personality-spec.md assigned_agent_id=worker-1 flow_template_id=ft-1 blocker=\"shared deliverable\"",
+		ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 246 (Write planning/sambot-personality-spec.md) id=bbb title=\"Write planning/sambot-personality-spec.md\" work_status=draft deliverable_path=planning/sambot-personality-spec.md assigned_agent_id=missing flow_template_id=missing child_tasks=3 replaceable_blocked_child_tasks=3 malformed_child_tasks=1",
+		FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 246 (Write planning/sambot-personality-spec.md) id=bbb title=\"Write planning/sambot-personality-spec.md\" work_status=draft deliverable_path=planning/sambot-personality-spec.md assigned_agent_id=missing flow_template_id=missing child_tasks=3 replaceable_blocked_child_tasks=3 malformed_child_tasks=1",
+	})
+
+	if !strings.Contains(prompt, "Because that focus parent still has explicit prerequisite fields missing") {
+		t.Fatalf("prompt = %q, want missing-prerequisite priority guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Repair the named assigned_agent_id / flow_template_id gaps on that exact task with one narrow task.update") {
+		t.Fatalf("prompt = %q, want direct task.update prerequisite guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Reuse one of the already-named project assignee ids") {
+		t.Fatalf("prompt = %q, want direct assignee reuse guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Reuse the already-named flow_template_id") {
+		t.Fatalf("prompt = %q, want direct template reuse guidance", prompt)
+	}
+}
+
 func TestBuildProjectContinuationActionPromptAddsReplacementChildGuidanceForMalformedChildren(t *testing.T) {
 	prompt := buildProjectContinuationActionPrompt("Active project request: recover malformed scrape batch children", projectExecutionContinuationSnapshot{
 		ProjectLine:          "Active project id: 123",
@@ -26103,6 +26310,34 @@ func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksGeneralFocusPro
 	}
 	if !strings.Contains(reason, focusTaskID.String()) || !strings.Contains(reason, "file.read") {
 		t.Fatalf("reason = %q, want focused parent handoff guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksPrerequisiteRepairFocusFileRead(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 246 (Write planning/sambot-personality-spec.md) id=" + focusTaskID.String() + " work_status=draft deliverable_path=planning/sambot-personality-spec.md assigned_agent_id=missing flow_template_id=missing child_tasks=3 replaceable_blocked_child_tasks=3 malformed_child_tasks=1.",
+			"Because that focus parent still has explicit prerequisite fields missing, do not inspect deliverables or sibling artifacts first. Repair the named assigned_agent_id / flow_template_id gaps on that exact task with one narrow task.update, or report one blocker sentence if the required value is still unknown.",
+			"Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now instead of rereading broad task trees, workspace roots, or flow templates.",
+		}, " "),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, "file.read", map[string]any{
+		"path": "planning/sambot-personality-spec.md",
+	})
+	if !blocked {
+		t.Fatal("expected prerequisite-repair focus file.read to be blocked")
+	}
+	if !strings.Contains(reason, focusTaskID.String()) || !strings.Contains(reason, "repair the missing prerequisite fields first") {
+		t.Fatalf("reason = %q, want focused prerequisite-repair guidance", reason)
 	}
 }
 

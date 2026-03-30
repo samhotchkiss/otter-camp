@@ -5075,6 +5075,13 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 			return true, nil
 		}
 	}
+	if projectContinuationTurnEndedWithFocusedPrerequisiteRepairStop(messages, completedTurn.ID) {
+		if retried, retryErr := e.retryProjectExecutionContinuationForFocusedPrerequisiteRepairStop(ctx, session, completedTurn, latestUser); retryErr != nil {
+			return false, retryErr
+		} else if retried {
+			return true, nil
+		}
+	}
 	if requiredChildLabels, found := projectContinuationParentCompletionStopDetails(messages, completedTurn.ID); found {
 		if retried, retryErr := e.retryProjectExecutionContinuationForParentCompletionRequirements(ctx, session, completedTurn, latestUser, requiredChildLabels); retryErr != nil {
 			return false, retryErr
@@ -5295,6 +5302,61 @@ func (e *TurnEngine) retryProjectExecutionContinuationAfterPrerequisiteRepair(
 		" Your last continuation repaired one project prerequisite with a direct mutation, but remaining draft work still needs advancement." +
 		" Do not stop with a status summary after a prerequisite-only task.update or task.create." +
 		" Continue immediately from the updated task tree and take the next bounded project action."
+	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	if err != nil {
+		return false, err
+	}
+	if retryMessage == nil {
+		return true, nil
+	}
+	nextPayload := AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  retryMessage.ID,
+		RetryCount: latestCompleted.RetryCount + 1,
+	}
+	if agentID != uuid.Nil {
+		nextPayload.AgentID = &agentID
+	}
+	runAfter := e.now().Add(defaultAutoContinueDelay).UTC()
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	if err != nil {
+		return false, err
+	}
+	return enqueued, nil
+}
+
+func (e *TurnEngine) retryProjectExecutionContinuationForFocusedPrerequisiteRepairStop(
+	ctx context.Context,
+	session *chat.ChatSession,
+	latestCompleted *repo.ChatTurn,
+	latestUser *repo.ChatMessage,
+) (bool, error) {
+	if e == nil || session == nil || latestCompleted == nil || latestUser == nil {
+		return false, nil
+	}
+	if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
+		return false, nil
+	}
+	completedTaskID, _ := parseUUIDAny(messageMetadataMap(latestUser.Metadata)["completed_task_id"])
+	var completedTask repo.ProjectTask
+	if completedTaskID != uuid.Nil && e.tasks != nil {
+		if taskRecord, err := e.tasks.GetByID(ctx, completedTaskID); err == nil {
+			completedTask = taskRecord
+		}
+	}
+	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	snapshot, err := e.projectExecutionContinuationSnapshot(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	agentID := latestCompleted.RespondingID
+	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot) +
+		" Your last continuation was blocked because the focus task still has explicit prerequisite fields missing." +
+		" Do not call file.read, file.list, task.get, agent.list, or flow.list_templates first." +
+		" Your next assistant action must issue one narrow task.update on the focus task that repairs the missing assigned_agent_id / flow_template_id fields using the already-named ids in this continuation prompt, or report one blocker sentence if the required values are still unknown."
 	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
 	if err != nil {
 		return false, err
@@ -8537,6 +8599,10 @@ func projectContinuationTurnEndedWithRediscoveryOnlyStop(messages []repo.ChatMes
 	return turnHasSystemMessageContaining(messages, turnID, projectContinuationRediscoveryGuardPrefix)
 }
 
+func projectContinuationTurnEndedWithFocusedPrerequisiteRepairStop(messages []repo.ChatMessage, turnID uuid.UUID) bool {
+	return turnHasSystemMessageContaining(messages, turnID, "[Project continuation focus task still has explicit prerequisite fields missing.")
+}
+
 func projectContinuationTurnEndedWithTaskLaneBoundaryStop(messages []repo.ChatMessage, turnID uuid.UUID) bool {
 	return turnHasSystemMessageContaining(messages, turnID, projectContinuationTaskLaneBoundaryGuardPrefix)
 }
@@ -8816,6 +8882,17 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		}
 		if strings.Contains(focusLine, "deliverable_path=") || strings.Contains(focusLine, "deliverable_root=") || strings.Contains(focusLine, "depends_on_path=") {
 			lines = append(lines, "When the focus task already includes exact deliverable or dependency hints, use those paths directly before any broader workspace search.")
+		}
+		if strings.Contains(focusLine, "assigned_agent_id=missing") || strings.Contains(focusLine, "flow_template_id=missing") {
+			lines = append(lines, "Because that focus parent still has explicit prerequisite fields missing, do not inspect deliverables or sibling artifacts first. Repair the named assigned_agent_id / flow_template_id gaps on that exact task with one narrow task.update, or report one blocker sentence if the required value is still unknown.")
+			if strings.Contains(focusLine, "assigned_agent_id=missing") &&
+				(strings.Contains(snapshot.ActiveTaskLine, "assigned_agent_id=") || strings.Contains(snapshot.ReplacementDraftLine, "assigned_agent_id=") || strings.Contains(snapshot.DraftTaskLine, "assigned_agent_id=")) {
+				lines = append(lines, "Reuse one of the already-named project assignee ids from this continuation prompt directly with task.update; do not call agent.list just to rediscover the same roster.")
+			}
+			if strings.Contains(focusLine, "flow_template_id=missing") &&
+				(strings.Contains(snapshot.ActiveTaskLine, "flow_template_id=") || strings.Contains(snapshot.ReplacementDraftLine, "flow_template_id=") || strings.Contains(snapshot.DraftTaskLine, "flow_template_id=")) {
+				lines = append(lines, "Reuse the already-named flow_template_id from matching sibling work in this continuation prompt when it fits the same lane; do not call flow.list_templates just to rediscover it.")
+			}
 		}
 		if focusHasCompletedCloseout {
 			lines = append(lines, "Because that focus parent is already closeout-ready, advance or close the parent directly instead of creating another replacement child.")
@@ -30418,12 +30495,18 @@ func shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt *turnRuntime, c
 		return false
 	}
 	focusTaskID := uuid.Nil
+	prerequisiteRepairActive := false
 	if rt != nil {
-		focusTaskID = projectContinuationPromptCurrentFocusParentTaskID(strings.TrimSpace(rt.initialMessageText))
+		initial := strings.TrimSpace(rt.initialMessageText)
+		focusTaskID = projectContinuationFocusedTaskID(initial)
+		prerequisiteRepairActive = projectContinuationFocusedPrerequisiteRepairActive(initial)
 	}
 	for idx, call := range calls {
 		if idx >= len(results) {
 			break
+		}
+		if prerequisiteRepairActive && projectExecutionFocusPrerequisiteRepairSucceeded(call, results[idx], focusTaskID) {
+			return true
 		}
 		if projectExecutionHandoffMutationSucceeded(call, results[idx]) {
 			return true
@@ -30451,6 +30534,9 @@ func projectContinuationReplacementChildHandoffActive(rt *turnRuntime) bool {
 	initial := strings.TrimSpace(rt.initialMessageText)
 	if strings.Contains(initial, "Current focus parent:") &&
 		strings.Contains(initial, "fresh replacement child task beneath") {
+		return true
+	}
+	if projectContinuationFocusedPrerequisiteRepairActive(initial) {
 		return true
 	}
 	if strings.Contains(initial, "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step:") &&
@@ -30511,6 +30597,38 @@ func projectExecutionDraftChildHandoffSucceeded(call ToolCall, result ToolResult
 	return strings.EqualFold(strings.TrimSpace(projectExecutionResultWorkStatus(call.Arguments, result)), "draft")
 }
 
+func projectExecutionFocusPrerequisiteRepairSucceeded(call ToolCall, result ToolResult, focusTaskID uuid.UUID) bool {
+	if focusTaskID == uuid.Nil || strings.TrimSpace(toolResultErrorCode(result)) != "" {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(call.Name), "task.update") {
+		return false
+	}
+	taskID, ok := parseUUIDAny(call.Arguments["task_id"])
+	if !ok || taskID == uuid.Nil || taskID != focusTaskID {
+		return false
+	}
+	return projectExecutionResultNamedField(call.Arguments, result, "assigned_agent_id") != "" ||
+		projectExecutionResultNamedField(call.Arguments, result, "flow_template_id") != ""
+}
+
+func projectExecutionResultNamedField(arguments map[string]any, result ToolResult, field string) string {
+	value := strings.TrimSpace(stringValue(arguments[field]))
+	if value == "" {
+		value = strings.TrimSpace(stringValue(result.Output[field]))
+	}
+	if value == "" {
+		taskOutput, ok := result.Output["task"].(map[string]any)
+		if ok {
+			value = strings.TrimSpace(stringValue(taskOutput[field]))
+		}
+	}
+	if strings.EqualFold(value, "missing") {
+		return ""
+	}
+	return value
+}
+
 func projectExecutionBlockedMutationStopMessage(rt *turnRuntime, results []ToolResult) string {
 	for _, result := range results {
 		errText := strings.ToLower(strings.TrimSpace(toolResultErrorCode(result)))
@@ -30523,6 +30641,10 @@ func projectExecutionBlockedMutationStopMessage(rt *turnRuntime, results []ToolR
 		}
 		if strings.Contains(errText, "bounded size policy") || strings.Contains(errText, "bounded task-size policy") {
 			return "[Project continuation found that the remaining draft work still violates the bounded size policy. Split it into smaller reviewable child tasks instead of trying to queue the broad parent again.]"
+		}
+		if strings.Contains(errText, "repair the missing prerequisite fields first") ||
+			strings.Contains(errText, "assigned_agent_id / flow_template_id still missing") {
+			return "[Project continuation focus task still has explicit prerequisite fields missing. Do not inspect deliverables or sibling artifacts from the project lane. Repair the named assigned_agent_id / flow_template_id gaps on that exact task with one narrow task.update first, then continue the replacement-child handoff if it is still needed.]"
 		}
 		if strings.Contains(errText, "project continuation already has focused draft task") {
 			return "[Project continuation already has a narrower focused draft task. Create or advance the smallest fresh child work beneath that focus task instead of re-queueing it or promoting its ancestors from the project lane.]"
@@ -33977,6 +34099,13 @@ func buildProjectContinuationFocusedDraftReadGuardError(focusTaskID uuid.UUID, t
 	return fmt.Sprintf("project continuation already has a focused draft parent and the prompt already required a direct replacement-child handoff. Do not call %s from the project lane now; create the smallest fresh replacement child beneath the current focus parent instead.", strings.TrimSpace(toolName))
 }
 
+func buildProjectContinuationFocusedPrerequisiteRepairGuardError(focusTaskID uuid.UUID, toolName string) string {
+	if focusTaskID != uuid.Nil {
+		return fmt.Sprintf("project continuation already has focused draft task id=%s with assigned_agent_id / flow_template_id still missing. Do not call %s from the project lane now; repair the missing prerequisite fields first with one narrow task.update on that exact task, or report one blocker sentence if the required value is still unknown.", focusTaskID.String(), strings.TrimSpace(toolName))
+	}
+	return fmt.Sprintf("project continuation already has a focused draft task with explicit prerequisite fields missing. Do not call %s from the project lane now; repair the missing prerequisite fields first with one narrow task.update on that exact task, or report one blocker sentence if the required value is still unknown.", strings.TrimSpace(toolName))
+}
+
 func projectContinuationFocusedDraftReadGuardActive(initial string) bool {
 	initial = strings.TrimSpace(initial)
 	if initial == "" {
@@ -33994,6 +34123,26 @@ func projectContinuationFocusedDraftReadGuardActive(initial string) bool {
 	return false
 }
 
+func projectContinuationFocusedPrerequisiteRepairActive(initial string) bool {
+	initial = strings.TrimSpace(initial)
+	if initial == "" {
+		return false
+	}
+	if !strings.Contains(initial, "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step:") &&
+		!strings.Contains(initial, "Current focus task:") &&
+		!strings.Contains(initial, "Current focus parent:") {
+		return false
+	}
+	return strings.Contains(initial, "assigned_agent_id=missing") || strings.Contains(initial, "flow_template_id=missing")
+}
+
+func projectContinuationFocusedTaskID(initial string) uuid.UUID {
+	if focusTaskID := projectContinuationPromptCurrentFocusParentTaskID(initial); focusTaskID != uuid.Nil {
+		return focusTaskID
+	}
+	return projectContinuationPromptFocusTaskID(initial)
+}
+
 func shouldBlockProjectContinuationFocusedDraftReadTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
 	if rt == nil || rt.session == nil {
 		return false, ""
@@ -34009,16 +34158,19 @@ func shouldBlockProjectContinuationFocusedDraftReadTool(rt *turnRuntime, toolNam
 	if !projectContinuationFocusedDraftReadGuardActive(initial) {
 		return false, ""
 	}
-	focusTaskID := projectContinuationPromptCurrentFocusParentTaskID(initial)
-	if focusTaskID == uuid.Nil {
-		focusTaskID = projectContinuationPromptFocusTaskID(initial)
-	}
+	focusTaskID := projectContinuationFocusedTaskID(initial)
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "file.read", "file.list", "task.get":
+		if projectContinuationFocusedPrerequisiteRepairActive(initial) {
+			return true, buildProjectContinuationFocusedPrerequisiteRepairGuardError(focusTaskID, toolName)
+		}
 		return true, buildProjectContinuationFocusedDraftReadGuardError(focusTaskID, toolName)
 	case "task.list":
 		parentTaskID, ok := parseUUIDAny(arguments["parent_task_id"])
 		if !ok || parentTaskID == uuid.Nil || focusTaskID == uuid.Nil || parentTaskID != focusTaskID {
+			if projectContinuationFocusedPrerequisiteRepairActive(initial) {
+				return true, buildProjectContinuationFocusedPrerequisiteRepairGuardError(focusTaskID, toolName)
+			}
 			return true, buildProjectContinuationFocusedDraftReadGuardError(focusTaskID, toolName)
 		}
 	}

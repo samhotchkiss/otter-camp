@@ -1146,3 +1146,13 @@
     - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) appended one blocked `ToolResult` per guarded call even when the same assistant batch had already hit the focused replacement-parent read guard
   - impact:
     - the PM lane still paid for duplicated blocked tool-result churn inside a single assistant batch before the same stop message ended the turn
+- 2026-03-30 03:18 MDT - Focused prerequisite-repair PM stops still fell back into the generic continuation retry path.
+  - fresh live evidence:
+    - PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` hit the new prerequisite-specific guard on task `246`
+    - turn messages `11679-11680` correctly said to repair `assigned_agent_id` / `flow_template_id` first with one narrow `task.update`
+    - the next continuation still reused the generic project summary and the assistant again opened with “Let me check what exists on disk...”
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) recognized rediscovery-only, bounded-size, missing-dependency, and parent-completion stops, but did not recognize the new focused prerequisite-repair stop as its own retry family
+  - impact:
+    - the runtime can correctly stop the bad PM reread turn, but the very next continuation forgets the exact repair instruction and re-enters broad rediscovery language
+    - that delays the actual `task.update` handoff on focus drafts whose only remaining problem is missing prerequisite ids
