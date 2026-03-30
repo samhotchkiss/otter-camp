@@ -4668,3 +4668,12 @@
     - added `TestHandleCompletedProjectExecutionContinuationTurnRetriesFocusedCloseoutReadyRediscoveryStop`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurnRetriesFocusedCloseoutReadyRediscoveryStop|HandleCompletedProjectExecutionContinuationTurnRetriesRediscoveryStopWithFocusedMessage|HandleCompletedProjectExecutionContinuationTurnRetriesParentCompletionStopWithCompletedChildren|ShouldStopAfterBlockedProjectExecutionBlockedMutationOnTaskLaneBoundaryErrors|ProjectExecutionBlockedMutationStopMessageOnFocused(CloseoutReady|PrerequisiteRepair)Guard)$' -count=1`
+- 2026-03-31 06:08 MDT - Gave on-disk deliverables precedence over malformed-child / bounded-size replacement guidance in PM prompts.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `buildProjectContinuationActionPrompt(...)` now treats `workspace_deliverable_present=true` as closeout-ready, so focus-line malformed-child replacement guidance no longer overrides an already-present deliverable
+    - `buildProjectExecutionContinuationBoundedSizeRetryPrompt(...)` now treats `workspaceDeliverablePresent` as closeout/verification work and stops telling the PM lane to split the parent into fresh authoring work
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestBuildProjectContinuationActionPromptTreatsWorkspaceDeliverableFocusAsCloseoutReady`
+    - added `TestBuildProjectExecutionContinuationBoundedSizeRetryPromptTreatsWorkspaceDeliverableAsCloseout`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectContinuationActionPromptTreatsWorkspaceDeliverableFocusAsCloseoutReady|BuildProjectExecutionContinuationBoundedSizeRetryPromptTreatsWorkspaceDeliverableAsCloseout|HandleCompletedProjectExecutionContinuationTurnRetriesFocusedCloseoutReadyRediscoveryStop|BuildProjectContinuationActionPromptAddsCompletedCloseoutGuidance)$' -count=1`

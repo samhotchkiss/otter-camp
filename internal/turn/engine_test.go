@@ -12974,6 +12974,34 @@ func TestHandleCompletedProjectExecutionContinuationTurnConsumesBoundedSizeQueue
 	}
 }
 
+func TestBuildProjectExecutionContinuationBoundedSizeRetryPromptTreatsWorkspaceDeliverableAsCloseout(t *testing.T) {
+	prompt := buildProjectExecutionContinuationBoundedSizeRetryPrompt(
+		repo.ProjectTask{TaskNumber: 84, Title: "Build HTML layout template 8 of 10"},
+		1,
+		projectExecutionContinuationSnapshot{ProjectLine: "Active project id: 123"},
+		repo.ProjectTask{TaskNumber: 245, Title: "Write planning/sambot-tech-architecture.md"},
+		projectContinuationChildActivity{
+			workspaceDeliverablePresent: true,
+			malformedChildTaskCount:     1,
+		},
+		projectContinuationTaskHints{DeliverablePath: "planning/sambot-tech-architecture.md"},
+		nil,
+	)
+
+	if !strings.Contains(prompt, "already has its deliverable body on disk") {
+		t.Fatalf("prompt = %q, want workspace-deliverable closeout guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not treat task 245") {
+		t.Fatalf("prompt = %q, want no-fresh-authoring guidance", prompt)
+	}
+	if !strings.Contains(prompt, "create the smallest closeout/verification child task beneath task 245") {
+		t.Fatalf("prompt = %q, want closeout child guidance", prompt)
+	}
+	if strings.Contains(prompt, "still too broad to queue as-is") {
+		t.Fatalf("prompt = %q, should not keep generic bounded-size split guidance once deliverable is already present", prompt)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnRetriesBoundedSizeStopWithFreshMessage(t *testing.T) {
 	t.Parallel()
 
@@ -23833,6 +23861,24 @@ func TestBuildProjectContinuationActionPromptAddsCompletedCloseoutGuidance(t *te
 	}
 	if strings.Contains(prompt, "Because that focus parent only has malformed or stale child artifact lanes") {
 		t.Fatalf("prompt = %q, should not append malformed-child replacement guidance once completed closeout proof exists", prompt)
+	}
+}
+
+func TestBuildProjectContinuationActionPromptTreatsWorkspaceDeliverableFocusAsCloseoutReady(t *testing.T) {
+	prompt := buildProjectContinuationActionPrompt("Active project request: finish planning/sambot-tech-architecture.md", projectExecutionContinuationSnapshot{
+		ProjectLine:   "Active project id: 123",
+		DraftTaskLine: "Actionable draft tasks already in the tree: task 245 (Write planning/sambot-tech-architecture.md) id=bbb title=\"Write planning/sambot-tech-architecture.md\" work_status=draft deliverable_path=planning/sambot-tech-architecture.md workspace_deliverable_present=true malformed_child_tasks=1",
+		FocusTaskLine: "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 245 (Write planning/sambot-tech-architecture.md) id=bbb title=\"Write planning/sambot-tech-architecture.md\" work_status=draft deliverable_path=planning/sambot-tech-architecture.md workspace_deliverable_present=true malformed_child_tasks=1",
+	})
+
+	if !strings.Contains(prompt, "the deliverable body is already on disk. Treat that parent as a closeout/verification step") {
+		t.Fatalf("prompt = %q, want workspace-deliverable closeout guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Because that focus parent is already closeout-ready, advance or close the parent directly instead of creating another replacement child") {
+		t.Fatalf("prompt = %q, want focus closeout guidance for workspace deliverable", prompt)
+	}
+	if strings.Contains(prompt, "Because that focus parent only has malformed or stale child artifact lanes") {
+		t.Fatalf("prompt = %q, should not append malformed-child replacement guidance once workspace deliverable is present", prompt)
 	}
 }
 

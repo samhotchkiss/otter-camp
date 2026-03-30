@@ -1325,3 +1325,14 @@
     - there was no dedicated branch for rediscovery-only turns whose blocked tools were specifically closeout-ready parent guards
   - impact:
     - PM closeout lanes can keep looping through generic rediscovery retries even after both the worker and the runtime already know the exact focused parent that should be advanced directly
+- 2026-03-31 06:08 MDT - `workspace_deliverable_present=true` still lost prompt precedence to malformed-child and bounded-size split guidance.
+  - fresh live evidence:
+    - PM continuation `6fc20037-b7fb-4471-b631-f4d969e9f394` told the model both:
+      - `workspace_deliverable_present=true ... Treat that parent as a closeout/verification step`
+      - `Because that focus parent only has malformed or stale child artifact lanes ... create the smallest fresh replacement child task`
+      - `task 245 ... is still too broad to queue as-is`
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) only treated `completed_closeout_child_tasks=` / `outcome_satisfied=true` as closeout-ready in `buildProjectContinuationActionPrompt(...)`
+    - the bounded-size retry prompt also ignored `workspaceDeliverablePresent`, so it kept appending split-the-parent instructions even when the deliverable body was already on disk
+  - impact:
+    - PM continuations can keep reopening replacement-child / split-authoring loops against an already-present deliverable instead of converging on closeout or narrow verification work

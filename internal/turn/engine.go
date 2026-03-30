@@ -6345,6 +6345,18 @@ func buildProjectExecutionContinuationBoundedSizeRetryPrompt(
 	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot)
 	focusLabel := projectBootstrapTaskLabel(focusTask)
 	focusRef := projectExecutionContinuationTaskRef(focusTask, focusActivity, focusHints)
+	if focusActivity.workspaceDeliverablePresent {
+		retryPrompt += fmt.Sprintf(" Your last continuation turn proved that %s already has its deliverable body on disk.", focusRef)
+		retryPrompt += fmt.Sprintf(" Do not treat %s as fresh replacement-writing work and do not split it into another broad authoring child.", focusLabel)
+		retryPrompt += " Do not reread broad project context, do not inspect unrelated blocked tasks, and do not browse the workspace first."
+		if deliverablePath := strings.TrimSpace(focusHints.DeliverablePath); deliverablePath != "" {
+			retryPrompt += fmt.Sprintf(" Keep any follow-on work anchored to existing deliverable `%s`.", deliverablePath)
+		} else if deliverableRoot := strings.TrimSpace(focusHints.DeliverableRoot); deliverableRoot != "" {
+			retryPrompt += fmt.Sprintf(" Keep any follow-on work anchored inside existing deliverable root `%s`.", deliverableRoot)
+		}
+		retryPrompt += fmt.Sprintf(" Your next assistant action must either create the smallest closeout/verification child task beneath %s, advance %s directly if it is already fully proven, or report one concrete blocker sentence naming the exact missing review or verification evidence.", focusLabel, focusLabel)
+		return retryPrompt
+	}
 	retryPrompt += fmt.Sprintf(" Your last continuation turn proved that %s is still too broad to queue as-is.", focusRef)
 	retryPrompt += fmt.Sprintf(" Do not try to queue %s again without narrowing it.", focusLabel)
 	retryPrompt += " Do not reread broad project context, do not inspect unrelated blocked tasks, and do not browse the workspace first."
@@ -9215,7 +9227,9 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 	}
 	if focusLine := strings.TrimSpace(snapshot.FocusTaskLine); focusLine != "" {
 		lines = append(lines, focusLine)
-		focusHasCompletedCloseout := strings.Contains(focusLine, "completed_closeout_child_tasks=") || strings.Contains(focusLine, "outcome_satisfied=true")
+		focusHasCompletedCloseout := strings.Contains(focusLine, "completed_closeout_child_tasks=") ||
+			strings.Contains(focusLine, "outcome_satisfied=true") ||
+			strings.Contains(focusLine, "workspace_deliverable_present=true")
 		if strings.Contains(focusLine, "child_tasks=") && strings.TrimSpace(snapshot.ActiveTaskLine) != "" {
 			lines = append(lines, "If that focus draft already has child tasks and the active-task snapshot above already names those child lanes, do not reread the parent or child task records first. Queue the draft only if it is still runnable as-is, split it directly into smaller reviewable work if bounded-size policy still blocks it, or report one concrete blocker sentence.")
 		}
