@@ -16760,6 +16760,37 @@ func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationIgnoresAssignme
 	}
 }
 
+func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationRequiresObservedQueuedState(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText:   "Current focus parent: task 44 (Replacement scrape batch) id=abc. Your next assistant action must create the smallest fresh replacement child task beneath task 44 (Replacement scrape batch).",
+	}
+
+	calls := []ToolCall{{
+		Name:      "task.update",
+		Arguments: map[string]any{"task_id": uuid.NewString(), "work_status": "queued"},
+	}}
+	results := []ToolResult{{
+		Name: "task.update",
+		Output: map[string]any{
+			"task": map[string]any{
+				"id":          uuid.NewString(),
+				"work_status": "draft",
+			},
+		},
+	}}
+
+	if shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
+		t.Fatal("queued task.update should not stop the PM turn when the observed task work_status remains draft")
+	}
+}
+
 func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationIgnoresUnfocusedDraftChildCreate(t *testing.T) {
 	t.Parallel()
 

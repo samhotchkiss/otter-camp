@@ -4699,3 +4699,11 @@
     - `projectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStop(...)` now also matches when the consumed continuation prompt already says `already closeout-ready for the same deliverable` or carries `workspace_deliverable_present=true`
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|BuildProjectExecutionContinuationParentAdvanceRetryPromptForWorker|BuildProjectExecutionContinuationReplacementChildRetryPromptForWorkerTreatsWorkspaceDeliverableAsVerification|ProjectContinuationTurnEndedWithCloseoutReadyParentStopRecognizesProvedParentWording|JobWorkerRequeueActiveProjectSessionsWithoutTurnsSuppressesRepeatedFailedRediscoveryBlockedContinuation)$' -count=1`
+- 2026-03-31 06:59 MDT - Made PM handoff stops trust the observed task state, not just the requested mutation.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `projectExecutionResultWorkStatus(...)` now prefers `result.Output.work_status` / `result.Output.task.work_status` before falling back to the requested call arguments
+    - that prevents `shouldStopAfterSuccessfulProjectExecutionHandoffMutation(...)` from treating a `task.update` as a successful handoff when the tool result leaves the task in `draft`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationRequiresObservedQueuedState`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation(ForMissingDependencyPrompt|ForFocusPrerequisiteRepair|ForDraftChildCreate|IgnoresAssignmentOnlyUpdate|RequiresObservedQueuedState|RequiresReplacementChildPrompt)$' -count=1`

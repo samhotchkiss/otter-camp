@@ -1363,3 +1363,12 @@
     - it did not use the consumed continuation prompt body as additional evidence that the turn belonged to the closeout-ready retry family
   - impact:
     - a live closeout-ready PM continuation can still regress into replacement-child wording even after the first closeout-ready suppression fix is deployed
+- 2026-03-31 06:59 MDT - PM handoff stop logic still trusted requested `work_status=queued` over the observed task state.
+  - fresh live evidence:
+    - project continuation `01a314f8-156f-4c96-b995-2fc6b4284194` issued a direct `task.update` against task `245`
+    - tool result `c04996bd-ac5f-4bc4-ae46-d49525256678` still reported `"work_status":"draft"` for task `245`
+    - the engine nevertheless emitted the successful-handoff stop and ended the PM turn, leaving no task session or queued job for task `245`
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) in `projectExecutionResultWorkStatus(...)` preferred `call.Arguments["work_status"]` over the returned `result.Output.task.work_status`
+  - impact:
+    - PM turns can falsely conclude that replacement or closeout work has been handed off even when the mutation was a no-op and the task never left `draft`

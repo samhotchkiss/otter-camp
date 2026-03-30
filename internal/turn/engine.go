@@ -31043,17 +31043,17 @@ func projectExecutionHandoffMutationSucceeded(call ToolCall, result ToolResult) 
 }
 
 func projectExecutionResultWorkStatus(arguments map[string]any, result ToolResult) string {
-	if status := strings.ToLower(strings.TrimSpace(stringValue(arguments["work_status"]))); status != "" {
-		return status
-	}
 	if status := strings.ToLower(strings.TrimSpace(stringValue(result.Output["work_status"]))); status != "" {
 		return status
 	}
 	taskOutput, ok := result.Output["task"].(map[string]any)
 	if !ok {
-		return ""
+		return strings.ToLower(strings.TrimSpace(stringValue(arguments["work_status"])))
 	}
-	return strings.ToLower(strings.TrimSpace(stringValue(taskOutput["work_status"])))
+	if status := strings.ToLower(strings.TrimSpace(stringValue(taskOutput["work_status"]))); status != "" {
+		return status
+	}
+	return strings.ToLower(strings.TrimSpace(stringValue(arguments["work_status"])))
 }
 
 func projectExecutionDraftChildHandoffSucceeded(call ToolCall, result ToolResult, focusTaskID uuid.UUID) bool {
