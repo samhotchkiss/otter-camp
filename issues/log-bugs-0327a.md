@@ -1573,3 +1573,18 @@
     - they did not treat a plain implementation child as closeout proof even when it shared the exact same deliverable identity as an orchestration-only parent
   - impact:
     - orchestration parents can disappear from PM focus after real work is already done, leaving only blocked leaves in the continuation prompt and forcing another rediscovery/stop loop instead of parent closeout
+- 2026-03-30 12:44 MDT - Closeout-ready orchestration parents could not actually leave `draft` after the PM lane recorded the required `parent_orchestration` evidence.
+  - fresh live evidence:
+    - task `286` reached a state with:
+      - `completed_closeout_child_tasks=1`
+      - `workspace_deliverable_present=true`
+      - persisted `parent_orchestration.child_verifications`
+      - `integration_check.status=passed`
+      - `outcome_assessment.satisfied=true`
+    - the PM retry then issued `task.update ... work_status=queued` exactly as instructed, but the tool returned the task still in `draft`
+    - the remaining non-terminal child tasks under `286` were all already `blocked`, so there was no meaningful child execution left to queue
+  - bug:
+    - [`internal/task/service.go`](/Users/sam/dev/otter-camp/internal/task/service.go) in `transitionTaskRecordTxWithRetry(...)` always short-circuited `draft -> queued` for orchestration parents whenever any non-terminal decomposition children existed
+    - because `blocked` children are non-terminal, the service re-entered the “queue children and keep parent draft” path even after the parent had already reached a satisfied closeout-ready state
+  - impact:
+    - PM continuations can keep telling the model to queue the closeout-ready parent while the task service silently leaves that same parent in `draft`, trapping the lane in repeated closeout retries instead of finishing the parent and moving on

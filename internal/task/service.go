@@ -786,7 +786,7 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 		}
 		executableChildren = executableProjectTasks(decompositionChildren)
 	}
-	if target == "queued" && len(executableChildren) > 0 {
+	if target == "queued" && len(executableChildren) > 0 && !allowsCloseoutReadyOrchestrationParentQueue(taskRecord, executableChildren) {
 		if err := s.queueDecompositionChildren(ctx, taskRecord, executableChildren, actor); err != nil {
 			return nil, err
 		}
@@ -1191,6 +1191,25 @@ func executableProjectTasks(tasks []repo.ProjectTask) []repo.ProjectTask {
 		filtered = append(filtered, taskRecord)
 	}
 	return filtered
+}
+
+func allowsCloseoutReadyOrchestrationParentQueue(taskRecord repo.ProjectTask, executableChildren []repo.ProjectTask) bool {
+	if !taskRequiresBoundedChildren(taskRecord) || len(executableChildren) == 0 {
+		return false
+	}
+	state, ok := taskorchestration.Parse(taskRecord.Metadata)
+	if !ok || state.IntegrationCheck == nil || !strings.EqualFold(strings.TrimSpace(state.IntegrationCheck.Status), "passed") {
+		return false
+	}
+	if state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied || len(state.ChildVerifications) == 0 {
+		return false
+	}
+	for _, child := range executableChildren {
+		if normalizeStatus(child.WorkStatus) != "blocked" {
+			return false
+		}
+	}
+	return true
 }
 
 func isTerminalTaskStatus(status string) bool {

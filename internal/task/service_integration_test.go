@@ -2331,6 +2331,85 @@ func TestTaskServiceIntegrationQueueSplitsEnumeratedFetchTaskIntoBatchChildren(t
 	}
 }
 
+func TestTaskServiceIntegrationQueueAllowsCloseoutReadyOrchestrationParentWithOnlyBlockedChildren(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	parentDescription := "Write planning/sambot-prompts/test-conversations-technical.md with level-2 and level-3 SamBot test conversations."
+	parent, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Write test conversations demonstrating SamBot adaptive complexity at levels 2 (moderately technical) and 3 (deeply technical)",
+		Description:    &parentDescription,
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask parent: %v", err)
+	}
+	parentRecord, children := seedOrchestrationChildrenForParent(t, ctx, svc, taskRepo, parent.ID, project.ID, template.ID, []string{
+		"Write level-2 and level-3 test conversations in planning/sambot-prompts/test-conversations-technical.md",
+		"Stale replacement child one",
+		"Stale replacement child two",
+	})
+	parentRecord.Metadata = taskdecomp.ApplyOrchestrationOnlyMetadata(parentRecord.Metadata)
+	if _, err := taskRepo.Update(ctx, parentRecord); err != nil {
+		t.Fatalf("Update parent orchestration metadata: %v", err)
+	}
+
+	doneChild := children[0]
+	doneChild.WorkStatus = "done"
+	if _, err := taskRepo.Update(ctx, doneChild); err != nil {
+		t.Fatalf("Update done child: %v", err)
+	}
+	for _, child := range children[1:] {
+		child.WorkStatus = "blocked"
+		if _, err := taskRepo.Update(ctx, child); err != nil {
+			t.Fatalf("Update blocked child %s: %v", child.ID, err)
+		}
+	}
+
+	parentRecord, err = taskRepo.GetByID(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("GetByID parent: %v", err)
+	}
+	now := time.Date(2026, 3, 30, 18, 41, 45, 0, time.UTC)
+	parentRecord.Metadata, err = taskorchestration.Apply(parentRecord.Metadata, taskorchestration.Update{
+		ChildVerifications: []taskorchestration.ChildVerification{
+			taskorchestration.NewChildVerification(doneChild.ID, "Verified OC child delivered planning/sambot-prompts/test-conversations-technical.md.", now),
+		},
+		IntegrationCheck:  taskorchestration.NewIntegrationCheck("passed", "Verified the shared deliverable exists and satisfies the parent outcome.", now),
+		OutcomeAssessment: taskorchestration.NewOutcomeAssessment(true, "The parent deliverable is satisfied by the completed child output.", now),
+	})
+	if err != nil {
+		t.Fatalf("Apply parent orchestration metadata: %v", err)
+	}
+	if _, err := taskRepo.Update(ctx, parentRecord); err != nil {
+		t.Fatalf("Update parent after orchestration metadata: %v", err)
+	}
+
+	queued, err := svc.TransitionStatus(ctx, parent.ID, "queued", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if queued.WorkStatus != "queued" {
+		t.Fatalf("queued work_status = %q, want queued", queued.WorkStatus)
+	}
+
+	for _, childID := range []uuid.UUID{children[1].ID, children[2].ID} {
+		stored, err := taskRepo.GetByID(ctx, childID)
+		if err != nil {
+			t.Fatalf("GetByID blocked child %s: %v", childID, err)
+		}
+		if stored.WorkStatus != "blocked" {
+			t.Fatalf("blocked child %s work_status = %q, want blocked", childID, stored.WorkStatus)
+		}
+	}
+}
+
 func TestTaskServiceIntegrationParentDoneRequiresVerificationAndIntegration(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

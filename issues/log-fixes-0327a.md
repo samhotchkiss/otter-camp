@@ -4903,3 +4903,20 @@
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshot(TreatsDoneOrchestrationChildWithSameDeliverableAsCloseoutProof|TreatsMarkParentCompleteTitleAsCloseoutProof)$' -count=1`
   - deploy / proof target:
     - after a fresh repo-version restart, PM continuation on parent `286` should restore the parent with `completed_closeout_child_tasks=1` instead of surfacing only blocked leaf children
+- 2026-03-30 12:44 MDT - Allowed closeout-ready orchestration parents to leave `draft` and enter `queued` once only blocked stale children remain.
+  - changed [`internal/task/service.go`](/Users/sam/dev/otter-camp/internal/task/service.go):
+    - `transitionTaskRecordTxWithRetry(...)` no longer forces the “queue children, keep parent draft” path when the parent is already a satisfied closeout-ready orchestration container
+    - added `allowsCloseoutReadyOrchestrationParentQueue(...)`, which requires:
+      - orchestration-only / bounded-children parent semantics
+      - persisted `child_verifications`
+      - `integration_check.status=passed`
+      - `outcome_assessment.satisfied=true`
+      - every remaining non-terminal child already `blocked`
+  - changed [`internal/task/service_integration_test.go`](/Users/sam/dev/otter-camp/internal/task/service_integration_test.go):
+    - added `TestTaskServiceIntegrationQueueAllowsCloseoutReadyOrchestrationParentWithOnlyBlockedChildren`
+    - re-ran the adjacent orchestration queue tests to keep the normal “stay draft and fan out to children” behavior covered
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/task -run 'TestTaskServiceIntegration(Queue(LeavesOrchestrationOnlyParentInDraft|SplitsEnumeratedFetchTaskIntoBatchChildren|AllowsCloseoutReadyOrchestrationParentWithOnlyBlockedChildren)|ParentDoneRequiresVerificationAndIntegration|ParentDoneIgnoresBlockedProceduralChildrenAfterCloseoutProof)$' -count=1`
+  - live proof:
+    - after restart, task `286` advanced cleanly to `done`
+    - the PM lane moved past the old closeout loop and immediately began handling the next actual deliverable gap instead of reissuing another `work_status=queued` retry
