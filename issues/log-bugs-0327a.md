@@ -1835,3 +1835,16 @@
   - impact:
     - PM can continue queueing obviously malformed shared-doc topic children even though task-lane preflight immediately blocks them
     - this reopens replacement-child churn and burns PM continuation turns on work that should never leave the parent lane
+- 2026-03-30 15:18 MDT - Replacement-child retry prompts still allowed parent-scoped child rediscovery even after naming the exact repair draft.
+  - fresh live evidence:
+    - PM retry prompts named `OC-303` as the preferred same-deliverable malformed child draft to repair under `OC-297`
+    - the next assistant turn still issued `task.list(parent_task_id=OC-297)` and summarized the same child set instead of repairing `OC-303`
+  - bug:
+    - `shouldBlockProjectContinuationSnapshotRediscoveryTool(...)` only activated for full project snapshot prompts
+    - it did not activate for focused replacement-child retry prompts that only carried:
+      - `Current focus parent: ...`
+      - `Preferred existing same-deliverable malformed child draft to repair before any new replacement work: ...`
+    - so parent-scoped `task.list` remained allowed in the exact retry path where child rediscovery was already unnecessary
+  - impact:
+    - PM can burn one or more retry turns re-listing the same child set even when the preferred repair target is already explicit in the prompt
+    - this slows same-deliverable child consolidation and prolongs replacement-child recovery churn

@@ -34996,7 +34996,8 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 	initialMessage := strings.TrimSpace(rt.initialMessageText)
 	hasActiveTaskSnapshot := strings.Contains(initialMessage, "Already-active non-terminal tasks in the tree:")
 	hasDraftTaskSnapshot := strings.Contains(initialMessage, "Actionable draft tasks already in the tree:")
-	if !hasActiveTaskSnapshot && !hasDraftTaskSnapshot {
+	hasFocusedRetrySnapshot := strings.Contains(initialMessage, "Current focus parent:") || strings.Contains(initialMessage, "Preferred existing same-deliverable malformed child draft to repair before any new replacement work:")
+	if !hasActiveTaskSnapshot && !hasDraftTaskSnapshot && !hasFocusedRetrySnapshot {
 		return false, ""
 	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
@@ -35022,6 +35023,15 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 			parentTaskID, err := uuid.Parse(parentTaskIDText)
 			if err != nil || parentTaskID == uuid.Nil {
 				return false, ""
+			}
+			if repairTaskID := projectContinuationPromptRepairDraftTaskID(initialMessage); repairTaskID != uuid.Nil {
+				focusTaskID := projectContinuationPromptCurrentFocusParentTaskID(initialMessage)
+				if focusTaskID == uuid.Nil {
+					focusTaskID = projectContinuationPromptFocusTaskID(initialMessage)
+				}
+				if focusTaskID != uuid.Nil && parentTaskID == focusTaskID {
+					return true, buildProjectContinuationSnapshotRepairDraftRediscoveryGuardError(focusTaskID, repairTaskID)
+				}
 			}
 			leafTaskIDs := projectContinuationPromptLeafTaskIDs(initialMessage)
 			if _, ok := leafTaskIDs[parentTaskID]; ok {
@@ -35121,6 +35131,35 @@ func projectContinuationPromptNamedTaskIDs(initialMessage string) map[uuid.UUID]
 		ids[taskID] = struct{}{}
 	}
 	return ids
+}
+
+func projectContinuationPromptRepairDraftTaskID(initialMessage string) uuid.UUID {
+	const marker = "Preferred existing same-deliverable malformed child draft to repair before any new replacement work:"
+	idx := strings.Index(initialMessage, marker)
+	if idx < 0 {
+		return uuid.Nil
+	}
+	match := projectContinuationPromptTaskIDPattern.FindStringSubmatch(initialMessage[idx:])
+	if len(match) != 2 {
+		return uuid.Nil
+	}
+	taskID, err := uuid.Parse(strings.TrimSpace(match[1]))
+	if err != nil {
+		return uuid.Nil
+	}
+	return taskID
+}
+
+func buildProjectContinuationSnapshotRepairDraftRediscoveryGuardError(focusTaskID, repairTaskID uuid.UUID) string {
+	focusLabel := focusTaskID.String()
+	if focusTaskID == uuid.Nil {
+		focusLabel = "the focused draft parent"
+	}
+	repairLabel := repairTaskID.String()
+	if repairTaskID == uuid.Nil {
+		repairLabel = "the preferred same-deliverable child draft named above"
+	}
+	return fmt.Sprintf("project continuation already names preferred same-deliverable repair child task %s beneath focused draft %s. Do not relist that parent's children now; repair or queue %s directly with one narrow task.update, or block/consolidate the weaker duplicate siblings if %s is no longer usable.", repairLabel, focusLabel, repairLabel, repairLabel)
 }
 
 func projectContinuationPromptAssignedAgentIDs(initialMessage string) []string {

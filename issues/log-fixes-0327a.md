@@ -5145,3 +5145,14 @@
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'TestProjectExecutionContinuationSnapshotIgnoresMalformed(InheritedSharedFileTopicChildren|DuplicateSharedFileChildrenUsingSourceDescriptionOnly|ChecklistFragmentChildren|ReferenceOnlyChildren|ProceduralChildren)$' -count=1`
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformed(InheritedSharedFileTopicChildren|ChecklistFragmentChildren|ReferenceOnlyChildren|ProceduralChildren|DuplicateSharedFileChildren)$' -count=1`
+- 2026-03-30 15:18 MDT - Blocked parent-scoped rediscovery when a preferred same-deliverable repair draft is already named.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `shouldBlockProjectContinuationSnapshotRediscoveryTool(...)` now activates for focused replacement-child retry prompts, not just full project snapshot prompts
+    - when the prompt already names a preferred same-deliverable repair draft, `task.list(parent_task_id=<focus parent>)` is blocked and redirected to the named repair child
+    - added:
+      - `projectContinuationPromptRepairDraftTaskID(...)`
+      - `buildProjectContinuationSnapshotRepairDraftRediscoveryGuardError(...)`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestShouldBlockProjectContinuationSnapshotRediscoveryToolForParentScopedTaskListWhenRepairDraftNamed`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(Should(Block|NotBlock)ProjectContinuationSnapshotRediscoveryToolForParentScopedTaskList(WhenRepairDraftNamed)?|BuildProjectExecutionContinuationReplacementChildRetryPromptPrefersRepairOfMalformedSameDeliverableDraftChild)$' -count=1`

@@ -11825,6 +11825,46 @@ func TestShouldNotBlockProjectContinuationSnapshotRediscoveryToolForParentScoped
 	}
 }
 
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolForParentScopedTaskListWhenRepairDraftNamed(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentTaskID := uuid.New()
+	repairTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectExecutionContinuationReplacementChildRetryPrompt(
+			repo.ProjectTask{TaskNumber: 286, Title: "Write test conversations demonstrating SamBot adaptive complexity"},
+			1,
+			projectExecutionContinuationSnapshot{
+				ProjectLine:     "Active project id: " + projectID.String(),
+				RepairDraftLine: `Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 303 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot dialogues) id=` + repairTaskID.String() + ` title="Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot dialogues" work_status=draft`,
+				FocusTaskLine:   `Current focus parent: task 297 (Write planning/sambot-prompts/test-conversations-level3.md) id=` + parentTaskID.String() + ` work_status=draft malformed_child_tasks=5`,
+			},
+			repo.ProjectTask{ID: parentTaskID, TaskNumber: 297, Title: "Write planning/sambot-prompts/test-conversations-level3.md"},
+			projectContinuationChildActivity{malformedChildTaskCount: 5},
+			projectContinuationTaskHints{DeliverablePath: "planning/sambot-prompts/test-conversations-level3.md"},
+		),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "task.list", map[string]any{
+		"parent_task_id": parentTaskID.String(),
+	})
+	if !blocked {
+		t.Fatal("expected parent-scoped task.list to be blocked once a preferred repair draft is already named")
+	}
+	if !strings.Contains(reason, repairTaskID.String()) {
+		t.Fatalf("reason = %q, want preferred repair child id", reason)
+	}
+	if !strings.Contains(reason, "task.update") {
+		t.Fatalf("reason = %q, want direct repair guidance", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksLeafParentScopedTaskList(t *testing.T) {
 	t.Parallel()
 
