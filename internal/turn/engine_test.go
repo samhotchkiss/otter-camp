@@ -11301,6 +11301,37 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksSessionListF
 	}
 }
 
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksAgentListWhenRosterAlreadyNamed(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	activeTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:    "Active project id: " + projectID.String(),
+			ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 22 (Ship docs) id=" + activeTaskID.String() + " title=\"Ship docs\" work_status=blocked assigned_agent_id=worker-1",
+			DraftTaskLine:  "Actionable draft tasks already in the tree: task 23 (Write tech spec) id=" + draftTaskID.String() + " title=\"Write tech spec\" work_status=draft assigned_agent_id=missing flow_template_id=ft-1",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "agent.list", map[string]any{})
+	if !blocked {
+		t.Fatal("expected project-lane agent.list to be blocked once the continuation prompt already names usable assignee ids")
+	}
+	if !strings.Contains(reason, "active project assignee id(s) worker-1") {
+		t.Fatalf("reason = %q, want existing assignee guidance", reason)
+	}
+	if !strings.Contains(reason, "retry task.update") {
+		t.Fatalf("reason = %q, want direct task.update retry guidance", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksGitLogForActiveTasks(t *testing.T) {
 	t.Parallel()
 
@@ -39953,7 +39984,7 @@ func TestRecoveryTargetPathForSessionPrefersExplicitDeliverableOverHistoricalRef
 	}
 }
 
-func TestNormalizeRecoveryCheckpointTargetForTaskClearsDependencyArtifactOutsidePreferredDeliverableRoot(t *testing.T) {
+func TestNormalizeRecoveryCheckpointTargetForTaskRepointsDependencyArtifactOutsidePreferredDeliverableRootToOwnedOutput(t *testing.T) {
 	t.Parallel()
 
 	description := "Read content/technonymous-index.json. For each of the last 11 URLs in the post_urls array (indices 24-34), use web_fetch to retrieve the page content, then save the article text as clean markdown files under content/posts/.\n\nDeliverable: 11 markdown files in content/posts/."
@@ -39975,8 +40006,8 @@ func TestNormalizeRecoveryCheckpointTargetForTaskClearsDependencyArtifactOutside
 	checkpoint := normalizeRecoveryCheckpointTargetForTask(taskRecord, taskcheckpoint.RecoveryFileWriteCheckpoint{
 		TargetPath: "content/technonymous-index.json",
 	})
-	if got := strings.TrimSpace(checkpoint.TargetPath); got != "" {
-		t.Fatalf("checkpoint.TargetPath = %q, want cleared outside-root dependency artifact", got)
+	if got := strings.TrimSpace(checkpoint.TargetPath); got != "content/posts/the-water-is-nearing-a-boil.md" {
+		t.Fatalf("checkpoint.TargetPath = %q, want checkpoint-owned output", got)
 	}
 }
 
@@ -40450,6 +40481,57 @@ func TestSessionTaskDeliverablePathPrefersExplicitFileLabelOverHistoricalPlannin
 
 	if got := fixture.engine.sessionTaskDeliverablePath(context.Background(), sessionID, taskRecord); got != "sambot/api.js" {
 		t.Fatalf("sessionTaskDeliverablePath(...) = %q, want %q", got, "sambot/api.js")
+	}
+}
+
+func TestSessionTaskDeliverablePathIgnoresBareDirectoryCheckpointAndInheritsParentMarkdownDeliverable(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	sessionID := fixture.session.ID
+	parentID := uuid.New()
+	taskID := uuid.New()
+	parentDescription := "Write the file planning/sambot-tech-architecture.md — the SamBot technical architecture specification."
+	childDescription := "Generic 500 errors — no internal details leaked"
+	taskRecord := repo.ProjectTask{
+		ID:          taskID,
+		TaskNumber:  206,
+		Title:       "Generic 500 errors — no internal details leaked",
+		Description: &childDescription,
+		Metadata: mustRawJSON(t, map[string]any{
+			"decomposition_parent_task_id": parentID.String(),
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":     1,
+				"target_path": "SamBot",
+			},
+		}),
+	}
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:          parentID,
+				TaskNumber:  200,
+				Title:       "Write SamBot technical architecture spec — planning/sambot-tech-architecture.md",
+				Description: &parentDescription,
+			},
+			taskID: taskRecord,
+		},
+	}
+	messageRepo := newFakeMessageRepo()
+	messageRepo.create(repo.ChatMessage{
+		SessionID: sessionID,
+		Role:      "tool_result",
+		Content:   `{"tool_name":"file.read","output":{"path":"SamBot/api.js","deliverable_path":"SamBot","error":"mismatched_deliverable_context"}}`,
+		Status:    "final",
+	})
+	fixture.messages = messageRepo
+	fixture.engine.messages = messageRepo
+
+	if got := fixture.engine.sessionTaskDeliverablePath(context.Background(), sessionID, taskRecord); got != "planning/sambot-tech-architecture.md" {
+		t.Fatalf("sessionTaskDeliverablePath(...) = %q, want %q", got, "planning/sambot-tech-architecture.md")
 	}
 }
 

@@ -812,3 +812,20 @@
     - they were not inheriting the equivalent validation/checkpoint fields from the task record itself when rebuilding a fresh kickoff
   - impact:
     - recovery-capable lanes could regress into generic rediscovery after every restart, paying another intent-only `file.write` before the engine reconstructed the same bounded stop
+- 2026-03-29 21:02 MDT - Project continuations still had one unguarded roster-rediscovery leak.
+  - fresh live evidence:
+    - PM continuation prompts for the remaining architecture draft task already carried `assigned_agent_id=61b10b32-cdc2-4d75-a84a-6c3bcf25b5ed`
+    - after a failed `task.update`, the live PM lane still called `agent.list` instead of retrying the bounded assignment/update step directly
+  - bug:
+    - `shouldBlockProjectContinuationSnapshotRediscoveryTool(...)` guarded `project.get`, `task.list`, `flow.get_execution`, `git.*`, and session rediscovery, but not `agent.list`
+  - impact:
+    - the PM lane could still spend an extra rediscovery hop on staff lookup even when the continuation prompt already named the usable assignee roster
+    - this was a direct remaining manual-test blocker for the final SamBot architecture split/assignment loop
+- 2026-03-29 21:02 MDT - Malformed shared-doc child checkpoints were still accepting the bare directory label `SamBot` as if it were a real deliverable path.
+  - fresh DB evidence:
+    - blocked child tasks `202-206` all persisted `recovery_file_write_checkpoint.target_path = "SamBot"` plus `.ottercamp/recovery/SamBot`
+    - the parent task contract for that family explicitly owns `planning/sambot-tech-architecture.md`, so `SamBot` is just a stray directory token, not a task deliverable
+  - bug:
+    - explicit deliverable parsing still treated bare mixed-case single-segment labels as path-like enough to preserve them
+  - impact:
+    - shared-doc child recovery could keep anchoring on a bogus directory token instead of the parent markdown deliverable, reopening the same malformed write/recovery path if those child lanes woke again

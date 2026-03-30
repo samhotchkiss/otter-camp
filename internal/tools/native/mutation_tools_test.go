@@ -1859,6 +1859,20 @@ func TestParseExplicitDeliverablePathDetectsMarkdownFileLabel(t *testing.T) {
 	}
 }
 
+func TestParseExplicitDeliverablePathIgnoresBareDirectoryLabel(t *testing.T) {
+	t.Parallel()
+
+	description := "Deliverable: SamBot"
+	taskRecord := repo.ProjectTask{
+		Title:       "Generic 500 errors — no internal details leaked",
+		Description: &description,
+	}
+
+	if got := parseExplicitDeliverablePath(taskRecord); got != "" {
+		t.Fatalf("parseExplicitDeliverablePath() = %q, want empty for bare directory label", got)
+	}
+}
+
 func TestParseExplicitDeliverablePathDetectsParenthesizedOptionPath(t *testing.T) {
 	t.Parallel()
 

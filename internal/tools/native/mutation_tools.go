@@ -64,6 +64,14 @@ var explicitDeliverableActionWords = map[string]struct{}{
 	"update":   {},
 	"write":    {},
 }
+var bareExplicitDeliverableFileNames = map[string]struct{}{
+	"dockerfile": {},
+	"license":    {},
+	"makefile":   {},
+	"notice":     {},
+	"procfile":   {},
+	"readme":     {},
+}
 var bootstrapWaveFamilyTitlePattern = regexp.MustCompile(`(?i)\b(?:[a-z0-9]+-)?(fw|lw)\s*[-:]?\s*(\d+)\b`)
 var contentMigrationCheckpointTaskPathPattern = regexp.MustCompile(`(?i)^\.ottercamp/checkpoints/oc-(\d+)-content-migration\.md$`)
 
@@ -295,12 +303,11 @@ func looksLikeExplicitDeliverablePath(normalized, raw string) bool {
 	if _, ok := explicitDeliverableActionWords[strings.ToLower(trimmedRaw)]; ok {
 		return false
 	}
-	for _, r := range trimmedRaw {
-		if r >= 'A' && r <= 'Z' {
-			return true
-		}
+	lowerRaw := strings.ToLower(trimmedRaw)
+	if _, ok := bareExplicitDeliverableFileNames[lowerRaw]; ok {
+		return true
 	}
-	return false
+	return strings.HasPrefix(trimmedRaw, ".")
 }
 
 func taskContractDescriptionCandidates(taskRecord repo.ProjectTask) []string {

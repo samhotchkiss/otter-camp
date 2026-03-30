@@ -351,6 +351,57 @@ func TestNormalizeRecoveryCheckpointTargetForTaskFallsBackToExplicitFileLabel(t 
 	}
 }
 
+func TestLatestRecoveryTargetPathForSessionIgnoresBareDirectoryCheckpointAndUsesParentMarkdownDeliverable(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	parentID := uuid.New()
+	childID := uuid.New()
+	sessionID := uuid.New()
+
+	parentDescription := "Write the file planning/sambot-tech-architecture.md — the SamBot technical architecture specification."
+	childDescription := "Generic 500 errors — no internal details leaked"
+	childMetadata := json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s","recovery_file_write_checkpoint":{"version":1,"target_path":"SamBot"}}`, parentID))
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &stubTaskRepo{
+		byID: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:             parentID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				TaskNumber:     200,
+				Title:          "Write SamBot technical architecture spec — planning/sambot-tech-architecture.md",
+				Description:    &parentDescription,
+			},
+			childID: {
+				ID:             childID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				TaskNumber:     206,
+				Title:          "Generic 500 errors — no internal details leaked",
+				Description:    &childDescription,
+				Metadata:       childMetadata,
+			},
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "tool_result",
+				Content:   `{"tool_name":"file.read","output":{"path":"SamBot/api.js","deliverable_path":"SamBot","error":"mismatched_deliverable_context"}}`,
+				Status:    "final",
+			},
+		},
+	}
+
+	got := executor.latestRecoveryTargetPathForSession(context.Background(), workspaceScope{sessionID: &sessionID, taskID: &childID})
+	if got != "planning/sambot-tech-architecture.md" {
+		t.Fatalf("latestRecoveryTargetPathForSession(...) = %q, want %q", got, "planning/sambot-tech-architecture.md")
+	}
+}
+
 func TestTaskExplicitDeliverablePathFindsMatchingParentDecompositionDeliverableForBackendChild(t *testing.T) {
 	orgID := uuid.New()
 	projectID := uuid.New()

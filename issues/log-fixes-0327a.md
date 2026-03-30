@@ -4005,3 +4005,19 @@
   - proof status:
     - this slice is test-green and diagnosis-backed
     - the live task-199 lane had already advanced into review before another natural recovery kickoff occurred on the rebuilt runtime, so fresh production proof for the widened kickoff metadata is still pending the next comparable validation-restart canary
+- 2026-03-29 21:02 MDT - Tightened PM assignee reuse and shared-doc target parsing.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - project continuations now block `agent.list` when the continuation prompt already names usable `assigned_agent_id=` values and push the PM lane back toward direct `task.update`
+    - explicit deliverable parsing no longer treats bare mixed-case directory labels like `SamBot` as deliverable paths
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - matched the same bare-directory deliverable-path tightening so native recovery target selection stops preserving `SamBot` as if it were a file target
+  - changed tests:
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go)
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go)
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(ParseExplicitDeliverablePath(IgnoresBareDirectoryLabel|DetectsMarkdownFileLabel)|LatestRecoveryTargetPathForSession(IgnoresBareDirectoryCheckpointAndUsesParentMarkdownDeliverable|PrefersExplicitFileLabelOverHistoricalPlanningTarget)|NormalizeRecoveryCheckpointTargetForTask(FallsBackToExplicitFileLabel|RepointsDependencyArtifactOutsidePreferredDeliverableRootToOwnedOutput))$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksAgentListWhenRosterAlreadyNamed|SessionTaskDeliverablePathIgnoresBareDirectoryCheckpointAndInheritsParentMarkdownDeliverable|SessionTaskDeliverablePathIgnoresHistoricalAuxiliaryTestArtifactForBackendTaskReferencingFeatureSpec|SessionTaskDeliverablePathPrefersExplicitFileLabelOverHistoricalPlanningTarget|NormalizeRecoveryCheckpointTargetForTaskRepointsDependencyArtifactOutsidePreferredDeliverableRootToOwnedOutput)$' -count=1`
+  - live proof:
+    - on `repo_version=3651`, PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8` produced tool-result `4f9347aa-e05b-408d-9028-754a4384d111`, which blocked `agent.list` with the already-named assignee id `61b10b32-cdc2-4d75-a84a-6c3bcf25b5ed`
+    - the bare-`SamBot` parser hardening is deployed and test-green; it is still waiting on the next natural shared-doc child recovery canary for direct production proof because tasks `202-206` were already terminally blocked before the new binary came up

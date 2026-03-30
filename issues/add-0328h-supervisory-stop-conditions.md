@@ -434,3 +434,21 @@ They need sharper stopping rules than ordinary execution lanes.
   - deploy / proof status:
     - this slice is currently test-proven and diagnosis-backed
     - task `199` had already cleared its validation guard and advanced into review before the rebuilt runtime had another natural recovery kickoff to prove the widened metadata path live
+- 2026-03-29 21:02 MDT - Followed the SamBot architecture PM lane into the next two narrow blockers: unnecessary assignee rediscovery in project continuations, and bare directory labels being treated as deliverable paths for malformed shared-doc child tasks.
+  - fresh live / DB evidence before the fix:
+    - PM continuation prompts for task `208` already named usable assignee ids like `assigned_agent_id=61b10b32-cdc2-4d75-a84a-6c3bcf25b5ed`, but the live PM assistant still drifted into `agent.list` after a failed `task.update`
+    - blocked child tasks `202-206` still carried malformed `recovery_file_write_checkpoint.target_path = "SamBot"` even though the parent task contract explicitly owned `planning/sambot-tech-architecture.md`
+  - local / deployed fix:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now blocks project-continuation `agent.list` when the continuation prompt already carries usable `assigned_agent_id=` values, and the guard message pushes the lane back toward direct `task.update`
+    - [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go) plus the mirrored parser in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) no longer treat bare mixed-case directory labels like `SamBot` as explicit deliverable paths; only real path-like targets, dotfiles, or a small extensionless filename allowlist survive
+    - session deliverable-path recovery in both native/file-tool and turn-engine test coverage now prefers the parent markdown deliverable over bare-directory checkpoint junk
+  - added focused coverage in:
+    - [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go) with `TestParseExplicitDeliverablePathIgnoresBareDirectoryLabel`
+    - [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go) with `TestLatestRecoveryTargetPathForSessionIgnoresBareDirectoryCheckpointAndUsesParentMarkdownDeliverable`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) with `TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksAgentListWhenRosterAlreadyNamed`, `TestSessionTaskDeliverablePathIgnoresBareDirectoryCheckpointAndInheritsParentMarkdownDeliverable`, and the refreshed multi-output checkpoint normalization expectation
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(ParseExplicitDeliverablePath(IgnoresBareDirectoryLabel|DetectsMarkdownFileLabel)|LatestRecoveryTargetPathForSession(IgnoresBareDirectoryCheckpointAndUsesParentMarkdownDeliverable|PrefersExplicitFileLabelOverHistoricalPlanningTarget)|NormalizeRecoveryCheckpointTargetForTask(FallsBackToExplicitFileLabel|RepointsDependencyArtifactOutsidePreferredDeliverableRootToOwnedOutput))$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksAgentListWhenRosterAlreadyNamed|SessionTaskDeliverablePathIgnoresBareDirectoryCheckpointAndInheritsParentMarkdownDeliverable|SessionTaskDeliverablePathIgnoresHistoricalAuxiliaryTestArtifactForBackendTaskReferencingFeatureSpec|SessionTaskDeliverablePathPrefersExplicitFileLabelOverHistoricalPlanningTarget|NormalizeRecoveryCheckpointTargetForTaskRepointsDependencyArtifactOutsidePreferredDeliverableRootToOwnedOutput)$' -count=1`
+  - live / proof status:
+    - live-proven on PM session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`: post-redeploy tool-result `4f9347aa-e05b-408d-9028-754a4384d111` blocked `agent.list` with `project continuation already has active project assignee id(s) 61b10b32-cdc2-4d75-a84a-6c3bcf25b5ed`
+    - the bare-`SamBot` parser fix is deployed and test-green, but it is still waiting on the next natural shared-doc child recovery canary because tasks `202-206` were already terminally blocked before the new binary came up

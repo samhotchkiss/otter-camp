@@ -182,6 +182,7 @@ var projectContinuationBatchRangePattern = regexp.MustCompile(`(?i)\bposts?\s+(\
 var projectContinuationCompletedBatchRangePattern = regexp.MustCompile(`\bThat completed task covers batch_range=([0-9]{1,3}-[0-9]{1,3})\b`)
 var projectContinuationWorkspacePathPattern = regexp.MustCompile(`\b(?:content|templates|results|planning|docs|scripts|src|app|internal|config|data|pipeline|deliverables)/[A-Za-z0-9._/\-]+\b`)
 var projectContinuationParentCompletionTaskLabelPattern = regexp.MustCompile(`(?i)\bOC-\d+\b`)
+var projectContinuationPromptAssignedAgentIDPattern = regexp.MustCompile(`assigned_agent_id=([^\s;]+)`)
 var promptFlowNodeExecutionPattern = regexp.MustCompile(`(?i)flow node execution:\s*([0-9a-fA-F-]{36})`)
 var workspacePathInBackticksPattern = regexp.MustCompile("`([^`]+)`")
 var acceptanceCriteriaListItemPattern = regexp.MustCompile(`^\d+[.)]\s+(.+)$`)
@@ -205,6 +206,14 @@ var explicitDeliverableActionWords = map[string]struct{}{
 	"produce":  {},
 	"update":   {},
 	"write":    {},
+}
+var bareExplicitDeliverableFileNames = map[string]struct{}{
+	"dockerfile": {},
+	"license":    {},
+	"makefile":   {},
+	"notice":     {},
+	"procfile":   {},
+	"readme":     {},
 }
 var preferredDeliverableRootPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:under|in)\s+/?((?:content(?:/[A-Za-z0-9._-]+)+)/?)`),
@@ -32728,6 +32737,12 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "project.get", "project.list":
 		return true, buildProjectContinuationSnapshotRediscoveryGuardError(toolName, uuid.Nil)
+	case "agent.list":
+		assignedAgentIDs := projectContinuationPromptAssignedAgentIDs(initialMessage)
+		if len(assignedAgentIDs) == 0 {
+			return false, ""
+		}
+		return true, buildProjectContinuationAssignedAgentRediscoveryGuardError(assignedAgentIDs)
 	case "session.list", "session.history", "inbox.list":
 		return true, buildProjectContinuationSnapshotSessionRediscoveryGuardError(toolName)
 	case "git.log", "git.status":
@@ -32839,6 +32854,33 @@ func projectContinuationPromptNamedTaskIDs(initialMessage string) map[uuid.UUID]
 			continue
 		}
 		ids[taskID] = struct{}{}
+	}
+	return ids
+}
+
+func projectContinuationPromptAssignedAgentIDs(initialMessage string) []string {
+	matches := projectContinuationPromptAssignedAgentIDPattern.FindAllStringSubmatch(initialMessage, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(matches))
+	ids := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) != 2 {
+			continue
+		}
+		assignedID := strings.TrimSpace(strings.Trim(match[1], ",.;:"))
+		if assignedID == "" || strings.EqualFold(assignedID, "missing") {
+			continue
+		}
+		if _, ok := seen[assignedID]; ok {
+			continue
+		}
+		seen[assignedID] = struct{}{}
+		ids = append(ids, assignedID)
+	}
+	if len(ids) == 0 {
+		return nil
 	}
 	return ids
 }
@@ -32965,6 +33007,13 @@ func buildProjectContinuationProjectIDTaskGetGuardError(projectID uuid.UUID) str
 
 func buildProjectContinuationSnapshotSessionRediscoveryGuardError(toolName string) string {
 	return fmt.Sprintf("project continuation already has the active project session context plus named active tasks in the continuation prompt. Do not reread broader session or inbox state with %s; act on the named tasks directly or report the concrete blocker.", toolName)
+}
+
+func buildProjectContinuationAssignedAgentRediscoveryGuardError(assignedAgentIDs []string) string {
+	if len(assignedAgentIDs) == 0 {
+		return "project continuation already has the active project assignee roster in the continuation prompt. Do not reread agent.list now; retry task.update with one of the already-assigned project agents or create a fresh worker only if the prompt proves none are usable."
+	}
+	return fmt.Sprintf("project continuation already has active project assignee id(s) %s in the continuation prompt. Do not reread agent.list now; retry task.update with one of those already-assigned project agents, or create a fresh worker only if the prompt proves none are usable.", strings.Join(assignedAgentIDs, ", "))
 }
 
 func buildProjectContinuationSnapshotGitRediscoveryGuardError(toolName string) string {
@@ -35737,12 +35786,11 @@ func looksLikeExplicitDeliverablePath(normalized, raw string) bool {
 	if _, ok := explicitDeliverableActionWords[strings.ToLower(trimmedRaw)]; ok {
 		return false
 	}
-	for _, r := range trimmedRaw {
-		if r >= 'A' && r <= 'Z' {
-			return true
-		}
+	lowerRaw := strings.ToLower(trimmedRaw)
+	if _, ok := bareExplicitDeliverableFileNames[lowerRaw]; ok {
+		return true
 	}
-	return false
+	return strings.HasPrefix(trimmedRaw, ".")
 }
 
 func looksLikePreferredDeliverableRootPath(normalized string) bool {
