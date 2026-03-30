@@ -1912,3 +1912,12 @@
     - `initialMessageTextWithContinuationSummary(...)` preferred the latest `[Continuation summary] ...` message even when that summary omitted the structured snapshot markers that the rediscovery guard requires
   - impact:
     - short `project_execution_continuation` retries could keep reopening broad project rediscovery even after the first carry-forward patch landed
+- 2026-03-30 17:26 MDT - Priority-filtered project snapshots could report “matched” while collapsing to only `ProjectLine`, producing a hollow PM resume prompt.
+  - fresh live evidence:
+    - `project_continuation_resume` message `18046` contained no structured snapshot lines even though the session still had many draft/blocked tasks
+    - the prompt only carried `Active project id: ...`, so the rediscovery guard still had nothing to parse
+  - bug:
+    - `projectExecutionContinuationSnapshotForSummary(...)` returned the priority-filtered snapshot whenever the path filter matched any task, even if all matched tasks were then filtered away as superseded/malformed and the resulting snapshot had no actionable context
+  - impact:
+    - PM resume prompts could degrade into generic anti-chat boilerplate plus project id only
+    - broad `task.list` rediscovery remained possible even after the structured-carry-forward patch

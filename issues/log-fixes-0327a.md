@@ -5230,3 +5230,11 @@
     - added `TestInitialMessageTextWithContinuationSummaryPrefersRecentStructuredContinuationPrompt`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(InitialMessageTextWithContinuationSummary(PrependsRecentProjectSummary|PrefersRecentStructuredContinuationPrompt)|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskList(UnderscoreAlias)?|DispatchTier1Concurrent(SerializesSameParentTaskCreateCalls|AllowsIndependentTier1CallsInParallel))$' -count=1`
+- 2026-03-30 17:26 MDT - Fell back to the unfiltered project snapshot when summary-path filtering collapsed to `ProjectLine` only.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `projectExecutionContinuationSnapshotForSummary(...)` now keeps the priority-filtered snapshot only when it still contains structured context beyond `ProjectLine`
+    - added `projectExecutionContinuationSnapshotHasStructuredContext(...)`
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added `TestProjectExecutionContinuationSnapshotForSummaryFallsBackWhenPriorityFilterCollapsesToProjectLine`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectExecutionContinuationSnapshotForSummaryFallsBackWhenPriorityFilterCollapsesToProjectLine|InitialMessageTextWithContinuationSummary(PrependsRecentProjectSummary|PrefersRecentStructuredContinuationPrompt)|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskList(UnderscoreAlias)?)$' -count=1`

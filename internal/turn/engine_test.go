@@ -29512,6 +29512,51 @@ func TestInitialMessageTextWithContinuationSummaryPrefersRecentStructuredContinu
 	}
 }
 
+func TestProjectExecutionContinuationSnapshotForSummaryFallsBackWhenPriorityFilterCollapsesToProjectLine(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentID := uuid.New()
+	childID := uuid.New()
+
+	engine := &TurnEngine{
+		tasks: &fakeTaskRepo{
+			items: map[uuid.UUID]repo.ProjectTask{
+				parentID: {
+					ID:           parentID,
+					ProjectID:    projectID,
+					TaskNumber:   297,
+					Title:        "Replacement parent",
+					Description:  stringPtr("Owns planning/sambot-prompts/test-conversations-level3.md"),
+					WorkStatus:   "draft",
+				},
+				childID: {
+					ID:           childID,
+					ProjectID:    projectID,
+					TaskNumber:   310,
+					Title:        "Completed replacement child",
+					Description:  stringPtr("Write planning/sambot-prompts/test-conversations-level3.md"),
+					WorkStatus:   "done",
+					Metadata: mustJSONRaw(map[string]any{
+						"decomposition_parent_task_id": parentID.String(),
+					}),
+				},
+			},
+		},
+	}
+
+	snapshot, err := engine.projectExecutionContinuationSnapshotForSummary(context.Background(), projectID, "Active project request: Continue the active project execution now. The latest completed task was task 310 (Write planning/sambot-prompts/test-conversations-level3.md).")
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshotForSummary: %v", err)
+	}
+	if strings.TrimSpace(snapshot.ProjectLine) == "" {
+		t.Fatalf("snapshot.ProjectLine = %q, want project id line", snapshot.ProjectLine)
+	}
+	if !projectExecutionContinuationSnapshotHasStructuredContext(snapshot) {
+		t.Fatalf("snapshot = %#v, want fallback to structured unfiltered snapshot when priority filter collapses", snapshot)
+	}
+}
+
 func TestProjectExecutionContinuationFallbackSummary(t *testing.T) {
 	summary := projectExecutionContinuationFallbackSummary()
 

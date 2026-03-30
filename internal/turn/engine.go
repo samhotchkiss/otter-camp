@@ -22321,11 +22321,24 @@ func (e *TurnEngine) projectExecutionContinuationSnapshotForSummary(ctx context.
 	priorityPaths := projectContinuationPriorityPathsFromText(summary)
 	if filtered, matched := buildProjectExecutionContinuationSnapshotWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths); matched {
 		filtered.ProjectLine = snapshot.ProjectLine
-		return filtered, nil
+		if projectExecutionContinuationSnapshotHasStructuredContext(filtered) {
+			return filtered, nil
+		}
 	}
 	filtered, _ := buildProjectExecutionContinuationSnapshotWithActivity(projectTasks, taskHintsByTask, childActivity, nil)
 	filtered.ProjectLine = snapshot.ProjectLine
 	return filtered, nil
+}
+
+func projectExecutionContinuationSnapshotHasStructuredContext(snapshot projectExecutionContinuationSnapshot) bool {
+	return strings.TrimSpace(snapshot.ActiveTaskLine) != "" ||
+		strings.TrimSpace(snapshot.CompletedTaskLine) != "" ||
+		strings.TrimSpace(snapshot.LeafActiveTaskLine) != "" ||
+		strings.TrimSpace(snapshot.DraftTaskLine) != "" ||
+		strings.TrimSpace(snapshot.ReplacementDraftLine) != "" ||
+		strings.TrimSpace(snapshot.RepairDraftLine) != "" ||
+		strings.TrimSpace(snapshot.ChildActiveDraftLine) != "" ||
+		strings.TrimSpace(snapshot.FocusTaskLine) != ""
 }
 
 func buildProjectExecutionContinuationSnapshot(
