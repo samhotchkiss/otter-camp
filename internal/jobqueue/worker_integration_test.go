@@ -26623,6 +26623,223 @@ func TestJobWorkerEnsureProjectContinuationMessageAllowsStalePendingReplacementH
 	}
 }
 
+func TestJobWorkerEnsureProjectContinuationMessageRefreshesFailedExecutableContractContinuation(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "ensure-project-continuation-refreshes-executable-contract",
+		DisplayName: "Ensure Project Continuation Refreshes Executable Contract",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "ensure-project-continuation-refreshes-executable-contract-project",
+		DisplayName:    "Ensure Project Continuation Refreshes Executable Contract Project",
+		Description:    "Project for executable-contract continuation refresh coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "ensure-project-continuation-refreshes-executable-contract-template",
+		DisplayName:    "Ensure Project Continuation Refreshes Executable Contract Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	doneTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     310,
+		Title:          "Write planning/sambot-prompts/test-conversations-level3.md",
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	parentDescription := "Write planning/sambot-prompts/test-conversations-level3.md with 3 deeply technical multi-turn conversations."
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     297,
+		Title:          "Write planning/sambot-prompts/test-conversations-level3.md",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent draft task: %v", err)
+	}
+	childDescription := "Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations."
+	childMetadata, err := json.Marshal(map[string]any{"decomposition_parent_task_id": parentTask.ID.String()})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     328,
+		Title:          "Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations.",
+		Description:    &childDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata:      childMetadata,
+	}); err != nil {
+		t.Fatalf("create duplicate same-deliverable child task: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	remainingDrafts, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	fingerprint := projectExecutionContinuationFingerprintForWorker(doneTask.ID, remainingDrafts, snapshot)
+	metadata, err := json.Marshal(map[string]any{
+		"source":                 "project_execution_continuation",
+		"auto_continue":          true,
+		"synthetic_user_message": true,
+		"completed_task_id":      doneTask.ID.String(),
+		projectContinuationSnapshotFingerprintKey: fingerprint,
+	})
+	if err != nil {
+		t.Fatalf("marshal continuation metadata: %v", err)
+	}
+	staleMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "failed",
+		Metadata:  metadata,
+	})
+	if err != nil {
+		t.Fatalf("create stale continuation message: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	completedTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StopReason:       &stopReason,
+		TriggerMessageID: &staleMessage.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create completed continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &completedTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation found remaining draft task 328 (Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations.) but could not auto-queue it because it still needs a bounded executable contract: task requires a bounded executable contract before it can be queued: resume the bounded work from parent task 297 instead of queueing duplicate same-deliverable child 328 for `planning/sambot-prompts/test-conversations-level3.md`. Resume the bounded parent or preferred same-deliverable child instead of queueing this duplicate draft unchanged.]",
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create executable-contract stop message: %v", err)
+	}
+
+	messageID, suppressed, err := worker.ensureProjectContinuationMessageDecision(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ensureProjectContinuationMessageDecision: %v", err)
+	}
+	if suppressed {
+		t.Fatal("suppressed = true, want fresh continuation after executable-contract stop")
+	}
+	if messageID == uuid.Nil {
+		t.Fatal("messageID = nil, want fresh continuation after executable-contract stop")
+	}
+
+	var (
+		source  string
+		content string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT COALESCE(metadata->>'source', ''), content
+		FROM chat_message
+		WHERE id = $1
+	`, messageID).Scan(&source, &content); err != nil {
+		t.Fatalf("query fresh continuation: %v", err)
+	}
+	if source != "project_execution_continuation" {
+		t.Fatalf("fresh continuation source = %q, want project_execution_continuation", source)
+	}
+	if !strings.Contains(content, "Current focus parent: task ") ||
+		!strings.Contains(content, "Write planning/sambot-prompts/test-conversations-level3.md") {
+		t.Fatalf("fresh continuation content = %q, want focused parent task reference", content)
+	}
+	if !strings.Contains(content, "repair and queue the preferred existing same-deliverable child draft named above with one narrow task.update") {
+		t.Fatalf("fresh continuation content = %q, want focused executable-contract repair guidance", content)
+	}
+	if strings.Contains(content, "Already-active non-terminal tasks in the tree:") {
+		t.Fatalf("fresh continuation content = %q, want narrowed executable-contract retry prompt", content)
+	}
+}
+
 func TestJobWorkerEnsureProjectContinuationMessageFallsBackToEarlierCloseoutQueueStopAfterLaterGenericRediscovery(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

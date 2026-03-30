@@ -1957,3 +1957,17 @@
   - impact:
     - the runtime could correctly derive the focused parent/child repair prompt and still never surface it to the session
     - PM remained stuck in the same short-continuation loop despite the richer retry logic existing in code
+- 2026-03-30 18:12 MDT - Worker recovery still downgraded executable-contract PM stops back into broad synthetic continuations.
+  - fresh live evidence:
+    - live PM history showed `synthetic_user_message=true` rows with `source=project_execution_continuation` continuing to appear after executable-contract stops even after engine-side focused retries were fixed
+    - code inspection confirmed `ensureProjectContinuationMessageDecision(...)` had focused retry branches for bounded-size, closeout-ready, and replacement-handoff stops, but no explicit executable-contract branch
+    - the first patch attempt also showed the bounded-size task-label parser was too loose: it treated executable-contract stop messages as bounded-size because it only looked for `remaining draft task ...`
+  - bug:
+    - worker missing-continuation recovery had no dedicated `ErrExecutableTaskContractRequired` continuation refresh path
+    - worker bounded-size retry detection relied on the stop task label alone instead of verifying the bounded-size stop markers first
+  - impact:
+    - the PM lane could still oscillate between:
+      - focused engine retry
+      - worker-generated broad continuation
+      - blocked rediscovery
+    - even after the engine-side focused executable-contract retry was fixed

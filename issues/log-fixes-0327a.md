@@ -5275,3 +5275,13 @@
     - `TestRetryProjectExecutionContinuationForExecutableContractStopUsesFocusedParent`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(RetryProjectExecutionContinuationForExecutableContractStopUsesFocusedParent|ProjectExecutionContinuationSnapshotForSummaryFallsBackWhenPriorityFilterCollapsesToProjectLine|InitialMessageTextWithContinuationSummary(PrependsRecentProjectSummary|PrefersRecentStructuredContinuationPrompt)|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskList(UnderscoreAlias)?)$' -count=1`
+- 2026-03-30 18:12 MDT - Added worker-side focused retries for executable-contract PM stops and tightened bounded-size detection.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - added `projectContinuationTurnEndedWithExecutableContractStop(...)`
+    - added `projectContinuationTurnEndedWithBoundedSizeStop(...)` so bounded-size retries only fire when the latest turn actually contains the bounded-size stop markers
+    - `ensureProjectContinuationMessageDecision(...)` now refreshes executable-contract stops with `buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(...)` instead of dropping back to the default broad continuation
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerEnsureProjectContinuationMessageRefreshesFailedExecutableContractContinuation`
+    - kept the adjacent stale-pending replacement-handoff refresh canary green alongside the new executable-contract case
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerEnsureProjectContinuationMessage(RefreshesFailedExecutableContractContinuation|AllowsStalePendingReplacementHandoffDuplicateRefresh)$' -count=1`

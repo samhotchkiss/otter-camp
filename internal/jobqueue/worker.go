@@ -2931,6 +2931,13 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		boundedSizeReferenceMessageID := uuid.Nil
 		if !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry {
 			for _, referenceMessageID := range retryReferenceMessageIDs {
+				isBoundedSizeStop, boundedErr := w.projectContinuationTurnEndedWithBoundedSizeStop(ctx, referenceMessageID)
+				if boundedErr != nil {
+					return uuid.Nil, false, fmt.Errorf("check latest consumed bounded-size continuation: %w", boundedErr)
+				}
+				if !isBoundedSizeStop {
+					continue
+				}
 				focusLabelOverride, labelErr := w.projectContinuationTurnBoundedSizeTaskLabel(ctx, referenceMessageID)
 				if labelErr != nil {
 					return uuid.Nil, false, fmt.Errorf("load latest consumed bounded-size task label: %w", labelErr)
@@ -2957,7 +2964,25 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		if retryErr != nil {
 			return uuid.Nil, false, fmt.Errorf("check latest consumed replacement-handoff continuation: %w", retryErr)
 		}
-		if !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && !boundedSizeRetry && replacementHandoffRetry {
+		executableContractRetry := false
+		if !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && !boundedSizeRetry {
+			for _, referenceMessageID := range retryReferenceMessageIDs {
+				var contractErr error
+				executableContractRetry, contractErr = w.projectContinuationTurnEndedWithExecutableContractStop(ctx, referenceMessageID)
+				if contractErr != nil {
+					return uuid.Nil, false, fmt.Errorf("check latest consumed executable-contract continuation: %w", contractErr)
+				}
+				if executableContractRetry {
+					content = buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot)
+					expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
+					metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+					latestConsumedMatchingMessageID = uuid.Nil
+					latestConsumedMatchingRepoVersion = ""
+					break
+				}
+			}
+		}
+		if !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && !boundedSizeRetry && !executableContractRetry && replacementHandoffRetry {
 			content = buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot)
 			expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
 			metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
@@ -3237,6 +3262,85 @@ func (w *Worker) projectContinuationTurnEndedWithReplacementHandoff(ctx context.
 		return false, err
 	}
 	return matched, nil
+}
+
+func (w *Worker) projectContinuationTurnEndedWithExecutableContractStop(ctx context.Context, referenceMessageID uuid.UUID) (bool, error) {
+	if w == nil || w.pool == nil || referenceMessageID == uuid.Nil {
+		return false, nil
+	}
+
+	var matched bool
+	if err := w.pool.QueryRow(ctx, `
+		WITH latest_turn AS (
+			SELECT ct.id
+			FROM chat_turn ct
+			WHERE ct.trigger_message_id = $1
+			  AND ct.status IN ('completed', 'failed', 'cancelled')
+			ORDER BY ct.retry_count DESC,
+			         COALESCE(ct.completed_at, ct.created_at) DESC,
+			         ct.id DESC
+			LIMIT 1
+		)
+		SELECT EXISTS (
+			SELECT 1
+			FROM latest_turn lt
+			JOIN chat_message sm
+			  ON sm.turn_id = lt.id
+			 AND sm.role = 'system'
+			WHERE sm.content LIKE $2
+		)
+	`, referenceMessageID, `%still needs a bounded executable contract:%`).Scan(&matched); err != nil {
+		return false, err
+	}
+	return matched, nil
+}
+
+func (w *Worker) projectContinuationTurnEndedWithBoundedSizeStop(ctx context.Context, referenceMessageID uuid.UUID) (bool, error) {
+	if w == nil || w.pool == nil || referenceMessageID == uuid.Nil {
+		return false, nil
+	}
+
+	rows, err := w.pool.Query(ctx, `
+		WITH latest_turn AS (
+			SELECT ct.id
+			FROM chat_turn ct
+			WHERE ct.trigger_message_id = $1
+			  AND ct.status IN ('completed', 'failed', 'cancelled')
+			ORDER BY ct.retry_count DESC,
+			         COALESCE(ct.completed_at, ct.created_at) DESC,
+			         ct.id DESC
+			LIMIT 1
+		)
+		SELECT tm.content
+		FROM latest_turn lt
+		JOIN chat_message tm
+		  ON tm.turn_id = lt.id
+		 AND tm.role = 'system'
+		ORDER BY tm.sequence_number ASC, tm.id ASC
+	`, referenceMessageID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var content string
+		if err := rows.Scan(&content); err != nil {
+			return false, err
+		}
+		content = strings.TrimSpace(content)
+		switch {
+		case strings.HasPrefix(content, projectContinuationBoundedSizePrefix):
+			return true, nil
+		case strings.HasPrefix(content, projectContinuationDraftBoundedSizePrefix) &&
+			strings.Contains(content, projectContinuationBoundedSizeMarker):
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 func (w *Worker) projectContinuationTurnEndedWithCloseoutReadyParentStop(ctx context.Context, referenceMessageID uuid.UUID) (bool, error) {
