@@ -447,3 +447,54 @@ func TestValidateCompletionStillRequiresVerificationWhenNoCompletedDirectChildRe
 		t.Fatalf("error = %v, want missing verification detail", err)
 	}
 }
+
+func TestValidateCompletionAllowsSupersedingOutputVerificationWhenNoExecutableChildRemains(t *testing.T) {
+	parentID := uuid.New()
+	blockedChildID := uuid.New()
+	cancelledChildID := uuid.New()
+	supersedingTaskID := uuid.New()
+	now := time.Date(2026, 3, 30, 0, 45, 0, 0, time.UTC)
+	description := "Write templates/template-08-replace.html — a complete standalone HTML deliverable."
+	parent := repo.ProjectTask{
+		ID:         parentID,
+		TaskNumber: 243,
+		Title:      "Write templates/template-08-replace.html — Dark Mode Editorial layout (final replacement)",
+		Metadata: taskdecomp.ApplyMetadata(json.RawMessage(`{}`), taskdecomp.Plan{
+			RequiresDecomposition: true,
+			PrimaryDeliverable:    "templates/template-08-replace.html",
+			Deliverables: []string{
+				"templates/template-08-replace.html",
+				"Replacement child A",
+				"Replacement child B",
+			},
+		}, description, []uuid.UUID{blockedChildID, cancelledChildID}),
+	}
+	metadata, err := Apply(parent.Metadata, Update{
+		ChildVerifications: []ChildVerification{
+			NewChildVerification(supersedingTaskID, "Superseding task OC-242 already delivered templates/template-08-replace.html as the final complete file.", now),
+		},
+		IntegrationCheck:  NewIntegrationCheck("passed", "Reviewed the delivered template end to end.", now),
+		OutcomeAssessment: NewOutcomeAssessment(true, "The final replacement template is already satisfied by the superseding output.", now),
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	parent.Metadata = metadata
+
+	blockedChild := repo.ProjectTask{
+		ID:         blockedChildID,
+		TaskNumber: 244,
+		Title:      "Replacement child A",
+		WorkStatus: "blocked",
+	}
+	cancelledChild := repo.ProjectTask{
+		ID:         cancelledChildID,
+		TaskNumber: 241,
+		Title:      "Replacement child B",
+		WorkStatus: "cancelled",
+	}
+
+	if err := ValidateCompletion(parent, []repo.ProjectTask{blockedChild, cancelledChild}); err != nil {
+		t.Fatalf("ValidateCompletion err = %v, want nil for superseding-output verification", err)
+	}
+}

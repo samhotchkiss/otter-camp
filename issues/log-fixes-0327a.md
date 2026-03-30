@@ -4344,3 +4344,12 @@
     - added `TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnCloseoutReadyDraftDoneError`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterBlockedProjectExecutionBlockedMutation(OnMetaTaskCreate|OnTaskLaneBoundaryErrors|OnSubtaskCreateBoundaryError|OnBoundedSizeTaskUpdateError|OnCloseoutReadyDraftDoneError)|ProjectExecutionBlockedMutationStopMessage(OnTaskExecutionRequired|OnTaskLaneBoundary|OnParentCompletionRequirements|OnFocusedDraftReadGuard))$' -count=1`
+- 2026-03-30 00:44 MDT - Allowed closeout-ready parents to finish from recorded superseding-output verification when no executable child lanes remain.
+  - changed [`internal/taskorchestration/metadata.go`](/Users/sam/dev/otter-camp/internal/taskorchestration/metadata.go):
+    - `Evaluate(...)` now treats any recorded verification entry as sufficient verification evidence for the no-executable-child closeout path, instead of requiring that verification to match a literal current child row
+    - this still requires `outcome_assessment.satisfied=true`, `integration_check.status=passed`, and zero executable child lanes
+  - changed [`internal/taskorchestration/metadata_test.go`](/Users/sam/dev/otter-camp/internal/taskorchestration/metadata_test.go):
+    - kept `TestValidateCompletionStillRequiresVerificationWhenNoCompletedDirectChildRemains`
+    - added `TestValidateCompletionAllowsSupersedingOutputVerificationWhenNoExecutableChildRemains`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskorchestration -run 'TestValidateCompletion(StillRequiresVerificationWhenNoCompletedDirectChildRemains|AllowsSupersedingOutputVerificationWhenNoExecutableChildRemains)$' -count=1`

@@ -188,9 +188,9 @@ func Evaluate(parentTask repo.ProjectTask, childTasks []repo.ProjectTask) Comple
 		hasExecutableChild        bool
 		hasCompletedChild         bool
 		hasCompletedCloseoutChild bool
-		hasRecordedVerification   bool
 		missingLabels             []string
 	)
+	hasRecordedVerification := len(verified) > 0
 	for _, child := range childTasks {
 		if childTaskClosesParent(parentTask, child) {
 			hasCompletedCloseoutChild = true
@@ -211,9 +211,6 @@ func Evaluate(parentTask repo.ProjectTask, childTasks []repo.ProjectTask) Comple
 		}
 		completed := status == "done"
 		recorded, ok := verified[child.ID]
-		if ok {
-			hasRecordedVerification = true
-		}
 		result.Children = append(result.Children, ChildStatus{
 			TaskID:    child.ID,
 			Label:     taskLabel(child),

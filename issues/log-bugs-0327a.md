@@ -1030,3 +1030,14 @@
   - impact:
     - closeout-ready parents could reopen replacement-child churn after the parent-orchestration evidence was already recorded
     - the PM lane lost turns on duplicate child-create attempts that the existing guards then had to reject
+- 2026-03-30 00:44 MDT - Parent completion validation still rejected superseding-output verification unless the verification task id matched a literal child row.
+  - fresh live evidence:
+    - task `243` had `outcome_satisfied=true` and a complete delivered file from superseding task `242`
+    - the PM lane followed the closeout path and attempted parent completion with verification metadata
+    - `task.update` still failed with `no completed child tasks are available for parent verification`
+  - bug:
+    - [`internal/taskorchestration/metadata.go`](/Users/sam/dev/otter-camp/internal/taskorchestration/metadata.go) only counted `ChildVerification` records when their `task_id` matched an actual child in the current decomposition tree
+    - that contradicted the PM guidance, which already told the lane it could use superseding outputs that satisfied the same deliverable
+  - impact:
+    - closeout-ready parents like task `243` could not finish even after the runtime had the final delivered artifact plus explicit superseding-output verification
+    - the PM lane kept looping on a structurally impossible validation requirement
