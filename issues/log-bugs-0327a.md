@@ -1447,3 +1447,12 @@
     - synthetic `task_recovery_resume` user messages also carried forward raw initial-message recovery checkpoint metadata instead of the normalized current recovery state
   - impact:
     - recovery retries can steer a task into the wrong artifact family, reuse the wrong draft body, and keep paying file-mutation corrections against sibling deliverables
+- 2026-03-30 11:08 MDT - Even after the corrected recovery resume state, same-turn tool rewrites could still use the stale pre-normalization target.
+  - fresh live evidence:
+    - task `288` on `repo_version=3707` showed the corrected recovery resume state for `planning/sambot-prompts/test-conversations-technical.md`
+    - in the same live lane, a fresh assistant failure still reported that the system was redirecting `file_write` to `planning/prd-spec/oc-245-prd.md`
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) loaded the normalized recovery resume state for prompt assembly, but did not update `turnRuntime.recoveryTargetPath`
+    - later same-turn rewrite logic could therefore continue using the stale target path captured before `appendRecoveryResumeState(...)` ran
+  - impact:
+    - recovery turns can show the correct target in the prompt while still mutating or rewriting tool calls against an older unrelated file target

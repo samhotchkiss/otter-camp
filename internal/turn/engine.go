@@ -20774,6 +20774,9 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 		}
 		return true, nil
 	}
+	rt.recoveryTurn = true
+	rt.recoveryTargetPath = normalizeWorkspaceRelativePath(strings.TrimSpace(state.targetPath))
+	rt.recoveryDirectWriteOnly = e.recoveryDirectWriteOnlyState(ctx, rt.session, rt.recoveryTargetPath, rt.initialMessageText)
 	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryResumeStateMessage(state))
 	if err != nil {
 		return false, err

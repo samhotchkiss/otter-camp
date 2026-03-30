@@ -3150,6 +3150,9 @@ func TestAppendRecoveryResumeStateUpdatesInitialPromptToSyntheticRecoveryMessage
 	if !appended {
 		t.Fatal("appendRecoveryResumeState = false, want true")
 	}
+	if rt.recoveryTargetPath != targetPath {
+		t.Fatalf("recoveryTargetPath = %q, want %q", rt.recoveryTargetPath, targetPath)
+	}
 	if rt.historyStartID == nil {
 		t.Fatal("historyStartID = nil, want synthetic recovery action message")
 	}

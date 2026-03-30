@@ -4772,3 +4772,10 @@
     - added `TestRecoveryResumeStateMetadataSourceOverridesCheckpointTargetFromNormalizedState`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ExplicitDeliverablePathDetectsWriteTheFilePath|LoadRecoveryResumeStatePrefersTaskExplicitDeliverableOverWrongCheckpointTarget|RecoveryResumeStateMetadataSourceOverridesCheckpointTargetFromNormalizedState|RecoveryTargetPathForSessionPrefersParentExplicitDeliverableOverWrongCheckpoint|MaybeContinueProjectExecutionAfterTaskCompletionIgnoresBlockedTasksForWakeup)$' -count=1`
+- 2026-03-30 11:08 MDT - Made the active recovery turn adopt that normalized target immediately.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `appendRecoveryResumeState(...)` now sets `rt.recoveryTurn = true`, updates `rt.recoveryTargetPath` from the normalized `recoveryResumeState`, and recomputes `recoveryDirectWriteOnly` before the rest of the turn continues
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - widened `TestAppendRecoveryResumeStateUpdatesInitialPromptToSyntheticRecoveryMessage` to assert the runtime target path was updated to the normalized deliverable
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ExplicitDeliverablePathDetectsWriteTheFilePath|LoadRecoveryResumeStatePrefersTaskExplicitDeliverableOverWrongCheckpointTarget|RecoveryResumeStateMetadataSourceOverridesCheckpointTargetFromNormalizedState|AppendRecoveryResumeStateUpdatesInitialPromptToSyntheticRecoveryMessage|MaybeContinueProjectExecutionAfterTaskCompletionIgnoresBlockedTasksForWakeup)$' -count=1`
