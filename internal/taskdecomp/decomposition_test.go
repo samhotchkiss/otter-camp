@@ -982,6 +982,71 @@ func TestPrepareQueueDecompositionSkipsSingleConcreteTemplateWithRequirements(t 
 	}
 }
 
+func TestExtractDeliverablesIgnoresPurposeApproachAndAcceptanceForSingleFileTemplate(t *testing.T) {
+	description := strings.Join([]string{
+		"## Purpose",
+		"Deliver template-08.html — the 8th of 10 layout templates for Sam.blog. Previous attempts (OC-38, OC-43) are permanently blocked due to flow rejection limits.",
+		"",
+		"## Deliverable",
+		"Create `templates/template-08-replace.html` (or `templates/template-08.html` if no file exists at that path yet) — a complete, standalone HTML layout template.",
+		"",
+		"## Approach",
+		"1. Read 2-3 existing templates from `templates/` to understand the design language and avoid duplication",
+		"2. Build a fresh, distinctive template (e.g., a bold magazine-style or asymmetric editorial layout)",
+		"3. Write the file to the deliverable path",
+		"",
+		"## Acceptance",
+		"- File exists and renders correctly as standalone HTML",
+		"- Design is clearly differentiated from the other 9 templates",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	want := []string{
+		"Create templates/template-08-replace.html (or templates/template-08.html if no file exists at that path yet) — a complete, standalone HTML layout template.",
+	}
+	if !reflect.DeepEqual(items, want) {
+		t.Fatalf("extractDeliverables() = %v, want %v", items, want)
+	}
+}
+
+func TestPrepareQueueDecompositionSkipsSingleConcreteTemplateWithPurposeApproachAndAcceptanceSections(t *testing.T) {
+	description := strings.Join([]string{
+		"## Purpose",
+		"Deliver template-08.html — the 8th of 10 layout templates for Sam.blog. Previous attempts (OC-38, OC-43) are permanently blocked due to flow rejection limits.",
+		"",
+		"## Deliverable",
+		"Create `templates/template-08-replace.html` (or `templates/template-08.html` if no file exists at that path yet) — a complete, standalone HTML layout template that:",
+		"- Is visually distinct from templates 01–07 and 09–10 already in the repo",
+		"- Follows the same quality bar as the other 9 delivered templates",
+		"- Is responsive, uses modern CSS, and showcases Sam Hotchkiss as a speaker/consultant/leader",
+		"",
+		"## Approach",
+		"1. Read 2-3 existing templates from `templates/` to understand the design language and avoid duplication",
+		"2. Build a fresh, distinctive template (e.g., a bold magazine-style or asymmetric editorial layout)",
+		"3. Write the file to the deliverable path",
+		"",
+		"## Acceptance",
+		"- File exists and renders correctly as standalone HTML",
+		"- Design is clearly differentiated from the other 9 templates",
+	}, "\n")
+
+	result, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        "Build HTML layout template 8 for Sam.blog (final replacement for terminal-blocked OC-43)",
+		Description:  &description,
+		Metadata:     json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("PrepareQueueDecomposition: %v", err)
+	}
+	if result.Applied {
+		t.Fatalf("Applied = true, want false for single-file replacement template with purpose/approach/acceptance sections: %+v", result)
+	}
+	if len(result.ChildDrafts) != 0 {
+		t.Fatalf("ChildDrafts len = %d, want 0", len(result.ChildDrafts))
+	}
+}
+
 func TestExtractDeliverablesIgnoresExactStepsCriticalRulesAndCodeFence(t *testing.T) {
 	description := strings.Join([]string{
 		"## Objective",

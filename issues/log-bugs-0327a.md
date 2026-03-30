@@ -1066,3 +1066,16 @@
   - impact:
     - PM lanes can keep burning turns on blocker recap plus blocked `task.list` retries even after the continuation snapshot has already converged on a blocked-only state
     - that delays the real next action, which is a one-sentence blocker handoff or human/operator intervention
+- 2026-03-30 01:15 MDT - The next live blocker moved into decomposition quality for the final template-08 replacement parent.
+  - fresh live evidence:
+    - task `251` auto-decomposed into child lanes `252-255`
+    - task `253` (`Build a fresh, distinctive template ...`) and task `255` (`Design is clearly differentiated ...`) are not bounded artifacts, yet both inherited recovery checkpoints targeting `templates/template-08-replace.html`
+    - parent metadata recorded:
+      - `primary_deliverable = "Deliver template-08.html ..."` (human title, not the file path)
+      - `deliverables` included `Build a fresh, distinctive template`, `Write the file to the deliverable path`, and `Design is clearly differentiated ...`
+  - bug:
+    - [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go) did not recognize `## Purpose`, `## Approach`, or `## Acceptance` as structural headings
+    - those sections leaked checklist/process bullets into `extractDeliverables(...)`, so a single concrete file replacement task was misclassified as multi-deliverable work
+  - impact:
+    - queue decomposition can spawn sibling same-file child lanes that all circle back to one shared deliverable
+    - those malformed child lanes then reopen the familiar `recovery_target_focus_required` / read-only recovery churn family

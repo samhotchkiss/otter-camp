@@ -846,15 +846,23 @@ func descriptionSectionHeading(raw string) (string, bool) {
 	switch {
 	case normalized == "objective" || strings.HasSuffix(normalized, " objective"):
 		return "objective", true
+	case normalized == "purpose" || strings.HasSuffix(normalized, " purpose"):
+		return "purpose", true
 	case normalized == "deliverable" || normalized == "deliverables" ||
 		strings.HasSuffix(normalized, " deliverable") || strings.HasSuffix(normalized, " deliverables"):
 		return "deliverables", true
 	case normalized == "output" || normalized == "outputs" ||
 		strings.HasSuffix(normalized, " output") || strings.HasSuffix(normalized, " outputs"):
 		return "outputs", true
+	case normalized == "approach" || normalized == "implementation approach" ||
+		strings.HasSuffix(normalized, " approach"):
+		return "approach", true
 	case normalized == "step" || normalized == "steps" ||
 		strings.HasSuffix(normalized, " step") || strings.HasSuffix(normalized, " steps"):
 		return "steps", true
+	case normalized == "acceptance" || normalized == "acceptance criteria" ||
+		strings.HasSuffix(normalized, " acceptance") || strings.HasSuffix(normalized, " acceptance criteria"):
+		return "acceptance", true
 	case normalized == "instruction" || normalized == "instructions" ||
 		strings.HasSuffix(normalized, " instruction") || strings.HasSuffix(normalized, " instructions"):
 		return "instructions", true
@@ -898,7 +906,8 @@ func normalizeDescriptionSectionHeading(raw string) string {
 
 func sectionSkipsDeliverables(section string) bool {
 	switch section {
-	case "step", "steps", "instruction", "instructions", "process", "procedure",
+	case "purpose", "approach", "acceptance",
+		"step", "steps", "instruction", "instructions", "process", "procedure",
 		"implementation", "important", "rule", "rules", "note", "notes", "requirements", "constraints":
 		return true
 	default:

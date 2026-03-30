@@ -4383,3 +4383,12 @@
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectExecutionContinuationPrompt(IncludesCompletedBatchSupersessionGuidance|IncludesBlockedOnlyStopGuidance)|BuildProjectExecutionContinuationRediscoveryRetryPromptIncludesBlockedOnlyStopGuidance|LooksLikeGenericTaskRecoveryReplyDetects(SnapshotNarrationReply|ContextSummaryReadyReply))$' -count=1`
     - `GOFLAGS='' go test ./internal/jobqueue -run 'TestBuildProjectExecutionContinuationPromptForWorkerIncludes(BlockerReuseGuidance|LeafTaskGuidance|BlockedOnlyStopGuidance)$' -count=1`
+- 2026-03-30 01:15 MDT - Stopped queue decomposition from treating `Purpose`, `Approach`, and `Acceptance` checklist text as child deliverables for single-file replacement tasks.
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+    - `descriptionSectionHeading(...)` now recognizes `Purpose`, `Approach`, and `Acceptance` / `Acceptance Criteria`
+    - `sectionSkipsDeliverables(...)` now skips those sections so checklist/process bullets do not leak into `extractDeliverables(...)`
+  - changed [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go):
+    - added `TestExtractDeliverablesIgnoresPurposeApproachAndAcceptanceForSingleFileTemplate`
+    - added `TestPrepareQueueDecompositionSkipsSingleConcreteTemplateWithPurposeApproachAndAcceptanceSections`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'Test(ExtractDeliverablesIgnores(PurposeApproachAndAcceptanceForSingleFileTemplate|ProceduralStepsAndImportantSections|DesignGuidanceAndProcessCompanionLines)|PrepareQueueDecompositionSkips(SingleConcreteTemplateWithRequirements|SingleConcreteTemplateWithPurposeApproachAndAcceptanceSections|ConcreteDeliverableWithTemplateConceptLine|ConcreteDeliverableWithProceduralSections))$' -count=1`
