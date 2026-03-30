@@ -723,3 +723,13 @@
   - impact:
     - supervisory cleanup sees active async task sessions that are no longer doing useful work
     - blocked shared-doc child lanes can linger as “active execution” shells until a later repair pass happens to reconcile them
+- 2026-03-29 19:14 MDT - The remaining shared-doc cost was partly upstream from recovery. Many child tasks under the SamBot shared-file parents were malformed support/requirement fragments, but they were still reaching execution.
+  - fresh live evidence:
+    - one-hour `validation_loop_families` showed `261` blocked turns across `260` shared-deliverable child lanes plus `44` duplicate full-file lanes each for `OC-152` and `OC-155`
+    - the live task titles in that family included requirement/style fragments like `No persistent server required — serverless is sufficient for MVP traffic`, `Opinionated, direct, technically rigorous — reflects Sam's writing voice`, and `Write the Voice & Tone Profile section of planning/sambot-personality-spec.md.`
+  - bug:
+    - `TaskLooksProceduralInstructionArtifact(...)` caught tool procedures, reference-only children, and some support instructions, but not short requirement/style fragments that still lack a bounded deliverable of their own
+    - as a result, those malformed children bypassed the kickoff preflight and still paid one async execution turn before later guards stopped them
+  - impact:
+    - the runtime burns a model turn on child lanes that are not executable contracts at all
+    - metrics show the cost as a wide fan-out of one-turn validation blocks rather than a tight retry loop

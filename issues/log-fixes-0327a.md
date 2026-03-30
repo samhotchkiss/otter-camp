@@ -3878,3 +3878,14 @@
     - added `TestBuildRecoveryResumeStateMessageIncludesTaskAcceptanceCriteriaFallback`
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildRecoveryResumeStateMessageIncludes(TaskAcceptanceCriteriaFallback|StructuredReviewDecisionContext)|BuildTaskReviewActionPromptIncludesPreferredDeliverableTarget)$' -count=1`
+- 2026-03-29 19:14 MDT - Followed that with the next `add-0328f` bounded-task-contract cut aimed at malformed shared-doc support children.
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+    - widened `isInstructionOnlyDeliverable(...)` with `looksLikeSupportOnlyRequirementFragment(...)`
+    - support-only requirement/style fragments like `No persistent server required — serverless is sufficient for MVP traffic` and `Opinionated, direct, technically rigorous — reflects Sam's writing voice` now count as malformed support artifacts
+  - changed [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go):
+    - widened `TestTaskLooksProceduralInstructionArtifact` with the new requirement/style-fragment examples
+  - changed [`internal/turn/engine_integration_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_integration_test.go):
+    - added `TestTurnEngineIntegrationMalformedSupportRequirementFragmentChildKickoffPreflightBlocksBeforeModelCall`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'TestTaskLooksProceduralInstructionArtifact$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/turn -run 'TestTurnEngineIntegrationMalformedSupport(ChildKickoffPreflightBlocksBeforeModelCall|RequirementFragmentChildKickoffPreflightBlocksBeforeModelCall)$' -count=1`

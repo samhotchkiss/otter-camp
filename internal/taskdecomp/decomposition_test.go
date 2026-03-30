@@ -117,6 +117,14 @@ func TestTaskLooksProceduralInstructionArtifact(t *testing.T) {
 	if !TaskLooksProceduralInstructionArtifact("Use Sam's voice and opinions as established in the SamBot feature spec at planning/sambot-feature-spec.md and the scraped blog content in content/posts/", &supportDescription) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for context-only support child task")
 	}
+	requirementDescription := "No persistent server required — serverless is sufficient for MVP traffic."
+	if !TaskLooksProceduralInstructionArtifact("No persistent server required — serverless is sufficient for MVP traffic", &requirementDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for support-only requirement fragment child task")
+	}
+	voiceDescription := "Opinionated, direct, technically rigorous — reflects Sam's writing voice."
+	if !TaskLooksProceduralInstructionArtifact("Opinionated, direct, technically rigorous — reflects Sam's writing voice", &voiceDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for voice-only support fragment child task")
+	}
 	boundedSupportDescription := "Use content/technonymous-index.json and write the first 12 posts as markdown files under content/posts/."
 	if TaskLooksProceduralInstructionArtifact("Use content/technonymous-index.json and write the first 12 posts as markdown files under content/posts/", &boundedSupportDescription) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = true, want false for bounded deliverable task that names source artifacts")

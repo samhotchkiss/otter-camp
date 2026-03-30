@@ -909,6 +909,9 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 	if strings.Contains(normalized, "gallery-style") || strings.Contains(normalized, "given prominence") {
 		return true
 	}
+	if looksLikeSupportOnlyRequirementFragment(normalized) {
+		return true
+	}
 	if strings.HasPrefix(normalized, "use browser tools to navigate to ") {
 		target := strings.TrimSpace(strings.TrimRight(strings.TrimPrefix(normalized, "use browser tools to navigate to "), ".,:;"))
 		if target != "" &&
@@ -942,6 +945,28 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 		strings.Contains(normalized, " must ") ||
 		strings.Contains(normalized, " needs to ") ||
 		strings.Contains(normalized, " need to ")
+}
+
+func looksLikeSupportOnlyRequirementFragment(normalized string) bool {
+	if normalized == "" {
+		return false
+	}
+	if leadingTaskActionPattern.MatchString(normalized) {
+		return false
+	}
+	if strings.HasPrefix(normalized, "no ") &&
+		strings.Contains(normalized, " required") &&
+		strings.Contains(normalized, " sufficient") {
+		return true
+	}
+	if strings.Contains(normalized, "reflects sam's writing voice") {
+		return true
+	}
+	if strings.HasPrefix(normalized, "opinionated,") &&
+		(strings.Contains(normalized, "writing voice") || strings.Contains(normalized, "voice")) {
+		return true
+	}
+	return false
 }
 
 func looksLikeContextOnlySupportInstruction(normalized string) bool {

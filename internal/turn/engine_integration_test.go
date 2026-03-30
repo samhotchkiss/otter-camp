@@ -11786,6 +11786,102 @@ func TestTurnEngineIntegrationMalformedSupportChildKickoffPreflightBlocksBeforeM
 	}
 }
 
+func TestTurnEngineIntegrationMalformedSupportRequirementFragmentChildKickoffPreflightBlocksBeforeModelCall(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+
+	parentDescription := "Write the file planning/sambot-personality-spec.md containing the complete SamBot personality and voice specification."
+	parentMetadata := mustJSON(t, map[string]any{
+		"decomposition": map[string]any{
+			"orchestration_only":  true,
+			"source_description":  parentDescription,
+			"primary_deliverable": "planning/sambot-personality-spec.md",
+		},
+	})
+	parentTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "Write SamBot personality spec",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		CreatedByType:  "human_user",
+		CreatedByID:    &fixture.user.ID,
+		Metadata:       parentMetadata,
+	})
+	if err != nil {
+		t.Fatalf("Create parent task: %v", err)
+	}
+
+	flowTemplate := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	childDescription := "Opinionated, direct, technically rigorous — reflects Sam's writing voice."
+	childTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Opinionated, direct, technically rigorous — reflects Sam's writing voice",
+		Description:     &childDescription,
+		WorkStatus:      "in_progress",
+		FlowTemplateID:  &flowTemplate.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+		AssignedAgentID: &fixture.agent.ID,
+		Metadata: mustJSON(t, map[string]any{
+			"decomposition_parent_task_id": parentTask.ID.String(),
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Create child task: %v", err)
+	}
+
+	taskSession, _ := mustCreateTaskSession(t, ctx, fixture, childTask, "operator opened an async support-fragment child session before the job was enqueued")
+	authorType := "human_user"
+	kickoffMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    buildTaskQueueKickoffMessageForTest(childTask),
+		Metadata: mustJSON(t, map[string]any{
+			"source": "task_queue_processor",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage kickoff: %v", err)
+	}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		return ModelResponse{Content: "should never reach model"}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, taskSession.ID, kickoffMessage.ID, &fixture.agent.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage malformed support fragment child kickoff: %v", err)
+	}
+	if modelCalls != 0 {
+		t.Fatalf("model calls = %d, want 0 because malformed support fragment child kickoff must halt in preflight", modelCalls)
+	}
+
+	refreshedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, childTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID child task: %v", err)
+	}
+	if refreshedTask.WorkStatus != "blocked" {
+		t.Fatalf("child task status = %q, want blocked", refreshedTask.WorkStatus)
+	}
+
+	blockedReasons, err := repo.NewProjectTaskEventRepo(fixture.pool).LatestBlockedReasonsByTask(ctx, []uuid.UUID{childTask.ID})
+	if err != nil {
+		t.Fatalf("LatestBlockedReasonsByTask: %v", err)
+	}
+	blockedReason := blockedReasons[childTask.ID]
+	if !strings.Contains(blockedReason, "procedural child") {
+		t.Fatalf("blocked reason = %q, want malformed support fragment explanation", blockedReason)
+	}
+}
+
 func TestTurnEngineIntegrationMalformedDuplicateSharedFileChildKickoffPreflightBlocksBeforeModelCall(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
