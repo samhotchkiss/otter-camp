@@ -803,3 +803,12 @@
   - impact:
     - backend and planning replacement tasks could keep inheriting stale historical targets even after the parent PM lane split them correctly
     - this was another direct manual-test blocker because the runtime could send a fresh bounded task back into the wrong artifact family
+- 2026-03-29 20:33 MDT - Recovery-aware task kickoff metadata still dropped off between a blocked turn and the next synthetic restart.
+  - fresh live evidence:
+    - task `199` session `c39d9ebc-1d0e-4039-a1ef-3d61925fb3a5` restarted from a plain `task_queue_processor` user message that carried only `run_id`, `source`, `task_id`, and `flow_node_execution_id`
+    - the same task metadata already contained the prior `agent_turn_validation_guard` for repeated `file.write/non_substantive_content`, but none of that was present on the restart message
+  - bug:
+    - kickoff producers only trusted event/message payload metadata
+    - they were not inheriting the equivalent validation/checkpoint fields from the task record itself when rebuilding a fresh kickoff
+  - impact:
+    - recovery-capable lanes could regress into generic rediscovery after every restart, paying another intent-only `file.write` before the engine reconstructed the same bounded stop

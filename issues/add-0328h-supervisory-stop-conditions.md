@@ -418,3 +418,19 @@ They need sharper stopping rules than ordinary execution lanes.
     - after the stale-turn repair unwedged task `199`, its fresh retry on `repo_version=3649` no longer reopened `planning/sambot-architecture.md`
     - the new turn went straight into `Let me write the complete sambot/api.js file now.`, which shows the wrong-path recovery redirect is no longer winning on that lane
     - the next remaining seam there is narrower: repeated narrative `file.write` content (`non_substantive_content`), not deliverable-path confusion
+- 2026-03-29 20:33 MDT - That next seam turned out to be one layer earlier than the turn engine. When a task lane hit repeated narrative `file.write` validation, the next recovered kickoff was still losing the structured validation/checkpoint metadata and starting as a generic `task_queue_processor` turn.
+  - fresh live evidence before the fix:
+    - task `199` session `c39d9ebc-1d0e-4039-a1ef-3d61925fb3a5` restarted from a plain kickoff carrying only `run_id`, `source=task_queue_processor`, `task_id`, and `flow_node_execution_id`
+    - the user message had none of the existing recovery keys (`recovery_action`, `validation_failure_code`, `validation_failure_reason`, `recovery_checkpoint_*`), so the lane had to rediscover the same `non_substantive_content` stop instead of entering the bounded recovery path immediately
+  - local fix:
+    - [`internal/controlplane/task_queue_processor.go`](/Users/sam/dev/otter-camp/internal/controlplane/task_queue_processor.go) now copies task-level validation guard / recovery checkpoint metadata into fresh `task_queue_processor` kickoffs when the triggering event payload does not already supply it
+    - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go) mirrors the same inheritance for synthetic missing-kickoff recovery messages
+    - added focused coverage in:
+      - [`internal/controlplane/task_queue_processor_test.go`](/Users/sam/dev/otter-camp/internal/controlplane/task_queue_processor_test.go) with `TestAppendTaskRecordRecoveryMetadataCarriesValidationGuard`
+      - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go) with `TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsCreatesMissingTaskQueueKickoffWithRecoveryMetadata`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/controlplane -run 'TestAppendTaskRecordRecoveryMetadataCarriesValidationGuard$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsCreatesMissingTaskQueueKickoff(WithRecoveryMetadata)?$' -count=1`
+  - deploy / proof status:
+    - this slice is currently test-proven and diagnosis-backed
+    - task `199` had already cleared its validation guard and advanced into review before the rebuilt runtime had another natural recovery kickoff to prove the widened metadata path live

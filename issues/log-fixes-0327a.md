@@ -3990,3 +3990,18 @@
     - on `repo_version=3649`, task `199` session `9e24faa3-a105-4d2b-9c91-e35dcc911b31` recovered from dead turn `a57229db-88de-416f-9781-cfc9c028cb11` into fresh retry turn `a6cb679e-0d99-4bd4-a15c-d6341b906c7c`
     - that fresh retry no longer reopened `planning/sambot-architecture.md`; it went straight into writing `sambot/api.js`
     - the next remaining seam on that lane is the narrower `non_substantive_content` file-write narration family, not wrong-deliverable recovery
+- 2026-03-29 20:33 MDT - Followed that with recovery-metadata propagation on fresh task kickoffs.
+  - changed [`internal/controlplane/task_queue_processor.go`](/Users/sam/dev/otter-camp/internal/controlplane/task_queue_processor.go):
+    - added task-record fallback metadata inheritance for fresh `task_queue_processor` wakeups so validation guard / recovery checkpoint state survives when the triggering event payload is sparse
+  - changed [`internal/controlplane/task_queue_processor_test.go`](/Users/sam/dev/otter-camp/internal/controlplane/task_queue_processor_test.go):
+    - added `TestAppendTaskRecordRecoveryMetadataCarriesValidationGuard`
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - synthetic missing-kickoff recovery messages now inherit the same task-level validation/checkpoint metadata before they are persisted
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsCreatesMissingTaskQueueKickoffWithRecoveryMetadata`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/controlplane -run 'TestAppendTaskRecordRecoveryMetadataCarriesValidationGuard$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsCreatesMissingTaskQueueKickoff(WithRecoveryMetadata)?$' -count=1`
+  - proof status:
+    - this slice is test-green and diagnosis-backed
+    - the live task-199 lane had already advanced into review before another natural recovery kickoff occurred on the rebuilt runtime, so fresh production proof for the widened kickoff metadata is still pending the next comparable validation-restart canary

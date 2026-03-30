@@ -698,6 +698,7 @@ func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.D
 		return err
 	}
 	appendValidationRecoveryMetadata(payload, event.Payload)
+	appendTaskRecordRecoveryMetadata(payload, taskRecord)
 	metadata, err = json.Marshal(payload)
 	if err != nil {
 		return err
@@ -722,6 +723,7 @@ func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.D
 		"run_mode":               "async",
 	}
 	appendValidationRecoveryMetadata(wakeupPayload, event.Payload)
+	appendTaskRecordRecoveryMetadata(wakeupPayload, taskRecord)
 
 	result, err := p.runs.CreateExecutionWakeup(ctx, executionWakeupInput{
 		CreateRunInput: CreateRunInput{
@@ -794,12 +796,22 @@ func (p *TaskQueueProcessor) RepairExecutionWakeupKickoff(ctx context.Context, t
 	if err != nil {
 		return err
 	}
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return err
+	}
+	appendTaskRecordRecoveryMetadata(payload, taskRecord)
+	metadata, err = json.Marshal(payload)
+	if err != nil {
+		return err
+	}
 	wakeupPayload := map[string]any{
 		"source":                 "task_queue_processor",
 		"flow_node_execution_id": execution.ID.String(),
 		"run_mode":               "async",
 		"repair_reason":          "missing_kickoff_message",
 	}
+	appendTaskRecordRecoveryMetadata(wakeupPayload, taskRecord)
 	result, err := p.runs.CreateExecutionWakeup(ctx, executionWakeupInput{
 		CreateRunInput: CreateRunInput{
 			OrganizationID: taskRecord.OrganizationID,
@@ -863,6 +875,7 @@ func (p *TaskQueueProcessor) ensureAssignedAgentRun(ctx context.Context, event e
 		return err
 	}
 	appendValidationRecoveryMetadata(payload, event.Payload)
+	appendTaskRecordRecoveryMetadata(payload, taskRecord)
 	metadata, err = json.Marshal(payload)
 	if err != nil {
 		return err
@@ -874,6 +887,7 @@ func (p *TaskQueueProcessor) ensureAssignedAgentRun(ctx context.Context, event e
 		"run_mode":             "async",
 	}
 	appendValidationRecoveryMetadata(wakeupPayload, event.Payload)
+	appendTaskRecordRecoveryMetadata(wakeupPayload, taskRecord)
 
 	result, err := p.runs.CreateExecutionWakeup(ctx, executionWakeupInput{
 		CreateRunInput: CreateRunInput{
@@ -2198,6 +2212,63 @@ func appendValidationRecoveryMetadata(payload map[string]any, eventPayload json.
 	}
 	if values := valueAsStrings(decoded["recovery_checkpoint_prior_failure_reasons"]); len(values) != 0 {
 		payload["recovery_checkpoint_prior_failure_reasons"] = values
+	}
+}
+
+func appendTaskRecordRecoveryMetadata(payload map[string]any, taskRecord repo.ProjectTask) {
+	if payload == nil || len(taskRecord.Metadata) == 0 || !json.Valid(taskRecord.Metadata) {
+		return
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(taskRecord.Metadata, &decoded); err != nil {
+		return
+	}
+
+	setIfEmpty := func(key string, value any) {
+		if value == nil {
+			return
+		}
+		if existing, ok := payload[key]; ok && strings.TrimSpace(valueAsString(existing)) != "" {
+			return
+		}
+		if typed, ok := value.(string); ok && strings.TrimSpace(typed) == "" {
+			return
+		}
+		payload[key] = value
+	}
+
+	guard, _ := decoded["agent_turn_validation_guard"].(map[string]any)
+	guardCount := 0
+	switch typed := guard["count"].(type) {
+	case float64:
+		guardCount = int(typed)
+	case int:
+		guardCount = typed
+	}
+	guardBlocked, _ := guard["blocked"].(bool)
+	if guardBlocked || guardCount > 0 {
+		setIfEmpty("recovery_action", tasksvc.RecoveryActionResumeBlockedTask)
+		setIfEmpty("recovery_blocker_class", tasksvc.RecoveryBlockerClassValidationLoop)
+		setIfEmpty("validation_tool_name", valueAsString(guard["tool_name"]))
+		setIfEmpty("validation_failure_code", valueAsString(guard["failure_code"]))
+		setIfEmpty("validation_failure_reason", valueAsString(guard["failure_reason"]))
+	}
+
+	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
+		blockerClass := strings.TrimSpace(taskcheckpoint.RecoveryFileWriteBlockerClass(&checkpoint))
+		if blockerClass != "" || strings.TrimSpace(checkpoint.FailureReason) != "" {
+			setIfEmpty("recovery_action", tasksvc.RecoveryActionResumeBlockedTask)
+			setIfEmpty("recovery_blocker_class", blockerClass)
+			setIfEmpty("recovery_checkpoint_target_path", strings.TrimSpace(checkpoint.TargetPath))
+			setIfEmpty("recovery_checkpoint_artifact_path", strings.TrimSpace(checkpoint.ArtifactPath))
+			setIfEmpty("recovery_checkpoint_failure_reason", strings.TrimSpace(checkpoint.FailureReason))
+			if _, exists := payload["recovery_checkpoint_prior_failure_reasons"]; !exists {
+				if values := taskcheckpoint.RecoveryFileWriteFailureHistory(&checkpoint); len(values) != 0 {
+					payload["recovery_checkpoint_prior_failure_reasons"] = values
+				}
+			}
+		}
 	}
 }
 

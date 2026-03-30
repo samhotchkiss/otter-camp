@@ -30748,6 +30748,155 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsCreatesMissingTaskQu
 	}
 }
 
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsCreatesMissingTaskQueueKickoffWithRecoveryMetadata(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-execution-missing-kickoff-recovery-metadata",
+		DisplayName: "Requeue Active Execution Missing Kickoff Recovery Metadata",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Missing Kickoff Recovery Metadata Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You resume task work after queue recovery.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-execution-missing-kickoff-recovery-metadata-project",
+		DisplayName:    "Requeue Active Execution Missing Kickoff Recovery Metadata Project",
+		Description:    "Project for missing kickoff recovery metadata repair",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "requeue-active-execution-missing-kickoff-recovery-metadata-template",
+		DisplayName:    "Requeue Active Execution Missing Kickoff Recovery Metadata Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Recover missing kickoff with validation context",
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+		Metadata: json.RawMessage(`{
+			"agent_turn_validation_guard":{
+				"tool_name":"file.write",
+				"failure_code":"non_substantive_content",
+				"failure_reason":"content appears to narrate intent instead of writing the deliverable body",
+				"count":2,
+				"blocked":false
+			}
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active flow node execution: %v", err)
+	}
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1", requeued)
+	}
+
+	messages, err := repo.NewChatMessageRepo(pool).ListBySession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list session messages: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("message count = %d, want 1", len(messages))
+	}
+	message := messages[0]
+	var metadata map[string]any
+	if err := json.Unmarshal(message.Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal kickoff metadata: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["recovery_action"])); got != "resume_validation_blocked_task" {
+		t.Fatalf("recovery_action = %q, want resume_validation_blocked_task", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["recovery_blocker_class"])); got != "deterministic_validation_loop" {
+		t.Fatalf("recovery_blocker_class = %q, want deterministic_validation_loop", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["validation_tool_name"])); got != "file.write" {
+		t.Fatalf("validation_tool_name = %q, want file.write", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["validation_failure_code"])); got != "non_substantive_content" {
+		t.Fatalf("validation_failure_code = %q, want non_substantive_content", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["validation_failure_reason"])); got != "content appears to narrate intent instead of writing the deliverable body" {
+		t.Fatalf("validation_failure_reason = %q, want non-substantive reason", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["flow_node_execution_id"])); got != execution.ID.String() {
+		t.Fatalf("flow_node_execution_id = %q, want %s", got, execution.ID)
+	}
+}
+
 func TestJobWorkerCancelsClaimedAgentTurnWhenSessionClosesMidExecution(t *testing.T) {
 	pool := testdb.New(t)
 	org := createOrgForJobQueue(t, pool, "agent-turn-close-mid-execution")

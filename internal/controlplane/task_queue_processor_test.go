@@ -895,6 +895,39 @@ func TestBuildFlowTransitionKickoffMessageForRejectedOrchestrationOnlyParent(t *
 	}
 }
 
+func TestAppendTaskRecordRecoveryMetadataCarriesValidationGuard(t *testing.T) {
+	taskRecord := repo.ProjectTask{
+		Metadata: json.RawMessage(`{
+			"agent_turn_validation_guard":{
+				"tool_name":"file.write",
+				"failure_code":"non_substantive_content",
+				"failure_reason":"content appears to narrate intent instead of writing the deliverable body",
+				"count":2,
+				"blocked":false
+			}
+		}`),
+	}
+
+	payload := map[string]any{"source": "task_queue_processor"}
+	appendTaskRecordRecoveryMetadata(payload, taskRecord)
+
+	if got := strings.TrimSpace(valueAsString(payload["recovery_action"])); got != tasksvc.RecoveryActionResumeBlockedTask {
+		t.Fatalf("recovery_action = %q, want %q", got, tasksvc.RecoveryActionResumeBlockedTask)
+	}
+	if got := strings.TrimSpace(valueAsString(payload["recovery_blocker_class"])); got != tasksvc.RecoveryBlockerClassValidationLoop {
+		t.Fatalf("recovery_blocker_class = %q, want %q", got, tasksvc.RecoveryBlockerClassValidationLoop)
+	}
+	if got := strings.TrimSpace(valueAsString(payload["validation_tool_name"])); got != "file.write" {
+		t.Fatalf("validation_tool_name = %q, want file.write", got)
+	}
+	if got := strings.TrimSpace(valueAsString(payload["validation_failure_code"])); got != "non_substantive_content" {
+		t.Fatalf("validation_failure_code = %q, want non_substantive_content", got)
+	}
+	if got := strings.TrimSpace(valueAsString(payload["validation_failure_reason"])); got != "content appears to narrate intent instead of writing the deliverable body" {
+		t.Fatalf("validation_failure_reason = %q, want non-substantive reason", got)
+	}
+}
+
 func TestTaskQueueProcessorHandleFlowAdvancedEventIgnoresTaskFlowRuntimeMismatch(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
