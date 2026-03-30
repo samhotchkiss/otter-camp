@@ -16811,7 +16811,7 @@ func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationForFocusPrerequ
 	}
 }
 
-func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationForDraftChildCreate(t *testing.T) {
+func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationDoesNotStopForDraftChildCreate(t *testing.T) {
 	t.Parallel()
 
 	focusTaskID := uuid.New()
@@ -16838,8 +16838,8 @@ func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationForDraftChildCr
 		},
 	}}
 
-	if !shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
-		t.Fatal("expected focused draft child creation to stop the PM turn")
+	if shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
+		t.Fatal("draft child creation should not stop the PM turn before the child lane is actually runnable")
 	}
 }
 

@@ -31305,9 +31305,6 @@ func shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt *turnRuntime, c
 		if projectExecutionHandoffMutationSucceeded(call, results[idx]) {
 			return true
 		}
-		if projectExecutionDraftChildHandoffSucceeded(call, results[idx], focusTaskID) {
-			return true
-		}
 	}
 	return false
 }
@@ -31375,20 +31372,6 @@ func projectExecutionResultWorkStatus(arguments map[string]any, result ToolResul
 		return status
 	}
 	return strings.ToLower(strings.TrimSpace(stringValue(arguments["work_status"])))
-}
-
-func projectExecutionDraftChildHandoffSucceeded(call ToolCall, result ToolResult, focusTaskID uuid.UUID) bool {
-	if focusTaskID == uuid.Nil || strings.TrimSpace(toolResultErrorCode(result)) != "" {
-		return false
-	}
-	if !strings.EqualFold(strings.TrimSpace(call.Name), "task.create") {
-		return false
-	}
-	parentTaskID, ok := parseUUIDAny(call.Arguments["parent_task_id"])
-	if !ok || parentTaskID == uuid.Nil || parentTaskID != focusTaskID {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(projectExecutionResultWorkStatus(call.Arguments, result)), "draft")
 }
 
 func projectExecutionFocusPrerequisiteRepairSucceeded(call ToolCall, result ToolResult, focusTaskID uuid.UUID) bool {

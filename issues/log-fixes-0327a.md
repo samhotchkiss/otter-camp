@@ -4779,3 +4779,12 @@
     - widened `TestAppendRecoveryResumeStateUpdatesInitialPromptToSyntheticRecoveryMessage` to assert the runtime target path was updated to the normalized deliverable
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ExplicitDeliverablePathDetectsWriteTheFilePath|LoadRecoveryResumeStatePrefersTaskExplicitDeliverableOverWrongCheckpointTarget|RecoveryResumeStateMetadataSourceOverridesCheckpointTargetFromNormalizedState|AppendRecoveryResumeStateUpdatesInitialPromptToSyntheticRecoveryMessage|MaybeContinueProjectExecutionAfterTaskCompletionIgnoresBlockedTasksForWakeup)$' -count=1`
+- 2026-03-30 10:27 MDT - Stopped PM handoff success from firing on draft-only child creation.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `shouldStopAfterSuccessfulProjectExecutionHandoffMutation(...)` no longer treats `task.create` returning `work_status=draft` as a successful handoff
+    - PM handoff stops now require observed runnable state (`queued`, `in_progress`, or `review`) or the existing focused prerequisite-repair success path
+    - removed the now-wrong `projectExecutionDraftChildHandoffSucceeded(...)` helper
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - flipped `TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationDoesNotStopForDraftChildCreate`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation(DoesNotStopForDraftChildCreate|ForMissingDependencyPrompt|ForFocusPrerequisiteRepair|IgnoresAssignmentOnlyUpdate|RequiresObservedQueuedState|IgnoresUnfocusedDraftChildCreate|RequiresReplacementChildPrompt)?$|TestShouldStopAfterSuccessfulProjectExecutionHandoffMutation$' -count=1`

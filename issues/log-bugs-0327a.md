@@ -1456,3 +1456,12 @@
     - later same-turn rewrite logic could therefore continue using the stale target path captured before `appendRecoveryResumeState(...)` ran
   - impact:
     - recovery turns can show the correct target in the prompt while still mutating or rewriting tool calls against an older unrelated file target
+- 2026-03-30 10:27 MDT - PM successful-handoff stops still treated a draft-only replacement child as if runnable work had been handed off.
+  - fresh live evidence:
+    - PM turns `26e09f48-77fb-472b-8012-38ac32024500` and `2ae3f72d-87d0-45e4-be04-45affdc277b9` each created task `289` under the focused parent and then ended with the successful-handoff stop
+    - task `289` stayed `draft`, had no task session, and never received an `agent_turn` job
+  - bug:
+    - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) in `shouldStopAfterSuccessfulProjectExecutionHandoffMutation(...)` still called `projectExecutionDraftChildHandoffSucceeded(...)`
+    - that branch treated `task.create(parent_task_id=focusTaskID)` returning `work_status=draft` as enough proof to end the PM turn, even though no runnable child lane had been observed
+  - impact:
+    - PM continuations can terminate after creating a replacement child that never actually starts, leaving the project stranded behind a new draft orphan
