@@ -122,6 +122,16 @@ func classifyTaskResumeDecision(taskRecord repo.ProjectTask, blockerReason strin
 	}
 	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok && hasDurableRecoveryCheckpoint(checkpoint) {
 		checkpointCopy := checkpoint
+		if recoveryResumeReasonMatchesTerminalMalformedChild(checkpointCopy.FailureReason) {
+			reason := blockerReason
+			if strings.TrimSpace(reason) == "" {
+				reason = strings.TrimSpace(checkpointCopy.FailureReason)
+			}
+			return taskResumeDecision{
+				blockerClass:  RecoveryBlockerClassBlockedWithoutResumableState,
+				blockerReason: reason,
+			}
+		}
 		blockerClass := taskcheckpoint.RecoveryFileWriteBlockerClass(&checkpointCopy)
 		if blockerClass == "" {
 			blockerClass = RecoveryBlockerClassDurableRecoveryCheckpoint
@@ -374,6 +384,11 @@ func recoveryResumeReasonMatchesTerminalMalformedChild(blockerReason string) boo
 		return true
 	}
 	if strings.Contains(normalized, "procedural child of") &&
+		strings.Contains(normalized, "instead of this malformed lane") {
+		return true
+	}
+	if strings.Contains(normalized, "duplicates the parent") &&
+		strings.Contains(normalized, "shared single-file deliverable") &&
 		strings.Contains(normalized, "instead of this malformed lane") {
 		return true
 	}

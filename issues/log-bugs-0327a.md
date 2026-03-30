@@ -763,3 +763,13 @@
   - impact:
     - worker/session cleanup on its own could not stop the family
     - the same inherited shared-doc child tasks kept reopening as fresh sessions, which is a direct manual-test blocker because the runtime never settles on parent/replacement ownership
+- 2026-03-29 20:34 MDT - A sibling resurrection bug remained for duplicate full-file children even after the inherited-shared guard fix.
+  - fresh live evidence:
+    - tasks `152` and `155` kept cycling through `resume_validation_blocked_task -> in_progress -> blocked` at `19:22:58` and `19:23:58 MDT`
+    - the kickoff metadata on those sessions carried `recovery_blocker_class=durable_recovery_checkpoint` and a checkpoint failure reason saying the child `duplicates the parent's shared single-file deliverable ... instead of this malformed lane`
+  - bug:
+    - `classifyTaskResumeDecision(...)` checked malformed-child terminality before the durable-checkpoint branch, but not inside it
+    - so a blocked task with a durable checkpoint containing a terminal malformed-child reason still came back as resumable
+  - impact:
+    - malformed duplicate full-file children kept reopening forever even though the runtime already had a terminal checkpoint reason telling it the lane should stay blocked
+    - this was still a manual-test blocker because the blocked-task resume layer could override earlier worker/session suppressors

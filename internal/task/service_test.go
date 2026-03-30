@@ -633,6 +633,33 @@ func TestClassifyTaskResumeDecisionRejectsInheritedSharedDeliverableChild(t *tes
 	}
 }
 
+func TestClassifyTaskResumeDecisionRejectsTerminalMalformedChildCheckpoint(t *testing.T) {
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(json.RawMessage(`{}`), taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    "planning/sambot-architecture.md",
+		FailureReason: "OC-152 was created as a child of OC-150 but still duplicates the parent's shared single-file deliverable instead of narrowing the work; resume the bounded split from the parent task or create a real section-scoped child instead of this malformed lane",
+		HaltTurnID:    uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	decision := classifyTaskResumeDecision(repo.ProjectTask{
+		ID:         uuid.New(),
+		WorkStatus: "blocked",
+		Metadata:   metadata,
+	}, "")
+
+	if decision.resumable {
+		t.Fatal("decision.resumable = true, want false")
+	}
+	if decision.blockerClass != RecoveryBlockerClassBlockedWithoutResumableState {
+		t.Fatalf("blockerClass = %q, want %q", decision.blockerClass, RecoveryBlockerClassBlockedWithoutResumableState)
+	}
+	if !strings.Contains(decision.blockerReason, "malformed lane") {
+		t.Fatalf("blockerReason = %q, want malformed-lane checkpoint reason", decision.blockerReason)
+	}
+}
+
 func TestClassifyTaskResumeDecisionAllowsFlowRejectionMaxVisitsWithCheckpoint(t *testing.T) {
 	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(json.RawMessage(`{}`), taskcheckpoint.RecoveryFileWriteCheckpoint{
 		TargetPath:    "Work/report.md",

@@ -3938,3 +3938,17 @@
   - expected live effect after rebuild:
     - inherited shared-doc child tasks like `160` stop emitting fresh `resume_validation_blocked_task` events and new async sessions
     - PM/parent replacement logic becomes the only valid path forward for those malformed child lanes
+- 2026-03-29 20:34 MDT - Followed that with the adjacent durable-checkpoint resume fix for duplicate full-file child resurrection.
+  - changed [`internal/task/recovery_resume.go`](/Users/sam/dev/otter-camp/internal/task/recovery_resume.go):
+    - the durable checkpoint branch in `classifyTaskResumeDecision(...)` now rejects terminal malformed-child checkpoint reasons as `blocked_without_resumable_state`
+    - widened the malformed-child matcher for the duplicate shared-single-file family (`duplicates the parent ... shared single-file deliverable ... instead of this malformed lane`)
+  - changed [`internal/task/service_test.go`](/Users/sam/dev/otter-camp/internal/task/service_test.go):
+    - added `TestClassifyTaskResumeDecisionRejectsTerminalMalformedChildCheckpoint`
+  - changed [`internal/controlplane/supervisor_integration_test.go`](/Users/sam/dev/otter-camp/internal/controlplane/supervisor_integration_test.go):
+    - added `TestSupervisor_TerminalMalformedCheckpointChildTaskStaysBlocked`
+  - verified with:
+    - `GOFLAGS='' go test ./internal/task -run 'Test(ClassifyTaskResumeDecisionRejects(InheritedSharedDeliverableChild|TerminalMalformedChildCheckpoint)|ResumeValidationBlockedTaskRejectsNonBlockedTask)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/controlplane -run 'TestSupervisor_(TerminalMalformedCheckpointChildTaskStaysBlocked|InheritedSharedDeliverableChildTaskStaysBlocked|DurableRecoveryCheckpointTaskStaysBlockedForManualRepair)$' -count=1`
+  - live proof:
+    - on the rebuilt binary, duplicate full-file child tasks `152` and `155` showed no newer `resume_validation_blocked_task` wakeups or task sessions beyond the last pre-fix `19:23:58-19:24:03 MDT` cycle
+    - that is the expected steady state for terminal malformed child checkpoints: stay blocked, do not mint another blocked-task resume kickoff
