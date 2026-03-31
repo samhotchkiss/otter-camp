@@ -159,6 +159,7 @@ type projectTasksLoadedMsg struct {
 	ProjectID  string
 	Tasks      []SidebarTaskItem
 	ExpandNode bool // true when triggered by user interaction (Space/arrow/Enter)
+	Err        error
 }
 
 type projectDetailLoadedMsg struct {
@@ -1000,6 +1001,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case projectTasksLoadedMsg:
+		if typed.Err != nil {
+			m.workspace.activity = appendActivity(
+				m.workspace.activity,
+				fmt.Sprintf("project task reload failed; preserved last known task list for %s", strings.TrimSpace(typed.ProjectID)),
+			)
+			return m, nil
+		}
 		m.workspace.setProjectTasks(typed.ProjectID, typed.Tasks, typed.ExpandNode)
 		// EX-152: sync RequiresHumanReview from loaded inbox items to newly-seeded
 		// task records. If inbox was loaded before this project's tasks existed in
@@ -8860,8 +8868,8 @@ func loadProjectTasksCmd(projectID string, hints RuntimeHints, expand bool) tea.
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		tasks, _ := hints.LoadProjectTasks(ctx, projectID)
-		return projectTasksLoadedMsg{ProjectID: projectID, Tasks: tasks, ExpandNode: expand}
+		tasks, err := hints.LoadProjectTasks(ctx, projectID)
+		return projectTasksLoadedMsg{ProjectID: projectID, Tasks: tasks, ExpandNode: expand, Err: err}
 	}
 }
 

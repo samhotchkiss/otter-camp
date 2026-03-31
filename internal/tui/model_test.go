@@ -16570,6 +16570,34 @@ func TestSidebarDataLoadedReplacesSidebarOnSuccessEX494(t *testing.T) {
 	}
 }
 
+func TestProjectTasksLoadedPreservesExistingChildrenOnErrEX495(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.rebuildSidebar(
+		"org-old",
+		nil,
+		[]SidebarProjectItem{{ID: "proj-rebuild", DisplayName: "Sam.blog Rebuild"}},
+	)
+	model.workspace.setProjectTasks("proj-rebuild", []SidebarTaskItem{
+		{ID: "task-1", Title: "Append expert conversation", WorkStatus: "review", TaskNumber: 9762},
+		{ID: "task-2", Title: "Write test conversations", WorkStatus: "in_progress", TaskNumber: 9763},
+	}, true)
+
+	before := model.workspace.projectChildren("project-proj-rebuild")
+	if len(before) != 2 {
+		t.Fatalf("precondition: got %d task children, want 2", len(before))
+	}
+
+	model = pressMsg(model, projectTasksLoadedMsg{
+		ProjectID: "proj-rebuild",
+		Err:       errors.New("timeout loading project tasks"),
+	})
+
+	after := model.workspace.projectChildren("project-proj-rebuild")
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("EX-495: project children changed on load error: before=%v after=%v", before, after)
+	}
+}
+
 func TestSidebarDataLoadedClearsInvalidSelectedProjectContextAfterArchive(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.workspace.rebuildSidebar(
