@@ -204,6 +204,48 @@ func TestHandleUserMessageSyncOrganizationActionRequestStillDispatchesTools(t *t
 	}
 }
 
+func TestLooksLikeSyncOrganizationProjectKickoffMessage(t *testing.T) {
+	if !looksLikeSyncOrganizationProjectKickoffMessage("hey frank, I want you to put together a new project. I want to build a website to track every author appearance across the country") {
+		t.Fatal("expected project kickoff request to be detected")
+	}
+	if looksLikeSyncOrganizationProjectKickoffMessage("hey frank, I'm only brainstorming a new project idea for now") {
+		t.Fatal("brainstorm-only message should not force project kickoff")
+	}
+	if looksLikeSyncOrganizationProjectKickoffMessage("how's it going?") {
+		t.Fatal("casual ping should not look like project kickoff")
+	}
+}
+
+func TestMaybeApplySyncOrganizationProjectKickoffPromptHint(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	if _, err := fixture.messages.UpdateContent(context.Background(), fixture.userMessageID, "hey frank, put together a new project for an author appearances tracker website"); err != nil {
+		t.Fatalf("UpdateContent user message: %v", err)
+	}
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+	}
+	assembled := &prompt.AssembledPrompt{
+		Messages: []prompt.PromptMessage{{Role: "system", Content: "base"}},
+	}
+	updated := fixture.engine.maybeApplySyncOrganizationProjectKickoffPromptHint(context.Background(), rt, assembled)
+	if updated == nil {
+		t.Fatal("updated assembled prompt is nil")
+	}
+	if len(updated.Messages) != len(assembled.Messages)+1 {
+		t.Fatalf("message count = %d, want %d", len(updated.Messages), len(assembled.Messages)+1)
+	}
+	if !strings.Contains(updated.Messages[len(updated.Messages)-1].Content, "Do not ask permission to create the project") {
+		t.Fatalf("kickoff hint = %q, want direct-create guidance", updated.Messages[len(updated.Messages)-1].Content)
+	}
+	if !strings.Contains(updated.Messages[len(updated.Messages)-1].Content, "project.create in this turn") {
+		t.Fatalf("kickoff hint = %q, want same-turn project.create guidance", updated.Messages[len(updated.Messages)-1].Content)
+	}
+	if !strings.Contains(updated.Messages[len(updated.Messages)-1].Content, "chief-of-staff discovery phase") {
+		t.Fatalf("kickoff hint = %q, want discovery-phase guidance", updated.Messages[len(updated.Messages)-1].Content)
+	}
+}
+
 func TestTurnRecoverableWorktreeRemoveError(t *testing.T) {
 	t.Parallel()
 

@@ -159,3 +159,9 @@ A good kickoff is one where:
   - do not immediately explode the project into implementation backlog / architecture / coding tasks before that discovery package exists and the operator has had a chance to react
 - The organization continuation prompt now mirrors the same behavior so long-running Frank chats keep the chief-of-staff posture after context compression rather than falling back to “create project and keep bootstrapping” mechanics.
 - Focused coverage for this slice is in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) under `TestBuildSyntheticProjectKickoffHandoffDiscoveryFirstRequest` and `TestBuildOrganizationContinuationActionPromptDiscoveryFirstProjectRequest`.
+- 2026-03-31 13:49 MDT - Follow-on from the same manual-test thread: the discovery-first continuation prompt was live, but the very first sync `Frank / General` turn still let the model ask permission to create the project. Added a sync-organization project-kickoff prompt hint so actionable new-project requests now say, in effect:
+  - the user already asked to start a project, so do not ask permission to create it
+  - call `project.create` in the current turn unless the user explicitly says they are only brainstorming
+  - after creation, acknowledge ownership briefly and move into discovery-first chief-of-staff mode
+  - do not front-load broad scope/stack questions before the project exists
+- Focused coverage for this follow-on is in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) under `TestLooksLikeSyncOrganizationProjectKickoffMessage` and `TestMaybeApplySyncOrganizationProjectKickoffPromptHint`.

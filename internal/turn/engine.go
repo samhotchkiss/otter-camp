@@ -12858,6 +12858,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			previousManifest = nil
 			continue
 		}
+		if assembled = e.maybeApplySyncOrganizationProjectKickoffPromptHint(ctx, rt, assembled); assembled == nil {
+			return fmt.Errorf("apply sync organization project kickoff prompt hint: assembled prompt missing")
+		}
 		if assembled = e.maybeApplySyncOrganizationCasualPromptHint(ctx, rt, assembled); assembled == nil {
 			return fmt.Errorf("apply sync organization casual prompt hint: assembled prompt missing")
 		}
@@ -39352,6 +39355,18 @@ func (e *TurnEngine) maybeApplySyncOrganizationCasualPromptHint(ctx context.Cont
 	return &clone
 }
 
+func (e *TurnEngine) maybeApplySyncOrganizationProjectKickoffPromptHint(ctx context.Context, rt *turnRuntime, assembled *prompt.AssembledPrompt) *prompt.AssembledPrompt {
+	if assembled == nil || !e.syncOrganizationProjectKickoffMessageActive(ctx, rt) {
+		return assembled
+	}
+	clone := *assembled
+	clone.Messages = append(append([]prompt.PromptMessage(nil), assembled.Messages...), prompt.PromptMessage{
+		Role: "system",
+		Content: "Latest user message is an actionable request to start a new project. Do not ask permission to create the project when the user already asked for it. Unless the user explicitly says they are only brainstorming, your next step should be project.create in this turn. After the project exists, briefly acknowledge ownership and move into a chief-of-staff discovery phase when the request is still underdefined: run discovery, then come back with a proposed methodology, recommended direction, and only the few high-leverage questions that materially change the plan. Do not open with broad scope/tech-stack questions before project.create, and do not jump straight into implementation backlog if the request is discovery-first.",
+	})
+	return &clone
+}
+
 func (e *TurnEngine) shouldSuppressSyncOrganizationCasualToolCalls(ctx context.Context, rt *turnRuntime, response ModelResponse) bool {
 	if e == nil || rt == nil || rt.session == nil {
 		return false
@@ -39378,6 +39393,24 @@ func (e *TurnEngine) syncOrganizationCasualMessageActive(ctx context.Context, rt
 		return false
 	}
 	return looksLikeCasualSyncOrganizationMessage(initialMessage.Content)
+}
+
+func (e *TurnEngine) syncOrganizationProjectKickoffMessageActive(ctx context.Context, rt *turnRuntime) bool {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "organization") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "sync") {
+		return false
+	}
+	if rt.initialMessageID == uuid.Nil {
+		return false
+	}
+	initialMessage, err := e.messages.GetByID(ctx, rt.initialMessageID)
+	if err != nil || !strings.EqualFold(strings.TrimSpace(initialMessage.Role), "user") {
+		return false
+	}
+	return looksLikeSyncOrganizationProjectKickoffMessage(initialMessage.Content)
 }
 
 func looksLikeCasualSyncOrganizationMessage(content string) bool {
@@ -39458,6 +39491,33 @@ func looksLikeActionableSyncOrganizationMessage(normalized string) bool {
 		"bootstrap",
 		"staff ",
 	)
+}
+
+func looksLikeSyncOrganizationProjectKickoffMessage(content string) bool {
+	normalized := strings.ToLower(normalizeInstructionText(content))
+	if normalized == "" {
+		return false
+	}
+	if !containsAny(normalized,
+		"new project",
+		"create a project",
+		"create a new project",
+		"start a project",
+		"start a new project",
+		"put together a new project",
+	) {
+		return false
+	}
+	if containsAny(normalized,
+		"should i create",
+		"don't create",
+		"do not create",
+		"just brainstorming",
+		"only brainstorming",
+	) {
+		return false
+	}
+	return true
 }
 
 func (e *TurnEngine) callMainModel(
