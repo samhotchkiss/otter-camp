@@ -2055,3 +2055,11 @@
   - impact:
     - the same task lane could alternate between reread attempts and successful poisoned `file.write` calls without ever producing real expert conversation content
     - recovery prompt quality kept degrading because the target file on disk was itself invalid context
+- 2026-03-31 08:05 MDT - PM continuation recovery still missed live malformed verification-checklist children because it only inspected visible child titles/descriptions.
+  - fresh live evidence:
+    - project `a6dbd331-7205-42d9-b0df-10105d5b5330` had `~9.4k` draft tasks, but the hot PM retry prompt had collapsed to a short generic continuation with no usable focus lines
+    - the actual malformed children under the verification-closeout parent had innocuous visible titles like `Technical question` / `Ethics/philosophy discussion`
+    - the procedural/checklist signal only lived in `metadata.decomposition.source_description`, so the PM snapshot kept treating those children as ordinary actionable drafts
+    - that left the PM lane alternating between empty rediscovery retries and expensive full-project scans instead of issuing the direct `task.update` on the focused verification-closeout parent
+  - paired runtime issue:
+    - `FailRun(...)` left active `run_step` / `tool_execution` rows open after parent run failure, which preserved poisoned execution ownership and made stale-turn recovery harder to settle

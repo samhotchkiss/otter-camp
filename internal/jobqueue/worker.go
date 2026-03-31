@@ -1689,7 +1689,41 @@ func projectContinuationResumeMessageHasStructuredContextForWorker(content strin
 	return strings.Contains(content, "Current focus parent:") ||
 		strings.Contains(content, "Current focus task:") ||
 		strings.Contains(content, "Actionable draft tasks already in the tree:") ||
-		strings.Contains(content, "Preferred existing same-deliverable malformed child draft to repair before any new replacement work:")
+		strings.Contains(content, "Preferred existing same-deliverable malformed child draft to repair before any new replacement work:") ||
+		strings.Contains(content, "Already-active non-terminal tasks in the tree:") ||
+		strings.Contains(content, "Draft parent tasks already have child work:")
+}
+
+func projectContinuationResumePromptMatchesSnapshotForWorker(content string, snapshot projectExecutionContinuationSnapshotForWorker) bool {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return false
+	}
+	lines := []struct {
+		marker string
+		value  string
+	}{
+		{marker: "Already-active non-terminal tasks in the tree:", value: strings.TrimSpace(snapshot.ActiveTaskLine)},
+		{marker: "Recently implementation-complete bounded tasks already in the tree:", value: strings.TrimSpace(snapshot.CompletedTaskLine)},
+		{marker: "Active leaf tasks already have no child tasks to inspect:", value: strings.TrimSpace(snapshot.LeafActiveTaskLine)},
+		{marker: "Actionable draft tasks already in the tree:", value: strings.TrimSpace(snapshot.DraftTaskLine)},
+		{marker: "Draft parent tasks need fresh replacement child work:", value: strings.TrimSpace(snapshot.ReplacementDraftLine)},
+		{marker: "Preferred existing same-deliverable malformed child draft to repair before any new replacement work:", value: strings.TrimSpace(snapshot.RepairDraftLine)},
+		{marker: "Draft parent tasks already have child work:", value: strings.TrimSpace(snapshot.ChildActiveDraftLine)},
+		{marker: "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step:", value: strings.TrimSpace(snapshot.FocusTaskLine)},
+	}
+	for _, line := range lines {
+		if line.value == "" {
+			if strings.Contains(content, line.marker) {
+				return false
+			}
+			continue
+		}
+		if !strings.Contains(content, line.value) {
+			return false
+		}
+	}
+	return true
 }
 
 func (w *Worker) refreshConsumedProjectContinuationResumeMessage(ctx context.Context, sessionID, messageID uuid.UUID) (uuid.UUID, bool, error) {
@@ -1980,23 +2014,28 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 				continue
 			}
 		}
+		rearmExecutionKickoffAfterRecovery := false
 		if messageConsumed && strings.EqualFold(strings.TrimSpace(messageSource), "task_recovery_resume") {
 			successfulRecoveryMutation, recoveryErr := w.recoveryResumeMessageCompletedWithDurableArtifactMutation(ctx, sessionID, messageID)
 			if recoveryErr != nil {
 				return repaired, fmt.Errorf("check completed recovery resume for session %s: %w", sessionID, recoveryErr)
 			}
-			if successfulRecoveryMutation {
-				continue
-			}
 			terminalStop, terminalErr := w.latestRecoveryResumeTurnShowsTerminalBlockedStop(ctx, sessionID, executionID)
 			if terminalErr != nil {
 				return repaired, fmt.Errorf("check terminal blocked recovery resume for session %s: %w", sessionID, terminalErr)
+			}
+			if successfulRecoveryMutation && !terminalStop {
+				// Once recovery has already produced a durable artifact mutation, switch the
+				// active execution back onto the normal kickoff path so the flow advances
+				// without reissuing recovery-only guidance on every subsequent turn.
+				rearmExecutionKickoffAfterRecovery = true
 			}
 			if terminalStop {
 				continue
 			}
 		}
 		if messageID == uuid.Nil ||
+			rearmExecutionKickoffAfterRecovery ||
 			(strings.EqualFold(strings.TrimSpace(messageSource), "supervisor") && messageConsumed) ||
 			(strings.EqualFold(strings.TrimSpace(messageSource), "task_queue_processor") && messageConsumed) {
 			synthMessageID, synthErr := w.ensureTaskExecutionKickoffMessage(ctx, sessionID, executionID)
@@ -2808,6 +2847,21 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			content = buildProjectExecutionContinuationPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot)
 		}
 	}
+	appendKnownChildRefsToCloseoutPrompt := func(focusLabelOverride string) error {
+		if projectID == uuid.Nil || !strings.Contains(content, "child_output_verifications") {
+			return nil
+		}
+		parentTaskID := projectContinuationFocusTaskIDFromSnapshotForWorker(snapshot, focusLabelOverride)
+		if parentTaskID == uuid.Nil {
+			return nil
+		}
+		refs, err := w.projectContinuationCompletedChildTaskVerificationRefsForWorker(ctx, projectID, parentTaskID)
+		if err != nil {
+			return err
+		}
+		content = appendProjectContinuationKnownChildRefsToCloseoutPromptForWorker(content, refs)
+		return nil
+	}
 
 	lockConn, err := w.pool.Acquire(ctx)
 	if err != nil {
@@ -2964,10 +3018,43 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			}
 		}
 
+		boundedSizeRetry := false
+		boundedSizeReferenceMessageID := uuid.Nil
+		if !latestExecutableContractRetry && latestConsumedProjectContinuationMessageID != uuid.Nil {
+			var boundedErr error
+			boundedSizeRetry, boundedErr = w.projectContinuationTurnEndedWithBoundedSizeStop(ctx, latestConsumedProjectContinuationMessageID)
+			if boundedErr != nil {
+				return uuid.Nil, false, fmt.Errorf("check latest consumed bounded-size continuation: %w", boundedErr)
+			}
+			if boundedSizeRetry {
+				boundedSizeReferenceMessageID = latestConsumedProjectContinuationMessageID
+				focusLabelOverride, labelErr := w.projectContinuationTurnBoundedSizeTaskLabel(ctx, latestConsumedProjectContinuationMessageID)
+				if labelErr != nil {
+					return uuid.Nil, false, fmt.Errorf("load latest consumed bounded-size task label: %w", labelErr)
+				}
+				if strings.TrimSpace(focusLabelOverride) != "" {
+					if _, focusRef, _ := projectContinuationRefByLabelFromSnapshotForWorker(snapshot, focusLabelOverride); focusRef != "" {
+						focusLabelOverride = focusRef
+					} else {
+						focusLabelOverride = ""
+					}
+				}
+				suggestedTitles, titlesErr := w.projectContinuationTurnBoundedSizeSuggestedChildTitles(ctx, latestConsumedProjectContinuationMessageID)
+				if titlesErr != nil {
+					return uuid.Nil, false, fmt.Errorf("load latest consumed bounded-size suggested child titles: %w", titlesErr)
+				}
+				content = buildProjectExecutionContinuationBoundedSizeRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, focusLabelOverride, suggestedTitles)
+				expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
+				metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+				latestConsumedMatchingMessageID = uuid.Nil
+				latestConsumedMatchingRepoVersion = ""
+			}
+		}
+
 		focusedCloseoutReadyRetry := false
 		focusedCloseoutReadyReferenceMessageID := uuid.Nil
 		for _, referenceMessageID := range retryReferenceMessageIDs {
-			if latestExecutableContractRetry {
+			if latestExecutableContractRetry || boundedSizeRetry {
 				break
 			}
 			var retryErr error
@@ -2983,7 +3070,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 
 		closeoutReadyQueueRetry := false
 		closeoutReadyQueueReferenceMessageID := uuid.Nil
-		if !latestExecutableContractRetry && !focusedCloseoutReadyRetry {
+		if !latestExecutableContractRetry && !boundedSizeRetry && !focusedCloseoutReadyRetry {
 			for _, referenceMessageID := range retryReferenceMessageIDs {
 				var retryErr error
 				closeoutReadyQueueRetry, retryErr = w.projectContinuationTurnEndedWithCloseoutReadyQueueRequiredStop(ctx, referenceMessageID)
@@ -2999,7 +3086,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 
 		closeoutReadyRetry := false
 		closeoutReadyReferenceMessageID := uuid.Nil
-		if !latestExecutableContractRetry && !focusedCloseoutReadyRetry && !closeoutReadyQueueRetry {
+		if !latestExecutableContractRetry && !boundedSizeRetry && !focusedCloseoutReadyRetry && !closeoutReadyQueueRetry {
 			for _, referenceMessageID := range retryReferenceMessageIDs {
 				var retryErr error
 				closeoutReadyRetry, retryErr = w.projectContinuationTurnEndedWithCloseoutReadyParentStop(ctx, referenceMessageID)
@@ -3026,8 +3113,16 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			} else if focusRef != "" {
 				focusLabelOverride = focusRef
 			}
-			if projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusLabelOverride) {
+			referenceContent, contentErr := w.projectContinuationMessageContentByID(ctx, closeoutReadyReferenceMessageID)
+			if contentErr != nil {
+				return uuid.Nil, false, fmt.Errorf("load latest consumed closeout-ready continuation content: %w", contentErr)
+			}
+			if projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusLabelOverride) ||
+				projectContinuationPromptExplicitlyProvesCloseoutReadyForWorker(referenceContent) {
 				content = buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, focusLabelOverride)
+				if err := appendKnownChildRefsToCloseoutPrompt(focusLabelOverride); err != nil {
+					return uuid.Nil, false, fmt.Errorf("append known child refs to closeout-ready continuation: %w", err)
+				}
 				expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
 				metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
 				latestConsumedMatchingMessageID = uuid.Nil
@@ -3048,8 +3143,16 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			} else if focusRef != "" {
 				focusLabelOverride = focusRef
 			}
-			if projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusLabelOverride) {
+			referenceContent, contentErr := w.projectContinuationMessageContentByID(ctx, focusedCloseoutReadyReferenceMessageID)
+			if contentErr != nil {
+				return uuid.Nil, false, fmt.Errorf("load latest consumed focused closeout-ready continuation content: %w", contentErr)
+			}
+			if projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusLabelOverride) ||
+				projectContinuationPromptExplicitlyProvesCloseoutReadyForWorker(referenceContent) {
 				content = buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, focusLabelOverride)
+				if err := appendKnownChildRefsToCloseoutPrompt(focusLabelOverride); err != nil {
+					return uuid.Nil, false, fmt.Errorf("append known child refs to focused closeout-ready continuation: %w", err)
+				}
 				expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
 				metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
 				latestConsumedMatchingMessageID = uuid.Nil
@@ -3070,17 +3173,23 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			} else if focusRef != "" {
 				focusLabelOverride = focusRef
 			}
-			if projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusLabelOverride) {
+			referenceContent, contentErr := w.projectContinuationMessageContentByID(ctx, closeoutReadyQueueReferenceMessageID)
+			if contentErr != nil {
+				return uuid.Nil, false, fmt.Errorf("load latest consumed closeout-ready queue continuation content: %w", contentErr)
+			}
+			if projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusLabelOverride) ||
+				projectContinuationPromptExplicitlyProvesCloseoutReadyForWorker(referenceContent) {
 				content = buildProjectExecutionContinuationParentQueueRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, focusLabelOverride)
+				if err := appendKnownChildRefsToCloseoutPrompt(focusLabelOverride); err != nil {
+					return uuid.Nil, false, fmt.Errorf("append known child refs to closeout-ready queue continuation: %w", err)
+				}
 				expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
 				metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
 				latestConsumedMatchingMessageID = uuid.Nil
 				latestConsumedMatchingRepoVersion = ""
 			}
 		}
-		boundedSizeRetry := false
-		boundedSizeReferenceMessageID := uuid.Nil
-		if !latestExecutableContractRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry {
+		if !latestExecutableContractRetry && !boundedSizeRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry {
 			for _, referenceMessageID := range retryReferenceMessageIDs {
 				isBoundedSizeStop, boundedErr := w.projectContinuationTurnEndedWithBoundedSizeStop(ctx, referenceMessageID)
 				if boundedErr != nil {
@@ -3103,7 +3212,64 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 				} else {
 					focusLabelOverride = ""
 				}
-				content = buildProjectExecutionContinuationBoundedSizeRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, focusLabelOverride)
+				suggestedTitles, titlesErr := w.projectContinuationTurnBoundedSizeSuggestedChildTitles(ctx, referenceMessageID)
+				if titlesErr != nil {
+					return uuid.Nil, false, fmt.Errorf("load latest consumed bounded-size suggested child titles: %w", titlesErr)
+				}
+				content = buildProjectExecutionContinuationBoundedSizeRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, focusLabelOverride, suggestedTitles)
+				expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
+				metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+				latestConsumedMatchingMessageID = uuid.Nil
+				latestConsumedMatchingRepoVersion = ""
+				break
+			}
+		}
+		if !latestExecutableContractRetry && !boundedSizeRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && latestConsumedSameCompletedTaskMessageID != uuid.Nil {
+			isBoundedSizeStop, boundedErr := w.projectContinuationTurnEndedWithBoundedSizeStop(ctx, latestConsumedSameCompletedTaskMessageID)
+			if boundedErr != nil {
+				return uuid.Nil, false, fmt.Errorf("check latest same-completed-task bounded-size continuation: %w", boundedErr)
+			}
+			if isBoundedSizeStop {
+				boundedSizeRetry = true
+				boundedSizeReferenceMessageID = latestConsumedSameCompletedTaskMessageID
+				focusLabelOverride, labelErr := w.projectContinuationTurnBoundedSizeTaskLabel(ctx, latestConsumedSameCompletedTaskMessageID)
+				if labelErr != nil {
+					return uuid.Nil, false, fmt.Errorf("load latest same-completed-task bounded-size task label: %w", labelErr)
+				}
+				if strings.TrimSpace(focusLabelOverride) != "" {
+					if _, focusRef, _ := projectContinuationRefByLabelFromSnapshotForWorker(snapshot, focusLabelOverride); focusRef != "" {
+						focusLabelOverride = focusRef
+					} else {
+						focusLabelOverride = ""
+					}
+				}
+				suggestedTitles, titlesErr := w.projectContinuationTurnBoundedSizeSuggestedChildTitles(ctx, latestConsumedSameCompletedTaskMessageID)
+				if titlesErr != nil {
+					return uuid.Nil, false, fmt.Errorf("load latest same-completed-task bounded-size suggested child titles: %w", titlesErr)
+				}
+				content = buildProjectExecutionContinuationBoundedSizeRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, focusLabelOverride, suggestedTitles)
+				expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
+				metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+				latestConsumedMatchingMessageID = uuid.Nil
+				latestConsumedMatchingRepoVersion = ""
+			}
+		}
+		rediscoveryOnlyRetry := false
+		if !latestExecutableContractRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && !boundedSizeRetry {
+			for _, referenceMessageID := range retryReferenceMessageIDs {
+				isRediscoveryOnlyStop, rediscoveryErr := w.projectContinuationTurnEndedWithRediscoveryOnlyStop(ctx, referenceMessageID)
+				if rediscoveryErr != nil {
+					return uuid.Nil, false, fmt.Errorf("check latest consumed rediscovery-only continuation: %w", rediscoveryErr)
+				}
+				if !isRediscoveryOnlyStop {
+					continue
+				}
+				candidate := buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot)
+				if !projectContinuationResumeMessageHasStructuredContextForWorker(candidate) {
+					continue
+				}
+				rediscoveryOnlyRetry = true
+				content = candidate
 				expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
 				metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
 				latestConsumedMatchingMessageID = uuid.Nil
@@ -3116,7 +3282,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			return uuid.Nil, false, fmt.Errorf("check latest consumed replacement-handoff continuation: %w", retryErr)
 		}
 		executableContractRetry := false
-		if !latestExecutableContractRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && !boundedSizeRetry {
+		if !latestExecutableContractRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && !boundedSizeRetry && !rediscoveryOnlyRetry {
 			for _, referenceMessageID := range retryReferenceMessageIDs {
 				var contractErr error
 				executableContractRetry, contractErr = w.projectContinuationTurnEndedWithExecutableContractStop(ctx, referenceMessageID)
@@ -3140,7 +3306,18 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			latestConsumedMatchingMessageID = uuid.Nil
 			latestConsumedMatchingRepoVersion = ""
 		}
-		if latestConsumedStructuredResumeMessageID != uuid.Nil && projectContinuationResumeMessageHasStructuredContextForWorker(latestConsumedStructuredResumeContent) {
+		if shouldReuseStructuredProjectContinuationResumeForWorker(
+			latestExecutableContractRetry,
+			closeoutReadyRetry,
+			closeoutReadyQueueRetry,
+			focusedCloseoutReadyRetry,
+			boundedSizeRetry,
+			rediscoveryOnlyRetry,
+			executableContractRetry,
+			replacementHandoffRetry,
+			latestConsumedStructuredResumeMessageID,
+			latestConsumedStructuredResumeContent,
+		) {
 			progressed, progressErr := w.projectContinuationTurnShowsProgress(ctx, latestConsumedStructuredResumeMessageID)
 			if progressErr != nil {
 				return uuid.Nil, false, fmt.Errorf("check latest consumed structured project continuation resume progress: %w", progressErr)
@@ -3148,6 +3325,10 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			if !progressed {
 				source = "project_continuation_resume"
 				content = strings.TrimSpace(latestConsumedStructuredResumeContent)
+				if projectContinuationResumeMessageHasStructuredContextForWorker(content) &&
+					!projectContinuationResumePromptMatchesSnapshotForWorker(content, snapshot) {
+					content = buildProjectExecutionContinuationPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot)
+				}
 				metadataMap["source"] = source
 				expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
 				metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
@@ -3164,12 +3345,14 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		existingSnapshotFingerprintText string
 		existingRepoVersionText         string
 		existingMessageConsumed         bool
+		existingContent                 string
 	)
 	err = lockConn.QueryRow(ctx, `
 		SELECT id,
 		       COALESCE(metadata->>'completed_task_id', ''),
 		       COALESCE(metadata->>$3, ''),
 		       COALESCE(metadata->>'repo_version', ''),
+		       content,
 		       EXISTS (
 		         SELECT 1
 		         FROM chat_turn ct
@@ -3188,10 +3371,18 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		&existingCompletedTaskIDText,
 		&existingSnapshotFingerprintText,
 		&existingRepoVersionText,
+		&existingContent,
 		&existingMessageConsumed,
 	)
 	if err == nil {
-		if source != "project_execution_continuation" {
+		if source == "project_continuation_resume" {
+			sameRepoVersion := sameProjectContinuationRepoVersion(currentRepoVersion, existingRepoVersionText)
+			structuredResume := projectContinuationResumeMessageHasStructuredContextForWorker(existingContent)
+			sameSnapshot := !structuredResume || projectContinuationResumePromptMatchesSnapshotForWorker(existingContent, snapshot)
+			if !existingMessageConsumed && sameRepoVersion && sameSnapshot {
+				return existingMessageID, false, nil
+			}
+		} else if source != "project_execution_continuation" {
 			return existingMessageID, false, nil
 		}
 		existingCompletedTaskIDText = strings.TrimSpace(existingCompletedTaskIDText)
@@ -3644,6 +3835,42 @@ func (w *Worker) projectContinuationTurnEndedWithFocusedCloseoutReadyRediscovery
 	return matched, nil
 }
 
+func (w *Worker) projectContinuationTurnEndedWithRediscoveryOnlyStop(ctx context.Context, referenceMessageID uuid.UUID) (bool, error) {
+	if w == nil || w.pool == nil || referenceMessageID == uuid.Nil {
+		return false, nil
+	}
+
+	var matched bool
+	if err := w.pool.QueryRow(ctx, `
+		WITH latest_turn AS (
+			SELECT ct.id,
+			       COALESCE(ct.stop_reason, '') AS stop_reason
+			FROM chat_turn ct
+			WHERE ct.trigger_message_id = $1
+			  AND ct.status IN ('completed', 'failed', 'cancelled')
+			ORDER BY ct.retry_count DESC,
+			         COALESCE(ct.completed_at, ct.created_at) DESC,
+			         ct.id DESC
+			LIMIT 1
+		)
+		SELECT EXISTS (
+			SELECT 1
+			FROM latest_turn lt
+			WHERE lt.stop_reason = 'validation_loop_blocked'
+			  AND EXISTS (
+			    SELECT 1
+			    FROM chat_message sm
+			    WHERE sm.turn_id = lt.id
+			      AND sm.role = 'system'
+			      AND sm.content LIKE $2
+			  )
+		)
+	`, referenceMessageID, projectContinuationRediscoveryGuardPrefix+"%").Scan(&matched); err != nil {
+		return false, err
+	}
+	return matched, nil
+}
+
 func (w *Worker) projectContinuationTurnCloseoutReadyTaskLabel(ctx context.Context, referenceMessageID uuid.UUID) (string, error) {
 	if w == nil || w.pool == nil || referenceMessageID == uuid.Nil {
 		return "", nil
@@ -3741,7 +3968,160 @@ func (w *Worker) projectContinuationTurnBoundedSizeTaskLabel(ctx context.Context
 	if err := rows.Err(); err != nil {
 		return "", err
 	}
+	content, err := w.projectContinuationMessageContentByID(ctx, referenceMessageID)
+	if err != nil {
+		return "", err
+	}
+	if label := projectContinuationPromptFocusLabelForWorker(content); strings.TrimSpace(label) != "" {
+		return strings.TrimSpace(label), nil
+	}
 	return "", nil
+}
+
+func (w *Worker) projectContinuationTurnBoundedSizeSuggestedChildTitles(ctx context.Context, referenceMessageID uuid.UUID) ([]string, error) {
+	if w == nil || w.pool == nil || referenceMessageID == uuid.Nil {
+		return nil, nil
+	}
+	rows, err := w.pool.Query(ctx, `
+		WITH latest_turn AS (
+			SELECT ct.id
+			FROM chat_turn ct
+			WHERE ct.trigger_message_id = $1
+			  AND ct.status IN ('completed', 'failed', 'cancelled')
+			ORDER BY ct.retry_count DESC,
+			         COALESCE(ct.completed_at, ct.created_at) DESC,
+			         ct.id DESC
+			LIMIT 1
+		)
+		SELECT tm.content
+		FROM latest_turn lt
+		JOIN chat_message tm
+		  ON tm.turn_id = lt.id
+		 AND tm.role = 'tool_result'
+		ORDER BY tm.sequence_number ASC, tm.id ASC
+	`, referenceMessageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var content string
+		if err := rows.Scan(&content); err != nil {
+			return nil, err
+		}
+		toolName, output, errText, ok := parseToolResultMessageForWorker(content)
+		if !ok {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(toolName), "task.create") &&
+			!strings.EqualFold(strings.TrimSpace(toolName), "task.update") {
+			continue
+		}
+		lowerErr := strings.ToLower(strings.TrimSpace(errText))
+		if !strings.Contains(lowerErr, "bounded size policy") && !strings.Contains(lowerErr, "bounded task-size policy") {
+			continue
+		}
+		suggested, _ := output["suggested_decomposition"].(map[string]any)
+		titles := anyStringsForWorker(suggested["child_titles"])
+		if len(titles) > 0 {
+			return titles, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func formatQuotedTitlesForWorker(titles []string) string {
+	trimmed := make([]string, 0, min(len(titles), 3))
+	for _, title := range titles {
+		title = strings.TrimSpace(title)
+		if title == "" {
+			continue
+		}
+		trimmed = append(trimmed, fmt.Sprintf("%q", title))
+		if len(trimmed) == 3 {
+			break
+		}
+	}
+	if len(trimmed) == 0 {
+		return ""
+	}
+	if len(titles) > len(trimmed) {
+		return strings.Join(trimmed, ", ") + ", ..."
+	}
+	return strings.Join(trimmed, ", ")
+}
+
+func parseToolResultMessageForWorker(content string) (string, map[string]any, string, bool) {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return "", nil, "", false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return "", nil, "", false
+	}
+	if payload == nil {
+		return "", nil, "", false
+	}
+	toolName := strings.TrimSpace(anyStringForWorker(payload["tool_name"]))
+	if toolName == "" {
+		return "", nil, "", false
+	}
+	output, _ := payload["output"].(map[string]any)
+	errText := strings.TrimSpace(anyStringForWorker(payload["error"]))
+	if errText == "" && output != nil {
+		errText = strings.TrimSpace(anyStringForWorker(output["error"]))
+	}
+	return toolName, output, errText, true
+}
+
+func anyStringForWorker(raw any) string {
+	if raw == nil {
+		return ""
+	}
+	switch typed := raw.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		return fmt.Sprintf("%v", raw)
+	}
+}
+
+func anyStringsForWorker(raw any) []string {
+	switch typed := raw.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			trimmed := strings.TrimSpace(item)
+			if trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			trimmed := strings.TrimSpace(anyStringForWorker(item))
+			if trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func (w *Worker) projectContinuationTurnShowsProgress(ctx context.Context, referenceMessageID uuid.UUID) (bool, error) {
@@ -4055,7 +4435,6 @@ func (w *Worker) ensureTaskExecutionKickoffMessage(ctx context.Context, sessionI
 	if err := json.Unmarshal(metadata, &payload); err != nil {
 		return uuid.Nil, fmt.Errorf("decode task execution kickoff metadata: %w", err)
 	}
-	appendTaskRecordRecoveryMetadataForWorker(payload, taskRecord)
 	metadata, err = json.Marshal(payload)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("remarshal task execution kickoff metadata: %w", err)
@@ -5026,6 +5405,10 @@ func (w *Worker) projectContinuationWorkspaceDeliverableEvidence(
 	if len(roots) == 0 {
 		return nil, nil
 	}
+	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(projectTasks))
+	for _, task := range projectTasks {
+		tasksByID[task.ID] = task
+	}
 	var evidence map[uuid.UUID]struct{}
 	cache := make(map[string]bool)
 	for _, task := range projectTasks {
@@ -5035,6 +5418,9 @@ func (w *Worker) projectContinuationWorkspaceDeliverableEvidence(
 		hints := taskHintsByTask[task.ID]
 		deliverablePath := normalizeWorkspaceRelativePathForWorker(hints.DeliverablePath)
 		if deliverablePath == "" {
+			continue
+		}
+		if !projectContinuationWorkspaceDeliverableEvidenceEligibleForWorker(task, tasksByID, deliverablePath) {
 			continue
 		}
 		present, ok := cache[deliverablePath]
@@ -5051,6 +5437,31 @@ func (w *Worker) projectContinuationWorkspaceDeliverableEvidence(
 		evidence[task.ID] = struct{}{}
 	}
 	return evidence, nil
+}
+
+func projectContinuationWorkspaceDeliverableEvidenceEligibleForWorker(task repo.ProjectTask, tasksByID map[uuid.UUID]repo.ProjectTask, deliverablePath string) bool {
+	deliverablePath = normalizeWorkspaceRelativePathForWorker(deliverablePath)
+	if deliverablePath == "" {
+		return false
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(task.Metadata, &metadata); err != nil {
+		return true
+	}
+	parentIDText := strings.TrimSpace(fmt.Sprint(metadata["decomposition_parent_task_id"]))
+	parentID, err := uuid.Parse(parentIDText)
+	if err != nil || parentID == uuid.Nil {
+		return true
+	}
+	parentTask, ok := tasksByID[parentID]
+	if !ok {
+		return true
+	}
+	sharedPath := taskDuplicateSharedFileDeliverablePathForWorker(parentTask)
+	if sharedPath == "" || !sameWorkspaceRelativePathForWorker(sharedPath, deliverablePath) {
+		return true
+	}
+	return taskLooksLikeVerificationCloseoutChildForWorker(task, sharedPath)
 }
 
 func (w *Worker) projectWorkspaceRoots(ctx context.Context, projectRecord repo.Project) ([]string, error) {
@@ -5691,8 +6102,9 @@ func projectContinuationMalformedChildTaskIDsForWorker(tasks []repo.ProjectTask)
 		if !ok {
 			continue
 		}
-		if !projectContinuationParentForbidsDecompositionForWorker(parentTask) &&
-			!taskdecomp.TaskLooksProceduralInstructionArtifact(task.Title, task.Description) &&
+		if !projectContinuationChildTaskStaleUnderTerminalParentForWorker(task, parentTask) &&
+			!projectContinuationParentForbidsDecompositionForWorker(parentTask) &&
+			!projectContinuationTaskLooksProceduralInstructionArtifactForWorker(task) &&
 			!projectContinuationMalformedDuplicateSharedFileChildForWorker(task, parentTask) &&
 			!projectContinuationMalformedInheritedSharedFileTopicChildForWorker(task, parentTask) &&
 			!projectContinuationMalformedConflictingDeliverableChildForWorker(task, parentTask) {
@@ -5704,6 +6116,34 @@ func projectContinuationMalformedChildTaskIDsForWorker(tasks []repo.ProjectTask)
 		malformed[task.ID] = struct{}{}
 	}
 	return malformed
+}
+
+func projectContinuationTaskLooksProceduralInstructionArtifactForWorker(task repo.ProjectTask) bool {
+	if taskdecomp.TaskLooksProceduralInstructionArtifact(task.Title, task.Description) {
+		return true
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(task.Metadata, &metadata); err != nil {
+		return false
+	}
+	decomposition, _ := metadata["decomposition"].(map[string]any)
+	sourceDescription := strings.TrimSpace(fmt.Sprint(decomposition["source_description"]))
+	if sourceDescription == "" {
+		return false
+	}
+	return taskdecomp.TaskLooksProceduralInstructionArtifact(task.Title, &sourceDescription)
+}
+
+func projectContinuationChildTaskStaleUnderTerminalParentForWorker(task, parentTask repo.ProjectTask) bool {
+	if !projectContinuationCountsAsOpenChildTaskForWorker(task.WorkStatus) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(parentTask.WorkStatus)) {
+	case "done", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func projectContinuationMalformedDuplicateSharedFileChildForWorker(task, parentTask repo.ProjectTask) bool {
@@ -6677,6 +7117,242 @@ func projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot projectExec
 		strings.Contains(line, "outcome_satisfied=true")
 }
 
+func projectContinuationPromptExplicitlyProvesCloseoutReadyForWorker(content string) bool {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return false
+	}
+	if strings.Contains(content, "workspace_deliverable_present=true") &&
+		(strings.Contains(content, "deliverable body is already on disk") ||
+			strings.Contains(content, "already has its deliverable body on disk")) {
+		return true
+	}
+	return strings.Contains(content, "already closeout-ready for the same deliverable") ||
+		strings.Contains(content, "closeout-ready parent still needs parent_orchestration evidence") ||
+		strings.Contains(content, "completed_closeout_child_tasks=") ||
+		strings.Contains(content, "outcome_satisfied=true")
+}
+
+var projectContinuationParentCompletionTaskLabelPatternForWorker = regexp.MustCompile(`\bOC-(\d+)\b`)
+
+func projectContinuationTaskNumberFromLabelForWorker(label string) (int, bool) {
+	match := projectContinuationParentCompletionTaskLabelPatternForWorker.FindStringSubmatch(strings.TrimSpace(label))
+	if len(match) < 2 {
+		return 0, false
+	}
+	value, err := strconv.Atoi(strings.TrimSpace(match[1]))
+	if err != nil || value <= 0 {
+		return 0, false
+	}
+	return value, true
+}
+
+func projectContinuationFocusTaskIDFromSnapshotForWorker(snapshot projectExecutionContinuationSnapshotForWorker, focusLabelOverride string) uuid.UUID {
+	candidates := []string{
+		strings.TrimSpace(snapshot.FocusTaskLine),
+		strings.TrimSpace(snapshot.ReplacementDraftLine),
+		strings.TrimSpace(snapshot.DraftTaskLine),
+		strings.TrimSpace(focusLabelOverride),
+	}
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if _, _, taskID := projectContinuationFocusRefFromLineForWorker(candidate); taskID != "" {
+			if parsed, err := uuid.Parse(strings.TrimSpace(taskID)); err == nil {
+				return parsed
+			}
+		}
+		if _, _, taskID := projectContinuationFirstTaskRefFromLineForWorker(candidate); taskID != "" {
+			if parsed, err := uuid.Parse(strings.TrimSpace(taskID)); err == nil {
+				return parsed
+			}
+		}
+	}
+	return uuid.Nil
+}
+
+func (w *Worker) projectContinuationCompletedChildTaskVerificationRefsForWorker(ctx context.Context, projectID, parentTaskID uuid.UUID) ([]string, error) {
+	if w == nil || w.pool == nil || projectID == uuid.Nil || parentTaskID == uuid.Nil {
+		return nil, nil
+	}
+
+	var parentMetadata string
+	if err := w.pool.QueryRow(ctx, `
+		SELECT COALESCE(metadata::text, '{}')
+		FROM project_task
+		WHERE project_id = $1
+		  AND id = $2
+	`, projectID, parentTaskID).Scan(&parentMetadata); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	refsByTaskNumber := make(map[int]string, 4)
+	appendRowRef := func(taskNumber int, taskID uuid.UUID) {
+		if taskNumber <= 0 || taskID == uuid.Nil {
+			return
+		}
+		refsByTaskNumber[taskNumber] = fmt.Sprintf("OC-%d task_id=%s", taskNumber, taskID.String())
+	}
+
+	rows, err := w.pool.Query(ctx, `
+		SELECT id, task_number
+		FROM project_task
+		WHERE project_id = $1
+		  AND work_status = 'done'
+		  AND COALESCE(metadata->>'decomposition_parent_task_id', '') = $2
+		ORDER BY task_number ASC
+	`, projectID, parentTaskID.String())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var taskID uuid.UUID
+		var taskNumber int
+		if err := rows.Scan(&taskID, &taskNumber); err != nil {
+			return nil, err
+		}
+		appendRowRef(taskNumber, taskID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	labelNumbers := make([]int32, 0, 4)
+	seenNumbers := make(map[int]struct{}, 4)
+	for _, match := range projectContinuationParentCompletionTaskLabelPatternForWorker.FindAllString(parentMetadata, -1) {
+		taskNumber, ok := projectContinuationTaskNumberFromLabelForWorker(match)
+		if !ok || taskNumber <= 0 {
+			continue
+		}
+		if _, exists := seenNumbers[taskNumber]; exists {
+			continue
+		}
+		seenNumbers[taskNumber] = struct{}{}
+		labelNumbers = append(labelNumbers, int32(taskNumber))
+	}
+	if len(labelNumbers) > 0 {
+		for _, taskNumber := range labelNumbers {
+			var taskID uuid.UUID
+			if err := w.pool.QueryRow(ctx, `
+				SELECT id
+				FROM project_task
+				WHERE project_id = $1
+				  AND work_status = 'done'
+				  AND task_number = $2
+				LIMIT 1
+			`, projectID, int(taskNumber)).Scan(&taskID); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					continue
+				}
+				return nil, err
+			}
+			appendRowRef(int(taskNumber), taskID)
+		}
+	}
+
+	if len(refsByTaskNumber) == 0 {
+		return nil, nil
+	}
+	refs := make([]string, 0, len(refsByTaskNumber))
+	for _, taskNumber := range labelNumbers {
+		if ref := refsByTaskNumber[int(taskNumber)]; strings.TrimSpace(ref) != "" {
+			refs = append(refs, ref)
+			delete(refsByTaskNumber, int(taskNumber))
+		}
+	}
+	if len(refsByTaskNumber) > 0 {
+		rows, err = w.pool.Query(ctx, `
+			SELECT id, task_number
+			FROM project_task
+			WHERE project_id = $1
+			  AND work_status = 'done'
+			  AND COALESCE(metadata->>'decomposition_parent_task_id', '') = $2
+			ORDER BY task_number ASC
+		`, projectID, parentTaskID.String())
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var taskID uuid.UUID
+			var taskNumber int
+			if err := rows.Scan(&taskID, &taskNumber); err != nil {
+				return nil, err
+			}
+			if ref := refsByTaskNumber[taskNumber]; strings.TrimSpace(ref) != "" {
+				refs = append(refs, ref)
+				delete(refsByTaskNumber, taskNumber)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return refs, nil
+}
+
+func appendProjectContinuationKnownChildRefsToCloseoutPromptForWorker(content string, refs []string) string {
+	content = strings.TrimSpace(content)
+	if content == "" || len(refs) == 0 {
+		return content
+	}
+	if strings.Contains(content, "Use these exact child task ids in child_output_verifications now:") {
+		return content
+	}
+	return strings.TrimSpace(content) + " Use these exact child task ids in child_output_verifications now: " + strings.Join(refs, "; ") + ". Do not call task.list first unless the runtime explicitly says those ids are still unknown."
+}
+
+func shouldReuseStructuredProjectContinuationResumeForWorker(
+	latestExecutableContractRetry bool,
+	closeoutReadyRetry bool,
+	closeoutReadyQueueRetry bool,
+	focusedCloseoutReadyRetry bool,
+	boundedSizeRetry bool,
+	rediscoveryOnlyRetry bool,
+	executableContractRetry bool,
+	replacementHandoffRetry bool,
+	latestConsumedStructuredResumeMessageID uuid.UUID,
+	latestConsumedStructuredResumeContent string,
+) bool {
+	if latestExecutableContractRetry ||
+		closeoutReadyRetry ||
+		closeoutReadyQueueRetry ||
+		focusedCloseoutReadyRetry ||
+		boundedSizeRetry ||
+		rediscoveryOnlyRetry ||
+		executableContractRetry ||
+		replacementHandoffRetry {
+		return false
+	}
+	if latestConsumedStructuredResumeMessageID == uuid.Nil {
+		return false
+	}
+	return projectContinuationResumeMessageHasStructuredContextForWorker(latestConsumedStructuredResumeContent)
+}
+
+func (w *Worker) projectContinuationMessageContentByID(ctx context.Context, messageID uuid.UUID) (string, error) {
+	if w == nil || w.pool == nil || messageID == uuid.Nil {
+		return "", nil
+	}
+	var content string
+	if err := w.pool.QueryRow(ctx, `
+		SELECT content
+		FROM chat_message
+		WHERE id = $1
+	`, messageID).Scan(&content); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(content), nil
+}
+
 func (w *Worker) projectContinuationRefByLabelFromMessageHistoryForWorker(ctx context.Context, messageIDs []uuid.UUID, focusLabel string) (string, string, string, error) {
 	if w == nil || w.pool == nil || strings.TrimSpace(focusLabel) == "" {
 		return "", "", "", nil
@@ -6774,6 +7450,9 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 		if strings.Contains(activeLine, "deliverable_path=") {
 			lines = append(lines, "If a named active task above already shows deliverable_path=..., inspect or write that exact path instead of broad workspace-root or artifact-root browsing.")
 		}
+		if strings.Contains(activeLine, "work_status=blocked") && strings.Contains(activeLine, "deliverable_path=") {
+			lines = append(lines, "If a named blocked task above already shows deliverable_path=..., do not read that blocked deliverable from disk first just to decide what to do. Use the named blocker, resume_policy, and task title/path to create, queue, or update the smallest replacement or parent action directly.")
+		}
 		if strings.Contains(activeLine, "deliverable_root=") {
 			lines = append(lines, "If a named active task above already shows deliverable_root=..., stay inside that exact root instead of broad content, templates, or planning rediscovery.")
 		}
@@ -6805,15 +7484,21 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 		if strings.Contains(draftLine, "completed_closeout_child_tasks=") {
 			lines = append(lines, "If a named draft task above already shows completed_closeout_child_tasks=..., use that completed child proof to advance or close the parent instead of creating another replacement child.")
 			lines = append(lines, "When completed child proof and completed-task batch evidence are already present, do not re-verify broad artifact roots on disk before advancing the parent unless a concrete tool error says the artifact is missing.")
-			lines = append(lines, "Before marking that closeout-ready parent done, record parent_orchestration.child_verifications for the completed child outputs, parent_orchestration.integration_check.status=passed, and parent_orchestration.outcome_assessment.satisfied=true on the parent task itself.")
+			lines = append(lines, "Before marking that closeout-ready parent done, send child_output_verifications for the completed child outputs plus integration_check.status=passed and outcome_assessment.satisfied=true in the same task.update so the parent_orchestration metadata is recorded on the parent task.")
 		}
-		if strings.Contains(draftLine, "deliverable_path=") {
+		if strings.Contains(draftLine, "deliverable_path=") &&
+			!strings.Contains(draftLine, "assigned_agent_id=missing") &&
+			!strings.Contains(draftLine, "flow_template_id=missing") {
 			lines = append(lines, "If a named draft task above already shows deliverable_path=..., inspect or write that exact path instead of reopening broad workspace context.")
 		}
-		if strings.Contains(draftLine, "deliverable_root=") {
+		if strings.Contains(draftLine, "deliverable_root=") &&
+			!strings.Contains(draftLine, "assigned_agent_id=missing") &&
+			!strings.Contains(draftLine, "flow_template_id=missing") {
 			lines = append(lines, "If a named draft task above already shows deliverable_root=..., stay inside that exact root instead of broad content or template browsing.")
 		}
-		if strings.Contains(draftLine, "depends_on_path=") {
+		if strings.Contains(draftLine, "depends_on_path=") &&
+			!strings.Contains(draftLine, "assigned_agent_id=missing") &&
+			!strings.Contains(draftLine, "flow_template_id=missing") {
 			lines = append(lines, "If a named draft task above already shows depends_on_path=..., inspect that prerequisite artifact before broader search.")
 		}
 	}
@@ -6834,11 +7519,34 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 	if focusLine := strings.TrimSpace(snapshot.FocusTaskLine); focusLine != "" {
 		lines = append(lines, focusLine)
 		focusHasCompletedCloseout := strings.Contains(focusLine, "completed_closeout_child_tasks=")
+		focusHasMissingPrerequisites := strings.Contains(focusLine, "assigned_agent_id=missing") ||
+			strings.Contains(focusLine, "flow_template_id=missing")
 		if strings.Contains(focusLine, "child_tasks=") && strings.TrimSpace(snapshot.ActiveTaskLine) != "" {
 			lines = append(lines, "If that focus draft already has child tasks and the active-task snapshot above already names those child lanes, do not reread the parent or child task records first. Queue the draft only if it is still runnable as-is, split it directly into smaller reviewable work if bounded-size policy still blocks it, or report one concrete blocker sentence.")
 		}
-		if strings.Contains(focusLine, "deliverable_path=") || strings.Contains(focusLine, "deliverable_root=") || strings.Contains(focusLine, "depends_on_path=") {
+		if !focusHasMissingPrerequisites &&
+			(strings.Contains(focusLine, "deliverable_path=") || strings.Contains(focusLine, "deliverable_root=") || strings.Contains(focusLine, "depends_on_path=")) {
 			lines = append(lines, "When the focus task already includes exact deliverable or dependency hints, use those paths directly before any broader workspace search.")
+		}
+		if focusHasMissingPrerequisites {
+			lines = append(lines, "Because that focus parent still has explicit prerequisite fields missing, do not inspect deliverables or sibling artifacts first. Repair the named assigned_agent_id / flow_template_id gaps on that exact task with one narrow task.update, or report one blocker sentence if the required value is still unknown.")
+			lines = append(lines, "Even if that focus task already names deliverable_path, deliverable_root, or depends_on_path, do not inspect those paths until the prerequisite repair succeeds.")
+			switch {
+			case strings.Contains(focusLine, "assigned_agent_id=missing") && !strings.Contains(focusLine, "flow_template_id=missing"):
+				lines = append(lines, "Because flow_template_id is already present on that focus task, your next assistant action should be one narrow task.update that sets assigned_agent_id and work_status=queued on that exact task.")
+			case !strings.Contains(focusLine, "assigned_agent_id=missing") && strings.Contains(focusLine, "flow_template_id=missing"):
+				lines = append(lines, "Because assigned_agent_id is already present on that focus task, your next assistant action should be one narrow task.update that sets flow_template_id and work_status=queued on that exact task.")
+			case strings.Contains(focusLine, "assigned_agent_id=missing") && strings.Contains(focusLine, "flow_template_id=missing"):
+				lines = append(lines, "Your next assistant action should be one narrow task.update that sets assigned_agent_id, flow_template_id, and work_status=queued on that exact task.")
+			}
+			if strings.Contains(focusLine, "assigned_agent_id=missing") &&
+				(strings.Contains(snapshot.ActiveTaskLine, "assigned_agent_id=") || strings.Contains(snapshot.ReplacementDraftLine, "assigned_agent_id=") || strings.Contains(snapshot.DraftTaskLine, "assigned_agent_id=")) {
+				lines = append(lines, "Reuse one of the already-named project assignee ids from this continuation prompt directly with task.update; do not call agent.list just to rediscover the same roster.")
+			}
+			if strings.Contains(focusLine, "flow_template_id=missing") &&
+				(strings.Contains(snapshot.ActiveTaskLine, "flow_template_id=") || strings.Contains(snapshot.ReplacementDraftLine, "flow_template_id=") || strings.Contains(snapshot.DraftTaskLine, "flow_template_id=")) {
+				lines = append(lines, "Reuse the already-named flow_template_id from matching sibling work in this continuation prompt when it fits the same lane; do not call flow.list_templates just to rediscover it.")
+			}
 		}
 		if focusHasCompletedCloseout {
 			lines = append(lines, "Because that focus parent already has completed closeout child proof, advance or close the parent directly instead of creating another replacement child.")
@@ -6863,6 +7571,11 @@ func appendProjectExecutionSnapshotGuidanceForWorker(lines []string, snapshot pr
 		}
 	}
 	return lines
+}
+
+func appendProjectExecutionSnapshotGuidanceWithoutProjectLineForWorker(lines []string, snapshot projectExecutionContinuationSnapshotForWorker) []string {
+	snapshot.ProjectLine = ""
+	return appendProjectExecutionSnapshotGuidanceForWorker(lines, snapshot)
 }
 
 func projectExecutionSnapshotContainsBatchRangeForWorker(snapshot projectExecutionContinuationSnapshotForWorker, batchRange string) bool {
@@ -6974,10 +7687,33 @@ func buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(compl
 		laneSource = strings.TrimSpace(snapshot.DraftTaskLine)
 	}
 	if focusRef == "" {
+		lines = appendProjectExecutionSnapshotGuidanceWithoutProjectLineForWorker(lines, snapshot)
+		if strings.TrimSpace(snapshot.ActiveTaskLine) != "" &&
+			strings.TrimSpace(snapshot.DraftTaskLine) == "" &&
+			strings.TrimSpace(snapshot.ReplacementDraftLine) == "" &&
+			strings.TrimSpace(snapshot.FocusTaskLine) == "" {
+			lines = append(lines,
+				"Your last continuation turn was blocked after broad rediscovery even though the active-task snapshot already names the remaining blocked lanes.",
+				"Do not inspect deliverable files or relist the project tree first.",
+				"Use one direct task.update or task.create to address the blocker or resume_policy on one named task above, or one concrete blocker sentence if none of those named blocked tasks are project-lane actionable.",
+			)
+		} else {
+			lines = append(lines,
+				"Your last continuation turn was blocked after broad rediscovery.",
+				"Do not call project.get, task.list, task.get, file.list, or file.read just to rediscover the same named work again.",
+				"Act directly on the named active or draft tasks already listed above. If the snapshot above still does not name a runnable task, reply with one concrete blocker sentence instead of another rediscovery tool call.",
+			)
+		}
 		return strings.Join(lines, " ")
 	}
 	if line := projectContinuationSnapshotLineForRefForWorker(snapshot, focusRef, focusTaskID); line != "" {
 		laneSource = line
+	}
+	if projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusRef) &&
+		(strings.TrimSpace(snapshot.RepairDraftLine) != "" ||
+			strings.Contains(laneSource, "completed_closeout_child_tasks=") ||
+			strings.Contains(laneSource, "outcome_satisfied=true")) {
+		return buildProjectExecutionContinuationParentQueueRetryPromptForWorker(completedTaskNumber, completedTaskTitle, remainingDraftTasks, snapshot, focusRef)
 	}
 	if projectContinuationPromptFocusLooksLikeVerificationCloseoutForWorker(laneSource) {
 		lines = append(lines,
@@ -7086,7 +7822,7 @@ func projectContinuationPromptFocusLooksLikeVerificationCloseoutForWorker(text s
 	)
 }
 
-func buildProjectExecutionContinuationBoundedSizeRetryPromptForWorker(completedTaskNumber int, completedTaskTitle string, remainingDraftTasks int, snapshot projectExecutionContinuationSnapshotForWorker, focusLabelOverride string) string {
+func buildProjectExecutionContinuationBoundedSizeRetryPromptForWorker(completedTaskNumber int, completedTaskTitle string, remainingDraftTasks int, snapshot projectExecutionContinuationSnapshotForWorker, focusLabelOverride string, suggestedChildTitles []string) string {
 	lines := []string{
 		"Continue the active project execution now.",
 	}
@@ -7132,7 +7868,23 @@ func buildProjectExecutionContinuationBoundedSizeRetryPromptForWorker(completedT
 		laneSource = line
 	}
 	if strings.Contains(laneSource, "workspace_deliverable_present=true") {
-		return buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNumber, completedTaskTitle, remainingDraftTasks, snapshot)
+		lines = append(lines,
+			"Your last continuation turn proved the deliverable body is already on disk, but the same focused parent still violates the bounded size policy if you try to queue it directly from the project lane.",
+			fmt.Sprintf("Current focus parent: %s.", focusRef),
+			"Treat that parent as closeout/verification work, not as fresh replacement-writing work.",
+			"Do not call task.list, task.get, file.list, file.read, git.status, or any other broad rediscovery tool before acting.",
+			fmt.Sprintf("Do not retry the same parent task.update on %s from the project lane.", focusLabel),
+			fmt.Sprintf("Do not create another broad authoring child beneath %s from the project lane.", focusLabel),
+			"Do not inspect or mention unrelated blocked tasks or other draft parents until this closeout handoff is advanced.",
+			"Keep the closeout child intentionally terse: use a short verification title and a 1-2 sentence description only. Do not paste a long checklist, restate the full acceptance criteria, or turn this into a broad authoring task.",
+		)
+		if projectContinuationCompletedTaskLooksLikeVerification(completedTaskTitle) ||
+			strings.Contains(laneSource, "completed_closeout_child_tasks=") ||
+			strings.Contains(laneSource, "outcome_satisfied=true") {
+			lines = append(lines, fmt.Sprintf("%s already has closeout-shaped proof; the remaining project-lane work must be a smaller closeout handoff, not another broad parent queue attempt.", focusLabel))
+		}
+		lines = append(lines, fmt.Sprintf("Your next assistant action must create the smallest closeout/verification child task beneath %s now, queue an already-bounded direct child there if one already exists unchanged, or report one concrete blocker sentence naming the exact missing review or verification evidence.", focusLabel))
+		return strings.Join(lines, " ")
 	}
 	lines = append(lines,
 		"Your last continuation turn proved that this focused draft is still too broad to queue as-is.",
@@ -7140,8 +7892,12 @@ func buildProjectExecutionContinuationBoundedSizeRetryPromptForWorker(completedT
 		"Do not call task.list without parent_task_id, task.get, file.list, file.read, git.status, or any other broad rediscovery tool before acting.",
 		fmt.Sprintf("Do not try to queue %s again without narrowing it.", focusLabel),
 		"Do not inspect or mention unrelated blocked tasks or other draft parents until this bounded split is advanced.",
-		fmt.Sprintf("Your next assistant action must split %s into smaller reviewable child tasks now, or queue an already-bounded direct child there if one already exists unchanged.", focusLabel),
 	)
+	if len(suggestedChildTitles) > 0 {
+		lines = append(lines, fmt.Sprintf("The last bounded-size tool result already suggested a concrete split: %s.", formatQuotedTitlesForWorker(suggestedChildTitles)))
+		lines = append(lines, "Do not create one replacement child that still owns the whole deliverable; create multiple bounded child tasks that follow that split directly.")
+	}
+	lines = append(lines, fmt.Sprintf("Your next assistant action must split %s into smaller reviewable child tasks now, or queue an already-bounded direct child there if one already exists unchanged.", focusLabel))
 	if focusTaskID != "" {
 		lines = append(lines, fmt.Sprintf("If you must inspect child lanes first, use only task.list(parent_task_id=%s).", focusTaskID))
 	}
@@ -7190,6 +7946,7 @@ func buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(complete
 		laneSource = line
 	}
 	if strings.Contains(laneSource, "workspace_deliverable_present=true") &&
+		!projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusRef) &&
 		!strings.Contains(laneSource, "completed_closeout_child_tasks=") &&
 		(strings.Contains(laneSource, "malformed_child_tasks=") || strings.Contains(laneSource, "replaceable_blocked_child_tasks=")) &&
 		!projectContinuationCompletedTaskLooksLikeVerification(completedTaskTitle) {
@@ -7205,16 +7962,16 @@ func buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(complete
 	if focusTaskID != "" {
 		lines = append(lines,
 			fmt.Sprintf("Your next assistant action must be one narrow task.update on task_id=%s for %s. No other tool call is allowed in that turn.", focusTaskID, focusLabel),
-			fmt.Sprintf("Use that single task.update to either advance %s directly or record the missing closeout metadata before closing it.", focusLabel),
 		)
 	} else {
 		lines = append(lines,
 			fmt.Sprintf("Your next assistant action must be one narrow task.update for %s. No other tool call is allowed in that turn.", focusLabel),
-			fmt.Sprintf("Use that single task.update to either advance %s directly or record the missing closeout metadata before closing it.", focusLabel),
 		)
 	}
 	lines = append(lines,
-		fmt.Sprintf("If the parent still needs closeout metadata, update %s with parent_orchestration.child_verifications, parent_orchestration.integration_check.status=passed, and parent_orchestration.outcome_assessment.satisfied=true before closing it.", focusLabel),
+		fmt.Sprintf("Never set work_status=done on %s from the project lane.", focusLabel),
+		fmt.Sprintf("If the parent_orchestration evidence is already recorded on %s, set work_status=queued so that same parent can finish through its own flow.", focusLabel),
+		fmt.Sprintf("If the parent still needs closeout metadata, update %s with child_output_verifications, integration_check.status=passed, outcome_assessment.satisfied=true, and work_status=queued in that same task.update so the parent_orchestration metadata is recorded on the parent.", focusLabel),
 	)
 	return strings.Join(lines, " ")
 }
@@ -7261,6 +8018,7 @@ func buildProjectExecutionContinuationParentQueueRetryPromptForWorker(completedT
 		laneSource = line
 	}
 	if strings.Contains(laneSource, "workspace_deliverable_present=true") &&
+		!projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusRef) &&
 		!strings.Contains(laneSource, "completed_closeout_child_tasks=") &&
 		(strings.Contains(laneSource, "malformed_child_tasks=") || strings.Contains(laneSource, "replaceable_blocked_child_tasks=")) &&
 		!projectContinuationCompletedTaskLooksLikeVerification(completedTaskTitle) {
@@ -7281,7 +8039,7 @@ func buildProjectExecutionContinuationParentQueueRetryPromptForWorker(completedT
 	lines = append(lines,
 		fmt.Sprintf("Never set work_status=done on %s from the project lane.", focusLabel),
 		fmt.Sprintf("If the parent_orchestration evidence is already recorded on %s, set work_status=queued so that same parent can finish through its own flow.", focusLabel),
-		fmt.Sprintf("If the evidence is still missing, include parent_orchestration.child_verifications, parent_orchestration.integration_check.status=passed, parent_orchestration.outcome_assessment.satisfied=true, and work_status=queued in that same task.update when possible; otherwise record the missing evidence first and queue %s on the next retry.", focusLabel),
+		fmt.Sprintf("If the evidence is still missing, include child_output_verifications, integration_check.status=passed, outcome_assessment.satisfied=true, and work_status=queued in that same task.update when possible so the parent_orchestration metadata is recorded on the parent; otherwise record the missing evidence first and queue %s on the next retry.", focusLabel),
 	)
 	return strings.Join(lines, " ")
 }
@@ -8792,6 +9550,21 @@ func (w *Worker) RecoverStaleInProgressProjectTurnsWithoutOwnership(ctx context.
 	const failureReason = "recovered stale in-progress project turn without active invocation ownership"
 	var recovered int64
 	for _, item := range candidates {
+		refreshContinuation := false
+		refreshResume := false
+		if item.messageID != nil && *item.messageID != uuid.Nil {
+			source, progressed, progressErr := w.recoveredStaleProjectTurnContinuationState(ctx, item.turnID, *item.messageID)
+			if progressErr != nil {
+				return recovered, fmt.Errorf("load recovered stale project continuation state for session %s: %w", item.sessionID, progressErr)
+			}
+			if progressed {
+				switch strings.ToLower(strings.TrimSpace(source)) {
+				case "project_execution_continuation", "project_continuation_resume":
+					refreshContinuation = true
+					refreshResume = strings.EqualFold(strings.TrimSpace(source), "project_continuation_resume")
+				}
+			}
+		}
 		tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{})
 		if err != nil {
 			return recovered, fmt.Errorf("begin stale in-progress project turn recovery tx: %w", err)
@@ -8864,7 +9637,7 @@ func (w *Worker) RecoverStaleInProgressProjectTurnsWithoutOwnership(ctx context.
 				return
 			}
 
-			if item.messageID != nil && *item.messageID != uuid.Nil {
+			if item.messageID != nil && *item.messageID != uuid.Nil && !refreshContinuation {
 				if _, execErr := w.enqueueAgentTurnDispatch(ctx, tx, agentTurnKeyPayload{
 					SessionID:  item.sessionID,
 					MessageID:  *item.messageID,
@@ -8883,7 +9656,32 @@ func (w *Worker) RecoverStaleInProgressProjectTurnsWithoutOwnership(ctx context.
 		if err != nil {
 			return recovered, err
 		}
-		if item.messageID == nil || *item.messageID == uuid.Nil {
+		if refreshContinuation {
+			hasQueued, queueErr := w.sessionHasQueuedOrClaimedAgentTurn(ctx, item.sessionID)
+			if queueErr != nil {
+				return recovered, fmt.Errorf("check queued recovered project continuation refresh for session %s: %w", item.sessionID, queueErr)
+			}
+			if !hasQueued {
+				if refreshResume {
+					if err := w.failPendingProjectContinuationResumeMessages(ctx, item.sessionID, uuid.Nil, "superseded after prior continuation resume turn completed"); err != nil {
+						return recovered, fmt.Errorf("retire consumed recovered project continuation resume messages for session %s: %w", item.sessionID, err)
+					}
+				}
+				synthMessageID, suppressed, synthErr := w.ensureProjectContinuationMessageDecision(ctx, item.sessionID)
+				if synthErr != nil {
+					return recovered, fmt.Errorf("refresh recovered project continuation message for session %s: %w", item.sessionID, synthErr)
+				}
+				if !suppressed && synthMessageID != uuid.Nil {
+					if _, enqueueErr := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
+						SessionID:  item.sessionID,
+						MessageID:  synthMessageID,
+						RetryCount: 0,
+					}, nil); enqueueErr != nil {
+						return recovered, fmt.Errorf("enqueue recovered refreshed project continuation for session %s: %w", item.sessionID, enqueueErr)
+					}
+				}
+			}
+		} else if item.messageID == nil || *item.messageID == uuid.Nil {
 			hasQueued, queueErr := w.sessionHasQueuedOrClaimedAgentTurn(ctx, item.sessionID)
 			if queueErr != nil {
 				return recovered, fmt.Errorf("check queued recovered project retry for session %s: %w", item.sessionID, queueErr)
@@ -8907,6 +9705,94 @@ func (w *Worker) RecoverStaleInProgressProjectTurnsWithoutOwnership(ctx context.
 		recovered++
 	}
 	return recovered, nil
+}
+
+func (w *Worker) recoveredStaleProjectTurnContinuationState(ctx context.Context, turnID, messageID uuid.UUID) (string, bool, error) {
+	if w == nil || w.pool == nil || messageID == uuid.Nil {
+		return "", false, nil
+	}
+
+	var source string
+	if err := w.pool.QueryRow(ctx, `
+		SELECT COALESCE(metadata->>'source', '')
+		FROM chat_message
+		WHERE id = $1
+	`, messageID).Scan(&source); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	progressed, err := w.projectContinuationTurnShowsProgress(ctx, messageID)
+	if err != nil {
+		return "", false, err
+	}
+	if !progressed && turnID != uuid.Nil {
+		undispatched, err := w.staleProjectTurnHasUndispatchedAssistantToolCalls(ctx, turnID)
+		if err != nil {
+			return "", false, err
+		}
+		progressed = undispatched
+	}
+	return source, progressed, nil
+}
+
+func (w *Worker) staleProjectTurnHasUndispatchedAssistantToolCalls(ctx context.Context, turnID uuid.UUID) (bool, error) {
+	if w == nil || w.pool == nil || turnID == uuid.Nil {
+		return false, nil
+	}
+
+	rows, err := w.pool.Query(ctx, `
+		SELECT metadata
+		FROM chat_message
+		WHERE turn_id = $1
+		  AND role = 'assistant'
+		  AND status = 'final'
+		ORDER BY sequence_number DESC, id DESC
+	`, turnID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	hasToolCalls := false
+	for rows.Next() {
+		var metadata []byte
+		if err := rows.Scan(&metadata); err != nil {
+			return false, err
+		}
+		if len(metadata) == 0 || !json.Valid(metadata) {
+			continue
+		}
+		var payload struct {
+			ToolCalls []map[string]any `json:"tool_calls"`
+		}
+		if err := json.Unmarshal(metadata, &payload); err != nil {
+			continue
+		}
+		if len(payload.ToolCalls) > 0 {
+			hasToolCalls = true
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	if !hasToolCalls {
+		return false, nil
+	}
+
+	var toolResultCount int
+	if err := w.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_message
+		WHERE turn_id = $1
+		  AND role = 'tool_result'
+		  AND status = 'final'
+	`, turnID).Scan(&toolResultCount); err != nil {
+		return false, err
+	}
+	return toolResultCount == 0, nil
 }
 
 func (w *Worker) RecoverStaleInProgressProjectTaskTurnsWithoutOwnership(ctx context.Context) (int64, error) {

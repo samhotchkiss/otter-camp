@@ -31,6 +31,14 @@ func mustJSONRawMessage(t *testing.T, payload map[string]any) json.RawMessage {
 	return encoded
 }
 
+func stringPointer(value string) *string {
+	return &value
+}
+
+func uuidPointer(value uuid.UUID) *uuid.UUID {
+	return &value
+}
+
 func TestCreateRunIdempotencyReturnsExistingRun(t *testing.T) {
 	repos := newFakeRunDeps()
 	svc := repos.newService(t)
@@ -849,6 +857,76 @@ func TestFailRunPermanentMarksRuntimeStateTerminal(t *testing.T) {
 	}
 }
 
+func TestFailRunClosesActiveStepsAndToolExecutions(t *testing.T) {
+	repos := newFakeRunDeps()
+	svc := repos.newService(t)
+
+	runRecord := repos.seedRun("in_progress")
+	stepInProgress, err := repos.steps.Create(context.Background(), RunStep{
+		ID:         uuid.New(),
+		RunID:      runRecord.ID,
+		StepNumber: 1,
+		ToolName:   stringPointer("task.update"),
+		ToolTier:   stringPointer("tier1"),
+		Status:     "in_progress",
+		CreatedAt:  time.Date(2026, 2, 24, 12, 1, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Create in-progress step: %v", err)
+	}
+	if _, err := repos.steps.Create(context.Background(), RunStep{
+		ID:         uuid.New(),
+		RunID:      runRecord.ID,
+		StepNumber: 2,
+		ToolName:   stringPointer("task.update"),
+		ToolTier:   stringPointer("tier1"),
+		Status:     "pending",
+		CreatedAt:  time.Date(2026, 2, 24, 12, 2, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("Create pending step: %v", err)
+	}
+	execInProgress := repos.executions.seed(ToolExecution{
+		ID:        uuid.New(),
+		RunID:     uuidPointer(runRecord.ID),
+		RunStepID: &stepInProgress.ID,
+		ToolName:  "task.update",
+		Status:    "in_progress",
+		CreatedAt: time.Date(2026, 2, 24, 12, 1, 30, 0, time.UTC),
+	})
+	execPending := repos.executions.seed(ToolExecution{
+		ID:        uuid.New(),
+		RunID:     uuidPointer(runRecord.ID),
+		ToolName:  "task.update",
+		Status:    "pending",
+		CreatedAt: time.Date(2026, 2, 24, 12, 2, 30, 0, time.UTC),
+	})
+
+	if err := svc.FailRun(context.Background(), runRecord.ID, "worker crashed", "transient"); err != nil {
+		t.Fatalf("FailRun: %v", err)
+	}
+
+	steps, err := repos.steps.ListByRun(context.Background(), runRecord.ID)
+	if err != nil {
+		t.Fatalf("ListByRun steps: %v", err)
+	}
+	for _, step := range steps {
+		if step.Status != "failed" {
+			t.Fatalf("step %s status = %q, want failed", step.ID, step.Status)
+		}
+	}
+	storedExecInProgress := repos.executions.byID[execInProgress.ID]
+	if storedExecInProgress.Status != "failed" {
+		t.Fatalf("in-progress execution status = %q, want failed", storedExecInProgress.Status)
+	}
+	if got := stringPointerValue(storedExecInProgress.ErrorMessage); got != "worker crashed" {
+		t.Fatalf("in-progress execution error = %q, want %q", got, "worker crashed")
+	}
+	storedExecPending := repos.executions.byID[execPending.ID]
+	if storedExecPending.Status != "failed" {
+		t.Fatalf("pending execution status = %q, want failed", storedExecPending.Status)
+	}
+}
+
 func TestRetireRuntimeStateForTaskMarksRetired(t *testing.T) {
 	repos := newFakeRunDeps()
 	svc := repos.newService(t)
@@ -1304,6 +1382,7 @@ func TestSupervisorDetectStaleCreatedRunsCancelsThem(t *testing.T) {
 type fakeRunDeps struct {
 	runs          *fakeRunRepo
 	steps         *fakeRunStepRepo
+	executions    *fakeServiceToolExecutionRepo
 	attempts      *fakeRunAttemptRepo
 	events        *fakeRunEventRepo
 	runtimeStates *fakeRuntimeStateRepo
@@ -1327,6 +1406,10 @@ func newFakeRunDeps() *fakeRunDeps {
 			byID:    make(map[uuid.UUID]RunStep),
 			byRunID: make(map[uuid.UUID][]uuid.UUID),
 		},
+		executions: &fakeServiceToolExecutionRepo{
+			byID:    make(map[uuid.UUID]ToolExecution),
+			byRunID: make(map[uuid.UUID][]uuid.UUID),
+		},
 		attempts: &fakeRunAttemptRepo{
 			byStep: make(map[uuid.UUID][]RunAttempt),
 		},
@@ -1336,9 +1419,9 @@ func newFakeRunDeps() *fakeRunDeps {
 		runtimeStates: &fakeRuntimeStateRepo{
 			byScope: make(map[string]RuntimeState),
 		},
-		bus:    &fakeDomainBus{},
-		policy: &fakeRunPolicyService{decision: RunCreationPolicyDecision{Allowed: true}},
-		budget: &fakeBudgetChecker{result: &budget.BudgetCheckResult{Allowed: true}},
+		bus:       &fakeDomainBus{},
+		policy:    &fakeRunPolicyService{decision: RunCreationPolicyDecision{Allowed: true}},
+		budget:    &fakeBudgetChecker{result: &budget.BudgetCheckResult{Allowed: true}},
 		fakeClock: fakeClock,
 	}
 }
@@ -1348,6 +1431,7 @@ func (d *fakeRunDeps) newService(t *testing.T) RunService {
 	svc, err := NewRunService(RunServiceOptions{
 		Runs:          d.runs,
 		RunSteps:      d.steps,
+		Executions:    d.executions,
 		Attempts:      d.attempts,
 		RunEvent:      d.events,
 		RuntimeStates: d.runtimeStates,
@@ -1378,6 +1462,52 @@ func (d *fakeRunDeps) seedRun(status string) Run {
 		Metadata:       []byte(`{}`),
 	})
 	return runRecord
+}
+
+type fakeServiceToolExecutionRepo struct {
+	mu      sync.Mutex
+	byID    map[uuid.UUID]ToolExecution
+	byRunID map[uuid.UUID][]uuid.UUID
+}
+
+func (r *fakeServiceToolExecutionRepo) seed(exec ToolExecution) ToolExecution {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if exec.ID == uuid.Nil {
+		exec.ID = uuid.New()
+	}
+	r.byID[exec.ID] = exec
+	if exec.RunID != nil && *exec.RunID != uuid.Nil {
+		r.byRunID[*exec.RunID] = append(r.byRunID[*exec.RunID], exec.ID)
+	}
+	return exec
+}
+
+func (r *fakeServiceToolExecutionRepo) ListByRun(_ context.Context, runID uuid.UUID) ([]ToolExecution, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := make([]ToolExecution, 0, len(r.byRunID[runID]))
+	for _, id := range r.byRunID[runID] {
+		items = append(items, r.byID[id])
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].CreatedAt.Before(items[j].CreatedAt)
+	})
+	return items, nil
+}
+
+func (r *fakeServiceToolExecutionRepo) UpdateStatus(_ context.Context, id uuid.UUID, status string, output json.RawMessage, errorMessage *string) (ToolExecution, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	item, ok := r.byID[id]
+	if !ok {
+		return ToolExecution{}, ErrNotFound
+	}
+	item.Status = status
+	item.Output = output
+	item.ErrorMessage = errorMessage
+	r.byID[id] = item
+	return item, nil
 }
 
 func (d *fakeRunDeps) seedStep(runID uuid.UUID, stepNumber int) RunStep {

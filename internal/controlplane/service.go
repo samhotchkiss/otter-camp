@@ -113,6 +113,11 @@ type runStepRepository interface {
 	ListByRun(ctx context.Context, runID uuid.UUID) ([]RunStep, error)
 }
 
+type toolExecutionRepository interface {
+	ListByRun(ctx context.Context, runID uuid.UUID) ([]ToolExecution, error)
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string, output json.RawMessage, errorMessage *string) (ToolExecution, error)
+}
+
 type runAttemptRepository interface {
 	Create(ctx context.Context, attempt RunAttempt) (RunAttempt, error)
 	GetLatestByStep(ctx context.Context, runStepID uuid.UUID) (RunAttempt, error)
@@ -159,6 +164,7 @@ type RunServiceOptions struct {
 	Attempts      runAttemptRepository
 	RunEvent      runEventRepository
 	RuntimeStates runtimeStateRepository
+	Executions    toolExecutionRepository
 
 	TaskEvents  taskEventRecorder
 	Inbox       inboxCreator
@@ -175,11 +181,12 @@ type RunServiceOptions struct {
 }
 
 type runService struct {
-	runs     runRepository
-	runSteps runStepRepository
-	attempts runAttemptRepository
-	events   runEventRepository
-	runtime  runtimeStateRepository
+	runs       runRepository
+	runSteps   runStepRepository
+	attempts   runAttemptRepository
+	events     runEventRepository
+	runtime    runtimeStateRepository
+	executions toolExecutionRepository
 
 	taskEvents  taskEventRecorder
 	inbox       inboxCreator
@@ -197,7 +204,7 @@ type runService struct {
 
 func NewRunService(opts RunServiceOptions) (RunService, error) {
 	requiresPool := opts.Runs == nil || opts.RunSteps == nil || opts.Attempts == nil || opts.RunEvent == nil ||
-		opts.RuntimeStates == nil || opts.TaskEvents == nil || opts.Inbox == nil || opts.Assignments == nil || opts.Agents == nil || opts.Users == nil
+		opts.RuntimeStates == nil || opts.Executions == nil || opts.TaskEvents == nil || opts.Inbox == nil || opts.Assignments == nil || opts.Agents == nil || opts.Users == nil
 	if opts.Pool == nil && requiresPool {
 		return nil, fmt.Errorf("run service requires a database pool")
 	}
@@ -243,6 +250,11 @@ func NewRunService(opts RunServiceOptions) (RunService, error) {
 		svc.runtime = opts.RuntimeStates
 	} else {
 		svc.runtime = NewRuntimeStateRepository(opts.Pool)
+	}
+	if opts.Executions != nil {
+		svc.executions = opts.Executions
+	} else {
+		svc.executions = NewToolExecutionRepository(opts.Pool)
 	}
 	if opts.TaskEvents != nil {
 		svc.taskEvents = opts.TaskEvents
@@ -498,6 +510,9 @@ func (s *runService) FailRun(ctx context.Context, runID uuid.UUID, reason, failu
 	if err != nil {
 		return err
 	}
+	if err := s.failActiveChildrenForTerminalRun(ctx, updated, targetStatus, reason); err != nil {
+		return err
+	}
 	if state, found, stateErr := s.runtimeStateForRun(ctx, updated); stateErr != nil {
 		return stateErr
 	} else if found {
@@ -532,6 +547,66 @@ func (s *runService) FailRun(ctx context.Context, runID uuid.UUID, reason, failu
 		"failure_class": failureClass,
 		"reason":        reason,
 	})
+}
+
+func (s *runService) failActiveChildrenForTerminalRun(ctx context.Context, runRecord Run, terminalStatus, reason string) error {
+	if s == nil {
+		return nil
+	}
+	for _, step := range mustListRunSteps(ctx, s.runSteps, runRecord.ID) {
+		switch strings.ToLower(strings.TrimSpace(step.Status)) {
+		case "completed", "failed", "cancelled":
+			continue
+		case "in_progress":
+			if err := s.FailStep(ctx, step.ID, reason); err != nil && !errors.Is(err, ErrInvalidTransition) && !errors.Is(err, ErrNotFound) {
+				return err
+			}
+		default:
+			if _, err := s.runSteps.UpdateStatus(ctx, step.ID, "failed"); err != nil && !errors.Is(err, ErrInvalidTransition) && !errors.Is(err, ErrNotFound) {
+				return err
+			}
+		}
+	}
+	if s.executions == nil {
+		return nil
+	}
+	executionStatus := "failed"
+	if strings.EqualFold(strings.TrimSpace(terminalStatus), "timed_out") {
+		executionStatus = "timed_out"
+	}
+	for _, execRecord := range mustListToolExecutions(ctx, s.executions, runRecord.ID) {
+		switch strings.ToLower(strings.TrimSpace(execRecord.Status)) {
+		case "completed", "failed", "policy_denied", "timed_out":
+			continue
+		}
+		errMessage := strings.TrimSpace(reason)
+		if _, err := s.executions.UpdateStatus(ctx, execRecord.ID, executionStatus, nil, stringPointerIfNonEmpty(errMessage)); err != nil && !errors.Is(err, ErrNotFound) {
+			return err
+		}
+	}
+	return nil
+}
+
+func mustListRunSteps(ctx context.Context, repo runStepRepository, runID uuid.UUID) []RunStep {
+	if repo == nil || runID == uuid.Nil {
+		return nil
+	}
+	steps, err := repo.ListByRun(ctx, runID)
+	if err != nil {
+		return nil
+	}
+	return steps
+}
+
+func mustListToolExecutions(ctx context.Context, repo toolExecutionRepository, runID uuid.UUID) []ToolExecution {
+	if repo == nil || runID == uuid.Nil {
+		return nil
+	}
+	items, err := repo.ListByRun(ctx, runID)
+	if err != nil {
+		return nil
+	}
+	return items
 }
 
 func (s *runService) RequestCancel(ctx context.Context, runID uuid.UUID, requestedBy CancelRequestActor) error {
@@ -1324,6 +1399,14 @@ func stringPointerValue(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func stringPointerIfNonEmpty(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func createdID(id uuid.UUID) string {

@@ -5377,3 +5377,21 @@
     - task `6660` session `3e23ddc5-3c24-4878-a274-1227ba38727b` first hit `placeholder_deliverable` on the poisoned target reread at seq `416`
     - the next continuation then wrote a fresh `10,493` byte body into `planning/sambot-example-conversations.md` at seq `418`
     - the only follow-on failure was the expected runtime-owned `task_git_commit_blocked` guard at seq `422`, which means the lane moved past poisoned-body recovery and back onto normal flow-owned completion boundaries
+- 2026-03-31 08:05 MDT - Restored PM continuation focus for the verification-closeout parent and hardened failed-run cleanup.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `shouldBlockProjectContinuationFocusedDraftMutationTool(...)` now allows direct prerequisite-repair `task.update` calls on the already-named focused draft without re-scanning the full project tree
+    - malformed procedural child detection now consults `metadata.decomposition.source_description` as well as visible title/description, both in PM snapshots and in task-lane malformed-child preflight
+  - changed [`internal/controlplane/service.go`](/Users/sam/dev/otter-camp/internal/controlplane/service.go):
+    - `FailRun(...)` now fails active `run_step` and `tool_execution` children when the parent run fails so stale poisoned execution rows do not survive the failed run
+  - changed tests:
+    - [`internal/controlplane/service_test.go`](/Users/sam/dev/otter-camp/internal/controlplane/service_test.go)
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/controlplane -run 'TestFailRunClosesActiveStepsAndToolExecutions$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationFocusedDraftMutationAllowsDirectPrerequisiteRepairWithoutProjectScan|ShouldBlockProjectContinuationFocusedDraftMutationAllowsRepairDraftPrerequisiteRepairWithoutProjectScan|NextRunnableDraftProjectTaskSkipsMalformedProceduralChildDraftsFromSourceDescription|ProjectExecutionContinuationSnapshotIgnoresMalformedProceduralChildrenFromSourceDescription)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerProjectExecutionContinuationSnapshotIgnoresMalformedProceduralChildren(FromSourceDescription)?$' -count=1`
+  - live proof:
+    - PM continuation message `2b1a2cf9-3d9e-4f12-b183-ffd8595f19e8` now includes the focused verification-closeout parent `task 6670`, `deliverable_path=planning/sambot-example-conversations.md`, and `malformed_child_tasks=5`
+    - PM turn `1fb9ab67-8f11-40de-bb8b-7a15f0d5f1ae` executed `task.update` successfully and the tool result moved task `6670` to `queued`
+    - task `6670` then launched its own task lane and progressed to `review`, proving the PM lane is no longer stuck in the empty rediscovery retry family

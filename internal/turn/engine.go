@@ -102,6 +102,7 @@ const (
 	stopReasonRecoveryCLIRejected                 = "model_error"
 	stopReasonRecoveryContinuation                = stopReasonRecoveryCLIRejected
 	stopReasonRecoveryFileRejected                = "recovery_content_required"
+	stopReasonRecoveryWriteCompleted              = "recovery_write_completed"
 	stopReasonRecoveryFileFallback                = stopReasonRecoveryCLIRejected
 	stopReasonValidationBlocked                   = "validation_loop_blocked"
 	recoveryActionValidationResume                = "resume_validation_blocked_task"
@@ -238,6 +239,7 @@ const projectContinuationMissingDependencyGuardPrefix = "[Project continuation f
 const projectContinuationTaskLaneBoundaryGuardPrefix = "[Project continuation found that task-owned active lane work must stay inside its project_task session."
 const projectContinuationReplacementHandoffPrefix = "[Project continuation already has a focused replacement-parent handoff."
 const projectContinuationSuccessfulHandoffPrefix = "[Project continuation successfully handed off the focused replacement child work."
+const projectContinuationPreparedBoundedSplitPrefix = "[Project continuation successfully prepared the bounded child split."
 const projectContinuationReviewLaneResumePrefix = "[Project continuation resumed blocked review lane "
 
 var errTurnBranchAttachedToMainWorktree = errors.New("branch attached to main worktree")
@@ -647,6 +649,7 @@ type turnRuntime struct {
 	reviewPreferredDeliverableTailReadSeen  bool
 	reviewPreferredDeliverableGapReadSeen   bool
 	reviewCheckpointOutputSiblingReads      int
+	boundedChildPreparations                int
 }
 
 type projectIdentity struct {
@@ -5467,6 +5470,7 @@ func (e *TurnEngine) retryProjectExecutionContinuationForFocusedPrerequisiteRepa
 	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot) +
 		" Your last continuation was blocked because the focus task still has explicit prerequisite fields missing." +
 		" Do not call file.read, file.list, task.get, agent.list, or flow.list_templates first." +
+		" Even if the continuation summary already names deliverable_path, deliverable_root, or depends_on_path for that focus task, do not inspect those paths until after the prerequisite repair succeeds." +
 		" Your next assistant action must issue one narrow task.update on the focus task that repairs the missing assigned_agent_id / flow_template_id fields using the already-named ids in this continuation prompt, or report one blocker sentence if the required values are still unknown."
 	retryMessage, err := e.appendProjectContinuationRetryMessage(ctx, session.ID, agentID, completedTaskID, latestUser, retryPrompt)
 	if err != nil {
@@ -6691,6 +6695,7 @@ func buildProjectExecutionContinuationBoundedSizeRetryPrompt(
 		retryPrompt += fmt.Sprintf(" Your last continuation turn proved that %s already has its deliverable body on disk.", focusRef)
 		retryPrompt += fmt.Sprintf(" Do not treat %s as fresh replacement-writing work and do not split it into another broad authoring child.", focusLabel)
 		retryPrompt += " Do not reread broad project context, do not inspect unrelated blocked tasks, and do not browse the workspace first."
+		retryPrompt += " Keep the closeout child intentionally terse: use a short verification title and a 1-2 sentence description only. Do not paste a long checklist, restate the full acceptance criteria, or turn this into a broad authoring task."
 		if deliverablePath := strings.TrimSpace(focusHints.DeliverablePath); deliverablePath != "" {
 			retryPrompt += fmt.Sprintf(" Keep any follow-on work anchored to existing deliverable `%s`.", deliverablePath)
 		} else if deliverableRoot := strings.TrimSpace(focusHints.DeliverableRoot); deliverableRoot != "" {
@@ -9591,6 +9596,9 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		if strings.Contains(activeLine, "deliverable_path=") {
 			lines = append(lines, "If a named active task above already shows deliverable_path=..., inspect or write that exact path instead of broad workspace-root or artifact-root browsing.")
 		}
+		if strings.Contains(activeLine, "work_status=blocked") && strings.Contains(activeLine, "deliverable_path=") {
+			lines = append(lines, "If a named blocked task above already shows deliverable_path=..., do not read that blocked deliverable from disk first just to decide what to do. Use the named blocker, resume_policy, and task title/path to create, queue, or update the smallest replacement or parent action directly.")
+		}
 		if strings.Contains(activeLine, "deliverable_root=") {
 			lines = append(lines, "If a named active task above already shows deliverable_root=..., stay inside that exact root instead of broad content, templates, or planning rediscovery.")
 		}
@@ -9627,13 +9635,19 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		if strings.Contains(draftLine, "workspace_deliverable_present=true") {
 			lines = append(lines, "If a named draft task above already shows workspace_deliverable_present=true, the deliverable body is already on disk. Treat that parent as a closeout/verification step, not as fresh replacement-child work.")
 		}
-		if strings.Contains(draftLine, "deliverable_path=") {
+		if strings.Contains(draftLine, "deliverable_path=") &&
+			!strings.Contains(draftLine, "assigned_agent_id=missing") &&
+			!strings.Contains(draftLine, "flow_template_id=missing") {
 			lines = append(lines, "If a named draft task above already shows deliverable_path=..., inspect or write that exact path instead of reopening broad workspace context.")
 		}
-		if strings.Contains(draftLine, "deliverable_root=") {
+		if strings.Contains(draftLine, "deliverable_root=") &&
+			!strings.Contains(draftLine, "assigned_agent_id=missing") &&
+			!strings.Contains(draftLine, "flow_template_id=missing") {
 			lines = append(lines, "If a named draft task above already shows deliverable_root=..., stay inside that exact root instead of broad content or template browsing.")
 		}
-		if strings.Contains(draftLine, "depends_on_path=") {
+		if strings.Contains(draftLine, "depends_on_path=") &&
+			!strings.Contains(draftLine, "assigned_agent_id=missing") &&
+			!strings.Contains(draftLine, "flow_template_id=missing") {
 			lines = append(lines, "If a named draft task above already shows depends_on_path=..., inspect that prerequisite artifact before broader search.")
 		}
 	}
@@ -9655,14 +9669,26 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		lines = append(lines, focusLine)
 		focusHasCompletedCloseout := strings.Contains(focusLine, "completed_closeout_child_tasks=") ||
 			strings.Contains(focusLine, "outcome_satisfied=true")
+		focusHasMissingPrerequisites := strings.Contains(focusLine, "assigned_agent_id=missing") ||
+			strings.Contains(focusLine, "flow_template_id=missing")
 		if strings.Contains(focusLine, "child_tasks=") && strings.TrimSpace(snapshot.ActiveTaskLine) != "" {
 			lines = append(lines, "If that focus draft already has child tasks and the active-task snapshot above already names those child lanes, do not reread the parent or child task records first. Queue the draft only if it is still runnable as-is, split it directly into smaller reviewable work if bounded-size policy still blocks it, or report one concrete blocker sentence.")
 		}
-		if strings.Contains(focusLine, "deliverable_path=") || strings.Contains(focusLine, "deliverable_root=") || strings.Contains(focusLine, "depends_on_path=") {
+		if !focusHasMissingPrerequisites &&
+			(strings.Contains(focusLine, "deliverable_path=") || strings.Contains(focusLine, "deliverable_root=") || strings.Contains(focusLine, "depends_on_path=")) {
 			lines = append(lines, "When the focus task already includes exact deliverable or dependency hints, use those paths directly before any broader workspace search.")
 		}
-		if strings.Contains(focusLine, "assigned_agent_id=missing") || strings.Contains(focusLine, "flow_template_id=missing") {
+		if focusHasMissingPrerequisites {
 			lines = append(lines, "Because that focus parent still has explicit prerequisite fields missing, do not inspect deliverables or sibling artifacts first. Repair the named assigned_agent_id / flow_template_id gaps on that exact task with one narrow task.update, or report one blocker sentence if the required value is still unknown.")
+			lines = append(lines, "Even if that focus task already names deliverable_path, deliverable_root, or depends_on_path, do not inspect those paths until the prerequisite repair succeeds.")
+			switch {
+			case strings.Contains(focusLine, "assigned_agent_id=missing") && !strings.Contains(focusLine, "flow_template_id=missing"):
+				lines = append(lines, "Because flow_template_id is already present on that focus task, your next assistant action should be one narrow task.update that sets assigned_agent_id and work_status=queued on that exact task.")
+			case !strings.Contains(focusLine, "assigned_agent_id=missing") && strings.Contains(focusLine, "flow_template_id=missing"):
+				lines = append(lines, "Because assigned_agent_id is already present on that focus task, your next assistant action should be one narrow task.update that sets flow_template_id and work_status=queued on that exact task.")
+			case strings.Contains(focusLine, "assigned_agent_id=missing") && strings.Contains(focusLine, "flow_template_id=missing"):
+				lines = append(lines, "Your next assistant action should be one narrow task.update that sets assigned_agent_id, flow_template_id, and work_status=queued on that exact task.")
+			}
 			if strings.Contains(focusLine, "assigned_agent_id=missing") &&
 				(strings.Contains(snapshot.ActiveTaskLine, "assigned_agent_id=") || strings.Contains(snapshot.ReplacementDraftLine, "assigned_agent_id=") || strings.Contains(snapshot.DraftTaskLine, "assigned_agent_id=")) {
 				lines = append(lines, "Reuse one of the already-named project assignee ids from this continuation prompt directly with task.update; do not call agent.list just to rediscover the same roster.")
@@ -11683,7 +11709,7 @@ func (e *TurnEngine) handleMalformedProceduralChildTaskPreflight(ctx context.Con
 }
 
 func (e *TurnEngine) malformedProceduralParentTaskForChild(ctx context.Context, taskRecord repo.ProjectTask) (repo.ProjectTask, bool, error) {
-	if !taskdecomp.TaskLooksProceduralInstructionArtifact(taskRecord.Title, taskRecord.Description) {
+	if !projectContinuationTaskLooksProceduralInstructionArtifact(taskRecord) {
 		return repo.ProjectTask{}, false, nil
 	}
 	metadata := messageMetadataMap(taskRecord.Metadata)
@@ -17077,6 +17103,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := shouldBlockTaskRecoveryPreferredTargetSiblingTool(rt, calls, id, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt, name, arguments) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -17146,25 +17180,66 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 				return true, nil
 			}
 			rt.stopReason = stopReasonValidationBlocked
+			if rt.recoveryTurn && e.tasks != nil {
+				reason := blockedTaskExecutionSiblingMutationReason(blockedCalls)
+				if reason != "" {
+					if taskID := resolveTaskID(rt.session); taskID != nil && *taskID != uuid.Nil {
+						if taskRecord, err := e.tasks.GetByID(ctx, *taskID); err == nil {
+							if e.taskTransitions == nil {
+								return false, fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+							}
+							if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
+								if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
+									var transitionErr tasksvc.ErrInvalidStatusTransition
+									if errors.As(err, &transitionErr) {
+										refreshed, refreshErr := e.tasks.GetByID(ctx, taskRecord.ID)
+										if refreshErr == nil {
+											nextStatus := strings.ToLower(strings.TrimSpace(refreshed.WorkStatus))
+											if nextStatus != "blocked" && nextStatus != "done" && nextStatus != "cancelled" {
+												return false, err
+											}
+										} else {
+											return false, err
+										}
+									} else {
+										return false, err
+									}
+								}
+							}
+							rt.recoveryBlockReason = reason
+							_ = e.cancelRecoveryResumeDispatch(ctx, rt, reason)
+						}
+					}
+				}
+			}
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Task sibling-responsibility guard blocked a discovery-only child lane from mutating the shared deliverable. Ending the turn early so the write-focused sibling can own the artifact.]")
 			return true, nil
 		}
 		if len(toolCalls) == 0 && shouldStopAfterBlockedTaskExecutionInheritedSharedWrite(rt, blockedCalls) {
 			rt.stopReason = stopReasonValidationBlocked
+			targetPath := ""
 			if rt.recoveryTurn {
-				targetPath := strings.TrimSpace(e.recoverySynthesizedFileWriteTargetPath(ctx, rt))
-				if targetPath == "" && e.tasks != nil {
-					if taskID := resolveTaskID(rt.session); taskID != nil && *taskID != uuid.Nil {
-						if taskRecord, err := e.tasks.GetByID(ctx, *taskID); err == nil {
-							targetPath = strings.TrimSpace(e.inheritedSharedSingleFileDeliverablePath(ctx, taskRecord))
-						}
+				targetPath = strings.TrimSpace(e.recoverySynthesizedFileWriteTargetPath(ctx, rt))
+			}
+			if targetPath == "" && e.tasks != nil {
+				if taskID := resolveTaskID(rt.session); taskID != nil && *taskID != uuid.Nil {
+					if taskRecord, err := e.tasks.GetByID(ctx, *taskID); err == nil {
+						targetPath = strings.TrimSpace(e.inheritedSharedSingleFileDeliverablePath(ctx, taskRecord))
 					}
 				}
+			}
+			if rt.recoveryTurn {
 				if err := e.persistBlockedRecoveryInheritedSharedWriteTaskState(ctx, rt, targetPath); err != nil {
 					return false, err
 				}
 				rt.recoveryBlockReason = buildRecoveryInheritedSharedDeliverableBlockedTaskReason(targetPath)
 				_ = e.cancelRecoveryResumeDispatch(ctx, rt, rt.recoveryBlockReason)
+			} else {
+				if handled, err := e.handleTaskExecutionInheritedSharedWriteGuardStop(ctx, rt, targetPath); err != nil {
+					return false, err
+				} else if handled {
+					return true, nil
+				}
 			}
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Task shared-deliverable guard blocked a decomposed child lane from replacing the inherited parent file with file.write. Ending the turn early so the next continuation uses file.edit on the bounded section instead of overwriting the whole shared document.]")
 			return true, nil
@@ -17292,6 +17367,10 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 		if shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, runCalls, results) {
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Project continuation successfully handed off the focused replacement child work. Ending this turn now so the new task lane can run instead of spending more PM tools re-checking the same handoff.]")
+			return true, nil
+		}
+		if shouldStopAfterPreparingBoundedProjectChildSplit(rt, runCalls, results) {
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Project continuation successfully prepared the bounded child split. Ending this turn now so the next continuation can assign and queue those fresh child lanes directly instead of stretching one PM turn across multiple setup phases.]")
 			return true, nil
 		}
 		if rt.toolCallsUsed >= toolBudget {
@@ -17539,6 +17618,10 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Project continuation successfully handed off the focused replacement child work. Ending this turn now so the new task lane can run instead of spending more PM tools re-checking the same handoff.]")
 			return true, nil
 		}
+		if shouldStopAfterPreparingBoundedProjectChildSplit(rt, []ToolCall{call}, []ToolResult{result}) {
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Project continuation successfully prepared the bounded child split. Ending this turn now so the next continuation can assign and queue those fresh child lanes directly instead of stretching one PM turn across multiple setup phases.]")
+			return true, nil
+		}
 		if rt.toolCallsUsed >= toolBudget {
 			return e.stopForMaxToolCalls(ctx, rt)
 		}
@@ -17611,6 +17694,7 @@ func (e *TurnEngine) shouldStopAfterExecutionDeliverableWrite(ctx context.Contex
 				return false, err
 			}
 			rt.recoveryWriteDone = true
+			rt.stopReason = stopReasonRecoveryWriteCompleted
 			return true, nil
 		}
 	}
@@ -17619,6 +17703,7 @@ func (e *TurnEngine) shouldStopAfterExecutionDeliverableWrite(ctx context.Contex
 			return false, err
 		}
 		rt.recoveryWriteDone = true
+		rt.stopReason = stopReasonRecoveryWriteCompleted
 		return true, nil
 	}
 
@@ -19445,6 +19530,14 @@ func buildRecoveryInheritedSharedDeliverableBlockedTaskReason(targetPath string)
 	return fmt.Sprintf("recovery halted because the decomposed child lane inherits shared parent deliverable %s; resume only with bounded file.edit updates on the current shared file or by moving integration back to the parent task", path)
 }
 
+func buildTaskExecutionInheritedSharedDeliverableBlockedTaskReason(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the shared parent deliverable"
+	}
+	return fmt.Sprintf("task execution halted because the decomposed child lane inherits shared parent deliverable %s; keep this child blocked until the shared file is updated through bounded file.edit on the current file or the work moves back to the parent task", path)
+}
+
 func (e *TurnEngine) persistBlockedRecoveryInheritedSharedWriteTaskState(ctx context.Context, rt *turnRuntime, targetPath string) error {
 	if e == nil || e.tasks == nil || rt == nil || rt.session == nil || rt.turn == nil || !rt.recoveryTurn {
 		return nil
@@ -19513,6 +19606,83 @@ func (e *TurnEngine) persistBlockedRecoveryInheritedSharedWriteTaskState(ctx con
 		return err
 	}
 	return nil
+}
+
+func (e *TurnEngine) handleTaskExecutionInheritedSharedWriteGuardStop(ctx context.Context, rt *turnRuntime, targetPath string) (bool, error) {
+	if e == nil || e.tasks == nil || rt == nil || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return false, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return true, err
+	}
+	reason := buildTaskExecutionInheritedSharedDeliverableBlockedTaskReason(targetPath)
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Task shared-deliverable guard blocked a decomposed child lane from replacing the inherited parent file with file.write. Ending this lane now and marking the task blocked so the parent lane or a bounded file.edit retry can own the shared document.]"); err != nil {
+		return true, err
+	}
+	if e.taskTransitions == nil {
+		return true, fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
+		if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
+			var transitionErr tasksvc.ErrInvalidStatusTransition
+			if errors.As(err, &transitionErr) {
+				refreshed, refreshErr := e.tasks.GetByID(ctx, taskRecord.ID)
+				if refreshErr == nil {
+					nextStatus := strings.ToLower(strings.TrimSpace(refreshed.WorkStatus))
+					if nextStatus != "blocked" && nextStatus != "done" && nextStatus != "cancelled" {
+						return true, err
+					}
+					taskRecord = refreshed
+				} else {
+					return true, err
+				}
+			} else {
+				return true, err
+			}
+		} else {
+			refreshed, refreshErr := e.tasks.GetByID(ctx, taskRecord.ID)
+			if refreshErr == nil {
+				taskRecord = refreshed
+			}
+		}
+	}
+	nowValue := e.now().UTC().Format(time.RFC3339Nano)
+	guardState := taskValidationGuardState{
+		InitialMessageID:   rt.initialMessageID.String(),
+		Fingerprint:        "file.write:inherited_shared_deliverable_write_blocked",
+		AttemptFingerprint: "file.write:inherited_shared_deliverable_write_blocked",
+		ToolName:           "file.write",
+		FailureClass:       "tool_validation",
+		FailureCode:        "inherited_shared_deliverable_write_blocked",
+		FailureReason:      reason,
+		Count:              validationLoopBlockThreshold,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            true,
+		FirstSeenAt:        nowValue,
+		LastSeenAt:         nowValue,
+		LastTurnID:         rt.turn.ID.String(),
+	}
+	merged, mergeErr := mergeTaskValidationGuardMetadata(taskRecord.Metadata, guardState)
+	if mergeErr != nil {
+		return true, mergeErr
+	}
+	taskRecord.Metadata = merged
+	if _, err := updateTurnTaskMetadata(ctx, e.tasks, taskRecord); err != nil {
+		return true, err
+	}
+	rt.stopReason = stopReasonValidationBlocked
+	return true, nil
 }
 
 func buildRecoveryMissingInheritedSharedDeliverableBlockedTaskReason(targetPath string) string {
@@ -23899,7 +24069,7 @@ func projectContinuationMalformedChildTaskIDs(tasks []repo.ProjectTask) map[uuid
 		}
 		if !projectContinuationChildTaskStaleUnderTerminalParent(task, parentTask) &&
 			!projectContinuationParentForbidsDecomposition(parentTask) &&
-			!taskdecomp.TaskLooksProceduralInstructionArtifact(task.Title, task.Description) &&
+			!projectContinuationTaskLooksProceduralInstructionArtifact(task) &&
 			!projectContinuationMalformedDuplicateSharedFileChild(task, parentTask) &&
 			!projectContinuationMalformedInheritedSharedFileTopicChild(task, parentTask) &&
 			!projectContinuationMalformedConflictingDeliverableChildForParent(task, parentTask) {
@@ -23911,6 +24081,19 @@ func projectContinuationMalformedChildTaskIDs(tasks []repo.ProjectTask) map[uuid
 		malformed[task.ID] = struct{}{}
 	}
 	return malformed
+}
+
+func projectContinuationTaskLooksProceduralInstructionArtifact(task repo.ProjectTask) bool {
+	if taskdecomp.TaskLooksProceduralInstructionArtifact(task.Title, task.Description) {
+		return true
+	}
+	metadata := messageMetadataMap(task.Metadata)
+	decomposition, _ := metadata["decomposition"].(map[string]any)
+	sourceDescription := strings.TrimSpace(anyString(decomposition["source_description"]))
+	if sourceDescription == "" {
+		return false
+	}
+	return taskdecomp.TaskLooksProceduralInstructionArtifact(task.Title, &sourceDescription)
 }
 
 func projectContinuationChildTaskStaleUnderTerminalParent(task, parentTask repo.ProjectTask) bool {
@@ -27305,6 +27488,53 @@ func looksLikeRecoveryRetryNarrationPlaceholder(content string) bool {
 		return true
 	}
 	if containsAny(lower,
+		"i need to read",
+		"let me read",
+	) && containsAny(lower,
+		"feature spec",
+		"parent task",
+		"task description",
+	) && containsAny(lower,
+		"existing draft is explicitly a placeholder",
+		"existing draft explicitly says it needs this context",
+		"placeholder saying it needs this context",
+		"needs this context",
+		"grounded expert conversation",
+		"ground the expert conversation",
+		"ground the expert conversation properly",
+		"ground the expert conversation content",
+		"write the actual expert conversation",
+		"write a grounded expert conversation",
+	) {
+		return true
+	}
+	if containsAny(lower,
+		"i need to read",
+		"let me read",
+	) && containsAny(lower,
+		"feature spec",
+		"parent task",
+	) && containsAny(lower,
+		"expert conversation",
+		"expert conversation content",
+		"actual expert conversation",
+	) {
+		return true
+	}
+	if containsAny(lower,
+		"i need to ground myself",
+		"let me check the key artifacts quickly",
+		"what this task requires",
+		"what sambot context exists",
+	) && containsAny(lower,
+		"expert conversation",
+		"task requires",
+		"key artifacts",
+		"context exists",
+	) {
+		return true
+	}
+	if containsAny(lower,
 		"i have the substantive draft from the recovery checkpoint",
 		"target file is truncated at",
 		"need to see how much of the file already exists on disk",
@@ -27566,6 +27796,17 @@ func looksLikeTaskBriefEchoPlaceholder(targetPath, content string) bool {
 			sectionHits++
 		}
 	}
+	if sectionHits >= 3 &&
+		strings.Contains(lower, "## objective") &&
+		strings.Contains(lower, "## validation criteria") &&
+		strings.Contains(lower, "## evidence expectations") &&
+		containsAny(lower,
+			"define explicit pass/fail checks for each relevant stage",
+			"note the required evidence or observable outputs for each check",
+			"reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete",
+		) {
+		return true
+	}
 	if sectionHits < 4 {
 		return false
 	}
@@ -27773,12 +28014,34 @@ func looksLikeRuntimeOwnedCommitHandoffPlaceholder(content string) bool {
 		return false
 	}
 	lower := strings.ToLower(trimmed)
+	commitIntent := containsAny(lower,
+		"committing it now",
+		"now i need to commit it",
+		"let me clean up by staging",
+		"let me commit the current state",
+		"let me commit everything cleanly",
+		"let me check git status and commit",
+		"let me update the task status",
+		"let me advance the flow",
+		"advance the flow execution",
+		"advance flow execution",
+	)
+	if !commitIntent {
+		return false
+	}
+	if containsAny(lower, "was written successfully in the previous turn") {
+		return containsAny(lower,
+			"target file",
+			"the file `",
+			"flow execution",
+			"merge step",
+		)
+	}
 	if !containsAny(lower,
 		"the posts are all committed",
 		"the deliverables are all committed",
 		"the only uncommitted changes are",
 		"the only uncommitted change is",
-		"was written successfully in the previous turn",
 	) {
 		return false
 	}
@@ -27790,15 +28053,7 @@ func looksLikeRuntimeOwnedCommitHandoffPlaceholder(content string) bool {
 	) {
 		return false
 	}
-	return containsAny(lower,
-		"committing it now",
-		"let me clean up by staging",
-		"let me commit the current state",
-		"let me commit everything cleanly",
-		"let me check git status and commit",
-		"let me update the task status",
-		"let me advance the flow",
-	)
+	return true
 }
 
 func looksLikeRuntimeAdvanceCompletionSummaryPlaceholder(content string) bool {
@@ -31740,6 +31995,9 @@ func isRecoveryResumeMessage(message repo.ChatMessage) bool {
 	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
 		return false
 	}
+	if taskExecutionKickoffMessage(message) {
+		return false
+	}
 	metadata := messageMetadataMap(message.Metadata)
 	if tasksvc.IsRecoveryResumeAction(stringValue(metadata["recovery_action"])) {
 		return true
@@ -33383,6 +33641,81 @@ func shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt *turnRuntime, c
 	return false
 }
 
+func shouldStopAfterPreparingBoundedProjectChildSplit(rt *turnRuntime, calls []ToolCall, results []ToolResult) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	initial := strings.TrimSpace(rt.initialMessageText)
+	if !strings.Contains(initial, "Your last continuation turn proved that this focused draft is still too broad to queue as-is.") ||
+		!strings.Contains(initial, "Current focus parent:") {
+		return false
+	}
+	preparedCount := rt.boundedChildPreparations
+	seenTaskIDs := map[uuid.UUID]struct{}{}
+	for idx, call := range calls {
+		if idx >= len(results) {
+			break
+		}
+		if strings.TrimSpace(toolResultErrorCode(results[idx])) != "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(call.Name)) {
+		case "task.create", "task.update":
+		default:
+			continue
+		}
+		count := projectExecutionPreparedBoundedChildCount(results[idx], seenTaskIDs)
+		preparedCount += count
+		if preparedCount >= 2 {
+			rt.boundedChildPreparations = preparedCount
+			return true
+		}
+	}
+	rt.boundedChildPreparations = preparedCount
+	return false
+}
+
+func projectExecutionPreparedBoundedChildCount(result ToolResult, seenTaskIDs map[uuid.UUID]struct{}) int {
+	if seenTaskIDs == nil {
+		return 0
+	}
+	count := 0
+	if taskOutput, ok := result.Output["task"].(map[string]any); ok {
+		if taskID, ok := parseUUIDAny(taskOutput["id"]); ok && taskID != uuid.Nil {
+			if _, exists := seenTaskIDs[taskID]; !exists &&
+				strings.EqualFold(strings.TrimSpace(stringValue(taskOutput["work_status"])), "draft") {
+				seenTaskIDs[taskID] = struct{}{}
+				count++
+			}
+		}
+	}
+	if taskOutputs, ok := result.Output["tasks"].([]any); ok {
+		for _, item := range taskOutputs {
+			taskOutput, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			taskID, ok := parseUUIDAny(taskOutput["id"])
+			if !ok || taskID == uuid.Nil {
+				continue
+			}
+			if _, exists := seenTaskIDs[taskID]; exists {
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(stringValue(taskOutput["work_status"])), "draft") {
+				continue
+			}
+			seenTaskIDs[taskID] = struct{}{}
+			count++
+		}
+	}
+	return count
+}
+
 func projectContinuationReplacementChildHandoffActive(rt *turnRuntime) bool {
 	if rt == nil || rt.session == nil {
 		return false
@@ -33744,6 +34077,19 @@ func shouldStopAfterBlockedTaskExecutionInheritedSharedWrite(rt *turnRuntime, re
 		return false
 	}
 	return true
+}
+
+func blockedTaskExecutionSiblingMutationReason(results []ToolResult) string {
+	for _, result := range results {
+		reason := strings.TrimSpace(result.Error)
+		if reason == "" {
+			reason = strings.TrimSpace(anyString(result.Output["error"]))
+		}
+		if reason != "" {
+			return reason
+		}
+	}
+	return "task sibling-responsibility guard blocked a discovery-only child lane from mutating the shared deliverable; keep this lane on discovery/listing evidence and advance the write-focused sibling instead"
 }
 
 func isBlockedProjectContinuationRediscoveryResult(result ToolResult) bool {
@@ -35532,7 +35878,7 @@ func shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt *turnRuntime, toolName
 		}
 	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "task.list", "git.log", "file.list", "file.search":
+	case "task.get", "task.list", "git.log", "file.list", "file.search":
 		return true
 	case "file.read":
 		return projectBootstrapRecoveryReadsPlanningPath(arguments)
@@ -35571,6 +35917,53 @@ func shouldBlockTaskReviewPreferredDeliverableSiblingReadTool(rt *turnRuntime, c
 		return false, ""
 	}
 	return true, buildTaskReviewPreferredDeliverableBatchReadGuardError(targetPath)
+}
+
+func shouldBlockTaskRecoveryPreferredTargetSiblingTool(rt *turnRuntime, calls []ModelToolCall, toolCallID, toolName string, arguments map[string]any) (bool, string) {
+	if rt == nil || !rt.recoveryTurn || rt.session == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, ""
+	}
+	targetPath := normalizeWorkspaceRelativePath(rt.recoveryTargetPath)
+	if targetPath == "" {
+		return false, ""
+	}
+	if !recoveryBatchContainsPreferredTargetRead(calls, targetPath) {
+		return false, ""
+	}
+	name := strings.ToLower(strings.TrimSpace(toolName))
+	currentPath := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+	if (name == "file.read" || name == "file_read") && sameWorkspaceRelativePath(currentPath, targetPath) {
+		return false, ""
+	}
+	switch name {
+	case "task.get", "task_get", "task.list", "task_list", "file.list", "file_list", "file.search", "file_search", "git.log", "git_log":
+		return true, buildTaskRecoveryPreferredTargetFirstGuardError(targetPath, toolName, currentPath)
+	case "file.read", "file_read":
+		if currentPath != "" && !sameWorkspaceRelativePath(currentPath, targetPath) {
+			return true, buildTaskRecoveryPreferredTargetFirstGuardError(targetPath, toolName, currentPath)
+		}
+	}
+	return false, ""
+}
+
+func recoveryBatchContainsPreferredTargetRead(calls []ModelToolCall, targetPath string) bool {
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	if targetPath == "" {
+		return false
+	}
+	for _, call := range calls {
+		name := strings.ToLower(strings.TrimSpace(call.Name))
+		if name != "file.read" && name != "file_read" {
+			continue
+		}
+		if sameWorkspaceRelativePath(normalizeWorkspaceRelativePath(stringValue(call.Arguments["path"])), targetPath) {
+			return true
+		}
+	}
+	return false
 }
 
 func taskReviewCheckpointOutputSiblingReadOrdinal(rt *turnRuntime, calls []ModelToolCall, toolCallID, targetPath, rootPath string) int {
@@ -38085,6 +38478,21 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 			return false, ""
 		}
 	}
+	initial := strings.TrimSpace(rt.initialMessageText)
+	actionableDraftTaskID := projectContinuationPromptFocusTaskID(initial)
+	repairTaskID := projectContinuationPromptRepairDraftTaskID(initial)
+	if projectContinuationFocusedPrerequisiteRepairActive(initial) &&
+		!projectContinuationFocusedCloseoutReadyActive(initial) &&
+		(targetTaskID == focusTaskID || targetTaskID == actionableDraftTaskID || targetTaskID == repairTaskID) {
+		if targetTask, err := e.tasks.GetByID(ctx, targetTaskID); err == nil {
+			missingAssignedAgent := targetTask.AssignedAgentID == nil || *targetTask.AssignedAgentID == uuid.Nil
+			missingFlowTemplate := targetTask.FlowTemplateID == nil || *targetTask.FlowTemplateID == uuid.Nil
+			if (!missingAssignedAgent || strings.TrimSpace(stringValue(arguments["assigned_agent_id"])) != "") &&
+				(!missingFlowTemplate || strings.TrimSpace(stringValue(arguments["flow_template_id"])) != "") {
+				return false, ""
+			}
+		}
+	}
 	if projectContinuationFocusedPrerequisiteRepairCanSkipProjectScan(rt, targetTaskID, nextStatus, arguments) {
 		return false, ""
 	}
@@ -38125,8 +38533,6 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 	}
 	focusTaskID = focusTask.ID
 	focusActivity := childActivity[focusTaskID]
-	initial := strings.TrimSpace(rt.initialMessageText)
-	repairTaskID := projectContinuationPromptRepairDraftTaskID(initial)
 	if targetTaskID == focusTaskID &&
 		nextStatus == "done" &&
 		projectContinuationCloseoutReadyParentPromptActive(rt) {
@@ -38228,12 +38634,13 @@ func projectContinuationFocusedPrerequisiteRepairCanSkipProjectScan(rt *turnRunt
 	if !projectContinuationFocusedPrerequisiteRepairActive(initial) || projectContinuationFocusedCloseoutReadyActive(initial) {
 		return false
 	}
-	if !strings.Contains(initial, "Actionable draft tasks already in the tree:") ||
-		!strings.Contains(initial, "Start from this existing actionable draft before broad rediscovery") {
+	focusTaskID := projectContinuationFocusedTaskID(initial)
+	actionableDraftTaskID := projectContinuationPromptFocusTaskID(initial)
+	repairTaskID := projectContinuationPromptRepairDraftTaskID(initial)
+	if targetTaskID == uuid.Nil {
 		return false
 	}
-	focusTaskID := projectContinuationFocusedTaskID(initial)
-	if focusTaskID == uuid.Nil || focusTaskID != targetTaskID {
+	if targetTaskID != focusTaskID && targetTaskID != actionableDraftTaskID && targetTaskID != repairTaskID {
 		return false
 	}
 	missingAssignedAgent := strings.Contains(initial, "assigned_agent_id=missing")
@@ -38592,12 +38999,36 @@ func buildTaskPlaceholderDeliverableFollowOnToolGuardError(rt *turnRuntime, tool
 		return "review already confirmed that the preferred deliverable is a rejected placeholder. Do not inspect more files or task metadata now. Call flow.review_decision reject using the placeholder tool result as the rejection evidence."
 	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "task.list", "git.log":
-		return "task execution already confirmed that the target deliverable file is a rejected placeholder. Do not reread task lists or git history now. Use the completed validation artifacts already read in this turn and write the substantive deliverable body directly."
+	case "task.get", "task.list", "git.log":
+		return "task execution already confirmed that the target deliverable file is a rejected placeholder. Do not reread task metadata, task lists, or git history now. Use the completed validation artifacts already read in this turn and write the substantive deliverable body directly."
 	case "file.list", "file.search":
 		return "task execution already confirmed that the target deliverable file is a rejected placeholder. Do not browse or search the workspace again now. Use the completed validation artifacts already read in this turn and write the substantive deliverable body directly."
 	default:
 		return "task execution already confirmed that the target deliverable file is a rejected placeholder. Do not reread broad planning or discovery context now. Write the substantive deliverable body directly using the artifacts already read in this turn."
+	}
+}
+
+func buildTaskRecoveryPreferredTargetFirstGuardError(targetPath, toolName, path string) string {
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	path = normalizeWorkspaceRelativePath(path)
+	if targetPath == "" {
+		return "this recovery batch already reads the target deliverable. Inspect that target first, then either write the file body directly or return one concrete blocker sentence instead of reopening planning/task rediscovery in the same step."
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "task.get", "task.list", "task_get", "task_list":
+		return fmt.Sprintf("this recovery batch already reads target deliverable `%s`. Do not inspect task metadata in the same step. Read `%s` first, then either write `%s` directly or return one concrete blocker sentence.", targetPath, targetPath, targetPath)
+	case "file.list", "file.search", "file_list", "file_search":
+		if path == "" {
+			return fmt.Sprintf("this recovery batch already reads target deliverable `%s`. Do not browse sibling workspace paths in the same step. Read `%s` first, then either write `%s` directly or return one concrete blocker sentence.", targetPath, targetPath, targetPath)
+		}
+		return fmt.Sprintf("this recovery batch already reads target deliverable `%s`. Do not browse `%s` in the same step. Read `%s` first, then either write `%s` directly or return one concrete blocker sentence.", targetPath, path, targetPath, targetPath)
+	case "file.read", "file_read":
+		if path == "" {
+			return fmt.Sprintf("this recovery batch already reads target deliverable `%s`. Do not reread other planning artifacts in the same step. Read `%s` first, then either write `%s` directly or return one concrete blocker sentence.", targetPath, targetPath, targetPath)
+		}
+		return fmt.Sprintf("this recovery batch already reads target deliverable `%s`. Do not inspect `%s` in the same step. Read `%s` first, then either write `%s` directly or return one concrete blocker sentence.", targetPath, path, targetPath, targetPath)
+	default:
+		return fmt.Sprintf("this recovery batch already reads target deliverable `%s`. Read `%s` first, then either write `%s` directly or return one concrete blocker sentence instead of reopening rediscovery in the same step.", targetPath, targetPath, targetPath)
 	}
 }
 
@@ -40261,7 +40692,7 @@ func shouldSuppressAutoContinuationForStopReason(stopReason *string) bool {
 		return false
 	}
 	switch strings.TrimSpace(*stopReason) {
-	case stopReasonRecoveryCLIRejected, stopReasonRecoveryFileRejected:
+	case stopReasonRecoveryCLIRejected, stopReasonRecoveryFileRejected, stopReasonRecoveryWriteCompleted:
 		return true
 	default:
 		return false
@@ -40286,6 +40717,12 @@ func shouldSuppressAutoContinuationForRecoveryHalt(messages []repo.ChatMessage, 
 		}
 		content := strings.ToLower(strings.TrimSpace(message.Content))
 		if strings.HasPrefix(content, "[recovery turn halted:") {
+			return true
+		}
+		if strings.HasPrefix(content, strings.ToLower("[Recovery shared-deliverable guard:")) ||
+			strings.HasPrefix(content, strings.ToLower("[Task sibling-responsibility guard blocked a discovery-only child lane from mutating the shared deliverable.")) ||
+			strings.HasPrefix(content, strings.ToLower("[Task shared-deliverable guard blocked a decomposed child lane from replacing the inherited parent file with file.write.")) ||
+			strings.HasPrefix(content, strings.ToLower("[Recovery direct-write-only mode blocked read-only discovery")) {
 			return true
 		}
 	}
