@@ -198,6 +198,31 @@ func TestTaskLooksProceduralInstructionArtifact(t *testing.T) {
 	if !TaskLooksProceduralInstructionArtifact("Four prior child tasks (OC-315, 316, 317, 318) were all terminally rejected because the conversations were surface-level — they described technologies conceptually instead of engaging with implementation details, tradeoffs, and code-level reasoning. This attempt MUST be qualitatively different.", &priorChildTasksDescription) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for prior-child qualitative-note fragment")
 	}
+
+	conversationPromptDescription := "User asks about Sam's approach to AI ethics beyond policy papers — how does he build it into systems?"
+	if !TaskLooksProceduralInstructionArtifact("User asks about Sam's approach to AI ethics beyond policy papers — how does he build it into systems?", &conversationPromptDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for shared-file conversation prompt fragment")
+	}
+
+	sambotShouldDescription := "SamBot should describe a concrete content-filtering pipeline: pre-inference classifier → prompt rewriting → post-inference output scanner → human-in-the-loop escalation."
+	if !TaskLooksProceduralInstructionArtifact("SamBot should describe a concrete content-filtering pipeline: pre-inference classifier → prompt rewriting → post-inference output scanner → human-in-the-loop escalation.", &sambotShouldDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for shared-file SamBot response fragment")
+	}
+
+	verificationFragmentDescription := strings.Join([]string{
+		"Verify that the file `planning/sambot-example-conversations.md` exists and contains all 5 required SamBot example conversation scenarios:",
+		"",
+		"1. **Technical question** — a visitor asking about AI/orchestration/engineering, with SamBot responding with Sam's depth of knowledge",
+		"2. **Consulting/hiring inquiry** — a visitor exploring whether Sam is available for consulting or a role, with SamBot representing Sam's value proposition",
+		"3. **Ethics/philosophy discussion** — a visitor asking about internet ethics or parenting/tech topics Sam has written about",
+		"4. **Photography question** — a visitor asking about Sam's photography work and background",
+		"5. **Casual conversation** — a visitor asking Sam a question in informal/friendly tone, with SamBot responding warmly and conversationally",
+		"",
+		"**Deliverable**: Confirm the file exists at `planning/sambot-example-conversations.md` with all 5 scenarios present and well-formed. If any are missing or incomplete, flag the gap.",
+	}, "\n")
+	if !TaskLooksProceduralInstructionArtifact("Technical question — a visitor asking about AI/orchestration/engineering, with SamBot responding with Sam's depth of knowledge", &verificationFragmentDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for verification checklist fragment child task")
+	}
 }
 
 func TestExtractDeliverablesIgnoresReferenceOnlyInstructionLines(t *testing.T) {
@@ -973,6 +998,72 @@ func TestValidateBoundedTaskSizeAllowsReadOnlyVerificationResultsTask(t *testing
 
 	if err := validateBoundedTaskSize(title, &description, false); err != nil {
 		t.Fatalf("validateBoundedTaskSize err = %v, want nil for bounded read-only verification results task", err)
+	}
+}
+
+func TestValidateBoundedTaskSizeAllowsReadOnlyVerificationCloseoutTask(t *testing.T) {
+	title := "Verify planning/sambot-example-conversations.md exists and contains all 5 required conversation scenarios"
+	description := strings.Join([]string{
+		"## Closeout Verification Task",
+		"",
+		"The deliverable file `planning/sambot-example-conversations.md` already exists on disk. This task verifies it meets acceptance criteria and advances through review.",
+		"",
+		"### Verification checklist (read the file, confirm each):",
+		"1. File exists at `planning/sambot-example-conversations.md`",
+		"2. Contains 5 distinct example conversations covering the required scenarios",
+		"3. Each conversation has at least 2 turns",
+		"4. SamBot responses reflect Sam Hotchkiss's voice, opinions, and background",
+		"5. Document is well-formatted Markdown",
+		"",
+		"### Deliverable",
+		"No new file creation needed. Simply confirm the existing file passes all checks, then commit and advance.",
+		"",
+		"Do NOT rewrite the file. Do NOT create planning artifacts. Just verify and advance.",
+	}, "\n")
+
+	if !looksLikeReadOnlyVerificationCloseoutTask(title, description) {
+		t.Fatal("looksLikeReadOnlyVerificationCloseoutTask = false, want true for bounded closeout verification task")
+	}
+
+	if err := validateBoundedTaskSize(title, &description, false); err != nil {
+		t.Fatalf("validateBoundedTaskSize err = %v, want nil for bounded read-only verification closeout task", err)
+	}
+}
+
+func TestPrepareQueueDecompositionSkipsReadOnlyVerificationCloseoutTask(t *testing.T) {
+	title := "Verify planning/sambot-example-conversations.md exists and contains all 5 required conversation scenarios"
+	description := strings.Join([]string{
+		"## Closeout Verification Task",
+		"",
+		"The deliverable file `planning/sambot-example-conversations.md` already exists on disk. This task verifies it meets acceptance criteria and advances through review.",
+		"",
+		"### Verification checklist (read the file, confirm each):",
+		"1. File exists at `planning/sambot-example-conversations.md`",
+		"2. Contains 5 distinct example conversations covering the required scenarios",
+		"3. Each conversation has at least 2 turns",
+		"4. SamBot responses reflect Sam Hotchkiss's voice, opinions, and background",
+		"5. Document is well-formatted Markdown",
+		"",
+		"### Deliverable",
+		"No new file creation needed. Simply confirm the existing file passes all checks, then commit and advance.",
+		"",
+		"Do NOT rewrite the file. Do NOT create planning artifacts. Just verify and advance.",
+	}, "\n")
+
+	result, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        title,
+		Description:  &description,
+		Metadata:     json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("PrepareQueueDecomposition: %v", err)
+	}
+	if result.Applied {
+		t.Fatal("Applied = true, want false for bounded read-only verification closeout task")
+	}
+	if len(result.ChildDrafts) != 0 {
+		t.Fatalf("ChildDrafts len = %d, want 0", len(result.ChildDrafts))
 	}
 }
 

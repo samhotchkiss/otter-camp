@@ -140,6 +140,9 @@ func Analyze(title string, description *string) Plan {
 	if descriptionForbidsDecomposition(rawDescription) {
 		return Plan{}
 	}
+	if looksLikeReadOnlyVerificationCloseoutTask(trimmedTitle, rawDescription) {
+		return Plan{}
+	}
 
 	titleDriven := titleSuggestsCompoundBoundedWork(trimmedTitle)
 	deliverables := extractDeliverables(rawDescription)
@@ -990,10 +993,34 @@ func ValidateExecutableTaskContract(title string, description *string) error {
 func TaskLooksProceduralInstructionArtifact(title string, description *string) bool {
 	normalizedTitle := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(title)), " "))
 	if normalizedTitle == "" || !isInstructionOnlyDeliverable(normalizedTitle) {
-		return false
+		return looksLikeVerificationChecklistFragment(normalizedTitle, strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(deref(description))), " ")))
 	}
 	normalizedDescription := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(deref(description))), " "))
 	return normalizedDescription == "" || normalizedDescription == normalizedTitle || isInstructionOnlyDeliverable(normalizedDescription)
+}
+
+func looksLikeVerificationChecklistFragment(normalizedTitle, normalizedDescription string) bool {
+	if normalizedTitle == "" || normalizedDescription == "" {
+		return false
+	}
+	normalizedDescription = strings.NewReplacer("*", "", "`", "").Replace(normalizedDescription)
+	if !strings.Contains(normalizedDescription, "verify that the file ") &&
+		!strings.Contains(normalizedDescription, "verification checklist") {
+		return false
+	}
+	if !strings.Contains(normalizedDescription, "contains all") ||
+		!strings.Contains(normalizedDescription, "required") {
+		return false
+	}
+	if !strings.Contains(normalizedDescription, normalizedTitle) {
+		return false
+	}
+	if count := strings.Count(normalizedDescription, "1.") + strings.Count(normalizedDescription, "2.") + strings.Count(normalizedDescription, "3."); count < 3 {
+		return false
+	}
+	return strings.Contains(normalizedDescription, "**deliverable**: confirm the file exists") ||
+		strings.Contains(normalizedDescription, "deliverable: confirm the file exists") ||
+		strings.Contains(normalizedDescription, "if any are missing or incomplete, flag the gap")
 }
 
 func isInstructionOnlyDeliverable(normalized string) bool {
@@ -1007,11 +1034,14 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 		"deferred task",
 		"each is ",
 		"each should ",
+		"user asks ",
 		"if the file exists ",
 		"commit to repo",
 		"commit in ",
 		"must include ",
 		"include a code snippet",
+		"sambot should ",
+		"sam should ",
 		"show sam's ",
 		"prior child tasks ",
 		"four prior child tasks ",
@@ -1386,8 +1416,9 @@ func estimateTaskMinutes(title string, description *string, parentScoped bool) (
 		strings.Contains(strings.ToLower(strings.TrimSpace(title)), " section for the brief")
 	deliverables := extractDeliverables(rawDescription)
 	readOnlyVerificationResultsTask := looksLikeReadOnlyVerificationResultsTask(title, rawDescription, deliverables)
+	readOnlyVerificationCloseoutTask := looksLikeReadOnlyVerificationCloseoutTask(title, rawDescription)
 	singleConcreteFileDeliverable := looksLikeSingleConcreteFileDeliverable(title, rawDescription, deliverables)
-	if readOnlyVerificationResultsTask {
+	if readOnlyVerificationResultsTask || readOnlyVerificationCloseoutTask {
 		estimatedMinutes := 25
 		if len(rawDescription) >= 900 {
 			estimatedMinutes = 30
@@ -1491,6 +1522,39 @@ func looksLikeReadOnlyVerificationResultsTask(title, rawDescription string, deli
 		sourcePaths++
 	}
 	return resultPaths == 1 && sourcePaths == 1
+}
+
+func looksLikeReadOnlyVerificationCloseoutTask(title, rawDescription string) bool {
+	if titleSuggestsCompoundBoundedWork(title) {
+		return false
+	}
+	normalizedText := strings.ToLower(strings.TrimSpace(strings.Join([]string{title, rawDescription}, " ")))
+	if normalizedText == "" {
+		return false
+	}
+	if !containsAny(normalizedText, []string{"verification", "verify ", "pass/fail", "checklist", "confirm "}) {
+		return false
+	}
+	if !containsAny(normalizedText, []string{
+		"read-only",
+		"do not modify",
+		"do not rewrite",
+		"no new file creation needed",
+		"just verify and advance",
+		"simply confirm",
+	}) {
+		return false
+	}
+	if !containsAny(normalizedText, []string{
+		"already exists on disk",
+		"file exists at ",
+		"the file `",
+		"the deliverable file `",
+	}) {
+		return false
+	}
+	paths := extractWorkspaceFilePaths(title + "\n" + rawDescription)
+	return len(paths) == 1
 }
 
 func extractWorkspaceFilePaths(text string) []string {
