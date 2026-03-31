@@ -26104,6 +26104,139 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedInheritedSharedFile
 	}
 }
 
+func TestProjectContinuationMalformedInheritedSharedFileTopicChildAllowsVerificationCloseoutChild(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	parentDescription := "Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn SamBot test conversations."
+	childDescription := "OC-310 already delivered planning/sambot-prompts/test-conversations-level3.md. This verification task confirms the file exists and the parent can close. Mark done immediately once verified."
+	parentTask := repo.ProjectTask{
+		ID:          parentDraftID,
+		ProjectID:   projectID,
+		TaskNumber:  297,
+		Title:       "Write planning/sambot-prompts/test-conversations-level3.md",
+		Description: &parentDescription,
+		WorkStatus:  "draft",
+		Metadata: mustJSONRaw(map[string]any{
+			"decomposition": map[string]any{
+				"applied":             true,
+				"mode":                "parallel_children",
+				"orchestration_only":  true,
+				"source_description":  parentDescription,
+				"primary_deliverable": "planning/sambot-prompts/test-conversations-level3.md",
+			},
+		}),
+	}
+	childTask := repo.ProjectTask{
+		ID:          uuid.New(),
+		ProjectID:   projectID,
+		TaskNumber:  6645,
+		Title:       "Verify planning/sambot-prompts/test-conversations-level3.md exists and close out parent",
+		Description: &childDescription,
+		WorkStatus:  "draft",
+		Metadata: mustJSONRaw(map[string]any{
+			"decomposition_parent_task_id": parentDraftID.String(),
+		}),
+	}
+
+	if projectContinuationMalformedInheritedSharedFileTopicChild(childTask, parentTask) {
+		t.Fatalf("expected verification closeout child to remain actionable; parentPath=%q visiblePath=%q", taskDuplicateSharedFileDeliverablePath(parentTask), taskVisibleBriefDeliverablePath(childTask))
+	}
+}
+
+func TestProjectContinuationDoneTaskSupersedesDraftIgnoresVerificationCloseoutChild(t *testing.T) {
+	t.Parallel()
+
+	draftDescription := "OC-310 already delivered planning/sambot-prompts/test-conversations-level3.md. This verification task confirms the file exists and the parent can close. Mark done immediately once verified."
+	draftTask := repo.ProjectTask{
+		TaskNumber:  6645,
+		Title:       "Verify planning/sambot-prompts/test-conversations-level3.md exists and close out parent",
+		Description: &draftDescription,
+		WorkStatus:  "draft",
+	}
+	doneTask := repo.ProjectTask{
+		TaskNumber: 310,
+		Title:      "Write planning/sambot-prompts/test-conversations-level3.md",
+		WorkStatus: "done",
+	}
+	draftHints := projectContinuationTaskHints{
+		DeliverablePath: "planning/sambot-prompts/test-conversations-level3.md",
+	}
+	doneHints := projectContinuationTaskHints{
+		DeliverablePath: "planning/sambot-prompts/test-conversations-level3.md",
+	}
+	doneActivity := projectContinuationChildActivity{
+		completedCloseoutChildTaskCount: 1,
+	}
+
+	if projectContinuationDoneTaskSupersedesDraft(draftTask, doneTask, draftHints, doneHints, doneActivity) {
+		t.Fatal("verification closeout draft should not be superseded by same-path done task")
+	}
+}
+
+func TestProjectContinuationSupersededDraftTaskIDsKeepsVerificationCloseoutDescendant(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentID := uuid.New()
+	childID := uuid.New()
+	doneID := uuid.New()
+	parentDescription := "Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn SamBot test conversations."
+	childDescription := "OC-310 already delivered planning/sambot-prompts/test-conversations-level3.md. This verification task confirms the file exists and the parent can close. Mark done immediately once verified."
+	projectTasks := []repo.ProjectTask{
+		{
+			ID:          parentID,
+			ProjectID:   projectID,
+			TaskNumber:  297,
+			Title:       "Write planning/sambot-prompts/test-conversations-level3.md",
+			Description: &parentDescription,
+			WorkStatus:  "draft",
+			Metadata: mustJSONRaw(map[string]any{
+				"decomposition": map[string]any{
+					"primary_deliverable": "planning/sambot-prompts/test-conversations-level3.md",
+				},
+			}),
+		},
+		{
+			ID:          childID,
+			ProjectID:   projectID,
+			TaskNumber:  6645,
+			Title:       "Verify planning/sambot-prompts/test-conversations-level3.md exists and close out parent",
+			Description: &childDescription,
+			WorkStatus:  "draft",
+			Metadata:    mustJSONRaw(map[string]any{"decomposition_parent_task_id": parentID.String()}),
+		},
+		{
+			ID:         doneID,
+			ProjectID:  projectID,
+			TaskNumber: 310,
+			Title:      "Write planning/sambot-prompts/test-conversations-level3.md",
+			WorkStatus: "done",
+			Metadata: mustJSONRaw(map[string]any{
+				"parent_orchestration": map[string]any{
+					"outcome_assessment": map[string]any{
+						"satisfied": true,
+					},
+				},
+			}),
+		},
+	}
+	taskHintsByTask := map[uuid.UUID]projectContinuationTaskHints{
+		parentID: {DeliverablePath: "planning/sambot-prompts/test-conversations-level3.md"},
+		childID:  {DeliverablePath: "planning/sambot-prompts/test-conversations-level3.md"},
+		doneID:   {DeliverablePath: "planning/sambot-prompts/test-conversations-level3.md"},
+	}
+
+	superseded := projectContinuationSupersededDraftTaskIDs(projectTasks, taskHintsByTask, map[uuid.UUID]projectContinuationChildActivity{}, nil)
+	if _, ok := superseded[parentID]; !ok {
+		t.Fatal("expected parent draft to be superseded by same-path done task")
+	}
+	if _, ok := superseded[childID]; ok {
+		t.Fatal("verification closeout descendant should remain actionable")
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotIgnoresMalformedConflictingDeliverableChildren(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()
@@ -27993,6 +28126,105 @@ func TestShouldBlockProjectContinuationFocusedDraftTaskCreateForExecutableRepair
 	}
 	if !strings.Contains(reason, "needs a bounded executable contract") || !strings.Contains(reason, "task.update") || !strings.Contains(reason, "queue") {
 		t.Fatalf("reason = %q, want executable-repair guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftTaskCreateSkipsProjectScanForDirectedReplacementChild(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	focusTaskID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{},
+		listByProjectFn: func(_ context.Context, _ uuid.UUID, _ ...string) ([]repo.ProjectTask, error) {
+			t.Fatal("ListByProject should not be called for directed replacement-child creation")
+			return nil, nil
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: strings.Join([]string{
+			"Continue the active project execution now.",
+			"The latest completed task was task 310 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations (replacement)).",
+			"Active project id: " + projectID.String(),
+			"Your last continuation turn was blocked after broad rediscovery even though the next bounded work was already named.",
+			`Current focus parent: task 297 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations) id=` + focusTaskID.String() + ` title="Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-level3.md assigned_agent_id=worker-1 flow_template_id=ft-1 malformed_child_tasks=12.`,
+			"That draft parent only has malformed or stale child artifact lanes.",
+			"Do not call task.list without parent_task_id, task.get, file.list, file.read, or file.search before acting.",
+			"Do not queue parent task task 297 again from the project lane.",
+			"Do not inspect or mention other draft parents until this handoff is advanced.",
+			"Your next assistant action must create the smallest fresh replacement child task beneath task 297 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations) now, or queue an existing direct child draft there if one already fits unchanged.",
+			"If you must inspect child lanes first, use only task.list(parent_task_id=" + focusTaskID.String() + ").",
+		}, " "),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftTaskCreateTool(context.Background(), rt, "task.create", map[string]any{
+		"parent_task_id": focusTaskID.String(),
+		"title":          "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations (fresh replacement)",
+		"description":    "Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn SamBot test conversations.",
+	})
+	if blocked {
+		t.Fatalf("blocked = true, reason = %q; want directed replacement-child creation to pass without project scan", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftMutationSkipsProjectScanForDirectedReplacementChildQueue(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	focusTaskID := uuid.New()
+	childTaskID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			childTaskID: {
+				ID:         childTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 6645,
+				Title:      "Verify planning/sambot-prompts/test-conversations-level3.md exists and close out parent",
+				WorkStatus: "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition_parent_task_id": focusTaskID.String(),
+				}),
+			},
+		},
+		listByProjectFn: func(_ context.Context, _ uuid.UUID, _ ...string) ([]repo.ProjectTask, error) {
+			t.Fatal("ListByProject should not be called for directed replacement-child queueing")
+			return nil, nil
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: strings.Join([]string{
+			"Continue the active project execution now.",
+			"The latest completed task was task 310 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations (replacement)).",
+			"Active project id: " + projectID.String(),
+			"Your last continuation turn was blocked after broad rediscovery even though the next bounded work was already named.",
+			`Current focus parent: task 297 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations) id=` + focusTaskID.String() + ` title="Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-level3.md assigned_agent_id=worker-1 flow_template_id=ft-1 malformed_child_tasks=12.`,
+			"That draft parent only has malformed or stale child artifact lanes.",
+			"Do not call task.list without parent_task_id, task.get, file.list, file.read, or file.search before acting.",
+			"Do not queue parent task task 297 again from the project lane.",
+			"Do not inspect or mention other draft parents until this handoff is advanced.",
+			"Your next assistant action must create the smallest fresh replacement child task beneath task 297 (Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations) now, or queue an existing direct child draft there if one already fits unchanged.",
+			"If you must inspect child lanes first, use only task.list(parent_task_id=" + focusTaskID.String() + ").",
+		}, " "),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftMutationTool(context.Background(), rt, "task.update", map[string]any{
+		"task_id":     childTaskID.String(),
+		"work_status": "queued",
+	})
+	if blocked {
+		t.Fatalf("blocked = true, reason = %q; want directed replacement-child queue to pass without project scan", reason)
 	}
 }
 

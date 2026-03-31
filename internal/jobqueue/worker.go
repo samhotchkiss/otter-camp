@@ -4512,7 +4512,7 @@ func projectContinuationSupersededDraftTaskIDsForWorker(
 				if !strings.EqualFold(strings.TrimSpace(doneTask.WorkStatus), "done") {
 					continue
 				}
-				if !projectContinuationDoneTaskSupersedesDraftForWorker(doneTask, draftHints, taskHintsByTask[doneTask.ID], childActivity[doneTask.ID]) {
+				if !projectContinuationDoneTaskSupersedesDraftForWorker(draftTask, doneTask, draftHints, taskHintsByTask[doneTask.ID], childActivity[doneTask.ID]) {
 					continue
 				}
 				if superseded == nil {
@@ -4599,6 +4599,9 @@ func projectContinuationAppendSupersededDraftDescendantsForWorker(
 			continue
 		}
 		if !isActionableProjectDraftTaskForWorker(task) {
+			continue
+		}
+		if projectContinuationDraftLooksLikeVerificationCloseoutForWorker(task) {
 			continue
 		}
 		if hasSupersededAncestor(task.ID, map[uuid.UUID]struct{}{task.ID: {}}) {
@@ -4721,11 +4724,15 @@ func projectContinuationOpenTaskSupersedesDraftForWorker(
 }
 
 func projectContinuationDoneTaskSupersedesDraftForWorker(
+	draftTask repo.ProjectTask,
 	doneTask repo.ProjectTask,
 	draftHints projectContinuationTaskHintsForWorker,
 	doneHints projectContinuationTaskHintsForWorker,
 	doneActivity projectContinuationChildActivityForWorker,
 ) bool {
+	if projectContinuationDraftLooksLikeVerificationCloseoutForWorker(draftTask) {
+		return false
+	}
 	if doneActivity.completedCloseoutChildTaskCount == 0 &&
 		!projectContinuationDraftTaskOutcomeSatisfiedForWorker(doneTask) {
 		return false
@@ -4738,6 +4745,50 @@ func projectContinuationDoneTaskSupersedesDraftForWorker(
 	draftRoot := normalizeWorkspaceRelativePathForWorker(draftHints.DeliverableRoot)
 	doneRoot := normalizeWorkspaceRelativePathForWorker(doneHints.DeliverableRoot)
 	return draftRoot != "" && doneRoot != "" && sameWorkspaceRelativePathForWorker(draftRoot, doneRoot)
+}
+
+func projectContinuationDraftLooksLikeVerificationCloseoutForWorker(task repo.ProjectTask) bool {
+	description := ""
+	if task.Description != nil {
+		description = strings.TrimSpace(*task.Description)
+	}
+	text := strings.ToLower(strings.Join(strings.Fields(strings.Join([]string{
+		strings.TrimSpace(task.Title),
+		description,
+	}, " ")), " "))
+	if text == "" {
+		return false
+	}
+	hasVerifySignal := projectContinuationContainsAnyForWorker(text,
+		"verify ",
+		"verification ",
+		" verification",
+		"confirm ",
+		"confirmation ",
+	)
+	if !hasVerifySignal {
+		return false
+	}
+	return projectContinuationContainsAnyForWorker(text,
+		"close parent",
+		"close out parent",
+		"close the parent",
+		"parent can close",
+		"parent can be closed",
+		"complete the parent",
+		"confirms the parent",
+		"closeout",
+		"mark done immediately",
+	)
+}
+
+func projectContinuationContainsAnyForWorker(text string, terms ...string) bool {
+	for _, term := range terms {
+		if strings.Contains(text, term) {
+			return true
+		}
+	}
+	return false
 }
 
 func projectContinuationDraftTaskOutcomeSatisfiedForWorker(task repo.ProjectTask) bool {
@@ -5681,7 +5732,53 @@ func projectContinuationMalformedInheritedSharedFileTopicChildForWorker(task, pa
 	if sourcePath := taskDecompositionSourceDeliverablePathForWorker(task); sourcePath != "" && !sameWorkspaceRelativePathForWorker(sourcePath, parentPath) {
 		return false
 	}
+	if taskLooksLikeVerificationCloseoutChildForWorker(task, parentPath) {
+		return false
+	}
 	return !taskHasStandaloneVisibleFileActionForWorker(task)
+}
+
+func taskLooksLikeVerificationCloseoutChildForWorker(task repo.ProjectTask, parentPath string) bool {
+	parentPath = normalizeWorkspaceRelativePathForWorker(parentPath)
+	if parentPath == "" {
+		return false
+	}
+	visiblePath := normalizeWorkspaceRelativePathForWorker(taskVisibleBriefDeliverablePathForWorker(task))
+	sourcePath := normalizeWorkspaceRelativePathForWorker(taskDecompositionSourceDeliverablePathForWorker(task))
+	if visiblePath != "" && !sameWorkspaceRelativePathForWorker(visiblePath, parentPath) {
+		return false
+	}
+	if sourcePath != "" && !sameWorkspaceRelativePathForWorker(sourcePath, parentPath) {
+		return false
+	}
+	text := strings.ToLower(strings.Join(strings.Fields(strings.Join(taskSharedFileOwnershipTextsForWorker(task), " ")), " "))
+	if text == "" {
+		return false
+	}
+	if !strings.Contains(text, strings.ToLower(parentPath)) {
+		return false
+	}
+	hasVerifySignal := projectContinuationContainsAnyForWorker(text,
+		"verify ",
+		"verification ",
+		" verification",
+		"confirm ",
+		"confirmation ",
+	)
+	if !hasVerifySignal {
+		return false
+	}
+	return projectContinuationContainsAnyForWorker(text,
+		"close parent",
+		"close out parent",
+		"close the parent",
+		"parent can close",
+		"parent can be closed",
+		"complete the parent",
+		"confirms the parent",
+		"closeout",
+		"mark done immediately",
+	)
 }
 
 func projectContinuationPreferredSameDeliverableDraftChildForWorker(tasks []repo.ProjectTask) repo.ProjectTask {

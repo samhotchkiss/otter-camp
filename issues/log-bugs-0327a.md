@@ -2015,3 +2015,16 @@
     - it did not consider the latest consumed structured `project_continuation_resume` as a reusable higher-signal retry candidate for the same completed task
   - impact:
     - even with the focused resume preserved in history, the worker could still restart the session on a broad generic continuation and reopen the same rediscovery loop
+- 2026-03-30 20:11 MDT - Verification-closeout child drafts were still being erased from PM continuation snapshots.
+  - fresh live evidence:
+    - live parent task `297` produced explicit child `6645`: `Verify planning/sambot-prompts/test-conversations-level3.md exists and close out parent`
+    - after the focused-resume fixes, the worker snapshot still dropped that child and reverted the PM lane to a broad continuation
+    - focused worker reproduction narrowed the failure to two places:
+      - malformed inherited shared-file child filtering still treated the verification-closeout child as malformed
+      - even after that was patched, descendant suppression still removed the child because its parent draft was superseded by a same-deliverable `done` task
+  - bug:
+    - worker-side malformed shared-file and superseded-descendant logic had no exemption for explicit verification-closeout child drafts
+    - engine and worker same-deliverable `done`-task supersession also treated those closeout children as stale duplicates instead of actionable proof/closure work
+  - impact:
+    - PM recovery could create the correct verification-closeout child and still immediately lose it from the next continuation snapshot
+    - the lane fell back to broad rediscovery instead of staying focused on the smallest bounded closeout step

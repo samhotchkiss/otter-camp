@@ -5325,3 +5325,17 @@
     - kept the stale-kickoff purge and project-continuation purge canaries green in the same focused slice
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(EnsureProjectContinuationMessageRevivesStructuredFailedResume|PurgeStaleAgentTurnJobs(FailsConsumedPendingMessagesForTerminalTurn|KeepsPendingProjectContinuationMessagesForProjectRecovery))$' -count=1`
+- 2026-03-30 20:11 MDT - Preserved verification-closeout child drafts in project continuation snapshots.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `projectContinuationDoneTaskSupersedesDraft(...)` now receives the draft task and exempts explicit verification-closeout drafts from same-deliverable `done` task supersession
+    - descendant supersession no longer wipes out verification-closeout children just because their parent draft was superseded
+    - malformed inherited shared-file topic detection now exempts verification-closeout children that explicitly target the parent deliverable
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - mirrored the same verification-closeout exemptions in worker snapshot supersession and malformed-child filtering
+    - worker snapshots now keep the `Verify ... close out parent` child actionable even when the parent draft has been superseded by a same-path `done` task
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectContinuationMalformedInheritedSharedFileTopicChildAllowsVerificationCloseoutChild|ProjectContinuationDoneTaskSupersedesDraftIgnoresVerificationCloseoutChild|ProjectContinuationSupersededDraftTaskIDsKeepsVerificationCloseoutDescendant|ShouldBlockProjectContinuationFocusedDraft(TaskCreateSkipsProjectScanForDirectedReplacementChild|MutationSkipsProjectScanForDirectedReplacementChildQueue))$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RequeueActiveProjectSessionsMissingContinuationKeepsVerificationCloseoutDraftDespiteDoneSamePathTask|ProjectExecutionContinuationSnapshotIgnoresMalformedInheritedSharedFileTopicChildren|RequeueActiveProjectSessionsMissingContinuationIgnoresSuperseded(SatisfiedOutcomeDrafts|CloseoutDrafts)|RequeueActiveProjectSessionsMissingContinuationKeepsReplacementDraftWhenBlockedSamePathTaskRemains)$' -count=1`

@@ -23391,7 +23391,54 @@ func projectContinuationMalformedInheritedSharedFileTopicChild(task, parentTask 
 	if sourcePath := taskDecompositionSourceDeliverablePath(task); sourcePath != "" && !sameWorkspaceRelativePath(sourcePath, parentPath) {
 		return false
 	}
+	if taskLooksLikeVerificationCloseoutChild(task, parentPath) {
+		return false
+	}
 	return !taskHasStandaloneVisibleFileAction(task)
+}
+
+func taskLooksLikeVerificationCloseoutChild(task repo.ProjectTask, parentPath string) bool {
+	parentPath = normalizeWorkspaceRelativePath(parentPath)
+	if parentPath == "" {
+		return false
+	}
+	visiblePath := normalizeWorkspaceRelativePath(taskVisibleBriefDeliverablePath(task))
+	sourcePath := normalizeWorkspaceRelativePath(taskDecompositionSourceDeliverablePath(task))
+	if visiblePath != "" && !sameWorkspaceRelativePath(visiblePath, parentPath) {
+		return false
+	}
+	if sourcePath != "" && !sameWorkspaceRelativePath(sourcePath, parentPath) {
+		return false
+	}
+	text := strings.ToLower(strings.Join(strings.Fields(strings.Join(taskSharedFileOwnershipTexts(task), " ")), " "))
+	if text == "" {
+		return false
+	}
+	if !strings.Contains(text, strings.ToLower(parentPath)) {
+		return false
+	}
+	hasVerifySignal := containsAny(text,
+		"verify ",
+		"verification ",
+		" verification",
+		"confirm ",
+		"confirmation ",
+	)
+	if !hasVerifySignal {
+		return false
+	}
+	return containsAny(text,
+		"close parent",
+		"close out parent",
+		"close the parent",
+		"parent can close",
+		"parent can be closed",
+		"parent can close.",
+		"complete the parent",
+		"confirms the parent",
+		"closeout",
+		"mark done immediately",
+	)
 }
 
 func projectContinuationMalformedConflictingDeliverableChildForParent(task, parentTask repo.ProjectTask) bool {
@@ -23521,7 +23568,7 @@ func projectContinuationSupersededDraftTaskIDs(
 				if !strings.EqualFold(strings.TrimSpace(doneTask.WorkStatus), "done") {
 					continue
 				}
-				if !projectContinuationDoneTaskSupersedesDraft(doneTask, draftHints, taskHintsByTask[doneTask.ID], childActivity[doneTask.ID]) {
+				if !projectContinuationDoneTaskSupersedesDraft(draftTask, doneTask, draftHints, taskHintsByTask[doneTask.ID], childActivity[doneTask.ID]) {
 					continue
 				}
 				if superseded == nil {
@@ -23608,6 +23655,9 @@ func projectContinuationAppendSupersededDraftDescendants(
 			continue
 		}
 		if !isActionableProjectDraftTask(task) {
+			continue
+		}
+		if projectContinuationDraftLooksLikeVerificationCloseout(task) {
 			continue
 		}
 		if hasSupersededAncestor(task.ID, map[uuid.UUID]struct{}{task.ID: {}}) {
@@ -23727,11 +23777,15 @@ func projectContinuationOpenTaskSupersedesDraft(
 }
 
 func projectContinuationDoneTaskSupersedesDraft(
+	draftTask repo.ProjectTask,
 	doneTask repo.ProjectTask,
 	draftHints projectContinuationTaskHints,
 	doneHints projectContinuationTaskHints,
 	doneActivity projectContinuationChildActivity,
 ) bool {
+	if projectContinuationDraftLooksLikeVerificationCloseout(draftTask) {
+		return false
+	}
 	if doneActivity.completedCloseoutChildTaskCount == 0 &&
 		!projectContinuationDraftTaskOutcomeSatisfied(doneTask) &&
 		!doneActivity.workspaceDeliverablePresent {
@@ -23745,6 +23799,37 @@ func projectContinuationDoneTaskSupersedesDraft(
 	draftRoot := normalizeWorkspaceRelativePath(draftHints.DeliverableRoot)
 	doneRoot := normalizeWorkspaceRelativePath(doneHints.DeliverableRoot)
 	return draftRoot != "" && doneRoot != "" && sameWorkspaceRelativePath(draftRoot, doneRoot)
+}
+
+func projectContinuationDraftLooksLikeVerificationCloseout(task repo.ProjectTask) bool {
+	text := strings.ToLower(strings.Join(strings.Fields(strings.Join([]string{
+		strings.TrimSpace(task.Title),
+		stringValue(task.Description),
+	}, " ")), " "))
+	if text == "" {
+		return false
+	}
+	hasVerifySignal := containsAny(text,
+		"verify ",
+		"verification ",
+		" verification",
+		"confirm ",
+		"confirmation ",
+	)
+	if !hasVerifySignal {
+		return false
+	}
+	return containsAny(text,
+		"close parent",
+		"close out parent",
+		"close the parent",
+		"parent can close",
+		"parent can be closed",
+		"complete the parent",
+		"confirms the parent",
+		"closeout",
+		"mark done immediately",
+	)
 }
 
 func projectContinuationTaskHasDeliverableIdentity(deliverablePath, deliverableRoot string) bool {
@@ -36445,6 +36530,9 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 	if projectContinuationFocusedPrerequisiteRepairCanSkipProjectScan(rt, targetTaskID, nextStatus, arguments) {
 		return false, ""
 	}
+	if e.projectContinuationFocusedReplacementChildQueueCanSkipProjectScan(ctx, rt, targetTaskID, nextStatus) {
+		return false, ""
+	}
 	projectID := resolveProjectID(ctx, rt.session, e.tasks)
 	if projectID == nil || *projectID == uuid.Nil {
 		return false, ""
@@ -36580,6 +36668,9 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 	if !ok || parentTaskID == uuid.Nil {
 		return false, ""
 	}
+	if projectContinuationFocusedReplacementChildCreateCanSkipProjectScan(rt, parentTaskID) {
+		return false, ""
+	}
 	projectID := resolveProjectID(ctx, rt.session, e.tasks)
 	if projectID == nil || *projectID == uuid.Nil {
 		return false, ""
@@ -36652,6 +36743,62 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 		return false, ""
 	}
 	return true, buildProjectContinuationFocusedDraftCloseoutTaskCreateGuardError(focusTask)
+}
+
+func projectContinuationFocusedReplacementChildCreateCanSkipProjectScan(rt *turnRuntime, parentTaskID uuid.UUID) bool {
+	if rt == nil || rt.session == nil || parentTaskID == uuid.Nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	initial := strings.TrimSpace(rt.initialMessageText)
+	if initial == "" || projectContinuationFocusedCloseoutReadyActive(initial) {
+		return false
+	}
+	if !strings.Contains(initial, "Current focus parent:") {
+		return false
+	}
+	if !strings.Contains(initial, "Your next assistant action must create the smallest fresh replacement child task beneath task") {
+		return false
+	}
+	focusTaskID := projectContinuationPromptCurrentFocusParentTaskID(initial)
+	return focusTaskID != uuid.Nil && focusTaskID == parentTaskID
+}
+
+func (e *TurnEngine) projectContinuationFocusedReplacementChildQueueCanSkipProjectScan(ctx context.Context, rt *turnRuntime, targetTaskID uuid.UUID, nextStatus string) bool {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil || targetTaskID == uuid.Nil {
+		return false
+	}
+	switch nextStatus {
+	case "queued", "in_progress", "review":
+	default:
+		return false
+	}
+	initial := strings.TrimSpace(rt.initialMessageText)
+	if initial == "" || projectContinuationFocusedCloseoutReadyActive(initial) {
+		return false
+	}
+	if !strings.Contains(initial, "Current focus parent:") {
+		return false
+	}
+	if !strings.Contains(initial, "Your next assistant action must create the smallest fresh replacement child task beneath task") {
+		return false
+	}
+	focusTaskID := projectContinuationPromptCurrentFocusParentTaskID(initial)
+	if focusTaskID == uuid.Nil {
+		return false
+	}
+	targetTask, err := e.tasks.GetByID(ctx, targetTaskID)
+	if err != nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(targetTask.WorkStatus), "draft") {
+		return false
+	}
+	parentID, _ := parseUUIDAny(messageMetadataMap(targetTask.Metadata)["decomposition_parent_task_id"])
+	return parentID == focusTaskID
 }
 
 func projectContinuationFocusedDraftShouldRepairExecutableContract(

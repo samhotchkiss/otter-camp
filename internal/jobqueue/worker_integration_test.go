@@ -37121,6 +37121,201 @@ func TestJobWorkerRequeueActiveProjectSessionsMissingContinuationIgnoresSupersed
 	}
 }
 
+func TestJobWorkerRequeueActiveProjectSessionsMissingContinuationKeepsVerificationCloseoutDraftDespiteDoneSamePathTask(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "worker-project-session-keeps-verification-closeout-draft",
+		DisplayName: "Worker Project Session Keeps Verification Closeout Draft",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "worker-project-session-keeps-verification-closeout-draft-project",
+		DisplayName:    "Worker Project Session Keeps Verification Closeout Draft Project",
+		Description:    "Project for verification closeout continuation coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "worker-project-session-keeps-verification-closeout-draft-template",
+		DisplayName:    "Worker Project Session Keeps Verification Closeout Draft Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentDescription := "Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn SamBot test conversations."
+	parentMetadata := json.RawMessage(`{
+		"decomposition": {
+			"applied": true,
+			"mode": "parallel_children",
+			"orchestration_only": true,
+			"source_description": "Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn SamBot test conversations.",
+			"primary_deliverable": "planning/sambot-prompts/test-conversations-level3.md"
+		}
+	}`)
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     297,
+		Title:          "Write planning/sambot-prompts/test-conversations-level3.md",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata:      parentMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	doneDescription := "Write planning/sambot-prompts/test-conversations-level3.md as the delivered level-3 conversation set."
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     310,
+		Title:          "Write planning/sambot-prompts/test-conversations-level3.md",
+		Description:    &doneDescription,
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata: json.RawMessage(`{
+			"parent_orchestration": {
+				"outcome_assessment": {
+					"satisfied": true,
+					"summary": "planning/sambot-prompts/test-conversations-level3.md already exists."
+				}
+			}
+		}`),
+	}); err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	verificationDescription := "OC-310 already delivered planning/sambot-prompts/test-conversations-level3.md. This verification task confirms the file exists and the parent can close. Mark done immediately once verified."
+	verificationMetadata, err := json.Marshal(map[string]any{
+		"decomposition_parent_task_id": parentTask.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal verification metadata: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     6645,
+		Title:          "Verify planning/sambot-prompts/test-conversations-level3.md exists and close out parent",
+		Description:    &verificationDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: func() *uuid.UUID {
+			id := agent.ID
+			return &id
+		}(),
+		CreatedByType: "system",
+		CreatedByID:   &agent.ID,
+		Metadata:      verificationMetadata,
+	}); err != nil {
+		t.Fatalf("create verification closeout draft: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	label := "Verify planning/sambot-prompts/test-conversations-level3.md exists and close out parent"
+	if !strings.Contains(snapshot.DraftTaskLine, label) {
+		t.Fatalf("snapshot = %+v, want verification closeout draft to stay actionable", snapshot)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, label) {
+		t.Fatalf("snapshot = %+v, want focus to stay on verification closeout draft", snapshot)
+	}
+
+	count, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("countActionableProjectDraftTasks = %d, want 1 verification closeout draft", count)
+	}
+
+	repaired, err := worker.RequeueActiveProjectSessionsMissingContinuation(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveProjectSessionsMissingContinuation: %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired = %d, want 1 when verification closeout draft remains actionable", repaired)
+	}
+
+	var pendingMessages int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_message
+		WHERE session_id = $1
+		  AND role = 'user'
+		  AND status = 'pending'
+	`, session.ID).Scan(&pendingMessages); err != nil {
+		t.Fatalf("count pending continuation messages: %v", err)
+	}
+	if pendingMessages != 1 {
+		t.Fatalf("pending continuation messages = %d, want 1", pendingMessages)
+	}
+}
+
 func TestJobWorkerRequeueActiveProjectSessionsMissingContinuationKeepsReplacementDraftWhenBlockedSamePathTaskRemains(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
