@@ -140,6 +140,9 @@ func Analyze(title string, description *string) Plan {
 	if descriptionForbidsDecomposition(rawDescription) {
 		return Plan{}
 	}
+	if looksLikeBoundedVerificationReportTask(trimmedTitle, rawDescription) {
+		return Plan{}
+	}
 	if looksLikeReadOnlyVerificationCloseoutTask(trimmedTitle, rawDescription) {
 		return Plan{}
 	}
@@ -418,6 +421,12 @@ func PrepareQueueDecomposition(input QueueDecompositionInput) (QueueDecompositio
 		return QueueDecomposition{}, nil
 	}
 	if sourceDescription := ParseSourceDescription(input.Metadata); sourceDescription != "" {
+		if looksLikeBoundedVerificationReportTask(input.Title, sourceDescription) {
+			if sizingErr := validateBoundedTaskSize(input.Title, input.Description, input.ParentTaskID != uuid.Nil); sizingErr != nil {
+				return QueueDecomposition{}, sizingErr
+			}
+			return QueueDecomposition{}, nil
+		}
 		if looksLikeReadOnlyVerificationCloseoutTask("", sourceDescription) {
 			if sizingErr := validateBoundedTaskSize(input.Title, input.Description, input.ParentTaskID != uuid.Nil); sizingErr != nil {
 				return QueueDecomposition{}, sizingErr
@@ -1432,10 +1441,11 @@ func estimateTaskMinutes(title string, description *string, parentScoped bool) (
 	isBoundedSectionDraft := strings.HasPrefix(strings.ToLower(strings.TrimSpace(title)), "draft ") &&
 		strings.Contains(strings.ToLower(strings.TrimSpace(title)), " section for the brief")
 	deliverables := extractDeliverables(rawDescription)
+	boundedVerificationReportTask := looksLikeBoundedVerificationReportTask(title, rawDescription)
 	readOnlyVerificationResultsTask := looksLikeReadOnlyVerificationResultsTask(title, rawDescription, deliverables)
 	readOnlyVerificationCloseoutTask := looksLikeReadOnlyVerificationCloseoutTask(title, rawDescription)
 	singleConcreteFileDeliverable := looksLikeSingleConcreteFileDeliverable(title, rawDescription, deliverables)
-	if readOnlyVerificationResultsTask || readOnlyVerificationCloseoutTask {
+	if boundedVerificationReportTask || readOnlyVerificationResultsTask || readOnlyVerificationCloseoutTask {
 		estimatedMinutes := 25
 		if len(rawDescription) >= 900 {
 			estimatedMinutes = 30
@@ -1525,6 +1535,33 @@ func looksLikeReadOnlyVerificationResultsTask(title, rawDescription string, deli
 		return false
 	}
 
+	paths := extractWorkspaceFilePaths(title + "\n" + rawDescription)
+	if len(paths) != 2 {
+		return false
+	}
+	resultPaths := 0
+	sourcePaths := 0
+	for _, path := range paths {
+		if strings.HasPrefix(path, "results/") {
+			resultPaths++
+			continue
+		}
+		sourcePaths++
+	}
+	return resultPaths == 1 && sourcePaths == 1
+}
+
+func looksLikeBoundedVerificationReportTask(title, rawDescription string) bool {
+	normalizedText := strings.ToLower(strings.TrimSpace(strings.Join([]string{title, rawDescription}, " ")))
+	if normalizedText == "" {
+		return false
+	}
+	if !containsAny(normalizedText, []string{"verify ", "verification", "pass/fail", "verdict", "criterion", "criteria"}) {
+		return false
+	}
+	if !containsAny(normalizedText, []string{"verification report", "write `results/", "write results/", "overall verdict", "pass/fail per criterion"}) {
+		return false
+	}
 	paths := extractWorkspaceFilePaths(title + "\n" + rawDescription)
 	if len(paths) != 2 {
 		return false

@@ -1141,6 +1141,37 @@ func TestPrepareQueueDecompositionSkipsInheritedReadOnlyCloseoutVerificationChil
 	}
 }
 
+func TestPrepareQueueDecompositionSkipsBoundedVerificationReportTask(t *testing.T) {
+	title := "Verify sambot-example-conversations.md and produce verification report"
+	description := strings.Join([]string{
+		"**Scope:** Verify that `planning/sambot-example-conversations.md` meets all acceptance criteria for this task, produce a verification report, commit it, and advance the flow.",
+		"",
+		"**Verification checklist:**",
+		"1. File exists at `planning/sambot-example-conversations.md` and is non-empty",
+		"2. Count conversation sections and document actual state",
+		"3. Verify domain coverage and both tones",
+		"",
+		"**Deliverable:** Write `results/verify-sambot-example-conversations.md` with pass/fail per criterion and overall verdict. Commit the file.",
+	}, "\n")
+
+	if !looksLikeBoundedVerificationReportTask(title, description) {
+		t.Fatal("looksLikeBoundedVerificationReportTask = false, want true for single-source verification report task")
+	}
+
+	result, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        title,
+		Description:  &description,
+		Metadata:     json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("PrepareQueueDecomposition: %v", err)
+	}
+	if result.Applied {
+		t.Fatal("Applied = true, want false for bounded verification report task")
+	}
+}
+
 func TestPrepareQueueDecompositionAutoAppliesForPhotographyArchiveWorkstream(t *testing.T) {
 	description := strings.Join([]string{
 		"ORCHESTRATION PARENT - do not execute directly.",
