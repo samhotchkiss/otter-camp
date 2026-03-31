@@ -2707,7 +2707,9 @@ func (w *Worker) RequeueActiveProjectSessionsMissingContinuation(ctx context.Con
 		if err := rows.Scan(&sessionID); err != nil {
 			return repaired, fmt.Errorf("scan active project session missing continuation: %w", err)
 		}
-		messageID, suppressed, err := w.ensureProjectContinuationMessageDecision(ctx, sessionID)
+		messageID, suppressed, err := w.ensureProjectContinuationMessageDecisionWithOptions(ctx, sessionID, projectContinuationDecisionOptions{
+			allowRediscoveryOnlyReplay: true,
+		})
 		if err != nil {
 			return repaired, fmt.Errorf("ensure missing project continuation message for session %s: %w", sessionID, err)
 		}
@@ -2753,7 +2755,15 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 	return messageID, err
 }
 
+type projectContinuationDecisionOptions struct {
+	allowRediscoveryOnlyReplay bool
+}
+
 func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, sessionID uuid.UUID) (uuid.UUID, bool, error) {
+	return w.ensureProjectContinuationMessageDecisionWithOptions(ctx, sessionID, projectContinuationDecisionOptions{})
+}
+
+func (w *Worker) ensureProjectContinuationMessageDecisionWithOptions(ctx context.Context, sessionID uuid.UUID, opts projectContinuationDecisionOptions) (uuid.UUID, bool, error) {
 	if w == nil || w.pool == nil || sessionID == uuid.Nil {
 		return uuid.Nil, false, nil
 	}
@@ -3392,7 +3402,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		sameRepoVersion := sameProjectContinuationRepoVersion(currentRepoVersion, existingRepoVersionText)
 		if !existingMessageConsumed && sameCompletedTask && (expectedSnapshotFingerprint == "" || sameSnapshot) && sameRepoVersion {
 			if latestConsumedMatchingMessageID != uuid.Nil {
-				suppressed, suppressErr := w.suppressRepeatedIdenticalPendingProjectContinuation(ctx, latestConsumedMatchingMessageID, existingMessageID, allowSuccessfulHandoffSuppression)
+				suppressed, suppressErr := w.suppressRepeatedIdenticalPendingProjectContinuation(ctx, latestConsumedMatchingMessageID, existingMessageID, allowSuccessfulHandoffSuppression, opts.allowRediscoveryOnlyReplay)
 				if suppressErr != nil {
 					return uuid.Nil, false, fmt.Errorf("check stale pending project continuation suppression: %w", suppressErr)
 				}
@@ -3403,7 +3413,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			return existingMessageID, false, nil
 		}
 		if existingMessageConsumed && sameCompletedTask && sameSnapshot && sameRepoVersion {
-			suppressed, suppressErr := w.suppressRepeatedIdenticalProjectContinuation(ctx, existingMessageID, allowSuccessfulHandoffSuppression)
+			suppressed, suppressErr := w.suppressRepeatedIdenticalProjectContinuation(ctx, existingMessageID, allowSuccessfulHandoffSuppression, opts.allowRediscoveryOnlyReplay)
 			if suppressErr != nil {
 				return uuid.Nil, false, fmt.Errorf("check repeated project continuation suppression: %w", suppressErr)
 			}
@@ -3462,7 +3472,7 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 	}
 
 	if source == "project_execution_continuation" && latestConsumedMatchingMessageID != uuid.Nil {
-		suppressed, suppressErr := w.suppressRepeatedIdenticalProjectContinuation(ctx, latestConsumedMatchingMessageID, allowSuccessfulHandoffSuppression)
+		suppressed, suppressErr := w.suppressRepeatedIdenticalProjectContinuation(ctx, latestConsumedMatchingMessageID, allowSuccessfulHandoffSuppression, opts.allowRediscoveryOnlyReplay)
 		if suppressErr != nil {
 			return uuid.Nil, false, fmt.Errorf("check repeated project continuation suppression: %w", suppressErr)
 		}
@@ -3514,8 +3524,8 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 	return messageID, false, nil
 }
 
-func (w *Worker) suppressRepeatedIdenticalProjectContinuation(ctx context.Context, messageID uuid.UUID, allowSuccessfulHandoffSuppression bool) (bool, error) {
-	return w.suppressRepeatedIdenticalPendingProjectContinuation(ctx, messageID, messageID, allowSuccessfulHandoffSuppression)
+func (w *Worker) suppressRepeatedIdenticalProjectContinuation(ctx context.Context, messageID uuid.UUID, allowSuccessfulHandoffSuppression, allowRediscoveryOnlyReplay bool) (bool, error) {
+	return w.suppressRepeatedIdenticalPendingProjectContinuation(ctx, messageID, messageID, allowSuccessfulHandoffSuppression, allowRediscoveryOnlyReplay)
 }
 
 func (w *Worker) projectContinuationHistoryMessageIDsForCompletedTask(ctx context.Context, sessionID uuid.UUID, completedTaskID string, limit int) ([]uuid.UUID, error) {
@@ -4209,7 +4219,7 @@ func projectContinuationBoundedSizeStopTaskNumberForWorker(content string) (int,
 	return taskNumber, true
 }
 
-func (w *Worker) suppressRepeatedIdenticalPendingProjectContinuation(ctx context.Context, referenceMessageID, pendingMessageID uuid.UUID, allowSuccessfulHandoffSuppression bool) (bool, error) {
+func (w *Worker) suppressRepeatedIdenticalPendingProjectContinuation(ctx context.Context, referenceMessageID, pendingMessageID uuid.UUID, allowSuccessfulHandoffSuppression, allowRediscoveryOnlyReplay bool) (bool, error) {
 	if w == nil || w.pool == nil || referenceMessageID == uuid.Nil || pendingMessageID == uuid.Nil {
 		return false, nil
 	}
@@ -4259,6 +4269,9 @@ func (w *Worker) suppressRepeatedIdenticalPendingProjectContinuation(ctx context
 		}
 		switch {
 		case strings.HasPrefix(content, projectContinuationRediscoveryGuardPrefix):
+			if allowRediscoveryOnlyReplay {
+				continue
+			}
 			blocked = true
 		case strings.HasPrefix(content, projectContinuationActiveReplacementPrefix) &&
 			strings.Contains(content, projectContinuationActiveReplacementMarker):
@@ -4477,7 +4490,7 @@ func buildRecoveredTaskExecutionKickoffMessage(taskRecord repo.ProjectTask, exec
 		if title == "" {
 			title = "Untitled task"
 		}
-		description := strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+		description := recoveredTaskKickoffDescription(taskRecord)
 		base = "Start review on task: " + title
 		if description != "" {
 			base += "\n\nTask description:\n" + description
@@ -4496,7 +4509,7 @@ func buildRecoveredTaskQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 		title = "Untitled task"
 	}
 
-	description := strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+	description := recoveredTaskKickoffDescription(taskRecord)
 	base := "Start work on task: " + title
 	if description != "" {
 		base += "\n\nTask description:\n" + description
@@ -4565,6 +4578,9 @@ func workerMessageMetadataMap(metadata json.RawMessage) map[string]any {
 }
 
 func recoveredTaskLooksLikeOrchestrationOnlyParent(taskRecord repo.ProjectTask) bool {
+	if recoveredTaskShouldUseSourceDescription(taskRecord) {
+		return false
+	}
 	if len(taskRecord.Metadata) != 0 && json.Valid(taskRecord.Metadata) {
 		var payload map[string]any
 		if err := json.Unmarshal(taskRecord.Metadata, &payload); err == nil {
@@ -4614,6 +4630,47 @@ func valueOrEmpty(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func recoveredTaskSourceDescription(taskRecord repo.ProjectTask) string {
+	if len(taskRecord.Metadata) == 0 || !json.Valid(taskRecord.Metadata) {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(taskRecord.Metadata, &payload); err != nil {
+		return ""
+	}
+	decomp, _ := payload["decomposition"].(map[string]any)
+	if decomp == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(decomp["source_description"]))
+}
+
+func recoveredTaskShouldUseSourceDescription(taskRecord repo.ProjectTask) bool {
+	description := strings.ToLower(strings.TrimSpace(valueOrEmpty(taskRecord.Description)))
+	if description == "" {
+		return false
+	}
+	if !strings.Contains(description, "already satisfied") && !strings.Contains(description, "no work needed") {
+		return false
+	}
+	sourceDescription := strings.ToLower(strings.TrimSpace(recoveredTaskSourceDescription(taskRecord)))
+	if sourceDescription == "" {
+		return false
+	}
+	if !strings.Contains(strings.ToLower(strings.TrimSpace(taskRecord.Title)), "verify") {
+		return false
+	}
+	return strings.Contains(sourceDescription, "closeout verification task") ||
+		(strings.Contains(sourceDescription, "already exists on disk") && strings.Contains(sourceDescription, "do not rewrite"))
+}
+
+func recoveredTaskKickoffDescription(taskRecord repo.ProjectTask) string {
+	if recoveredTaskShouldUseSourceDescription(taskRecord) {
+		return recoveredTaskSourceDescription(taskRecord)
+	}
+	return strings.TrimSpace(valueOrEmpty(taskRecord.Description))
 }
 
 func (w *Worker) countActionableProjectDraftTasks(ctx context.Context, projectID uuid.UUID) (int, error) {
@@ -7686,6 +7743,12 @@ func buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(compl
 		focusLabel, focusRef, focusTaskID = projectContinuationFirstTaskRefFromLineForWorker(snapshot.DraftTaskLine)
 		laneSource = strings.TrimSpace(snapshot.DraftTaskLine)
 	}
+	focusDerivedFromChildActiveDraftLine := false
+	if focusRef == "" {
+		focusLabel, focusRef, focusTaskID = projectContinuationFirstTaskRefFromLineForWorker(snapshot.ChildActiveDraftLine)
+		laneSource = strings.TrimSpace(snapshot.ChildActiveDraftLine)
+		focusDerivedFromChildActiveDraftLine = focusRef != ""
+	}
 	if focusRef == "" {
 		lines = appendProjectExecutionSnapshotGuidanceWithoutProjectLineForWorker(lines, snapshot)
 		if strings.TrimSpace(snapshot.ActiveTaskLine) != "" &&
@@ -7708,6 +7771,27 @@ func buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(compl
 	}
 	if line := projectContinuationSnapshotLineForRefForWorker(snapshot, focusRef, focusTaskID); line != "" {
 		laneSource = line
+	}
+	if focusDerivedFromChildActiveDraftLine || (strings.Contains(laneSource, "child_tasks=") && strings.Contains(strings.TrimSpace(snapshot.ChildActiveDraftLine), focusRef)) {
+		lines = append(lines,
+			"Your last continuation turn was blocked after broad rediscovery even though the focused draft parent already has direct child work to advance.",
+			fmt.Sprintf("Current focus parent: %s.", focusRef),
+			"Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.",
+			fmt.Sprintf("Do not inspect or mention other draft parents until %s is advanced.", focusLabel),
+		)
+		if focusTaskID != "" {
+			lines = append(lines,
+				fmt.Sprintf("If you still need to inspect child lanes first, use only task.list(parent_task_id=%s).", focusTaskID),
+				"The moment that direct-child list returns a runnable draft or queued child, stop rediscovery and issue one narrow task.update on that child immediately.",
+				"After a successful direct-child lookup, do not call broader task.list again in the same turn.",
+			)
+		} else {
+			lines = append(lines,
+				"Inspect only that focused parent's direct children if absolutely required, then issue one narrow task.update on the chosen child immediately.",
+				"After a successful direct-child lookup, do not call broader task.list again in the same turn.",
+			)
+		}
+		return strings.Join(lines, " ")
 	}
 	if projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusRef) &&
 		(strings.TrimSpace(snapshot.RepairDraftLine) != "" ||

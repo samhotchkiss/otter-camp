@@ -5395,3 +5395,17 @@
     - PM continuation message `2b1a2cf9-3d9e-4f12-b183-ffd8595f19e8` now includes the focused verification-closeout parent `task 6670`, `deliverable_path=planning/sambot-example-conversations.md`, and `malformed_child_tasks=5`
     - PM turn `1fb9ab67-8f11-40de-bb8b-7a15f0d5f1ae` executed `task.update` successfully and the tool result moved task `6670` to `queued`
     - task `6670` then launched its own task lane and progressed to `review`, proving the PM lane is no longer stuck in the empty rediscovery retry family
+- 2026-03-31 15:20 MDT - Replayed PM continuations after rediscovery-only stops and tightened child-active parent retry prompts.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - added a narrow worker-only continuation decision option so `RequeueActiveProjectSessionsMissingContinuation(...)` can replay one `project_execution_continuation` after a rediscovery-only validation stop instead of suppressing it immediately with the generic repeated-continuation guard
+    - widened `buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(...)` so `Draft parent tasks already have child work:` counts as structured focus and forces a single `task.list(parent_task_id=...)` followed by immediate `task.update` on the discovered child, with no broader `task.list` allowed afterward
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added coverage for missing-continuation replay after rediscovery-only stop
+    - added prompt coverage for child-active draft parents so the retry path stays narrow after one direct-child lookup
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRequeueActiveProjectSessionsMissingContinuation(RetriesRediscoveryBlockedContinuation|IgnoresPendingProjectContinuationResume)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestBuildProjectExecutionContinuationReplacementChildRetryPromptForWorkerUsesDirectChildInspectionForChildActiveDraftParent$' -count=1`
+  - live proof:
+    - worker startup on the patched binary created and dispatched fresh PM continuation `3c4018a8-9948-45fd-83d3-e6e6ada448ae` for session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, proving the idle-suppression bug was fixed
+    - the first replay identified `OC-12040` beneath draft parent `OC-12039`, which exposed the retry-prompt gap
+    - after the prompt fix and redeploy, `OC-12040` remained `in_progress` instead of the PM lane falling back into another idle rediscovery loop
