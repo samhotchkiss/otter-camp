@@ -268,6 +268,21 @@ func ValidateCompletion(parentTask repo.ProjectTask, childTasks []repo.ProjectTa
 	return CompletionError{Reasons: status.Missing}
 }
 
+func ConfirmationChildCanBeRetiredAfterParentCompletion(parentTask, childTask repo.ProjectTask) bool {
+	state, ok := Parse(parentTask.Metadata)
+	if !ok || state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied {
+		return false
+	}
+	if state.IntegrationCheck == nil || normalizeIntegrationStatus(state.IntegrationCheck.Status) != "passed" {
+		return false
+	}
+	verification, found := recordedVerificationForChild(state, childTask.ID)
+	if !found {
+		return false
+	}
+	return verifiedChildActsAsCompletedCloseout(parentTask, childTask, verification, state)
+}
+
 func NewChildVerification(taskID uuid.UUID, summary string, now time.Time) ChildVerification {
 	return ChildVerification{
 		TaskID:     taskID.String(),
@@ -312,6 +327,20 @@ func mergeVerifications(existing, updates []ChildVerification) []ChildVerificati
 		merged = append(merged, item)
 	}
 	return merged
+}
+
+func recordedVerificationForChild(state ParentState, childTaskID uuid.UUID) (ChildVerification, bool) {
+	if childTaskID == uuid.Nil {
+		return ChildVerification{}, false
+	}
+	for _, item := range state.ChildVerifications {
+		taskID, err := uuid.Parse(strings.TrimSpace(item.TaskID))
+		if err != nil || taskID != childTaskID {
+			continue
+		}
+		return item, true
+	}
+	return ChildVerification{}, false
 }
 
 func compactVerifications(items []ChildVerification) []ChildVerification {

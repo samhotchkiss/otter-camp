@@ -77,6 +77,260 @@ func TestStatusTransitionMatrix(t *testing.T) {
 	}
 }
 
+func TestAllowsCloseoutReadyOrchestrationParentQueueIgnoresMalformedProceduralChildren(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	metadata, err := json.Marshal(map[string]any{
+		"decomposition": map[string]any{
+			"applied":            true,
+			"mode":               "parallel_children",
+			"orchestration_only": true,
+		},
+		"parent_orchestration": map[string]any{
+			"child_verifications": []map[string]any{
+				{
+					"task_id":     uuid.NewString(),
+					"summary":     "OC-328 delivered the final file.",
+					"verified_at": now.Format(time.RFC3339),
+				},
+			},
+			"integration_check": map[string]any{
+				"status":     "passed",
+				"summary":    "Verified the final file end to end.",
+				"checked_at": now.Format(time.RFC3339),
+			},
+			"outcome_assessment": map[string]any{
+				"satisfied":   true,
+				"summary":     "The parent outcome is already satisfied.",
+				"assessed_at": now.Format(time.RFC3339),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	description := "Write planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations."
+	parent := repo.ProjectTask{
+		Title:       "Verify and close: planning/sambot-prompts/test-conversations-level3.md",
+		Description: &description,
+		Metadata:    metadata,
+	}
+	malformedDescription := "User asks about Sam's approach to AI ethics beyond policy papers — how does he build it into systems?"
+	children := []repo.ProjectTask{
+		{
+			Title:       "### Conversation 2 — Building ethical guardrails into production AI systems",
+			Description: &malformedDescription,
+			WorkStatus:  "draft",
+		},
+		{
+			Title:      "Four prior child tasks (OC-315, 316, 317, 318) were all terminally rejected because the conversations were surface-level — they described technologies conceptually instead of engaging with implementation details, tradeoffs, and code-level reasoning. This attempt MUST be qualitatively different.",
+			WorkStatus: "draft",
+		},
+		{
+			Title:      "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations (fresh replacement)",
+			WorkStatus: "draft",
+		},
+		{
+			Title:      "Existing blocked sibling lane",
+			WorkStatus: "blocked",
+		},
+	}
+
+	if !allowsCloseoutReadyOrchestrationParentQueue(parent, children) {
+		t.Fatal("expected malformed procedural child drafts to be ignored for closeout-ready parent queue")
+	}
+}
+
+func TestAllowsCloseoutReadyOrchestrationParentQueueIgnoresReviewChildReferencingSameWorkspacePath(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	metadata, err := json.Marshal(map[string]any{
+		"decomposition": map[string]any{
+			"applied":            true,
+			"mode":               "parallel_children",
+			"orchestration_only": true,
+		},
+		"parent_orchestration": map[string]any{
+			"child_verifications": []map[string]any{
+				{
+					"task_id":     uuid.NewString(),
+					"summary":     "OC-328 delivered the final file.",
+					"verified_at": now.Format(time.RFC3339),
+				},
+			},
+			"integration_check": map[string]any{
+				"status":     "passed",
+				"summary":    "Verified the final file end to end.",
+				"checked_at": now.Format(time.RFC3339),
+			},
+			"outcome_assessment": map[string]any{
+				"satisfied":   true,
+				"summary":     "The parent outcome is already satisfied.",
+				"assessed_at": now.Format(time.RFC3339),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	description := "Verify and close planning/sambot-prompts/test-conversations-level3.md once the output is present."
+	parent := repo.ProjectTask{
+		Title:       "Verify and close: planning/sambot-prompts/test-conversations-level3.md",
+		Description: &description,
+		Metadata:    metadata,
+	}
+	childDescription := "Check that planning/sambot-prompts/test-conversations-level3.md exists and advance the parent task."
+	children := []repo.ProjectTask{
+		{
+			Title:       "Verify planning/sambot-prompts/test-conversations-level3.md exists and advance",
+			Description: &childDescription,
+			WorkStatus:  "review",
+		},
+	}
+
+	if !allowsCloseoutReadyOrchestrationParentQueue(parent, children) {
+		t.Fatal("expected same-path verification review child to be ignored for closeout-ready parent queue")
+	}
+}
+
+func TestCancelDoneParentResidualChildrenCancelsRecordedConfirmationDraft(t *testing.T) {
+	t.Parallel()
+
+	parentID := uuid.New()
+	childID := uuid.New()
+	projectID := uuid.New()
+	now := time.Now().UTC()
+	parentDescription := "Verify sambot-example-conversations.md and produce verification report."
+	childDescription := "Confirm verification report for sambot-example-conversations.md is committed and complete, then close parent OC-12037."
+	parentMetadata, err := json.Marshal(map[string]any{
+		"parent_orchestration": map[string]any{
+			"child_verifications": []map[string]any{
+				{
+					"task_id":     childID.String(),
+					"summary":     "OC-12047: Confirmation child — verification report is committed and complete; parent OC-12037 can close.",
+					"verified_at": now.Format(time.RFC3339Nano),
+				},
+			},
+			"integration_check": map[string]any{
+				"status":     "passed",
+				"summary":    "Verification report committed and reviewed.",
+				"checked_at": now.Format(time.RFC3339Nano),
+			},
+			"outcome_assessment": map[string]any{
+				"satisfied":   true,
+				"summary":     "Parent deliverable is satisfied.",
+				"assessed_at": now.Format(time.RFC3339Nano),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(parent metadata): %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:          parentID,
+				ProjectID:   projectID,
+				TaskNumber:  12037,
+				Title:       "Verify sambot-example-conversations.md and produce verification report",
+				Description: &parentDescription,
+				WorkStatus:  "done",
+				Metadata:    parentMetadata,
+			},
+			childID: {
+				ID:          childID,
+				ProjectID:   projectID,
+				TaskNumber:  12047,
+				Title:       "Confirm verification report for sambot-example-conversations.md is committed and complete",
+				Description: &childDescription,
+				WorkStatus:  "draft",
+				Metadata:    json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentID.String())),
+			},
+		},
+	}
+	svc := newUnitService(taskRepo)
+
+	if err := svc.cancelDoneParentResidualChildren(context.Background(), taskRepo.tasks[parentID], Actor{
+		Type: "system",
+		ID:   uuid.New(),
+	}); err != nil {
+		t.Fatalf("cancelDoneParentResidualChildren: %v", err)
+	}
+
+	child := taskRepo.tasks[childID]
+	if child.WorkStatus != "cancelled" {
+		t.Fatalf("child work_status = %q, want cancelled", child.WorkStatus)
+	}
+	if child.CompletedAt == nil {
+		t.Fatal("cancelled child CompletedAt = nil, want timestamp")
+	}
+}
+
+func TestCloseoutReadyOrchestrationParentCanQueueDirectlyWhenOnlyDraftAndBlockedChildrenRemain(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	metadata, err := json.Marshal(map[string]any{
+		"decomposition": map[string]any{
+			"applied":            true,
+			"mode":               "parallel_children",
+			"orchestration_only": true,
+		},
+		"parent_orchestration": map[string]any{
+			"child_verifications": []map[string]any{
+				{
+					"task_id":     uuid.NewString(),
+					"summary":     "OC-328 delivered the final conversations file.",
+					"verified_at": now.Format(time.RFC3339),
+				},
+			},
+			"integration_check": map[string]any{
+				"status":     "passed",
+				"summary":    "Verified upstream deliverable presence and coherence.",
+				"checked_at": now.Format(time.RFC3339),
+			},
+			"outcome_assessment": map[string]any{
+				"satisfied":   true,
+				"summary":     "The parent verification report is ready to produce.",
+				"assessed_at": now.Format(time.RFC3339),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	description := "Write the single file results/verify-test-conversations-level3.md and record PASS/FAIL verdicts."
+	parent := repo.ProjectTask{
+		Title:       "Write results/verify-test-conversations-level3.md — verification report confirming 3 deeply technical SamBot test conversations",
+		Description: &description,
+		Metadata:    metadata,
+	}
+	malformedDescription := "Four prior child tasks were terminally rejected because the conversations were surface-level."
+	blockedDescription := "Confirm the file exists at planning/sambot-prompts/test-conversations-level3.md and verify it contains exactly 3 deeply technical multi-turn test conversations."
+	children := []repo.ProjectTask{
+		{
+			Title:       "Malformed stale child",
+			Description: &malformedDescription,
+			WorkStatus:  "draft",
+		},
+		{
+			Title:       "Verify planning/sambot-prompts/test-conversations-level3.md exists and advance",
+			Description: &blockedDescription,
+			WorkStatus:  "blocked",
+		},
+	}
+
+	if !closeoutReadyOrchestrationParentCanQueueDirectly(parent, children) {
+		t.Fatal("expected closeout-ready parent to queue directly when only draft/blocked children remain")
+	}
+}
+
 func TestTransitionStatusRejectsReviewMismatchWithCurrentFlowNode(t *testing.T) {
 	taskID := uuid.New()
 	workNodeID := uuid.New()
@@ -110,6 +364,41 @@ func TestTransitionStatusRejectsReviewMismatchWithCurrentFlowNode(t *testing.T) 
 	}
 	if conflict.TargetStatus != "review" || conflict.CurrentNodeType != "work" {
 		t.Fatalf("flow conflict = %+v, want target=review current_node_type=work", conflict)
+	}
+}
+
+func TestTransitionStatusAllowsFlowRuntimeBypassForDraftReviewAlignment(t *testing.T) {
+	taskID := uuid.New()
+	reviewNodeID := uuid.New()
+	flowTemplateID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    uuid.New(),
+				ProjectID:         uuid.New(),
+				WorkStatus:        "draft",
+				FlowTemplateID:    &flowTemplateID,
+				CurrentFlowNodeID: &reviewNodeID,
+				Title:             "Task",
+				CreatedByType:     "system",
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	svc.flowNodes = &fakeFlowNodeRepo{
+		nodes: map[uuid.UUID]repo.FlowNode{
+			reviewNodeID: {ID: reviewNodeID, NodeType: "review"},
+		},
+	}
+
+	updated, err := svc.TransitionStatus(context.Background(), taskID, "review", Actor{Type: "system", AllowFlowRuntimeBypass: true})
+	if err != nil {
+		t.Fatalf("TransitionStatus: %v", err)
+	}
+	if updated.WorkStatus != "review" {
+		t.Fatalf("work_status = %q, want review", updated.WorkStatus)
 	}
 }
 

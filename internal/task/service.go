@@ -722,7 +722,11 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 		}
 		taskRecord.FlowTemplateID = resolvedFlowTemplateID
 	}
-	if !isTransitionAllowed(from, target) && !bootstrapGateAutoComplete && !bootstrapSetupComplete && !bootstrapPlanningAutoComplete && !satisfiedDraftAutoComplete && !childReopen && !orchestrationAutoComplete && !flowRejectedOrchestrationReset {
+	flowRuntimeAlignment, err := s.allowsFlowRuntimeStatusAlignment(ctx, taskRecord, from, target, actor)
+	if err != nil {
+		return nil, err
+	}
+	if !isTransitionAllowed(from, target) && !flowRuntimeAlignment && !bootstrapGateAutoComplete && !bootstrapSetupComplete && !bootstrapPlanningAutoComplete && !satisfiedDraftAutoComplete && !childReopen && !orchestrationAutoComplete && !flowRejectedOrchestrationReset {
 		return nil, ErrInvalidStatusTransition{From: from, To: target}
 	}
 	if target == "queued" && taskRecord.RequiresHumanReview && !approvalOverride {
@@ -788,6 +792,9 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 		if childErr != nil {
 			return nil, childErr
 		}
+		if target == "queued" && closeoutReadyOrchestrationParentCanQueueDirectly(taskRecord, decompositionChildren) {
+			decompositionChildren = nil
+		}
 		executableChildren = executableProjectTasks(decompositionChildren)
 	}
 	if target == "queued" && len(executableChildren) > 0 && !allowsCloseoutReadyOrchestrationParentQueue(taskRecord, executableChildren) {
@@ -805,7 +812,7 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 			return nil, err
 		}
 	}
-	if target == "in_progress" && len(executableChildren) > 0 {
+	if target == "in_progress" && len(executableChildren) > 0 && !allowsCloseoutReadyOrchestrationParentQueue(taskRecord, executableChildren) {
 		return nil, ErrTaskMustRemainOrchestrationOnly
 	}
 	if target == "in_progress" {
@@ -909,6 +916,9 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 		return nil, err
 	}
 	if tx == nil && target == "done" {
+		if err := s.cancelDoneParentResidualChildren(ctx, updated, actor); err != nil {
+			return nil, err
+		}
 		if _, err := s.EnqueueForMerge(ctx, updated.ID); err != nil && !errors.Is(err, ErrNoTaskBranch) {
 			return nil, err
 		}
@@ -1227,6 +1237,60 @@ func executableProjectTasks(tasks []repo.ProjectTask) []repo.ProjectTask {
 	return filtered
 }
 
+func closeoutReadyOrchestrationParentCanQueueDirectly(taskRecord repo.ProjectTask, childTasks []repo.ProjectTask) bool {
+	if !taskRequiresBoundedChildren(taskRecord) || len(childTasks) == 0 {
+		return false
+	}
+	state, ok := taskorchestration.Parse(taskRecord.Metadata)
+	if !ok || state.IntegrationCheck == nil || !strings.EqualFold(strings.TrimSpace(state.IntegrationCheck.Status), "passed") {
+		return false
+	}
+	if state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied || len(state.ChildVerifications) == 0 {
+		return false
+	}
+	for _, child := range childTasks {
+		switch normalizeStatus(child.WorkStatus) {
+		case "queued", "in_progress", "review", "on_hold":
+			return false
+		}
+	}
+	return true
+}
+
+func (s *service) cancelDoneParentResidualChildren(ctx context.Context, parentTask repo.ProjectTask, actor Actor) error {
+	if s == nil || s.tasks == nil || normalizeStatus(parentTask.WorkStatus) != "done" {
+		return nil
+	}
+	children, err := s.listDecompositionChildren(ctx, parentTask)
+	if err != nil {
+		return err
+	}
+	if len(children) == 0 {
+		return nil
+	}
+	cleanupActor := actor
+	cleanupActor.AllowFlowRuntimeBypass = true
+	cleanupActor.AllowGateBypass = true
+	for _, child := range children {
+		switch normalizeStatus(child.WorkStatus) {
+		case "draft", "blocked", "on_hold":
+		default:
+			continue
+		}
+		if !taskorchestration.ConfirmationChildCanBeRetiredAfterParentCompletion(parentTask, child) {
+			continue
+		}
+		cleanupActor.ExpectedFromStatus = normalizeStatus(child.WorkStatus)
+		if _, err := s.transitionTaskRecord(ctx, child, "cancelled", cleanupActor, map[string]any{
+			"cancellation_reason": "superseded_by_parent_completion",
+			"parent_task_id":      parentTask.ID,
+		}, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func allowsCloseoutReadyOrchestrationParentQueue(taskRecord repo.ProjectTask, executableChildren []repo.ProjectTask) bool {
 	if !taskRequiresBoundedChildren(taskRecord) || len(executableChildren) == 0 {
 		return false
@@ -1238,12 +1302,45 @@ func allowsCloseoutReadyOrchestrationParentQueue(taskRecord repo.ProjectTask, ex
 	if state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied || len(state.ChildVerifications) == 0 {
 		return false
 	}
+	parentPath := queueDuplicateSharedFileDeliverablePath(taskRecord)
 	for _, child := range executableChildren {
-		if normalizeStatus(child.WorkStatus) != "blocked" {
+		status := normalizeStatus(child.WorkStatus)
+		if status == "blocked" || status == "draft" {
+			continue
+		}
+		if parentPath != "" {
+			childPath := queueDuplicateSharedFileDeliverablePath(child)
+			if childPath == "" {
+				if queueTaskReferencesWorkspacePath(child, parentPath) {
+					continue
+				}
+				continue
+			}
+			if sameQueueWorkspaceRelativePath(parentPath, childPath) {
+				continue
+			}
+		}
+		if taskdecomp.TaskLooksProceduralInstructionArtifact(child.Title, child.Description) {
+			continue
+		}
+		if taskdecomp.DescriptionForbidsDecomposition(derefString(child.Description)) {
+			continue
+		}
+		if err := taskdecomp.ValidateExecutableTaskContract(child.Title, child.Description); err != nil {
+			continue
+		}
+		if status != "blocked" && status != "draft" {
 			return false
 		}
 	}
 	return true
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func isTerminalTaskStatus(status string) bool {
@@ -1298,6 +1395,24 @@ func queueExplicitDeliverablePathFromText(text string) string {
 
 func sameQueueWorkspaceRelativePath(left, right string) bool {
 	return filepath.Clean(filepath.FromSlash(strings.TrimSpace(left))) == filepath.Clean(filepath.FromSlash(strings.TrimSpace(right)))
+}
+
+func queueTaskReferencesWorkspacePath(taskRecord repo.ProjectTask, targetPath string) bool {
+	targetPath = strings.ToLower(strings.TrimSpace(filepath.ToSlash(filepath.Clean(filepath.FromSlash(targetPath)))))
+	if targetPath == "" {
+		return false
+	}
+	for _, text := range queueTaskSharedFileOwnershipTexts(taskRecord) {
+		normalized := strings.ToLower(strings.TrimSpace(filepath.ToSlash(filepath.Clean(filepath.FromSlash(text)))))
+		if normalized == targetPath {
+			return true
+		}
+		flat := strings.ToLower(strings.Join(strings.Fields(text), " "))
+		if strings.Contains(flat, targetPath) {
+			return true
+		}
+	}
+	return false
 }
 
 func queueTaskClaimsWholeSharedFileOwnership(taskRecord repo.ProjectTask, sharedPath string) bool {
@@ -1564,6 +1679,36 @@ func allowsFlowRejectedOrchestrationReset(taskRecord repo.ProjectTask, from, tar
 		return false
 	}
 	return taskRequiresBoundedChildren(taskRecord)
+}
+
+func (s *service) allowsFlowRuntimeStatusAlignment(ctx context.Context, taskRecord repo.ProjectTask, from, target string, actor Actor) (bool, error) {
+	if !actor.AllowFlowRuntimeBypass {
+		return false, nil
+	}
+	if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID == uuid.Nil {
+		return false, nil
+	}
+	switch normalizeStatus(target) {
+	case "in_progress", "review":
+	default:
+		return false, nil
+	}
+	switch normalizeStatus(from) {
+	case "draft", "queued", "in_progress", "blocked", "on_hold", "review":
+	default:
+		return false, nil
+	}
+	if s.flowNodes == nil {
+		return false, nil
+	}
+	currentNode, err := s.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return normalizeStatus(target) == expectedTaskRuntimeStatusForNode(currentNode), nil
 }
 
 func allowsBootstrapPlanningAutoComplete(taskRecord repo.ProjectTask, from, target string, actor Actor) bool {
