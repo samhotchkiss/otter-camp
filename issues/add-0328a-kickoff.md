@@ -151,3 +151,11 @@ A good kickoff is one where:
   - reserve optional value-add ideation for after the core spec is solid
 - Focused coverage is in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) under `TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext`.
 - This is intentionally the first kickoff slice, not the full feature. It improves kickoff behavior at the prompt/handoff layer without yet persisting assumption state or adding a structured kickoff-question classifier.
+- 2026-03-31 07:27 MDT - Picked the kickoff track back up from the live manual-test feedback about Frank acting too implementation-eager on new project ideas. The new narrow slice in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) adds a discovery-first kickoff branch for underdefined new initiatives like “build a website/platform to track X” where the data model, display model, and workflow are still open.
+- The new guidance now says:
+  - create the project, but treat the first phase as discovery and decision support instead of immediate implementation planning
+  - produce a concise discovery package first: methodology, proposed data/display/workflow approach, assumptions, risks, and validation plan
+  - come back to the operator with the proposed methodology plus only the few high-leverage questions that materially change direction
+  - do not immediately explode the project into implementation backlog / architecture / coding tasks before that discovery package exists and the operator has had a chance to react
+- The organization continuation prompt now mirrors the same behavior so long-running Frank chats keep the chief-of-staff posture after context compression rather than falling back to “create project and keep bootstrapping” mechanics.
+- Focused coverage for this slice is in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) under `TestBuildSyntheticProjectKickoffHandoffDiscoveryFirstRequest` and `TestBuildOrganizationContinuationActionPromptDiscoveryFirstProjectRequest`.

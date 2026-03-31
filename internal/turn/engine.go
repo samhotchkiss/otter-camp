@@ -3540,6 +3540,16 @@ func inferredReviewRejectFromText(text string) bool {
 			return true
 		}
 	}
+	if strings.Contains(text, "required scenarios are present") &&
+		strings.Contains(text, "only ") &&
+		(strings.Contains(text, "missing:") || strings.Contains(text, "missing ")) {
+		return true
+	}
+	if strings.Contains(text, "required scenario") &&
+		strings.Contains(text, "only ") &&
+		(strings.Contains(text, "missing:") || strings.Contains(text, "missing ")) {
+		return true
+	}
 
 	evidenceSignals := 0
 	for _, signal := range []string{
@@ -12848,6 +12858,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			previousManifest = nil
 			continue
 		}
+		if assembled = e.maybeApplySyncOrganizationCasualPromptHint(ctx, rt, assembled); assembled == nil {
+			return fmt.Errorf("apply sync organization casual prompt hint: assembled prompt missing")
+		}
 		guardrail := e.agentTurnPromptGuardrailTokens(ctx, rt, taskComplexity)
 		if guardrail > 0 && assembled != nil && assembled.TotalTokens > guardrail {
 			continuations++
@@ -12957,6 +12970,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			return synthErr
 		} else if synthesized {
 			response.ToolCalls = synthesizedToolCalls
+		}
+		if e.shouldSuppressSyncOrganizationCasualToolCalls(ctx, rt, response) {
+			response.ToolCalls = nil
 		}
 
 		if blocked, blockErr := e.maybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatch(ctx, rt, response.Content, response.ToolCalls); blockErr != nil {
@@ -13309,6 +13325,12 @@ func buildSyntheticProjectKickoffHandoffFromRequest(projectID uuid.UUID, project
 	lines = append(lines, "Do not stop on small, obvious, reversible, or low-risk choices. Make the call yourself, state the assumption briefly, and keep bootstrap moving.")
 	lines = append(lines, "After the critical unknowns are covered, briefly restate the working spec back, note any one or two hidden risk areas that truly matter, and move directly into execution by default.")
 	lines = append(lines, "If the project is already specified well enough to start, do not keep interrogating the operator. You may offer optional strategic value-add ideas only after the core spec is solid enough to begin.")
+	if kickoffShouldStartWithDiscovery(originatingRequest) {
+		lines = append(lines, "This request is discovery-first. Treat the first project phase as discovery and decision support, not immediate implementation planning.")
+		lines = append(lines, "Before creating implementation epics or coding tasks, produce a concise discovery package that clarifies the problem, proposed methodology, data model/display/workflow approach, key assumptions, risks, and validation plan. Use discovery artifacts like a problem brief, research plan, assumption log, and validation plan when they help.")
+		lines = append(lines, "Frank should come back to the operator with the proposed methodology, suggested path forward, and only the few high-leverage questions whose answers would materially change direction before the project moves into implementation.")
+		lines = append(lines, "Do not explode the project into implementation backlog, detailed architecture, or build tasks until that discovery package exists and the operator has had a chance to react.")
+	}
 	lines = append(lines, "Frank, Lori, and Ellie are starter-trio governance agents for setup/review only, not project staff. Do not assign them to project roles; create or assign dedicated project staff instead.")
 	lines = append(lines, "Keep staffing discovery bounded. Use at most one staffing.browse_profiles pass per needed category and at most one staffing.get_profile call per candidate you actually intend to staff. Once you can name one staff PM, the concrete workers, and the needed reviewers, stop browsing profiles and persist staffing. Do not spend multiple rounds re-browsing similar profiles when the current candidates are already sufficient to act.")
 	lines = append(lines, "Staffing profile browsing is advisory, not required. If the profile catalog does not immediately provide a perfect PM/worker/reviewer mix, create fit-for-purpose dedicated project staff directly with agent.create_staff and agent.assign_project instead of looping on more profile browsing.")
@@ -13322,6 +13344,56 @@ func buildSyntheticProjectKickoffHandoffFromRequest(projectID uuid.UUID, project
 	lines = append(lines, "If you need project docs, files, planning artifacts, or current task state during bootstrap, inspect them directly with tools. Do not ask the operator to go read docs, restate accessible context, or manually restart the same bootstrap step for you.")
 	lines = append(lines, "When you start task decomposition, do not stop after creating broad parent workstreams or after decomposing only one of them. Before you pause to read scaffold artifacts or persist setup, every persisted broad workstream parent must either have bounded executable child tasks under it or be replaced by those bounded children directly. Do not leave other broad parents untouched while you deepen only one workstream.")
 	return strings.Join(lines, "\n\n")
+}
+
+func kickoffShouldStartWithDiscovery(request string) bool {
+	normalized := strings.ToLower(normalizeInstructionText(request))
+	if normalized == "" {
+		return false
+	}
+	plan := taskplan.Analyze(normalized, nil)
+	switch strings.TrimSpace(plan.Playbook) {
+	case taskplan.PlaybookDiscovery:
+		return true
+	}
+	switch strings.TrimSpace(plan.ProjectStage) {
+	case taskplan.StageConcept, taskplan.StageValidation:
+		return true
+	}
+	if containsAny(normalized,
+		"build a website",
+		"build an app",
+		"build a platform",
+		"build a product",
+		"build a tool",
+		"create a website",
+		"create an app",
+		"create a platform",
+		"track every",
+		"market research",
+		"how to sort the data",
+		"how to display the data",
+		"what data should",
+		"what should the workflow",
+		"methodology",
+	) && !containsAny(normalized,
+		"react",
+		"next.js",
+		"typescript",
+		"postgres",
+		"schema",
+		"database",
+		"migration",
+		"api",
+		"endpoint",
+		"express",
+		"implementation plan",
+		"technical design",
+		"architecture doc",
+	) {
+		return true
+	}
+	return false
 }
 
 func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
@@ -24751,6 +24823,13 @@ func buildOrganizationContinuationActionPrompt(summary string) string {
 		"Do not restate the request and stop. Continue the work directly.",
 		"If the request is to create a project, your next step should be the concrete project creation and handoff action, not another summary.",
 		"If you truly cannot continue, report the concrete blocker in one sentence instead of switching into generic conversation.",
+	}
+	if kickoffShouldStartWithDiscovery(summary) {
+		lines = append(lines,
+			"For discovery-first new initiatives, act like a chief of staff: create the project, acknowledge that you are taking point, and then drive a short discovery phase before implementation planning.",
+			"Your first substantive milestone should be a reviewable methodology/proposed-approach package: problem framing, research plan, assumptions, validation plan, proposed data/display/workflow approach, and only the few questions whose answers materially change direction.",
+			"Do not jump straight into implementation backlog, detailed architecture, or coding tasks until that discovery package is ready and the operator has had a chance to react.",
+		)
 	}
 	if continuationSummaryLooksLikeDraft(summary) {
 		lines = append(lines, "The continuation summary above already contains concrete request details. Use them directly instead of re-deriving the request.")
@@ -39259,6 +39338,126 @@ func normalizeInstructionText(value string) string {
 		return normalized
 	}
 	return normalized[:maxLen] + "..."
+}
+
+func (e *TurnEngine) maybeApplySyncOrganizationCasualPromptHint(ctx context.Context, rt *turnRuntime, assembled *prompt.AssembledPrompt) *prompt.AssembledPrompt {
+	if assembled == nil || !e.syncOrganizationCasualMessageActive(ctx, rt) {
+		return assembled
+	}
+	clone := *assembled
+	clone.Messages = append(append([]prompt.PromptMessage(nil), assembled.Messages...), prompt.PromptMessage{
+		Role:    "system",
+		Content: "Latest user message is a casual direct chat ping, not a request for project status, repo inspection, or tool-driven action. Ignore stale bootstrap/project context unless the user explicitly asks for operational work. Reply briefly and naturally as a direct DM, and do not call tools for this message.",
+	})
+	return &clone
+}
+
+func (e *TurnEngine) shouldSuppressSyncOrganizationCasualToolCalls(ctx context.Context, rt *turnRuntime, response ModelResponse) bool {
+	if e == nil || rt == nil || rt.session == nil {
+		return false
+	}
+	if len(response.ToolCalls) == 0 || strings.TrimSpace(response.Content) == "" {
+		return false
+	}
+	return e.syncOrganizationCasualMessageActive(ctx, rt)
+}
+
+func (e *TurnEngine) syncOrganizationCasualMessageActive(ctx context.Context, rt *turnRuntime) bool {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "organization") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "sync") {
+		return false
+	}
+	if rt.initialMessageID == uuid.Nil {
+		return false
+	}
+	initialMessage, err := e.messages.GetByID(ctx, rt.initialMessageID)
+	if err != nil || !strings.EqualFold(strings.TrimSpace(initialMessage.Role), "user") {
+		return false
+	}
+	return looksLikeCasualSyncOrganizationMessage(initialMessage.Content)
+}
+
+func looksLikeCasualSyncOrganizationMessage(content string) bool {
+	normalized := strings.ToLower(normalizeInstructionText(content))
+	if normalized == "" {
+		return false
+	}
+	if looksLikeActionableSyncOrganizationMessage(normalized) {
+		return false
+	}
+
+	switch normalized {
+	case "hey", "hi", "hello", "yo", "sup", "frank", "frank?", "hey frank", "hey frank?", "hi frank", "hi frank?", "hello frank", "hello frank?":
+		return true
+	}
+
+	if containsAny(normalized,
+		"how's it going",
+		"hows it going",
+		"how are you",
+		"how're you",
+		"you there",
+		"good morning",
+		"good afternoon",
+		"good evening",
+	) {
+		return true
+	}
+
+	if (strings.HasPrefix(normalized, "hey frank") ||
+		strings.HasPrefix(normalized, "hi frank") ||
+		strings.HasPrefix(normalized, "hello frank")) &&
+		len(strings.Fields(normalized)) <= 8 {
+		return true
+	}
+
+	return false
+}
+
+func looksLikeActionableSyncOrganizationMessage(normalized string) bool {
+	normalized = strings.ToLower(strings.TrimSpace(normalized))
+	if normalized == "" {
+		return false
+	}
+	return containsAny(normalized,
+		"create ",
+		"make ",
+		"build ",
+		"start ",
+		"continue ",
+		"resume ",
+		"check ",
+		"show ",
+		"list ",
+		"open ",
+		"navigate ",
+		"inspect ",
+		"look up",
+		"find ",
+		"review ",
+		"fix ",
+		"assign ",
+		"send ",
+		"queue ",
+		"run ",
+		"what's the status",
+		"whats the status",
+		"status of",
+		"how many",
+		"project ",
+		"task ",
+		"repo",
+		"file ",
+		"branch",
+		"git ",
+		"merge ",
+		"flow ",
+		"bootstrap",
+		"staff ",
+	)
 }
 
 func (e *TurnEngine) callMainModel(

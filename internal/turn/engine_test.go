@@ -85,6 +85,125 @@ func TestListeningEvalSkippedForSyncSinglePending(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageSyncOrganizationCasualDMSettlesWithoutToolCalls(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	if _, err := fixture.messages.UpdateContent(context.Background(), fixture.userMessageID, "hey frank, how's it going?"); err != nil {
+		t.Fatalf("UpdateContent user message: %v", err)
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "Old Sam.blog bootstrap status dump that should not trigger a new tool chase.",
+	})
+
+	var dispatched []string
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		dispatched = append(dispatched, call.Name)
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"ok": true}}, nil
+	}
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		reply := "Hey! I'm here. Things are good."
+		if err := onChunk(reply); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{
+			Content: reply,
+			ToolCalls: []ModelToolCall{{
+				ID:   "task-status-drift",
+				Name: "task.list",
+				Tier: "tier1",
+				Arguments: map[string]any{
+					"limit": 50,
+				},
+			}},
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if len(dispatched) != 0 {
+		t.Fatalf("dispatched tools = %v, want none for casual DM", dispatched)
+	}
+	if fixture.messages.containsToolName("task.list") {
+		t.Fatal("did not expect tool_result messages for casual DM")
+	}
+	if !fixture.messages.containsContent("Hey! I'm here. Things are good.") {
+		t.Fatal("expected settled assistant reply for casual DM")
+	}
+	turnID := fixture.chat.waitForTurnID(t)
+	turn := fixture.chat.turnByID(turnID)
+	if turn == nil {
+		t.Fatal("expected created turn")
+	}
+	if !strings.EqualFold(strings.TrimSpace(turn.Status), "completed") {
+		t.Fatalf("turn status = %q, want completed", turn.Status)
+	}
+}
+
+func TestHandleUserMessageSyncOrganizationActionRequestStillDispatchesTools(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	if _, err := fixture.messages.UpdateContent(context.Background(), fixture.userMessageID, "create a project for speaker pipeline ops"); err != nil {
+		t.Fatalf("UpdateContent user message: %v", err)
+	}
+
+	var dispatched []string
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		dispatched = append(dispatched, call.Name)
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"project": map[string]any{
+					"id":   uuid.NewString(),
+					"slug": "speaker-pipeline-ops",
+				},
+			},
+		}, nil
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		round++
+		switch round {
+		case 1:
+			reply := "I can set that up now."
+			if err := onChunk(reply); err != nil {
+				return ModelResponse{}, err
+			}
+			return ModelResponse{
+				Content: reply,
+				ToolCalls: []ModelToolCall{{
+					ID:   "create-project",
+					Name: "project.create",
+					Tier: "tier1",
+					Arguments: map[string]any{
+						"name": "Speaker Pipeline Ops",
+						"slug": "speaker-pipeline-ops",
+					},
+				}},
+			}, nil
+		default:
+			reply := "Project created."
+			if err := onChunk(reply); err != nil {
+				return ModelResponse{}, err
+			}
+			return ModelResponse{Content: reply}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if len(dispatched) != 1 || dispatched[0] != "project.create" {
+		t.Fatalf("dispatched tools = %v, want one project.create", dispatched)
+	}
+	if !fixture.messages.containsToolName("project.create") {
+		t.Fatal("expected project.create tool_result for actionable org request")
+	}
+}
+
 func TestTurnRecoverableWorktreeRemoveError(t *testing.T) {
 	t.Parallel()
 
@@ -9484,6 +9603,23 @@ func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testin
 	}
 	if !strings.Contains(handoff, content) {
 		t.Fatalf("handoff = %q, want originating request content", handoff)
+	}
+}
+
+func TestBuildSyntheticProjectKickoffHandoffDiscoveryFirstRequest(t *testing.T) {
+	request := "I want to build a website to track every author appearance at bookstores, coffee shops, literary festivals, and similar venues across the country."
+	handoff := buildSyntheticProjectKickoffHandoffFromRequest(uuid.New(), "author-appearance-tracker", request)
+	if !strings.Contains(handoff, "This request is discovery-first.") {
+		t.Fatalf("handoff = %q, want discovery-first kickoff guidance", handoff)
+	}
+	if !strings.Contains(handoff, "proposed methodology, data model/display/workflow approach") {
+		t.Fatalf("handoff = %q, want discovery package guidance", handoff)
+	}
+	if !strings.Contains(handoff, "Frank should come back to the operator with the proposed methodology") {
+		t.Fatalf("handoff = %q, want operator follow-up guidance", handoff)
+	}
+	if !strings.Contains(handoff, "Do not explode the project into implementation backlog") {
+		t.Fatalf("handoff = %q, want anti-implementation-rush guidance", handoff)
 	}
 }
 
@@ -24409,6 +24545,20 @@ func TestContinuationTurnAppendsDirectActionPromptForAsyncOrganizationSession(t 
 	}
 }
 
+func TestBuildOrganizationContinuationActionPromptDiscoveryFirstProjectRequest(t *testing.T) {
+	summary := "[Continuation summary] Active organization request: I want to build a website to track every author appearance at bookstores, coffee shops, literary festivals, and similar venues across the country."
+	prompt := buildOrganizationContinuationActionPrompt(summary)
+	if !strings.Contains(prompt, "For discovery-first new initiatives, act like a chief of staff") {
+		t.Fatalf("prompt = %q, want discovery-first chief-of-staff guidance", prompt)
+	}
+	if !strings.Contains(prompt, "reviewable methodology/proposed-approach package") {
+		t.Fatalf("prompt = %q, want methodology package guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not jump straight into implementation backlog") {
+		t.Fatalf("prompt = %q, want anti-implementation-rush guidance", prompt)
+	}
+}
+
 func TestContinuationTurnUsesDeterministicActiveRequestSummaryForAsyncOrganizationSession(t *testing.T) {
 	t.Parallel()
 
@@ -38710,6 +38860,65 @@ func TestMaybeSynthesizeTaskReviewDecisionToolCallsUsesSufficientEvidenceRejectP
 	}
 	if got := stringValue(toolCalls[0].Arguments["decision"]); got != "reject" {
 		t.Fatalf("decision = %q, want reject", got)
+	}
+}
+
+func TestMaybeSynthesizeTaskReviewDecisionToolCallsInfersRejectFromMissingRequiredScenariosSummary(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		TaskNumber: 6670,
+		Title:      "Verify planning/sambot-example-conversations.md exists and contains all 5 required conversation scenarios",
+		WorkStatus: "review",
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	content := "I now have all the evidence I need for a review decision.\n\nReview findings:\nOnly 2 of 5 required scenarios are present.\n\nMissing:\n- Speaking engagement inquiry\n- Consulting/hiring inquiry\n- Ethics/parenting topic"
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskReviewDecisionToolCalls(
+		context.Background(),
+		rt,
+		content,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskReviewDecisionToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "flow.review_decision" {
+		t.Fatalf("toolCalls = %+v, want one flow.review_decision", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["decision"]); got != "reject" {
+		t.Fatalf("decision = %q, want reject", got)
+	}
+	if got := stringValue(toolCalls[0].Arguments["flow_node_execution_id"]); got != executionID.String() {
+		t.Fatalf("flow_node_execution_id = %q, want %s", got, executionID)
 	}
 }
 
