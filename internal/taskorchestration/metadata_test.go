@@ -292,6 +292,76 @@ func TestValidateCompletionAllowsBlockedChildrenWhenOutcomeAlreadySatisfied(t *t
 	}
 }
 
+func TestValidateCompletionAllowsDraftMalformedChildrenAfterCompletedCloseoutProof(t *testing.T) {
+	parentID := uuid.New()
+	doneChildID := uuid.New()
+	verifyChildID := uuid.New()
+	draftFragmentAID := uuid.New()
+	draftFragmentBID := uuid.New()
+	now := time.Date(2026, 3, 31, 6, 50, 0, 0, time.UTC)
+	description := "Write planning/sambot-prompts/test-conversations-level3.md with exactly 3 deeply technical SamBot conversations."
+	parent := repo.ProjectTask{
+		ID:         parentID,
+		TaskNumber: 297,
+		Title:      "Write results/verify-test-conversations-level3.md — verification report confirming 3 deeply technical SamBot test conversations",
+		Metadata: taskdecomp.ApplyMetadata(json.RawMessage(`{}`), taskdecomp.Plan{
+			RequiresDecomposition: true,
+			PrimaryDeliverable:    "planning/sambot-prompts/test-conversations-level3.md",
+			Deliverables: []string{
+				"planning/sambot-prompts/test-conversations-level3.md",
+				"Four prior child tasks were all terminally rejected because the conversations were surface-level.",
+				"### Conversation 1 — State machines in AI agent orchestration",
+				"Verify planning/sambot-prompts/test-conversations-level3.md exists and close out parent",
+			},
+		}, description, []uuid.UUID{doneChildID, draftFragmentAID, draftFragmentBID, verifyChildID}),
+	}
+	metadata, err := Apply(parent.Metadata, Update{
+		ChildVerifications: []ChildVerification{
+			NewChildVerification(doneChildID, "Verified the delivered SamBot conversation file satisfies the technical depth requirements.", now),
+			NewChildVerification(verifyChildID, "Verified the parent can close after confirming the deliverable exists and passes all acceptance criteria.", now),
+		},
+		IntegrationCheck:  NewIntegrationCheck("passed", "Confirmed the delivered file and verification report satisfy the parent end-to-end requirements.", now),
+		OutcomeAssessment: NewOutcomeAssessment(true, "The parent outcome is already satisfied.", now),
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	parent.Metadata = metadata
+
+	doneDescription := "Delivered planning/sambot-prompts/test-conversations-level3.md with exactly 3 deeply technical SamBot conversations."
+	doneChild := repo.ProjectTask{
+		ID:          doneChildID,
+		TaskNumber:  328,
+		Title:       "Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations",
+		Description: &doneDescription,
+		WorkStatus:  "done",
+	}
+	draftFragmentA := repo.ProjectTask{
+		ID:         draftFragmentAID,
+		TaskNumber: 329,
+		Title:      "Four prior child tasks (OC-315, 316, 317, 318) were all terminally rejected because the conversations were surface-level.",
+		WorkStatus: "draft",
+	}
+	draftFragmentB := repo.ProjectTask{
+		ID:         draftFragmentBID,
+		TaskNumber: 331,
+		Title:      "### Conversation 1 — State machines in AI agent orchestration",
+		WorkStatus: "draft",
+	}
+	verifyDescription := "Confirm the parent can close after verifying planning/sambot-prompts/test-conversations-level3.md."
+	verifyChild := repo.ProjectTask{
+		ID:          verifyChildID,
+		TaskNumber:  6645,
+		Title:       "Verify planning/sambot-prompts/test-conversations-level3.md exists and close out parent",
+		Description: &verifyDescription,
+		WorkStatus:  "done",
+	}
+
+	if err := ValidateCompletion(parent, []repo.ProjectTask{doneChild, draftFragmentA, draftFragmentB, verifyChild}); err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+}
+
 func TestValidateCompletionStillRejectsActiveChildAfterCompletedCloseoutProof(t *testing.T) {
 	parentID := uuid.New()
 	activeChildID := uuid.New()
@@ -496,5 +566,47 @@ func TestValidateCompletionAllowsSupersedingOutputVerificationWhenNoExecutableCh
 
 	if err := ValidateCompletion(parent, []repo.ProjectTask{blockedChild, cancelledChild}); err != nil {
 		t.Fatalf("ValidateCompletion err = %v, want nil for superseding-output verification", err)
+	}
+}
+
+func TestValidateCompletionAllowsRecordedConfirmationChildWithoutDoneStatus(t *testing.T) {
+	parentID := uuid.New()
+	confirmationChildID := uuid.New()
+	now := time.Date(2026, 3, 31, 20, 45, 0, 0, time.UTC)
+	description := "Verify `planning/sambot-example-conversations.md` and write `results/verify-sambot-example-conversations.md`."
+	parent := repo.ProjectTask{
+		ID:         parentID,
+		TaskNumber: 12037,
+		Title:      "Verify sambot-example-conversations.md and produce verification report",
+		Metadata: taskdecomp.ApplyMetadata(json.RawMessage(`{}`), taskdecomp.Plan{
+			RequiresDecomposition: true,
+			PrimaryDeliverable:    "results/verify-sambot-example-conversations.md",
+			Deliverables: []string{
+				"results/verify-sambot-example-conversations.md",
+				"Confirm verification report for sambot-example-conversations.md is committed and complete",
+			},
+		}, description, []uuid.UUID{confirmationChildID}),
+	}
+	metadata, err := Apply(parent.Metadata, Update{
+		ChildVerifications: []ChildVerification{
+			NewChildVerification(confirmationChildID, "OC-12047: Confirmation child — verification report is committed and complete; parent OC-12037 can close.", now),
+		},
+		IntegrationCheck:  NewIntegrationCheck("passed", "Reviewed the verification report end to end.", now),
+		OutcomeAssessment: NewOutcomeAssessment(true, "All parent verification outcomes are satisfied.", now),
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	parent.Metadata = metadata
+
+	confirmationChild := repo.ProjectTask{
+		ID:         confirmationChildID,
+		TaskNumber: 12047,
+		Title:      "Confirm verification report for sambot-example-conversations.md is committed and complete",
+		WorkStatus: "draft",
+	}
+
+	if err := ValidateCompletion(parent, []repo.ProjectTask{confirmationChild}); err != nil {
+		t.Fatalf("ValidateCompletion err = %v, want nil for recorded confirmation child", err)
 	}
 }

@@ -200,7 +200,8 @@ func Evaluate(parentTask repo.ProjectTask, childTasks []repo.ProjectTask) Comple
 	for _, child := range childTasks {
 		status := normalizeStatus(child.WorkStatus)
 		terminal := status == "done" || status == "cancelled"
-		if !terminal && blockedMalformedChildDoesNotBlockParentCompletion(parentTask, child) {
+		recorded, ok := verified[child.ID]
+		if !terminal && malformedChildDoesNotBlockParentCompletion(parentTask, child) {
 			terminal = true
 		}
 		if !terminal && status == "blocked" && state.OutcomeAssessment != nil && state.OutcomeAssessment.Satisfied {
@@ -210,7 +211,10 @@ func Evaluate(parentTask repo.ProjectTask, childTasks []repo.ProjectTask) Comple
 			terminal = true
 		}
 		completed := status == "done"
-		recorded, ok := verified[child.ID]
+		if !terminal && ok && verifiedChildActsAsCompletedCloseout(parentTask, child, recorded, state) {
+			terminal = true
+			completed = true
+		}
 		result.Children = append(result.Children, ChildStatus{
 			TaskID:    child.ID,
 			Label:     taskLabel(child),
@@ -366,11 +370,15 @@ func taskLabel(task repo.ProjectTask) string {
 	}
 }
 
-func blockedMalformedChildDoesNotBlockParentCompletion(parentTask, childTask repo.ProjectTask) bool {
-	if normalizeStatus(childTask.WorkStatus) != "blocked" {
+func malformedChildDoesNotBlockParentCompletion(parentTask, childTask repo.ProjectTask) bool {
+	status := normalizeStatus(childTask.WorkStatus)
+	if status != "blocked" && status != "draft" {
 		return false
 	}
 	if taskdecomp.TaskLooksProceduralInstructionArtifact(strings.TrimSpace(childTask.Title), childTask.Description) {
+		return true
+	}
+	if err := taskdecomp.ValidateExecutableTaskContract(strings.TrimSpace(childTask.Title), childTask.Description); err != nil {
 		return true
 	}
 	return parentSourceDescriptionForbidsDecomposition(parentTask.Metadata)
@@ -380,12 +388,44 @@ func childTaskClosesParent(parentTask, childTask repo.ProjectTask) bool {
 	if normalizeStatus(childTask.WorkStatus) != "done" {
 		return false
 	}
-	text := strings.ToLower(strings.TrimSpace(childTask.Title))
-	if childTask.Description != nil {
-		if description := strings.ToLower(strings.TrimSpace(*childTask.Description)); description != "" {
+	return closeoutSignalTextMentionsParent(parentTask, closeoutSignalTextForTask(childTask))
+}
+
+func verifiedChildActsAsCompletedCloseout(parentTask, childTask repo.ProjectTask, verification ChildVerification, state ParentState) bool {
+	if state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied {
+		return false
+	}
+	if state.IntegrationCheck == nil || normalizeIntegrationStatus(state.IntegrationCheck.Status) != "passed" {
+		return false
+	}
+	status := normalizeStatus(childTask.WorkStatus)
+	if status != "draft" && status != "blocked" && status != "cancelled" {
+		return false
+	}
+	text := closeoutSignalTextForTask(childTask)
+	if summary := strings.ToLower(strings.TrimSpace(verification.Summary)); summary != "" {
+		text += "\n" + summary
+	}
+	if !containsAnyCloseoutSignal(text) &&
+		!strings.Contains(text, "confirmation child") &&
+		!strings.Contains(text, "confirm verification report") &&
+		!strings.Contains(text, "committed and complete") {
+		return false
+	}
+	return closeoutSignalTextMentionsParent(parentTask, text)
+}
+
+func closeoutSignalTextForTask(task repo.ProjectTask) string {
+	text := strings.ToLower(strings.TrimSpace(task.Title))
+	if task.Description != nil {
+		if description := strings.ToLower(strings.TrimSpace(*task.Description)); description != "" {
 			text += "\n" + description
 		}
 	}
+	return text
+}
+
+func closeoutSignalTextMentionsParent(parentTask repo.ProjectTask, text string) bool {
 	if !containsAnyCloseoutSignal(text) {
 		return false
 	}
@@ -402,6 +442,9 @@ func containsAnyCloseoutSignal(text string) bool {
 		"close parent",
 		"close out parent",
 		"close out oc-",
+		"confirm verification report",
+		"verification report is committed and complete",
+		"committed and complete",
 		"parent can close",
 		"parent can be closed",
 		"parent can be closed out",
