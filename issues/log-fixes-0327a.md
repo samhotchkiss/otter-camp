@@ -5351,3 +5351,29 @@
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectExecutionContinuationReplacementChildRetryPromptTreatsVerificationCloseoutChildAsDirectCloseout|ProjectContinuationMalformedInheritedSharedFileTopicChildAllowsVerificationCloseoutChild|ProjectContinuationDoneTaskSupersedesDraftIgnoresVerificationCloseoutChild|ProjectContinuationSupersededDraftTaskIDsKeepsVerificationCloseoutDescendant)$' -count=1`
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(BuildProjectExecutionContinuationReplacementChildRetryPromptForWorker(TreatsVerificationCloseoutChildAsDirectCloseout|AdvancesParentAfterVerificationChild)|RequeueActiveProjectSessionsMissingContinuationKeepsVerificationCloseoutDraftDespiteDoneSamePathTask)$' -count=1`
+- 2026-03-31 04:18 MDT - Blocked poisoned recovery prose in shared planning deliverables.
+  - changed [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go):
+    - widened narrated-recovery placeholder detection to catch:
+      - `review commentary` / `review assessment` confession writes
+      - recovery-checkpoint truncation notes
+    - widened strong reviewer-summary detection to catch structured planning-deliverable review memos with `Task context`, `Review assessment`, `Strengths`, `Minor observations`, and `Verdict`
+    - those same helpers now reject the bad bodies in native `file.write`
+  - changed [`internal/tools/native/file_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/file_tools_test.go):
+    - added read-side canaries for planning-deliverable review memos and recovery-confession placeholders
+  - changed [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go):
+    - added write-side canaries for:
+      - review-commentary confession
+      - review-assessment confession
+      - recovery-checkpoint truncation narration
+      - structured planning-deliverable review memo
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - mirrored the same recovery-retry / reviewer-summary classifier expansion so recovery draft rejection and checkpoint logic reject the same poisoned bodies
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added matching `recoveryFileWriteDraftRejectReason(...)` coverage for the new confession / review-memo / truncation families
+  - verified with:
+    - `GOFLAGS='' go test ./internal/tools/native -run 'Test(FileWriteRejects(RecoveryCheckpointTruncationNarration|RecoveryAssessmentConfessionPlaceholder|RecoveryCommentaryConfessionPlaceholder|PlanningDeliverableReviewAssessmentMemo)|FileReadRejects(PlanningDeliverableReviewAssessmentMemo|RecoveryCommentaryConfessionPlaceholderAtPlanningDeliverablePath|RecoveryRetryNarrationPlaceholderAtExplicitDeliverablePath))$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'TestRecoveryFileWriteDraftRejectReasonRejects(RecoveryCheckpointTruncationNarration|RecoveryAssessmentConfessionPlaceholder|RecoveryCommentaryConfessionPlaceholder|PlanningDeliverableReviewAssessmentMemo)$' -count=1`
+  - live proof:
+    - task `6660` session `3e23ddc5-3c24-4878-a274-1227ba38727b` first hit `placeholder_deliverable` on the poisoned target reread at seq `416`
+    - the next continuation then wrote a fresh `10,493` byte body into `planning/sambot-example-conversations.md` at seq `418`
+    - the only follow-on failure was the expected runtime-owned `task_git_commit_blocked` guard at seq `422`, which means the lane moved past poisoned-body recovery and back onto normal flow-owned completion boundaries

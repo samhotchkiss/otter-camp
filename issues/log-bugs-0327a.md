@@ -2038,3 +2038,20 @@
     - they did not recognize that the focused task itself was already an explicit verification-closeout child for a previously delivered artifact
   - impact:
     - once the PM lane moved from parent `297` to verification-closeout child `6645`, it kept reopening child-lane orchestration instead of issuing the direct queue/closeout update on `6645`
+- 2026-03-31 04:18 MDT - Shared planning-deliverable recovery kept accepting poisoned retry prose as if it were the deliverable body.
+  - fresh live evidence:
+    - task `6660` repeatedly wrote `planning/sambot-example-conversations.md` with:
+      - a structured review-assessment memo about the file itself
+      - then shorter first-person retry confessions about having written a review assessment
+      - then a recovery-checkpoint truncation memo
+      - then a compact `Let me gather the essential context ...` stub
+    - those bodies were all accepted by native `file.write`, and the read side also treated the on-disk review memo as substantive enough to continue recovery
+  - bug:
+    - the existing placeholder detectors covered several older families (verification summaries, review rejections, task-brief echoes, runtime completion summaries), but they missed:
+      - first-person recovery confessions using `review assessment` wording
+      - structured planning-deliverable review memos with `Task context` / `Review assessment` / `Strengths` / `Verdict`
+      - recovery-checkpoint truncation notes about the target file already being partially written
+    - because those families were not classified as non-substantive, the target file itself became the durable poisoned draft for later retries
+  - impact:
+    - the same task lane could alternate between reread attempts and successful poisoned `file.write` calls without ever producing real expert conversation content
+    - recovery prompt quality kept degrading because the target file on disk was itself invalid context

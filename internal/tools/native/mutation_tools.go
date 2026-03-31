@@ -377,10 +377,29 @@ func workspacePathLooksDirectory(path string) bool {
 
 func looksLikeNarratedTaskFileWritePlaceholder(content string) bool {
 	trimmed := strings.TrimSpace(content)
-	if trimmed == "" || len(trimmed) > 1600 {
+	if trimmed == "" || len(trimmed) > 4000 {
 		return false
 	}
+	if looksLikeRecoveryRetryNarrationPlaceholder(trimmed) {
+		return true
+	}
 	lower := strings.ToLower(trimmed)
+	if containsAnySubstring(lower,
+		"writing the full verification report now",
+		"now i'll write the verification report",
+		"now i will write the verification report",
+		"now i need to write the verification report",
+		"verification report target file",
+	) && containsAnySubstring(lower,
+		"placeholder stub",
+		"stub summary note",
+		"placeholder prose rather than a real verification report",
+		"the source file is substantive and complete",
+		"the file already exists with high-quality",
+		"the file already exists and is substantive",
+	) {
+		return true
+	}
 	firstLine := lower
 	if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
 		firstLine = strings.TrimSpace(firstLine[:idx])
@@ -474,6 +493,97 @@ func looksLikeNarratedTaskFileWritePlaceholder(content string) bool {
 		"3. ",
 		"4. ",
 	)
+}
+
+func looksLikeRecoveryRetryNarrationPlaceholder(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || len(trimmed) > 4000 {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "---") || strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if containsAnySubstring(lower,
+		"there's already a solid start",
+		"there is already a solid start",
+	) && containsAnySubstring(lower,
+		"level 2 conversations",
+		"level 3 conversations",
+		"let me also check for sam's voice/bio materials",
+		"let me also check",
+		"let me quickly read",
+	) {
+		return true
+	}
+	if containsAnySubstring(lower,
+		"i can see this task has been stuck in a retry loop",
+		"i'm breaking that cycle now",
+		"i am breaking that cycle now",
+		"step 1: read both source documents",
+		"reading the two source documents now",
+		"read both source documents in parallel",
+	) && containsAnySubstring(lower,
+		"verification appendix",
+		"build the verification appendix",
+		"source documents",
+		"retry loop",
+	) {
+		return true
+	}
+	if containsAnySubstring(lower,
+		"let me quickly read",
+		"let me also check",
+		"reading the two source documents now",
+		"step 1: read both source documents",
+	) && containsAnySubstring(lower,
+		"solid start",
+		"voice/bio materials",
+		"verification appendix",
+		"stuck in a retry loop",
+	) {
+		return true
+	}
+	if containsAnySubstring(lower,
+		"i wrote review commentary",
+		"i accidentally wrote review commentary",
+		"i just wrote review commentary",
+		"i wrote a review assessment",
+		"i accidentally wrote a review assessment",
+		"i just wrote a review assessment",
+		"i wrote meta-commentary",
+		"i accidentally wrote meta-commentary",
+		"i wrote review commentary into the file",
+		"i wrote review commentary into the target file",
+		"i wrote a review assessment into the file",
+		"i wrote a review assessment into the target file",
+		"instead of the actual deliverable",
+		"instead of the actual deliverable content",
+		"instead of the actual deliverable body",
+	) && containsAnySubstring(lower,
+		"let me read",
+		"let me fix this now",
+		"write the real",
+		"write the correct",
+		"write the actual",
+		"write the concrete",
+		"feature spec",
+		"grounding",
+		"current file state",
+		"existing file",
+		"sibling task",
+	) {
+		return true
+	}
+	if containsAnySubstring(lower,
+		"i have the substantive draft from the recovery checkpoint",
+		"target file is truncated at",
+		"need to see how much of the file already exists on disk",
+		"complete it or write fresh",
+	) {
+		return true
+	}
+	return false
 }
 
 func looksLikeExecutionPlanFileWrite(path, content string) bool {
@@ -615,6 +725,9 @@ func looksLikeReviewerAssessmentInDeliverable(path, content string) bool {
 	if looksLikeStrongDeliverableReviewerSummaryPlaceholder(lower) {
 		return true
 	}
+	if looksLikeVerificationReportStubPlaceholder(lower) {
+		return true
+	}
 	if strings.HasPrefix(normalizedPath, "planning/") ||
 		strings.HasPrefix(normalizedPath, "review/") ||
 		strings.HasPrefix(normalizedPath, "reviews/") ||
@@ -683,6 +796,70 @@ func looksLikeStrongDeliverableReviewerSummaryPlaceholder(lower string) bool {
 	if lower == "" {
 		return false
 	}
+	if strings.Contains(lower, "mismatched_deliverable_context") && containsAnySubstring(lower,
+		"self-referential placeholder",
+		"per the review instructions",
+		"per my review instructions",
+		"terminal rejection condition",
+		"should reject immediately using this tool result as evidence",
+	) {
+		return true
+	}
+	if containsAnySubstring(lower,
+		"the evidence is clear",
+		"here's my assessment",
+		"here is my assessment",
+		"here is my review assessment",
+	) && containsAnySubstring(lower,
+		"parent task oc-",
+		"child tasks still blocked",
+		"completion gate requires all child tasks to complete",
+		"parent orchestration is incomplete",
+		"blocked and draft children remain unresolved",
+	) {
+		return true
+	}
+	if containsAnySubstring(lower,
+		"**review assessment:**",
+		"**verdict:**",
+		"**task context:**",
+		"**strengths:**",
+		"**minor observations",
+	) && containsAnySubstring(lower,
+		"let me evaluate",
+		"deliverable file `",
+		"this task (oc-",
+		"shared deliverable for both sibling tasks",
+		"the deliverable is complete and ready",
+	) {
+		return true
+	}
+	if containsAnySubstring(lower,
+		"contains only 430 bytes of internal scratch notes",
+		"contains only 454 bytes of what is clearly work-session scratch notes",
+		"contains only internal scratch notes",
+		"contains only 362 bytes of what is clearly a worker note or placeholder",
+		"contains only 830 bytes of what is clearly not the required deliverable",
+		"contains only 213 bytes of what appears to be internal worker notes",
+		"self-referential worker note",
+		"placeholder/stub",
+		"meta-commentary about the file-write interception cycle",
+		"no substantive content whatsoever",
+	) && containsAnySubstring(lower,
+		"task description requires",
+		"required by the task description",
+		"none of this content is present",
+		"this is a clear case of a missing/placeholder deliverable",
+		"this is a clear case of an incomplete/placeholder deliverable",
+		"this is a clear non-delivery",
+		"not the actual deliverable",
+		"self-referential worker note",
+		"mismatched deliverable",
+		"neither is present",
+		"rejecting.",
+	) {
+		return true
+	}
 	if !containsAnySubstring(lower,
 		"the evidence is clear",
 		"here's my assessment",
@@ -707,9 +884,14 @@ func looksLikeStrongDeliverableReviewerSummaryPlaceholder(lower string) bool {
 		"the file is a self-referential summary",
 		"this is a `mismatched_deliverable_context`",
 		"this is a mismatched_deliverable_context",
+		"self-referential placeholder",
 		"not the actual",
 		"rejecting.",
 		"per the review protocol",
+		"per the review instructions",
+		"per my review instructions",
+		"terminal rejection condition",
+		"should reject immediately using this tool result as evidence",
 		"rejecting now with this evidence",
 		"contains only placeholder narration",
 		"is a placeholder",
@@ -819,6 +1001,9 @@ func looksLikeDeliverableCompletionSummaryWithoutBody(path, content string) bool
 	}
 	lower := strings.ToLower(trimmed)
 	normalizedPath := strings.ToLower(normalizeWorkspacePath(path))
+	if looksLikeVerificationReportCompletionSummaryPlaceholder(normalizedPath, trimmed) {
+		return true
+	}
 	if strings.HasPrefix(normalizedPath, "planning/") ||
 		strings.HasPrefix(normalizedPath, "review/") ||
 		strings.HasPrefix(normalizedPath, "reviews/") ||
@@ -863,6 +1048,92 @@ func looksLikeDeliverableCompletionSummaryWithoutBody(path, content string) bool
 	return true
 }
 
+func looksLikeVerificationReportCompletionSummaryPlaceholder(path, content string) bool {
+	normalizedPath := strings.ToLower(strings.TrimSpace(path))
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	if !containsAnySubstring(normalizedPath,
+		"results/verify-",
+		"/verify-",
+		"verification-report",
+	) {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if looksLikeVerificationReportFlowAdvancePlaceholder(lower) {
+		return true
+	}
+	if !containsAnySubstring(lower,
+		"the deliverable is already in place",
+		"the target file is already complete, substantive",
+		"no write action is needed",
+		"no further file work is needed",
+		"no further action required from this recovery turn",
+		"no file mutation is needed",
+		"no write or repair is needed",
+		"no repair needed",
+		"the recovery target",
+		"durable and complete",
+		"already durable and accurate",
+		"accurate and complete",
+		"cannot advance to review directly",
+		"already the final durable output",
+		"already in a fully complete state",
+	) {
+		return false
+	}
+	return containsAnySubstring(lower,
+		"the verification report confirms",
+		"passes all verification criteria",
+		"already contains the full verification report",
+		"both files exist and are complete",
+		"both deliverable files are already complete and verified",
+		"both the source file (`planning/",
+		"both the source file and the verification report",
+		"the source file `planning/",
+		"the target file `results/",
+		"passes all acceptance criteria",
+		"already contains a thorough verification report",
+		"correctly assesses",
+		"the verification report is substantive and accurate",
+		"is fully written with a",
+		"returns a **pass** verdict",
+		"returns a pass verdict",
+		"verification report at `results/",
+		"can advance",
+	)
+}
+
+func looksLikeVerificationReportFlowAdvancePlaceholder(lower string) bool {
+	if lower == "" {
+		return false
+	}
+	if !containsAnySubstring(lower, "flow node execution", "flow_node_execution", "flow execution") {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"cannot advance to review directly",
+		"cannot be advanced to `review`",
+		"cannot be advanced to review",
+		"is in `draft` status and cannot be advanced",
+		"is in draft status and cannot be advanced",
+	) {
+		return false
+	}
+	return containsAnySubstring(lower,
+		"requires the runtime to activate the work node first",
+		"runtime must transition it to active before `flow.advance` can succeed",
+		"runtime must transition it to active before flow.advance can succeed",
+		"requires the task's work status to be updated",
+		"git commit to trigger the flow advancement",
+		"work step must be marked active/complete before the flow can transition",
+		"work node must first be moved to `in_progress` or `complete`",
+		"work node must first be moved to in_progress or complete",
+	)
+}
+
 func looksLikeRuntimeOwnedCommitHandoffPlaceholder(content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
@@ -874,6 +1145,7 @@ func looksLikeRuntimeOwnedCommitHandoffPlaceholder(content string) bool {
 		"the deliverables are all committed",
 		"the only uncommitted changes are",
 		"the only uncommitted change is",
+		"was written successfully in the previous turn",
 	) {
 		return false
 	}
@@ -881,10 +1153,12 @@ func looksLikeRuntimeOwnedCommitHandoffPlaceholder(content string) bool {
 		"checkpoint file",
 		"{slug}.md",
 		"placeholder",
+		"complete, substantive verification report",
 	) {
 		return false
 	}
 	return containsAnySubstring(lower,
+		"committing it now",
 		"let me clean up by staging",
 		"let me commit the current state",
 		"let me commit everything cleanly",
@@ -967,6 +1241,7 @@ func looksLikeTaskBriefEchoPlaceholder(path, content string) bool {
 		"## deliverable",
 		"## what to produce",
 		"## context",
+		"## key constraints",
 		"## do not",
 		"## validation criteria",
 		"## evidence expectations",
@@ -983,6 +1258,9 @@ func looksLikeTaskBriefEchoPlaceholder(path, content string) bool {
 		"this is a write task",
 		"do not describe intent to write it",
 		"using file_write or python3 via cli_execute",
+		"do not create a separate verification report file",
+		"do not produce planning artifacts",
+		"append a \"## prd acceptance criteria verification\" section",
 		"read it first",
 		"write a complete ",
 		"write the file to `",
@@ -1000,6 +1278,7 @@ func looksLikeTaskBriefEchoPlaceholder(path, content string) bool {
 		firstLine = strings.TrimSpace(firstLine[:idx])
 	}
 	if !strings.HasPrefix(firstLine, "# write ") &&
+		!strings.HasPrefix(firstLine, "# verify ") &&
 		!strings.HasPrefix(firstLine, "# create ") &&
 		!strings.HasPrefix(firstLine, "# append ") &&
 		!strings.HasPrefix(firstLine, "# implement ") {
@@ -1009,6 +1288,8 @@ func looksLikeTaskBriefEchoPlaceholder(path, content string) bool {
 		"reference `planning/",
 		"feature spec exists at `planning/",
 		"architecture spec exists at `planning/",
+		"append a \"## prd acceptance criteria verification\" section",
+		"do not create a separate verification report file",
 		"a markdown document covering:",
 		"each step includes:",
 		"what to produce",
@@ -1389,7 +1670,24 @@ func (e *NativeToolExecutor) taskSessionContentMigrationCheckpointOnlyDirtyPath(
 	return checkpointPath, true, nil
 }
 
-func (e *NativeToolExecutor) taskSessionDirectStatusBlocked(ctx context.Context, scope workspaceScope, taskRecord repo.ProjectTask, desiredStatus string) (map[string]any, bool, error) {
+func taskSessionAllowsFlowOwnedQueuedRepair(input map[string]any) bool {
+	now := time.Now().UTC()
+	childVerifications, hasChildVerifications, err := readChildOutputVerificationsInput(input, now)
+	if err != nil || !hasChildVerifications || len(childVerifications) == 0 {
+		return false
+	}
+	integrationCheck, hasIntegrationCheck, err := readIntegrationCheckInput(input, now)
+	if err != nil || !hasIntegrationCheck || integrationCheck == nil || !strings.EqualFold(strings.TrimSpace(integrationCheck.Status), "passed") {
+		return false
+	}
+	outcomeAssessment, hasOutcomeAssessment, err := readOutcomeAssessmentInput(input, now)
+	if err != nil || !hasOutcomeAssessment || outcomeAssessment == nil || !outcomeAssessment.Satisfied {
+		return false
+	}
+	return true
+}
+
+func (e *NativeToolExecutor) taskSessionDirectStatusBlocked(ctx context.Context, scope workspaceScope, taskRecord repo.ProjectTask, desiredStatus string, input map[string]any) (map[string]any, bool, error) {
 	if e == nil || scope.sessionID == nil || *scope.sessionID == uuid.Nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
 		return nil, false, nil
 	}
@@ -1402,6 +1700,9 @@ func (e *NativeToolExecutor) taskSessionDirectStatusBlocked(ctx context.Context,
 	desiredStatus = strings.ToLower(strings.TrimSpace(desiredStatus))
 	currentStatus := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
 	if desiredStatus == "" || desiredStatus == currentStatus {
+		return nil, false, nil
+	}
+	if desiredStatus == "queued" && taskSessionAllowsFlowOwnedQueuedRepair(input) {
 		return nil, false, nil
 	}
 	errorCode := "flow_owned_status_blocked"
@@ -2297,6 +2598,9 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 		if errors.Is(err, ErrPathTraversal) {
 			return map[string]any{"error": "path_traversal"}, nil
 		}
+		return nil, err
+	}
+	if scope, err = e.enrichScopeFromInput(ctx, scope, normalizedInput); err != nil {
 		return nil, err
 	}
 	pathInput, ok := readString(normalizedInput, "path")
@@ -3981,10 +4285,15 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		if childErr != nil {
 			return nil, childErr
 		}
+		closeoutReadyDirectQueue := strings.EqualFold(desiredStatus, "queued") && closeoutReadyOrchestrationParentCanQueueDirectlyNative(current, decompositionChildren)
+		if closeoutReadyDirectQueue {
+			decompositionChildren = nil
+		}
 		executableChildren := executableTasks(decompositionChildren)
 		requiresChildren := taskRequiresBoundedChildren(current)
 		if (strings.EqualFold(desiredStatus, "queued") || strings.EqualFold(desiredStatus, "in_progress")) &&
 			requiresChildren &&
+			!closeoutReadyDirectQueue &&
 			len(executableChildren) == 0 {
 			return map[string]any{
 				"error":   taskNeedsChildTasksMessage,
@@ -3992,10 +4301,12 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			}, nil
 		}
 		if strings.EqualFold(desiredStatus, "queued") && len(executableChildren) > 0 {
-			if err := e.queueDecompositionChildren(ctx, current, executableChildren); err != nil {
-				return nil, err
+			if !allowsCloseoutReadyOrchestrationParentQueueNative(current, executableChildren) {
+				if err := e.queueDecompositionChildren(ctx, current, executableChildren); err != nil {
+					return nil, err
+				}
+				desiredStatus = previousStatus
 			}
-			desiredStatus = previousStatus
 		}
 		if strings.EqualFold(desiredStatus, "in_progress") && len(executableChildren) > 0 {
 			return map[string]any{
@@ -4018,7 +4329,7 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		} else if _, hasFeedback := input["reopen_feedback"]; hasFeedback {
 			return map[string]any{"error": "reopen_feedback can only be used when reopening a completed child task"}, nil
 		}
-		if blocked, reject, guardErr := e.taskSessionDirectStatusBlocked(ctx, scope, current, desiredStatus); guardErr != nil {
+		if blocked, reject, guardErr := e.taskSessionDirectStatusBlocked(ctx, scope, current, desiredStatus, input); guardErr != nil {
 			return nil, guardErr
 		} else if reject {
 			return blocked, nil
@@ -5833,6 +6144,89 @@ func executableTasks(tasks []repo.ProjectTask) []repo.ProjectTask {
 		filtered = append(filtered, task)
 	}
 	return filtered
+}
+
+func closeoutReadyOrchestrationParentCanQueueDirectlyNative(task repo.ProjectTask, childTasks []repo.ProjectTask) bool {
+	if !taskRequiresBoundedChildren(task) || len(childTasks) == 0 {
+		return false
+	}
+	state, ok := taskorchestration.Parse(task.Metadata)
+	if !ok || state.IntegrationCheck == nil || !strings.EqualFold(strings.TrimSpace(state.IntegrationCheck.Status), "passed") {
+		return false
+	}
+	if state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied || len(state.ChildVerifications) == 0 {
+		return false
+	}
+	for _, child := range childTasks {
+		switch strings.ToLower(strings.TrimSpace(child.WorkStatus)) {
+		case "queued", "in_progress", "review", "on_hold":
+			return false
+		}
+	}
+	return true
+}
+
+func allowsCloseoutReadyOrchestrationParentQueueNative(task repo.ProjectTask, executableChildren []repo.ProjectTask) bool {
+	if !taskRequiresBoundedChildren(task) || len(executableChildren) == 0 {
+		return false
+	}
+	state, ok := taskorchestration.Parse(task.Metadata)
+	if !ok || state.IntegrationCheck == nil || !strings.EqualFold(strings.TrimSpace(state.IntegrationCheck.Status), "passed") {
+		return false
+	}
+	if state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied || len(state.ChildVerifications) == 0 {
+		return false
+	}
+	parentPath := parseExplicitDeliverablePath(task)
+	for _, child := range executableChildren {
+		status := strings.ToLower(strings.TrimSpace(child.WorkStatus))
+		if status == "blocked" || status == "draft" {
+			continue
+		}
+		if parentPath != "" {
+			childPath := parseExplicitDeliverablePath(child)
+			if childPath == "" {
+				if taskReferencesWorkspacePathNative(child, parentPath) {
+					continue
+				}
+				continue
+			}
+			if normalizeWorkspacePath(childPath) == normalizeWorkspacePath(parentPath) {
+				continue
+			}
+		}
+		if taskdecomp.TaskLooksProceduralInstructionArtifact(child.Title, child.Description) {
+			continue
+		}
+		if taskdecomp.DescriptionForbidsDecomposition(derefString(child.Description)) {
+			continue
+		}
+		if err := taskdecomp.ValidateExecutableTaskContract(child.Title, child.Description); err != nil {
+			continue
+		}
+		if status != "blocked" && status != "draft" {
+			return false
+		}
+	}
+	return true
+}
+
+func taskReferencesWorkspacePathNative(task repo.ProjectTask, targetPath string) bool {
+	targetPath = strings.ToLower(normalizeWorkspacePath(targetPath))
+	if targetPath == "" {
+		return false
+	}
+	for _, text := range taskContractDescriptionCandidates(task) {
+		normalized := strings.ToLower(normalizeWorkspacePath(text))
+		if normalized == targetPath {
+			return true
+		}
+		flat := strings.ToLower(strings.Join(strings.Fields(text), " "))
+		if strings.Contains(flat, targetPath) {
+			return true
+		}
+	}
+	return false
 }
 
 func taskRequiresBoundedChildren(task repo.ProjectTask) bool {

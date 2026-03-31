@@ -339,6 +339,56 @@ func TestFileWriteRejectsRuntimeAdvanceCompletionSummaryPlaceholderContent(t *te
 	}
 }
 
+func TestFileWriteRejectsRuntimeOwnedCommitHandoffPreviousTurnVerificationMemo(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("78787878-7878-7878-7878-787878787878")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project_task",
+				ScopeID:        taskID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "results/verify-test-conversations-level3.md",
+		"content":     "The file `results/verify-test-conversations-level3.md` was written successfully in the previous turn (6,574 bytes) and contains a complete, substantive verification report — committing it now.",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
 func TestFileWriteRejectsContentMigrationStatusPlaceholderContent(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()
@@ -1261,6 +1311,1276 @@ func TestFileWriteRejectsReviewerSummaryPlaceholderInPlanningDeliverable(t *test
 		"path": "planning/sambot-feature-spec.md",
 		"content": "The file content is clearly not a valid deliverable. It contains 988 bytes of meta-commentary about what would be delivered rather than actual spec content. There is no `## UI/UX Design` section, no chat widget placement details, no conversation flow patterns, no mobile responsiveness guidance, no conversation starters, and no error state definitions. The file is a self-referential summary describing what sections \"would\" contain.\n\n" +
 			"This is a `mismatched_deliverable_context` — rejecting.\n",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsPlanningDeliverableReviewAssessmentMemo(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("94949494-9494-9494-9494-949494949494")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	content := "The full file was returned (6,860 bytes, not truncated). Now let me review this deliverable against the task's requirements.\n\n" +
+		"**Task context:**\n- **Task title:** \"Expert version\"\n\n" +
+		"**Review assessment:**\nThe deliverable file `planning/sambot-example-conversations.md` is a single consolidated document.\n\n" +
+		"**Strengths:**\n1. Strong expert register.\n\n" +
+		"**Minor observations (not blocking):**\n- Shared deliverable for both sibling tasks.\n\n" +
+		"**Verdict:** The deliverable is complete and ready."
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "planning/sambot-example-conversations.md",
+		"content":     content,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationReportStubPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "results/verify-test-conversations-level3.md",
+		"content": "The source file exists and contains all 3 deeply technical conversations (14,904 bytes). " +
+			"The `results/verify-test-conversations-level3.md` currently contains a stub summary note rather than a real verification report. " +
+			"Writing the full verification report now:",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsReviewEvidenceSummaryPlaceholderWithReviewInstructions(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "results/verify-test-conversations-level3.md",
+		"content":     "The file read returned `mismatched_deliverable_context`. Per my review instructions, this is a terminal rejection condition — I should not proceed with broad inspection and should reject immediately using this tool result as evidence.",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsReviewEvidenceSummaryPlaceholderWithTheReviewInstructions(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "results/verify-test-conversations-level3.md",
+		"content":     "The file content is a self-referential placeholder stating `mismatched_deliverable_context` — it is not an actual verification report. Per the review instructions, this is a terminal rejection condition.",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationReportSubstantiveSourceStubPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "results/verify-test-conversations-level3.md",
+		"content":     "The source file is substantive and complete at 14,904 bytes. The target file `results/verify-test-conversations-level3.md` currently contains a placeholder stub (457 bytes). Writing the full verification report now.",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationReportPathBearingSourceStubPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "results/verify-test-conversations-level3.md",
+		"content":     "The source file `planning/sambot-prompts/test-conversations-level3.md` exists and is substantive. The target verification report at `results/verify-test-conversations-level3.md` contains only a stub. Writing the full verification report now:",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationReportRealWriteStubPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "results/verify-test-conversations-level3.md",
+		"content":     "The source file `planning/sambot-prompts/test-conversations-level3.md` exists and is substantive (14,904 bytes, 3 deeply technical conversations). The current `results/verify-test-conversations-level3.md` contains only a placeholder stub (303 bytes). Writing the real verification report now.",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationReportCompletionSummaryPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "results/verify-test-conversations-level3.md",
+		"content": "Both files exist and are complete. The target file `results/verify-test-conversations-level3.md` already contains the full verification report (4,402 bytes, PASS status) and `planning/sambot-prompts/test-conversations-level3.md` contains all 3 deeply technical conversations (14,904 bytes). The deliverable is already in place — no write action is needed.\n\n" +
+			"The verification report confirms:\n" +
+			"- PASS. The target file satisfies the verification criteria.\n\n" +
+			"The recovery target `results/verify-test-conversations-level3.md` is durable and complete. OC-6645 and OC-297 can advance.",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsRecoveryRetryNarrationPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("91919191-9191-9191-9191-919191919191")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "planning/sambot-tech-architecture.md",
+		"content":     "I can see this task has been stuck in a retry loop. I'm breaking that cycle now.\n\nStep 1: Read both source documents in parallel.\nStep 2: Build the verification appendix.\n",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsRecoveryCommentaryConfessionPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("93939393-9393-9393-9393-939393939393")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	content := "I just wrote review commentary into the target file instead of the actual deliverable. Let me fix this now by writing the real expert SamBot example conversations.\n\n" +
+		"Before I do that, let me read the existing file and the SamBot feature spec for grounding so I can produce the correct expert conversation content."
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "planning/sambot-example-conversations.md",
+		"content":     content,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsRecoveryAssessmentConfessionPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("95959595-9595-9595-9595-959595959595")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	content := "I accidentally wrote a review assessment into the target file instead of the actual expert conversation content. Let me read the parent task and sibling task context to understand what the actual deliverable should contain, then write the correct content."
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "planning/sambot-example-conversations.md",
+		"content":     content,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsRecoveryCheckpointTruncationNarration(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("96969696-9696-9696-9696-969696969696")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	content := "I have the substantive draft from the recovery checkpoint. The target file is truncated at \"Pair 3: Advice on a technical decision / Casual Visitor\" — I need to see how much of the file already exists on disk to know whether to complete it or write fresh."
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "planning/sambot-example-conversations.md",
+		"content":     content,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsReviewerSummaryPlaceholderAtPlanningDeliverable(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("92929292-9292-9292-9292-929292929292")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	content := "The file contains only 362 bytes of what is clearly a worker note or placeholder — not the actual deliverable. The task description requires a complete markdown document with:\n\n1. An overview of SamBot's depth adaptation capability\n2. Pair 1 and Pair 2 conversations\n3. Adaptation Notes section\n\nNone of this content is present. The file is a self-referential worker note about needing to write the conversations. Rejecting."
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "planning/sambot-example-conversations.md",
+		"content":     content,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationTaskBriefEchoPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("93939393-9393-9393-9393-939393939393")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	content := `# Verify planning/sambot-tech-architecture.md satisfies PRD acceptance criteria
+
+## Objective
+## Deliverable
+Update planning/sambot-tech-architecture.md with a verification appendix section confirming it meets PRD acceptance criteria.
+
+## Context
+This replaces OC-281/OC-261/OC-235.
+
+## Key constraints
+- Do NOT create a separate verification report file
+- Do NOT produce planning artifacts
+
+## Validation Criteria
+- Define explicit pass/fail checks for each relevant stage.
+
+## Evidence Expectations
+- Reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.
+
+Append a "## PRD Acceptance Criteria Verification" section to planning/sambot-tech-architecture.md.`
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "planning/sambot-tech-architecture.md",
+		"content":     content,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsArchitectureMetaCommentaryPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("94949494-9494-9494-9494-949494949494")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	content := "The deliverable file `planning/sambot-tech-architecture.md` contains no actual architecture content. Its entire content is a 264-byte meta-commentary about the file-write interception cycle — it is not a SamBot technical architecture document, nor does it contain a \"PRD Acceptance Criteria Verification\" appendix as required by the task description.\n\nThis is a mismatched deliverable: the file exists but holds no architecture specification, no verification table, and no substantive content whatsoever. Rejecting."
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "planning/sambot-tech-architecture.md",
+		"content":     content,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationReportRuntimeAdvanceSummaryPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "results/verify-test-conversations-level3.md",
+		"content":     "Both deliverable files are already complete and verified. The flow execution `9dbc7b27-8ab1-4689-b291-b7c58e1d374e` is in `draft` status and cannot advance to review directly — this requires the runtime to activate the work node first. The target file `results/verify-test-conversations-level3.md` is fully written with a ✅ PASS verification report; no further file work is needed.",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationReportFlowAdvanceDraftStatusPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "results/verify-test-conversations-level3.md",
+		"content":     "The flow node execution `9dbc7b27-8ab1-4689-b291-b7c58e1d374e` is in `draft` status and cannot be advanced to `review` — the task work step must be marked active/complete before the flow can transition; this requires the task's work status to be updated or a git commit to trigger the flow advancement.",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationReportAlreadyCompleteSummaryPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "results/verify-test-conversations-level3.md",
+		"content":     "The target file `results/verify-test-conversations-level3.md` is already complete, substantive (6,574 bytes), and passes all verification criteria. The source file `planning/sambot-prompts/test-conversations-level3.md` (14,904 bytes) also exists and is confirmed present. The deliverable is done — no further action required from this recovery turn.",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationReportFlowAdvanceRuntimeActivationPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Write results/verify-test-conversations-level3.md — verification report confirming 3 deeply technical SamBot test conversations",
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "results/verify-test-conversations-level3.md",
+		"content":     "The flow node is in `draft` status and cannot be advanced to `review` directly — the work node must first be moved to `in_progress` or `complete` by the runtime before flow.advance is valid. The concrete blocker is: **flow_node_execution `9dbc7b27-8ab1-4689-b291-b7c58e1d374e` is in `draft` status and the runtime must transition it to active before `flow.advance` can succeed.**",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationReportPlaceholderProse(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "results/verify-test-conversations-level3.md",
+		"content":     "The source file exists and is substantive. The `results/verify-test-conversations-level3.md` currently contains placeholder prose rather than a real verification report. Writing it now:",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationReportFinalOutputSummaryPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "results/verify-test-conversations-level3.md",
+		"content":     "Both files already exist and are complete. The verification report at `results/verify-test-conversations-level3.md` (4,402 bytes) is fully written with a ✅ PASS status covering all acceptance criteria, and the source deliverable at `planning/sambot-prompts/test-conversations-level3.md` (14,904 bytes) contains all 3 deeply technical conversations. No file mutation is needed — the target file is already the final durable output for this recovery turn.",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationReportSourceAndReportCompleteSummaryPlaceholderWithTaskIDOnlyInInput(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":    "results/verify-test-conversations-level3.md",
+		"task_id": taskID.String(),
+		"content": "Both the source file (`planning/sambot-prompts/test-conversations-level3.md`) and the verification report (`results/verify-test-conversations-level3.md`) already exist and are complete. The verification report is substantive and accurate. The task is already in a fully complete state — no file mutation is needed.",
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationReportPassVerdictSummaryPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "results/verify-test-conversations-level3.md",
+		"content":     "Both files already exist and are complete. The verification report at `results/verify-test-conversations-level3.md` correctly assesses `planning/sambot-prompts/test-conversations-level3.md` and returns a **PASS** verdict. The target file is already durable and accurate — no write or repair is needed.",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationReportNoRepairNeededSummaryPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "results/verify-test-conversations-level3.md",
+		"content":     "Both files exist and are complete. The source file `planning/sambot-prompts/test-conversations-level3.md` is 14,904 bytes with 3 deeply technical conversations, and `results/verify-test-conversations-level3.md` already contains a thorough verification report that passes all acceptance criteria. The verification report is accurate and complete — no repair needed.",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationReportParentOrchestrationStatusMemo(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "results/verify-test-conversations-level3.md",
+		"content":     "The evidence is clear. The parent task OC-297 has **two key child tasks still blocked** (OC-6646 and OC-6649) and **five more child tasks still in draft**. Only two of nine actionable children are `done` (OC-328 and OC-6645). The parent's completion gate requires all child tasks to complete before the parent can finish integration, and that gate is not met.\n\nThe verification report at `results/verify-test-conversations-level3.md` exists and is well-written, but the parent orchestration is incomplete: blocked and draft children remain unresolved.",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsVerificationReportIntentNarrationPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("89898989-8989-8989-8989-898989898989")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "results/verify-test-conversations-level3.md",
+		"content":     "The file already exists and is fully substantive — 3 deeply technical multi-turn conversations covering distributed consensus (Raft vs Paxos), ML inference (KV cache + VRAM math for LLaMA-3), and event sourcing/CQRS. Now writing the verification report.",
 		"create_dirs": true,
 	})
 	if err != nil {
@@ -2610,6 +3930,13 @@ func TestLooksLikeNarratedTaskFileWritePlaceholderTaskRequiresMeVariant(t *testi
 Let me look at the flow template to understand the validation flow structure:`
 	if !looksLikeNarratedTaskFileWritePlaceholder(content) {
 		t.Fatal("expected task-requires-me placeholder to be rejected")
+	}
+}
+
+func TestLooksLikeNarratedTaskFileWritePlaceholderRecoveryRetryVariant(t *testing.T) {
+	content := "There's already a solid start — 2 Level 2 conversations and 2 Level 3 conversations are in place. Let me also check for Sam's voice/bio materials before I finish the file."
+	if !looksLikeNarratedTaskFileWritePlaceholder(content) {
+		t.Fatal("expected recovery-retry placeholder to be rejected")
 	}
 }
 
@@ -5849,6 +7176,119 @@ func TestTaskUpdateReturnsBoundedTaskContractRewriteHint(t *testing.T) {
 	}
 }
 
+func TestTaskUpdateQueuesCloseoutReadyOrchestrationParentInsteadOfRequeueingChildren(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	now := time.Now().UTC()
+	description := "Write the single file results/verify-test-conversations-level3.md. Read planning/sambot-prompts/test-conversations-level3.md, confirm exactly 3 deeply technical multi-turn test conversations are present, and record a PASS/FAIL verification report."
+	metadata := taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren)
+	metadata = taskdecomp.AppendChildTaskID(metadata, uuid.MustParse("23ab9a39-09a0-401d-949b-77f9960b2b22"))
+	metadata = taskdecomp.AppendChildTaskID(metadata, uuid.MustParse("498fa308-65f1-41db-9be8-fc54c1458c61"))
+	metadata = taskdecomp.AppendChildTaskID(metadata, uuid.MustParse("b2005e6e-005a-481b-9bf8-f594f23784ba"))
+	var err error
+	metadata, err = taskorchestration.Apply(metadata, taskorchestration.Update{
+		ChildVerifications: []taskorchestration.ChildVerification{
+			taskorchestration.NewChildVerification(uuid.MustParse("23ab9a39-09a0-401d-949b-77f9960b2b22"), "OC-328 delivered planning/sambot-prompts/test-conversations-level3.md.", now),
+		},
+		IntegrationCheck:  taskorchestration.NewIntegrationCheck("passed", "Upstream deliverable exists and is coherent.", now),
+		OutcomeAssessment: taskorchestration.NewOutcomeAssessment(true, "Verification report is ready to produce.", now),
+	})
+	if err != nil {
+		t.Fatalf("taskorchestration.Apply: %v", err)
+	}
+
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      projectID,
+			Title:          "Write results/verify-test-conversations-level3.md — verification report confirming 3 deeply technical SamBot test conversations",
+			Description:    &description,
+			WorkStatus:     "draft",
+			FlowTemplateID: &flowTemplateID,
+			Metadata:       metadata,
+		},
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				Title:          "Write results/verify-test-conversations-level3.md — verification report confirming 3 deeply technical SamBot test conversations",
+				Description:    &description,
+				WorkStatus:     "draft",
+				FlowTemplateID: &flowTemplateID,
+				Metadata:       metadata,
+			},
+			{
+				ID:          uuid.MustParse("23ab9a39-09a0-401d-949b-77f9960b2b22"),
+				ProjectID:   projectID,
+				Title:       "Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations that exercise SamBot's ability to speak as Sam Hotchkiss on hard technical subjects.",
+				WorkStatus:  "done",
+				Description: func() *string { s := "Deliverable: planning/sambot-prompts/test-conversations-level3.md"; return &s }(),
+				Metadata:    taskdecomp.ApplyChildMetadata(json.RawMessage(`{}`), taskID, 1),
+			},
+			{
+				ID:         uuid.MustParse("498fa308-65f1-41db-9be8-fc54c1458c61"),
+				ProjectID:  projectID,
+				Title:      "Four prior child tasks were all terminally rejected because the conversations were surface-level.",
+				WorkStatus: "draft",
+				Description: func() *string {
+					s := "Four prior child tasks were all terminally rejected because the conversations were surface-level."
+					return &s
+				}(),
+				Metadata: taskdecomp.ApplyChildMetadata(json.RawMessage(`{}`), taskID, 2),
+			},
+			{
+				ID:         uuid.MustParse("b2005e6e-005a-481b-9bf8-f594f23784ba"),
+				ProjectID:  projectID,
+				Title:      "Verify planning/sambot-prompts/test-conversations-level3.md exists and advance",
+				WorkStatus: "blocked",
+				Description: func() *string {
+					s := "Confirm the file exists at planning/sambot-prompts/test-conversations-level3.md and verify it contains exactly 3 deeply technical multi-turn test conversations."
+					return &s
+				}(),
+				Metadata: taskdecomp.ApplyChildMetadata(json.RawMessage(`{}`), taskID, 3),
+			},
+		},
+	}
+	taskService := &mockTaskTransitionService{}
+	executor := NewExecutor(ExecutorOptions{
+		WorkspaceRoot: t.TempDir(),
+		TaskService:   taskService,
+	})
+	executor.tasks = tasks
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			flowTemplateID: validExecutableTemplateNodeList(flowTemplateID),
+		},
+	}
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if taskService.transitionCalls != 1 {
+		t.Fatalf("transition calls = %d, want 1", taskService.transitionCalls)
+	}
+	if taskService.lastStatus != "queued" {
+		t.Fatalf("transition status = %q, want queued", taskService.lastStatus)
+	}
+	if tasks.updateCalls != 1 {
+		t.Fatalf("update calls = %d, want 1 persisted metadata update before transition", tasks.updateCalls)
+	}
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if taskOut["work_status"] != "queued" {
+		t.Fatalf("work_status = %v, want queued", taskOut["work_status"])
+	}
+}
+
 func TestTaskUpdateRejectsDoneWithoutFlowTemplate(t *testing.T) {
 	taskID := uuid.New()
 	tasks := &mockTaskRepo{
@@ -5936,9 +7376,9 @@ func TestTaskSessionDirectDoneBlockedForFlowOwnedTaskSession(t *testing.T) {
 	}
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
 	sessionID := uuid.New()
-	scope := workspaceScope{sessionID: &sessionID, taskID: &taskID}
+	scope := workspaceScope{sessionID: &sessionID, taskID: &taskID, sessionScope: "project_task"}
 
-	out, reject, err := executor.taskSessionDirectStatusBlocked(context.Background(), scope, taskRecord, "done")
+	out, reject, err := executor.taskSessionDirectStatusBlocked(context.Background(), scope, taskRecord, "done", nil)
 	if err != nil {
 		t.Fatalf("taskSessionDirectStatusBlocked: %v", err)
 	}
@@ -5973,9 +7413,9 @@ func TestTaskSessionDirectDoneBlockedForFlowOwnedReviewTaskSession(t *testing.T)
 		},
 	}
 	sessionID := uuid.New()
-	scope := workspaceScope{sessionID: &sessionID, taskID: &taskID}
+	scope := workspaceScope{sessionID: &sessionID, taskID: &taskID, sessionScope: "project_task"}
 
-	out, reject, err := executor.taskSessionDirectStatusBlocked(context.Background(), scope, taskRecord, "done")
+	out, reject, err := executor.taskSessionDirectStatusBlocked(context.Background(), scope, taskRecord, "done", nil)
 	if err != nil {
 		t.Fatalf("taskSessionDirectStatusBlocked: %v", err)
 	}
@@ -6010,9 +7450,9 @@ func TestTaskSessionDirectReviewBlockedForFlowOwnedWorkTaskSession(t *testing.T)
 		},
 	}
 	sessionID := uuid.New()
-	scope := workspaceScope{sessionID: &sessionID, taskID: &taskID}
+	scope := workspaceScope{sessionID: &sessionID, taskID: &taskID, sessionScope: "project_task"}
 
-	out, reject, err := executor.taskSessionDirectStatusBlocked(context.Background(), scope, taskRecord, "review")
+	out, reject, err := executor.taskSessionDirectStatusBlocked(context.Background(), scope, taskRecord, "review", nil)
 	if err != nil {
 		t.Fatalf("taskSessionDirectStatusBlocked: %v", err)
 	}
@@ -6688,12 +8128,55 @@ func TestTaskSessionDirectStatusBlockedIgnoresProjectSessionTaskBinding(t *testi
 		sessionScope:   "project",
 		sessionMode:    "async",
 		organizationID: uuid.New(),
-	}, taskRecord, "cancelled")
+	}, taskRecord, "cancelled", nil)
 	if err != nil {
 		t.Fatalf("taskSessionDirectStatusBlocked: %v", err)
 	}
 	if blocked {
 		t.Fatalf("blocked = true, want false for project session task binding: %v", out)
+	}
+}
+
+func TestTaskSessionDirectQueuedAllowedForFlowOwnedParentOrchestrationRepair(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	flowNodeID := uuid.New()
+	taskRecord := repo.ProjectTask{
+		ID:                taskID,
+		OrganizationID:    uuid.New(),
+		ProjectID:         uuid.New(),
+		WorkStatus:        "in_progress",
+		FlowTemplateID:    &flowTemplateID,
+		CurrentFlowNodeID: &flowNodeID,
+		Title:             "Write results/verify-test-conversations-level3.md",
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	sessionID := uuid.New()
+	scope := workspaceScope{sessionID: &sessionID, taskID: &taskID, sessionScope: "project_task"}
+
+	out, reject, err := executor.taskSessionDirectStatusBlocked(context.Background(), scope, taskRecord, "queued", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "queued",
+		"child_output_verifications": []any{
+			map[string]any{
+				"task_id": uuid.New().String(),
+				"summary": "Completed child deliverable already satisfies the parent verification gate.",
+			},
+		},
+		"integration_check": map[string]any{
+			"status":  "passed",
+			"summary": "Child verification passed.",
+		},
+		"outcome_assessment": map[string]any{
+			"satisfied": true,
+			"summary":   "Parent deliverable outcome is satisfied.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("taskSessionDirectStatusBlocked: %v", err)
+	}
+	if reject {
+		t.Fatalf("reject = true, want false for flow-owned queued repair: %v", out)
 	}
 }
 
