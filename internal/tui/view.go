@@ -4119,5 +4119,55 @@ func wrapChatInputForDisplay(text string, width int) string {
 	// Tabs render unpredictably in terminal layouts and can jump across panel
 	// boundaries; normalize them to spaces for stable wrapping.
 	text = strings.ReplaceAll(text, "\t", "    ")
-	return strings.Join(wrapTextPreserveWhitespace(text, width), "\n")
+	return strings.Join(wrapChatInputLines(text, width), "\n")
+}
+
+func wrapChatInputLines(text string, width int) []string {
+	if width <= 0 {
+		return []string{text}
+	}
+	var result []string
+	for _, line := range strings.Split(text, "\n") {
+		if strings.TrimSpace(line) == "" {
+			result = append(result, line)
+			continue
+		}
+		words := strings.Fields(line)
+		if len(words) == 0 {
+			result = append(result, line)
+			continue
+		}
+		current := ""
+		for _, word := range words {
+			if lipgloss.Width(word) > width {
+				if current != "" {
+					result = append(result, current)
+					current = ""
+				}
+				runes := []rune(word)
+				for len(runes) > width {
+					result = append(result, string(runes[:width]))
+					runes = runes[width:]
+				}
+				if len(runes) > 0 {
+					current = string(runes)
+				}
+				continue
+			}
+			candidate := word
+			if current != "" {
+				candidate = current + " " + word
+			}
+			if lipgloss.Width(candidate) <= width {
+				current = candidate
+				continue
+			}
+			result = append(result, current)
+			current = word
+		}
+		if current != "" {
+			result = append(result, current)
+		}
+	}
+	return result
 }

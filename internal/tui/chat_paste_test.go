@@ -77,3 +77,19 @@ func TestWrapTextPreserveWhitespaceKeepsIndentationAndBlankLines(t *testing.T) {
 		}
 	}
 }
+
+func TestWrapChatInputForDisplayPrefersWordBoundaries(t *testing.T) {
+	got := wrapChatInputForDisplay("doing market research with authors", 18)
+	want := "doing market\nresearch with\nauthors"
+	if got != want {
+		t.Fatalf("wrapped chat input = %q, want %q", got, want)
+	}
+}
+
+func TestWrapChatInputForDisplayPreservesExplicitBlankLines(t *testing.T) {
+	got := wrapChatInputForDisplay("first line\n\nsecond line", 20)
+	want := "first line\n\nsecond line"
+	if got != want {
+		t.Fatalf("wrapped chat input with blank line = %q, want %q", got, want)
+	}
+}

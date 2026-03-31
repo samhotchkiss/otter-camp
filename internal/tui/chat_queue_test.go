@@ -82,8 +82,8 @@ func TestChatInputBehaviorsNewlineHistoryAndMentionAutocomplete(t *testing.T) {
 		t.Fatalf("alt-enter newline input = %q, want %q", got, "@frank \n")
 	}
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\n'}})
-	if got := model.ChatInput(); got != "@frank \n\n" {
-		t.Fatalf("shift-enter newline input = %q, want %q", got, "@frank \\n\\n")
+	if got := model.ChatInput(); got != "@frank \n" {
+		t.Fatalf("raw newline rune should not mutate input = %q, want %q", got, "@frank \\n")
 	}
 
 	model.chatInput = "history-entry"

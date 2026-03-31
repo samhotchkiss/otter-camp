@@ -5495,8 +5495,7 @@ func (m *Model) handleChatRunes(key tea.KeyMsg) {
 	if len(key.Runes) == 1 {
 		r := key.Runes[0]
 		if r == '\n' {
-			m.chatInput += "\n"
-			m.statusMessage = "Inserted newline."
+			m.statusMessage = "Use Alt-Enter to insert a newline."
 			return
 		}
 		// EX-420: queue actions (e/s/d) should work when activeTurn is true AND when
