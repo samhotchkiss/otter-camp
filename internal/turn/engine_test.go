@@ -15399,6 +15399,99 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesJordanGenericRepl
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnUsesTriggerMessageWhenPassedLatestUserIsUnrelated(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 12037,
+				Title:      "Verify sambot-example-conversations.md and produce verification report",
+				WorkStatus: "done",
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	triggerMessageID := uuid.New()
+	triggerMessage := repo.ChatMessage{
+		ID:             triggerMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "failed",
+		SequenceNumber: 21043,
+		Content:        "Continue the active project execution now. The latest completed task was task 12037.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	fixture.messages.create(triggerMessage)
+
+	unrelatedLatestUser := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "final",
+		SequenceNumber: 21045,
+		Content:        "unrelated chatter",
+		Metadata:       mustJSONRaw(map[string]any{"source": "manual_test_note"}),
+	}
+	fixture.messages.create(*unrelatedLatestUser)
+
+	turnID := uuid.New()
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		SequenceNumber: 21044,
+		Content:        "How can I help you with the Sam.blog Rebuild project? What would you like to know or do?",
+	}
+	fixture.messages.create(*assistant)
+
+	messages := []repo.ChatMessage{triggerMessage, *unrelatedLatestUser, *assistant}
+	completedTurn := &repo.ChatTurn{
+		ID:               turnID,
+		SessionID:        fixture.session.ID,
+		RespondingID:     fixture.chat.participants[0].ParticipantID,
+		RetryCount:       0,
+		TriggerMessageID: &triggerMessageID,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, unrelatedLatestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected generic project continuation reply to retry using the turn trigger message")
+	}
+	if len(fixture.enqueuer.jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1", len(fixture.enqueuer.jobs))
+	}
+
+	retryMessage, err := fixture.messages.GetByID(context.Background(), fixture.enqueuer.jobs[0].payload.MessageID)
+	if err != nil {
+		t.Fatalf("GetByID retry message: %v", err)
+	}
+	if !strings.Contains(retryMessage.Content, "generic non-action reply") {
+		t.Fatalf("retry message = %q, want generic-reply retry guidance", retryMessage.Content)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnSuppressesRepeatedRediscoveryBlockedRetry(t *testing.T) {
 	t.Parallel()
 
@@ -16125,6 +16218,12 @@ func TestHandleCompletedProjectExecutionContinuationTurnFocusedCloseoutRetryProm
 	}
 	if !strings.Contains(retryMessage.Content, "child_output_verifications") {
 		t.Fatalf("retry message = %q, want child_output_verifications guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "Do not begin with task.list(parent_task_id=...)") {
+		t.Fatalf("retry message = %q, want explicit no-task.list guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "Start with one narrow task.update on the focused parent now") {
+		t.Fatalf("retry message = %q, want explicit direct task.update guidance", retryMessage.Content)
 	}
 }
 
@@ -28344,6 +28443,62 @@ func TestProjectContinuationSupersededDraftTaskIDsKeepsVerificationCloseoutDesce
 	}
 }
 
+func TestBuildProjectContinuationTaskHintsCachesInheritedDeliverablesAndIndexDependencies(t *testing.T) {
+	t.Parallel()
+
+	parentID := uuid.New()
+	indexID := uuid.New()
+	importID := uuid.New()
+	tasks := []repo.ProjectTask{
+		{
+			ID:         parentID,
+			TaskNumber: 297,
+			Title:      "Write planning/sambot-prompts/test-conversations-level3.md",
+			WorkStatus: "draft",
+			Metadata: mustJSONRaw(map[string]any{
+				"decomposition": map[string]any{
+					"primary_deliverable": "planning/sambot-prompts/test-conversations-level3.md",
+				},
+			}),
+		},
+		{
+			ID:         indexID,
+			TaskNumber: 401,
+			Title:      "Write content/technonymous-index.json",
+			WorkStatus: "done",
+			Metadata: mustJSONRaw(map[string]any{
+				"decomposition": map[string]any{
+					"primary_deliverable": "content/technonymous-index.json",
+				},
+			}),
+		},
+		{
+			ID:         importID,
+			TaskNumber: 402,
+			Title:      "Use URL index to verify parent deliverable completeness",
+			WorkStatus: "draft",
+			Metadata: mustJSONRaw(map[string]any{
+				"decomposition_parent_task_id": parentID.String(),
+			}),
+		},
+	}
+
+	hintsByTask := buildProjectContinuationTaskHints(tasks, nil)
+
+	parentHints := hintsByTask[parentID]
+	if parentHints.DeliverablePath != "planning/sambot-prompts/test-conversations-level3.md" {
+		t.Fatalf("parent deliverable_path = %q, want planning/sambot-prompts/test-conversations-level3.md", parentHints.DeliverablePath)
+	}
+
+	importHints := hintsByTask[importID]
+	if importHints.DeliverablePath != "planning/sambot-prompts/test-conversations-level3.md" {
+		t.Fatalf("child inherited deliverable_path = %q, want planning/sambot-prompts/test-conversations-level3.md", importHints.DeliverablePath)
+	}
+	if importHints.DependsOnPath != "content/technonymous-index.json" {
+		t.Fatalf("url-index depends_on_path = %q, want content/technonymous-index.json", importHints.DependsOnPath)
+	}
+}
+
 func TestProjectExecutionContinuationSnapshotIgnoresMalformedConflictingDeliverableChildren(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()
@@ -29147,6 +29302,93 @@ func TestProjectExecutionContinuationSnapshotTreatsVerificationEvidenceChildAsCl
 	}
 	if !strings.Contains(snapshot.FocusTaskLine, "completed_closeout_child_tasks=1") {
 		t.Fatalf("FocusTaskLine = %q, want closeout marker from verification-evidence child", snapshot.FocusTaskLine)
+	}
+}
+
+func TestProjectExecutionContinuationSnapshotIgnoresStaleVerificationCloseoutChildrenAfterRecordedProof(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentDraftID := uuid.New()
+	parentDescription := "Write planning/sambot-example-conversations.md with paired SamBot example conversations."
+	staleChildDescription := "Verify planning/sambot-example-conversations.md exists and close out the parent if it is complete."
+	provedChildDescription := "Verify planning/sambot-example-conversations.md exists and close out parent OC-12048 once the file is confirmed complete."
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+
+	staleChildMetadata := mustRawJSON(t, map[string]any{
+		"decomposition_parent_task_id": parentDraftID.String(),
+	})
+	provedChildMetadata := mustRawJSON(t, map[string]any{
+		"decomposition_parent_task_id": parentDraftID.String(),
+		"parent_orchestration": map[string]any{
+			"integration_check": map[string]any{
+				"status":  "passed",
+				"summary": "planning/sambot-example-conversations.md exists and matches the verified deliverable.",
+			},
+			"outcome_assessment": map[string]any{
+				"satisfied": true,
+				"summary":   "Parent deliverable is already satisfied and can close.",
+			},
+		},
+	})
+
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentDraftID: {
+				ID:          parentDraftID,
+				ProjectID:   projectID,
+				TaskNumber:  12048,
+				Title:       "Write paired SamBot example conversations (casual + expert) — replacement for blocked OC-6654",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+			},
+			uuid.New(): {
+				ID:          uuid.New(),
+				ProjectID:   projectID,
+				TaskNumber:  12049,
+				Title:       "Verify planning/sambot-example-conversations.md exists and close out parent",
+				Description: &staleChildDescription,
+				WorkStatus:  "draft",
+				Metadata:    staleChildMetadata,
+			},
+			uuid.New(): {
+				ID:          uuid.New(),
+				ProjectID:   projectID,
+				TaskNumber:  12050,
+				Title:       "Verify planning/sambot-example-conversations.md exists and close out parent OC-12048",
+				Description: &provedChildDescription,
+				WorkStatus:  "blocked",
+				Metadata:    provedChildMetadata,
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshotForSummary(context.Background(), projectID, "planning/sambot-example-conversations.md")
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshotForSummary: %v", err)
+	}
+	parentLabel := "task 12048 (Write paired SamBot example conversations (casual + expert) — replacement for blocked OC-6654)"
+	if !strings.Contains(snapshot.DraftTaskLine, parentLabel) {
+		t.Fatalf("DraftTaskLine = %q, want parent 12048 visible as actionable closeout-ready draft", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "completed_closeout_child_tasks=1") {
+		t.Fatalf("DraftTaskLine = %q, want self-proved verification child to count as closeout proof", snapshot.DraftTaskLine)
+	}
+	if strings.Contains(snapshot.DraftTaskLine, "task 12049") {
+		t.Fatalf("DraftTaskLine = %q, did not want stale verification child drafts to remain actionable", snapshot.DraftTaskLine)
+	}
+	if strings.Contains(snapshot.ReplacementDraftLine, parentLabel) {
+		t.Fatalf("ReplacementDraftLine = %q, should not keep parent 12048 in replacement bucket once verification proof exists", snapshot.ReplacementDraftLine)
+	}
+	if strings.Contains(snapshot.ChildActiveDraftLine, parentLabel) {
+		t.Fatalf("ChildActiveDraftLine = %q, should not treat stale verification child drafts as active child work", snapshot.ChildActiveDraftLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, parentLabel) {
+		t.Fatalf("FocusTaskLine = %q, want focus to stay on closeout-ready parent 12048", snapshot.FocusTaskLine)
 	}
 }
 
@@ -49549,6 +49791,56 @@ func TestDeliverableTargetMatchesTaskContractRejectsAuxiliaryTestArtifactForBack
 	}
 	if deliverableTargetMatchesTaskContract(taskRecord, "sambot/system-prompt-spec.md") {
 		t.Fatal("expected auxiliary spec artifact to be rejected for backend task")
+	}
+}
+
+func TestDeliverableTargetMatchesTaskContractAllowsVerificationCloseoutParentPath(t *testing.T) {
+	t.Parallel()
+
+	description := "OC-12037 already delivered planning/sambot-example-conversations.md. This verification task confirms the file exists and the parent can close. Mark done immediately once verified."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  12050,
+		Title:       "Verify sambot-example-conversations.md exists and close out parent",
+		Description: &description,
+	}
+
+	if !deliverableTargetMatchesTaskContract(taskRecord, "planning/sambot-example-conversations.md") {
+		t.Fatal("expected verification closeout child to accept inherited parent deliverable path")
+	}
+}
+
+func TestSessionTaskDeliverablePathInheritsParentExplicitDeliverableForVerificationCloseoutChild(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	parentID := uuid.New()
+	childID := uuid.New()
+	parentDescription := "Write paired SamBot example conversations to planning/sambot-example-conversations.md."
+	childDescription := "OC-12037 already delivered planning/sambot-example-conversations.md. This verification task confirms the file exists and the parent can close. Mark done immediately once verified."
+	childTask := repo.ProjectTask{
+		ID:          childID,
+		TaskNumber:  12050,
+		Title:       "Verify sambot-example-conversations.md exists and close out parent",
+		Description: &childDescription,
+		Metadata: mustRawJSON(t, map[string]any{
+			"decomposition_parent_task_id": parentID.String(),
+		}),
+	}
+
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:          parentID,
+				TaskNumber:  12048,
+				Title:       "Write paired SamBot example conversations",
+				Description: &parentDescription,
+			},
+			childID: childTask,
+		},
+	}
+
+	if got := fixture.engine.sessionTaskDeliverablePath(context.Background(), fixture.session.ID, childTask); got != "planning/sambot-example-conversations.md" {
+		t.Fatalf("sessionTaskDeliverablePath(...) = %q, want %q", got, "planning/sambot-example-conversations.md")
 	}
 }
 

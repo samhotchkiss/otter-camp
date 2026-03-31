@@ -5132,6 +5132,13 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 	if e == nil || session == nil || completedTurn == nil || latestUser == nil || assistant == nil || e.tasks == nil || e.taskTransitions == nil {
 		return false, nil
 	}
+	if !projectContinuationMessageRootsHistory(*latestUser) && e.messages != nil &&
+		completedTurn.TriggerMessageID != nil && *completedTurn.TriggerMessageID != uuid.Nil {
+		if triggerMessage, err := e.messages.GetByID(ctx, *completedTurn.TriggerMessageID); err == nil &&
+			projectContinuationMessageRootsHistory(triggerMessage) {
+			latestUser = &triggerMessage
+		}
+	}
 	if !projectContinuationMessageRootsHistory(*latestUser) {
 		return false, nil
 	}
@@ -14112,10 +14119,18 @@ func buildProjectContinuationFocusedResumeRetryPrompt(content string) string {
 	if content == "" {
 		return ""
 	}
-	return content +
+	retry := content +
 		" Your last continuation turn did not complete the focused project action already required above." +
 		" Do not restart with broad project-state reads, do not fall back to generic narration, and do not rediscover the broader tree." +
 		" Your next assistant action must emit the direct task.update, task.create, or explicitly allowed parent-scoped task.list needed by the focused handoff above, or report one concrete blocker sentence."
+	lower := strings.ToLower(content)
+	if strings.Contains(lower, "already closeout-ready for the same deliverable") ||
+		strings.Contains(lower, "already proved that the focused parent is closeout-ready") ||
+		strings.Contains(lower, "closeout-ready parent still needs parent_orchestration evidence") {
+		retry += " Do not begin with task.list(parent_task_id=...), task.get, or phrases like 'Let me check the current children first'."
+		retry += " Start with one narrow task.update on the focused parent now unless the prompt above explicitly allowed a parent-scoped task.list."
+	}
+	return retry
 }
 
 func (e *TurnEngine) projectContinuationBoundedSizeResumeActionPrompt(
@@ -21095,6 +21110,15 @@ func (e *TurnEngine) decompositionParentTask(ctx context.Context, taskRecord rep
 
 func (e *TurnEngine) taskExplicitDeliverablePath(ctx context.Context, taskRecord repo.ProjectTask) string {
 	if explicit := strings.TrimSpace(explicitDeliverablePath(taskRecord)); explicit != "" {
+		if !strings.Contains(normalizeWorkspaceRelativePath(explicit), "/") {
+			parentTask, ok := e.decompositionParentTask(ctx, taskRecord)
+			if ok {
+				if inherited := strings.TrimSpace(explicitDeliverablePath(parentTask)); inherited != "" &&
+					taskVerificationCloseoutMatchesDeliverablePath(taskRecord, inherited) {
+					return inherited
+				}
+			}
+		}
 		return explicit
 	}
 	parentTask, ok := e.decompositionParentTask(ctx, taskRecord)
@@ -21283,6 +21307,9 @@ func deliverableTargetMatchesTaskContract(taskRecord repo.ProjectTask, candidate
 	if candidate == "" {
 		return false
 	}
+	if taskVerificationCloseoutMatchesDeliverablePath(taskRecord, candidate) {
+		return true
+	}
 	if explicit := normalizeWorkspaceRelativePath(explicitDeliverablePath(taskRecord)); explicit != "" {
 		return sameWorkspaceRelativePath(candidate, explicit)
 	}
@@ -21307,6 +21334,46 @@ func deliverableTargetMatchesTaskContract(taskRecord repo.ProjectTask, candidate
 	default:
 		return false
 	}
+}
+
+func taskVerificationCloseoutMatchesDeliverablePath(taskRecord repo.ProjectTask, candidate string) bool {
+	candidate = normalizeWorkspaceRelativePath(candidate)
+	if candidate == "" || !strings.Contains(filepath.Base(candidate), ".") {
+		return false
+	}
+	if taskLooksLikeVerificationCloseoutChild(taskRecord, candidate) {
+		return true
+	}
+	text := strings.ToLower(strings.Join(strings.Fields(strings.Join(taskSharedFileOwnershipTexts(taskRecord), " ")), " "))
+	if text == "" {
+		return false
+	}
+	base := strings.ToLower(filepath.Base(candidate))
+	if base == "" || !strings.Contains(text, base) {
+		return false
+	}
+	hasVerifySignal := containsAny(text,
+		"verify ",
+		"verification ",
+		" verification",
+		"confirm ",
+		"confirmation ",
+	)
+	if !hasVerifySignal {
+		return false
+	}
+	return containsAny(text,
+		"close parent",
+		"close out parent",
+		"close the parent",
+		"parent can close",
+		"parent can be closed",
+		"parent can close.",
+		"complete the parent",
+		"confirms the parent",
+		"closeout",
+		"mark done immediately",
+	)
 }
 
 func taskTreatsPathAsAuxiliaryArtifact(taskRecord repo.ProjectTask, candidate string) bool {
@@ -23602,18 +23669,75 @@ func projectContinuationTaskNeedsReviewResume(task repo.ProjectTask, blockedReas
 func buildProjectContinuationTaskHints(tasks []repo.ProjectTask, blockedReasons map[uuid.UUID]string) map[uuid.UUID]projectContinuationTaskHints {
 	hintsByTask := make(map[uuid.UUID]projectContinuationTaskHints, len(tasks))
 	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(tasks))
+	ownHintsByTask := make(map[uuid.UUID]projectContinuationTaskHints, len(tasks))
+	parentByTask := make(map[uuid.UUID]uuid.UUID, len(tasks))
+	childHintsByParent := make(map[uuid.UUID]projectContinuationTaskHints)
+	urlIndexCandidates := make([]struct {
+		taskID uuid.UUID
+		path   string
+	}, 0, len(tasks))
 	for _, task := range tasks {
 		tasksByID[task.ID] = task
+		deliverablePath, deliverableRoot := projectContinuationOwnDeliverableHints(task)
+		ownHintsByTask[task.ID] = projectContinuationTaskHints{
+			DeliverablePath: deliverablePath,
+			DeliverableRoot: deliverableRoot,
+		}
+		if deliverablePath != "" {
+			explicitLower := strings.ToLower(strings.TrimSpace(deliverablePath))
+			if projectContinuationTaskReferencesURLIndex(task) || strings.Contains(explicitLower, "index") {
+				urlIndexCandidates = append(urlIndexCandidates, struct {
+					taskID uuid.UUID
+					path   string
+				}{taskID: task.ID, path: deliverablePath})
+			}
+		}
+		metadata := messageMetadataMap(task.Metadata)
+		parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+		if !ok || parentID == uuid.Nil {
+			continue
+		}
+		parentByTask[task.ID] = parentID
+		if existing := childHintsByParent[parentID]; existing.DeliverablePath != "" || existing.DeliverableRoot != "" {
+			continue
+		}
+		if deliverablePath != "" || deliverableRoot != "" {
+			childHintsByParent[parentID] = projectContinuationTaskHints{
+				DeliverablePath: deliverablePath,
+				DeliverableRoot: deliverableRoot,
+			}
+		}
 	}
 	for _, task := range tasks {
 		blockedReason := strings.TrimSpace(blockedReasons[task.ID])
-		deliverablePath, deliverableRoot := projectContinuationTaskDeliverableHints(task, tasksByID)
+		deliverablePath := strings.TrimSpace(ownHintsByTask[task.ID].DeliverablePath)
+		deliverableRoot := strings.TrimSpace(ownHintsByTask[task.ID].DeliverableRoot)
+		if deliverablePath == "" && deliverableRoot == "" {
+			if childHints := childHintsByParent[task.ID]; childHints.DeliverablePath != "" || childHints.DeliverableRoot != "" {
+				deliverablePath = strings.TrimSpace(childHints.DeliverablePath)
+				deliverableRoot = strings.TrimSpace(childHints.DeliverableRoot)
+			} else if parentID, ok := parentByTask[task.ID]; ok {
+				parentHints := ownHintsByTask[parentID]
+				deliverablePath = strings.TrimSpace(parentHints.DeliverablePath)
+				deliverableRoot = strings.TrimSpace(parentHints.DeliverableRoot)
+			}
+		}
+		dependsOnPath := ""
+		if projectContinuationTaskReferencesURLIndex(task) {
+			for _, candidate := range urlIndexCandidates {
+				if candidate.taskID == task.ID {
+					continue
+				}
+				dependsOnPath = candidate.path
+				break
+			}
+		}
 		hintsByTask[task.ID] = projectContinuationTaskHints{
 			BlockedReason:   blockedReason,
 			ResumePolicy:    projectContinuationTaskResumePolicy(task, blockedReason),
 			DeliverablePath: deliverablePath,
 			DeliverableRoot: deliverableRoot,
-			DependsOnPath:   projectContinuationTaskDependencyHintPath(task, tasks),
+			DependsOnPath:   dependsOnPath,
 			BatchRange:      projectContinuationTaskBatchRange(task),
 			DirectWriteOnly: projectContinuationTaskRequiresDirectWriteOnly(task, deliverablePath),
 		}
@@ -23900,6 +24024,7 @@ func projectContinuationChildTaskActivity(tasks []repo.ProjectTask, hintsByTask 
 	for _, task := range tasks {
 		tasksByID[task.ID] = task
 	}
+	selfProvingCloseoutParentIDs := make(map[uuid.UUID]struct{})
 	for _, task := range tasks {
 		metadata := messageMetadataMap(task.Metadata)
 		parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
@@ -23907,6 +24032,31 @@ func projectContinuationChildTaskActivity(tasks []repo.ProjectTask, hintsByTask 
 			continue
 		}
 		parentTask, hasParent := tasksByID[parentID]
+		if !hasParent {
+			continue
+		}
+		if projectContinuationVerificationCloseoutChildProvidesParentClosureProof(task, parentTask, hintsByTask[task.ID], hintsByTask[parentID]) {
+			selfProvingCloseoutParentIDs[parentID] = struct{}{}
+		}
+	}
+	for _, task := range tasks {
+		metadata := messageMetadataMap(task.Metadata)
+		parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"])
+		if !ok || parentID == uuid.Nil {
+			continue
+		}
+		parentTask, hasParent := tasksByID[parentID]
+		if hasParent {
+			if _, ok := selfProvingCloseoutParentIDs[parentID]; ok &&
+				projectContinuationVerificationCloseoutChildCanRetireAfterParentProof(task, parentTask, hintsByTask[task.ID], hintsByTask[parentID]) {
+				if projectContinuationVerificationCloseoutChildProvidesParentClosureProof(task, parentTask, hintsByTask[task.ID], hintsByTask[parentID]) {
+					activity := activityByParentID[parentID]
+					activity.completedCloseoutChildTaskCount++
+					activityByParentID[parentID] = activity
+				}
+				continue
+			}
+		}
 		if hasParent &&
 			strings.EqualFold(strings.TrimSpace(task.WorkStatus), "done") &&
 			projectContinuationChildTaskClosesParent(task, parentTask, hintsByTask[task.ID], hintsByTask[parentID]) {
@@ -24130,6 +24280,64 @@ func projectContinuationVerificationChildHasRecordedCloseoutProof(task repo.Proj
 		strings.EqualFold(strings.TrimSpace(state.IntegrationCheck.Status), "passed")
 	hasSatisfiedOutcome := state.OutcomeAssessment != nil && state.OutcomeAssessment.Satisfied
 	return hasPassedIntegration || hasSatisfiedOutcome
+}
+
+func projectContinuationVerificationCloseoutChildProvidesParentClosureProof(
+	childTask repo.ProjectTask,
+	parentTask repo.ProjectTask,
+	childHints projectContinuationTaskHints,
+	parentHints projectContinuationTaskHints,
+) bool {
+	status := strings.ToLower(strings.TrimSpace(childTask.WorkStatus))
+	switch status {
+	case "draft", "blocked", "cancelled":
+	default:
+		return false
+	}
+	if !projectContinuationDraftLooksLikeVerificationCloseout(childTask) {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(childTask.Title))
+	if childTask.Description != nil {
+		if description := strings.ToLower(strings.TrimSpace(*childTask.Description)); description != "" {
+			text += "\n" + description
+		}
+	}
+	if !projectContinuationVerificationChildHasRecordedCloseoutProof(childTask, text) {
+		return false
+	}
+	parentDeliverablePath := normalizeWorkspaceRelativePath(parentHints.DeliverablePath)
+	childDeliverablePath := normalizeWorkspaceRelativePath(childHints.DeliverablePath)
+	parentDeliverableRoot := normalizeWorkspaceRelativePath(parentHints.DeliverableRoot)
+	childDeliverableRoot := normalizeWorkspaceRelativePath(childHints.DeliverableRoot)
+	parentDependsOnPath := normalizeWorkspaceRelativePath(parentHints.DependsOnPath)
+	if projectContinuationChildMatchesParentDeliverableIdentity(
+		parentDeliverablePath,
+		parentDeliverableRoot,
+		parentDependsOnPath,
+		childDeliverablePath,
+		childDeliverableRoot,
+		normalizeWorkspaceRelativePath(childHints.DependsOnPath),
+	) {
+		return true
+	}
+	return strings.Contains(text, fmt.Sprintf("oc-%d", parentTask.TaskNumber)) ||
+		strings.Contains(text, fmt.Sprintf("parent %d", parentTask.TaskNumber))
+}
+
+func projectContinuationVerificationCloseoutChildCanRetireAfterParentProof(
+	childTask repo.ProjectTask,
+	parentTask repo.ProjectTask,
+	childHints projectContinuationTaskHints,
+	parentHints projectContinuationTaskHints,
+) bool {
+	if projectTaskExecutionActive(childTask.WorkStatus) {
+		return false
+	}
+	if projectContinuationVerificationCloseoutChildProvidesParentClosureProof(childTask, parentTask, childHints, parentHints) {
+		return true
+	}
+	return projectContinuationDraftLooksLikeVerificationCloseout(childTask)
 }
 
 func projectContinuationMalformedChildTaskIDs(tasks []repo.ProjectTask) map[uuid.UUID]struct{} {
@@ -24380,6 +24588,16 @@ func projectContinuationSupersededDraftTaskIDs(
 		if !isActionableProjectDraftTask(draftTask) {
 			continue
 		}
+		if projectContinuationDraftLooksLikeVerificationCloseout(draftTask) {
+			parentID := taskdecomp.ParseParentTaskID(draftTask.Metadata)
+			if parentID != uuid.Nil && childActivity[parentID].completedCloseoutChildTaskCount > 0 {
+				if superseded == nil {
+					superseded = make(map[uuid.UUID]struct{})
+				}
+				superseded[draftTask.ID] = struct{}{}
+				continue
+			}
+		}
 		draftHints := taskHintsByTask[draftTask.ID]
 		if !projectContinuationTaskHasDeliverableIdentity(draftHints.DeliverablePath, draftHints.DeliverableRoot) {
 			continue
@@ -24586,6 +24804,9 @@ func projectContinuationOpenTaskSupersedesDraft(
 	openTask repo.ProjectTask,
 	openHints projectContinuationTaskHints,
 ) bool {
+	if projectContinuationDraftLooksLikeVerificationCloseout(openTask) {
+		return false
+	}
 	if openTask.TaskNumber <= draftTask.TaskNumber {
 		return false
 	}
@@ -39371,7 +39592,7 @@ func (e *TurnEngine) maybeApplySyncOrganizationProjectKickoffPromptHint(ctx cont
 	}
 	clone := *assembled
 	clone.Messages = append(append([]prompt.PromptMessage(nil), assembled.Messages...), prompt.PromptMessage{
-		Role: "system",
+		Role:    "system",
 		Content: "Latest user message is an actionable request to start a new project. Do not ask permission to create the project when the user already asked for it. Unless the user explicitly says they are only brainstorming, your next step should be project.create in this turn. After the project exists, briefly acknowledge ownership and move into a chief-of-staff discovery phase when the request is still underdefined: run discovery, then come back with a proposed methodology, recommended direction, and only the few high-leverage questions that materially change the plan. Keep the immediate user-facing reply short and ownership-oriented: a concise \"I'm on it; I'll do discovery and return with a proposed approach\" response is better than a long speculative workstream list. Do not open with broad scope/tech-stack questions before project.create, do not dump a full implementation plan in the same first reply, and do not jump straight into implementation backlog if the request is discovery-first.",
 	})
 	return &clone

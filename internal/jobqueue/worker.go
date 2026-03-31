@@ -4929,6 +4929,16 @@ func projectContinuationSupersededDraftTaskIDsForWorker(
 		if !isActionableProjectDraftTaskForWorker(draftTask) {
 			continue
 		}
+		if projectContinuationDraftLooksLikeVerificationCloseoutForWorker(draftTask) {
+			parentID := taskdecomp.ParseParentTaskID(draftTask.Metadata)
+			if parentID != uuid.Nil && childActivity[parentID].completedCloseoutChildTaskCount > 0 {
+				if superseded == nil {
+					superseded = make(map[uuid.UUID]struct{})
+				}
+				superseded[draftTask.ID] = struct{}{}
+				continue
+			}
+		}
 		draftActivity := childActivity[draftTask.ID]
 		if projectContinuationDraftTaskReadyForParentClosureForWorkerTask(draftTask, draftActivity) {
 			continue
@@ -5143,6 +5153,9 @@ func projectContinuationOpenTaskSupersedesDraftForWorker(
 	openTask repo.ProjectTask,
 	openHints projectContinuationTaskHintsForWorker,
 ) bool {
+	if projectContinuationDraftLooksLikeVerificationCloseoutForWorker(openTask) {
+		return false
+	}
 	if openTask.TaskNumber <= draftTask.TaskNumber {
 		return false
 	}
@@ -5230,6 +5243,64 @@ func projectContinuationContainsAnyForWorker(text string, terms ...string) bool 
 func projectContinuationDraftTaskOutcomeSatisfiedForWorker(task repo.ProjectTask) bool {
 	state, ok := taskorchestration.Parse(task.Metadata)
 	return ok && state.OutcomeAssessment != nil && state.OutcomeAssessment.Satisfied
+}
+
+func projectContinuationVerificationCloseoutChildProvidesParentClosureProofForWorker(
+	childTask repo.ProjectTask,
+	parentTask repo.ProjectTask,
+	childHints projectContinuationTaskHintsForWorker,
+	parentHints projectContinuationTaskHintsForWorker,
+) bool {
+	status := strings.ToLower(strings.TrimSpace(childTask.WorkStatus))
+	switch status {
+	case "draft", "blocked", "cancelled":
+	default:
+		return false
+	}
+	if !projectContinuationDraftLooksLikeVerificationCloseoutForWorker(childTask) {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(childTask.Title))
+	if childTask.Description != nil {
+		if description := strings.ToLower(strings.TrimSpace(*childTask.Description)); description != "" {
+			text += "\n" + description
+		}
+	}
+	if !projectContinuationVerificationChildHasRecordedCloseoutProofForWorker(childTask, text) {
+		return false
+	}
+	parentDeliverablePath := normalizeWorkspaceRelativePathForWorker(parentHints.DeliverablePath)
+	childDeliverablePath := normalizeWorkspaceRelativePathForWorker(childHints.DeliverablePath)
+	parentDeliverableRoot := normalizeWorkspaceRelativePathForWorker(parentHints.DeliverableRoot)
+	childDeliverableRoot := normalizeWorkspaceRelativePathForWorker(childHints.DeliverableRoot)
+	parentDependsOnPath := normalizeWorkspaceRelativePathForWorker(parentHints.DependsOnPath)
+	if projectContinuationChildMatchesParentDeliverableIdentityForWorker(
+		parentDeliverablePath,
+		parentDeliverableRoot,
+		parentDependsOnPath,
+		childDeliverablePath,
+		childDeliverableRoot,
+		normalizeWorkspaceRelativePathForWorker(childHints.DependsOnPath),
+	) {
+		return true
+	}
+	return strings.Contains(text, fmt.Sprintf("oc-%d", parentTask.TaskNumber)) ||
+		strings.Contains(text, fmt.Sprintf("parent %d", parentTask.TaskNumber))
+}
+
+func projectContinuationVerificationCloseoutChildCanRetireAfterParentProofForWorker(
+	childTask repo.ProjectTask,
+	parentTask repo.ProjectTask,
+	childHints projectContinuationTaskHintsForWorker,
+	parentHints projectContinuationTaskHintsForWorker,
+) bool {
+	if projectTaskExecutionActiveForWorker(childTask.WorkStatus) {
+		return false
+	}
+	if projectContinuationVerificationCloseoutChildProvidesParentClosureProofForWorker(childTask, parentTask, childHints, parentHints) {
+		return true
+	}
+	return projectContinuationDraftLooksLikeVerificationCloseoutForWorker(childTask)
 }
 
 func projectContinuationTaskHasDeliverableIdentityForWorker(deliverablePath, deliverableRoot string) bool {
@@ -5972,6 +6043,7 @@ func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask, hin
 	for _, task := range tasks {
 		tasksByID[task.ID] = task
 	}
+	selfProvingCloseoutParentIDs := make(map[uuid.UUID]struct{})
 	for _, task := range tasks {
 		var metadata map[string]any
 		if err := json.Unmarshal(task.Metadata, &metadata); err != nil {
@@ -5987,6 +6059,39 @@ func projectContinuationChildTaskActivityForWorker(tasks []repo.ProjectTask, hin
 			continue
 		}
 		parentTask, hasParent := tasksByID[parentID]
+		if !hasParent {
+			continue
+		}
+		if projectContinuationVerificationCloseoutChildProvidesParentClosureProofForWorker(task, parentTask, hintsByTask[task.ID], hintsByTask[parentID]) {
+			selfProvingCloseoutParentIDs[parentID] = struct{}{}
+		}
+	}
+	for _, task := range tasks {
+		var metadata map[string]any
+		if err := json.Unmarshal(task.Metadata, &metadata); err != nil {
+			continue
+		}
+		rawParentID, ok := metadata["decomposition_parent_task_id"]
+		if !ok {
+			continue
+		}
+		parentIDText := strings.TrimSpace(fmt.Sprint(rawParentID))
+		parentID, err := uuid.Parse(parentIDText)
+		if err != nil || parentID == uuid.Nil {
+			continue
+		}
+		parentTask, hasParent := tasksByID[parentID]
+		if hasParent {
+			if _, ok := selfProvingCloseoutParentIDs[parentID]; ok &&
+				projectContinuationVerificationCloseoutChildCanRetireAfterParentProofForWorker(task, parentTask, hintsByTask[task.ID], hintsByTask[parentID]) {
+				if projectContinuationVerificationCloseoutChildProvidesParentClosureProofForWorker(task, parentTask, hintsByTask[task.ID], hintsByTask[parentID]) {
+					activity := activityByParentID[parentID]
+					activity.completedCloseoutChildTaskCount++
+					activityByParentID[parentID] = activity
+				}
+				continue
+			}
+		}
 		if hasParent &&
 			strings.EqualFold(strings.TrimSpace(task.WorkStatus), "done") &&
 			projectContinuationChildTaskClosesParentForWorker(task, parentTask, hintsByTask[task.ID], hintsByTask[parentID]) {
