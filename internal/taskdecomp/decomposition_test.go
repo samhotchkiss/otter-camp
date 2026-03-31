@@ -1067,6 +1067,80 @@ func TestPrepareQueueDecompositionSkipsReadOnlyVerificationCloseoutTask(t *testi
 	}
 }
 
+func TestPrepareQueueDecompositionSkipsLiveCloseoutVerificationWording(t *testing.T) {
+	title := "No new file — this task validates the existing planning/sambot-tech-architecture.md and produces a brief verification summary as output."
+	description := strings.Join([]string{
+		"## Closeout verification task",
+		"",
+		"The deliverable `planning/sambot-tech-architecture.md` already exists on disk. This task verifies it meets the PRD acceptance criteria for the SamBot tech architecture document and advances it through review.",
+		"",
+		"### Verification checklist",
+		"1. Confirm `planning/sambot-tech-architecture.md` exists and is non-empty",
+		"2. Confirm it covers the required architecture sections",
+		"",
+		"### Deliverable",
+		"No new file — this task validates the existing `planning/sambot-tech-architecture.md` and produces a brief verification summary as output.",
+		"",
+		"### Instructions for worker",
+		"- Read `planning/sambot-tech-architecture.md`",
+		"- Check each acceptance criterion",
+		"- Write a short verification summary confirming coverage",
+		"- Advance through the flow",
+	}, "\n")
+
+	result, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        title,
+		Description:  &description,
+		Metadata:     json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("PrepareQueueDecomposition: %v", err)
+	}
+	if result.Applied {
+		t.Fatal("Applied = true, want false for live closeout verification wording")
+	}
+}
+
+func TestPrepareQueueDecompositionSkipsInheritedReadOnlyCloseoutVerificationChildren(t *testing.T) {
+	title := "Write a short verification summary confirming coverage"
+	description := "Write a short verification summary confirming coverage"
+	sourceDescription := strings.Join([]string{
+		"## Closeout verification task",
+		"",
+		"The deliverable `planning/sambot-tech-architecture.md` already exists on disk. This task verifies it meets the PRD acceptance criteria for the SamBot tech architecture document and advances it through review.",
+		"",
+		"### Deliverable",
+		"No new file — this task validates the existing `planning/sambot-tech-architecture.md` and produces a brief verification summary as output.",
+		"",
+		"### Instructions for worker",
+		"- Read `planning/sambot-tech-architecture.md`",
+		"- Write a short verification summary confirming coverage",
+	}, "\n")
+	metadata, err := json.Marshal(map[string]any{
+		"decomposition_parent_task_id": uuid.New().String(),
+		"decomposition": map[string]any{
+			"source_description": sourceDescription,
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(metadata): %v", err)
+	}
+
+	result, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        title,
+		Description:  &description,
+		Metadata:     metadata,
+	})
+	if err != nil {
+		t.Fatalf("PrepareQueueDecomposition: %v", err)
+	}
+	if result.Applied {
+		t.Fatal("Applied = true, want false for inherited closeout verification child")
+	}
+}
+
 func TestPrepareQueueDecompositionAutoAppliesForPhotographyArchiveWorkstream(t *testing.T) {
 	description := strings.Join([]string{
 		"ORCHESTRATION PARENT - do not execute directly.",

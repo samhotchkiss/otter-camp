@@ -417,6 +417,14 @@ func PrepareQueueDecomposition(input QueueDecompositionInput) (QueueDecompositio
 	if strings.TrimSpace(ParsePrimaryDeliverable(input.Metadata)) != "" {
 		return QueueDecomposition{}, nil
 	}
+	if sourceDescription := ParseSourceDescription(input.Metadata); sourceDescription != "" {
+		if looksLikeReadOnlyVerificationCloseoutTask("", sourceDescription) {
+			if sizingErr := validateBoundedTaskSize(input.Title, input.Description, input.ParentTaskID != uuid.Nil); sizingErr != nil {
+				return QueueDecomposition{}, sizingErr
+			}
+			return QueueDecomposition{}, nil
+		}
+	}
 	plan := Analyze(input.Title, input.Description)
 	if !plan.RequiresDecomposition {
 		if sizingErr := validateBoundedTaskSize(input.Title, input.Description, input.ParentTaskID != uuid.Nil); sizingErr != nil {
@@ -485,6 +493,15 @@ func ParsePrimaryDeliverable(metadata json.RawMessage) string {
 	}
 	primary, _ := decomp["primary_deliverable"].(string)
 	return strings.TrimSpace(primary)
+}
+
+func ParseSourceDescription(metadata json.RawMessage) string {
+	decomp := decompositionObject(metadata)
+	if decomp == nil {
+		return ""
+	}
+	source, _ := decomp["source_description"].(string)
+	return strings.TrimSpace(source)
 }
 
 func ParseChildTaskIDs(metadata json.RawMessage) []uuid.UUID {
@@ -1539,9 +1556,14 @@ func looksLikeReadOnlyVerificationCloseoutTask(title, rawDescription string) boo
 		"read-only",
 		"do not modify",
 		"do not rewrite",
+		"no new file",
 		"no new file creation needed",
+		"produces a brief verification summary as output",
+		"brief verification summary as output",
+		"write a short verification summary confirming coverage",
 		"just verify and advance",
 		"simply confirm",
+		"advances it through review",
 	}) {
 		return false
 	}
