@@ -5339,3 +5339,15 @@
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ProjectContinuationMalformedInheritedSharedFileTopicChildAllowsVerificationCloseoutChild|ProjectContinuationDoneTaskSupersedesDraftIgnoresVerificationCloseoutChild|ProjectContinuationSupersededDraftTaskIDsKeepsVerificationCloseoutDescendant|ShouldBlockProjectContinuationFocusedDraft(TaskCreateSkipsProjectScanForDirectedReplacementChild|MutationSkipsProjectScanForDirectedReplacementChildQueue))$' -count=1`
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RequeueActiveProjectSessionsMissingContinuationKeepsVerificationCloseoutDraftDespiteDoneSamePathTask|ProjectExecutionContinuationSnapshotIgnoresMalformedInheritedSharedFileTopicChildren|RequeueActiveProjectSessionsMissingContinuationIgnoresSuperseded(SatisfiedOutcomeDrafts|CloseoutDrafts)|RequeueActiveProjectSessionsMissingContinuationKeepsReplacementDraftWhenBlockedSamePathTaskRemains)$' -count=1`
+- 2026-03-30 20:32 MDT - Switched verification-closeout focus retries out of replacement-child mode.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(...)` now detects verification-closeout focus refs and emits direct closeout guidance instead of replacement-child guidance
+    - removed the `task.list(parent_task_id=...)` fallback for that closeout path
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - `buildProjectExecutionContinuationReplacementChildRetryPrompt(...)` now treats explicit verification-closeout focus tasks as direct closeout/update work rather than fresh replacement-parent work
+  - changed tests:
+    - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(BuildProjectExecutionContinuationReplacementChildRetryPromptTreatsVerificationCloseoutChildAsDirectCloseout|ProjectContinuationMalformedInheritedSharedFileTopicChildAllowsVerificationCloseoutChild|ProjectContinuationDoneTaskSupersedesDraftIgnoresVerificationCloseoutChild|ProjectContinuationSupersededDraftTaskIDsKeepsVerificationCloseoutDescendant)$' -count=1`
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(BuildProjectExecutionContinuationReplacementChildRetryPromptForWorker(TreatsVerificationCloseoutChildAsDirectCloseout|AdvancesParentAfterVerificationChild)|RequeueActiveProjectSessionsMissingContinuationKeepsVerificationCloseoutDraftDespiteDoneSamePathTask)$' -count=1`

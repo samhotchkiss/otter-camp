@@ -6369,6 +6369,16 @@ func buildProjectExecutionContinuationReplacementChildRetryPrompt(
 	}
 	focusLabel := projectBootstrapTaskLabel(focusTask)
 	focusRef := projectExecutionContinuationTaskRef(focusTask, focusActivity, focusHints)
+	if projectContinuationDraftLooksLikeVerificationCloseout(focusTask) {
+		retryPrompt.WriteString(" Your last continuation turn was blocked after broad rediscovery even though the next bounded closeout step was already named.")
+		retryPrompt.WriteString(fmt.Sprintf(" Current focus task: %s.", focusRef))
+		retryPrompt.WriteString(" That focused draft is already a verification/closeout lane for a previously delivered artifact.")
+		retryPrompt.WriteString(" Do not create another replacement child from the project lane.")
+		retryPrompt.WriteString(" Do not call task.list, task.get, file.list, file.read, or file.search before acting.")
+		retryPrompt.WriteString(fmt.Sprintf(" Do not inspect or mention other draft parents until %s is advanced.", focusLabel))
+		retryPrompt.WriteString(fmt.Sprintf(" Your next assistant action must be one narrow task.update on task_id=%s for %s to queue or close it directly, or one concrete blocker sentence if the exact verification evidence is still missing.", focusTask.ID.String(), focusLabel))
+		return retryPrompt.String()
+	}
 	laneReason := "terminally blocked or malformed child lanes"
 	switch {
 	case focusActivity.malformedChildTaskCount > 0 && focusActivity.replaceableBlockedChildTaskCount == 0:

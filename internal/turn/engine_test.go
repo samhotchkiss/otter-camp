@@ -17916,6 +17916,42 @@ func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnFocusedCloseoutR
 	}
 }
 
+func TestBuildProjectExecutionContinuationReplacementChildRetryPromptTreatsVerificationCloseoutChildAsDirectCloseout(t *testing.T) {
+	t.Parallel()
+
+	completedTask := repo.ProjectTask{TaskNumber: 310, Title: "Write planning/sambot-prompts/test-conversations-level3.md — 3 deeply technical SamBot test conversations (replacement)"}
+	focusTaskID := uuid.MustParse("e088a32b-1e43-44fa-a5b5-5aa3fdf351a3")
+	description := "OC-310 already delivered planning/sambot-prompts/test-conversations-level3.md. This verification task confirms the file exists and the parent can close. Mark done immediately once verified."
+	focusTask := repo.ProjectTask{
+		ID:          focusTaskID,
+		TaskNumber:  6645,
+		Title:       "Verify planning/sambot-prompts/test-conversations-level3.md exists and close out parent",
+		Description: &description,
+		WorkStatus:  "draft",
+	}
+	prompt := buildProjectExecutionContinuationReplacementChildRetryPrompt(
+		completedTask,
+		1,
+		projectExecutionContinuationSnapshot{ProjectLine: "Active project id: a6dbd331-7205-42d9-b0df-10105d5b5330"},
+		focusTask,
+		projectContinuationChildActivity{malformedChildTaskCount: 2},
+		projectContinuationTaskHints{DeliverablePath: "planning/sambot-prompts/test-conversations-level3.md"},
+	)
+
+	if !strings.Contains(prompt, "verification/closeout lane for a previously delivered artifact") {
+		t.Fatalf("prompt = %q, want verification closeout guidance", prompt)
+	}
+	if !strings.Contains(prompt, "task.update on task_id="+focusTaskID.String()) {
+		t.Fatalf("prompt = %q, want direct task.update instruction", prompt)
+	}
+	if strings.Contains(prompt, "create the smallest fresh replacement child task beneath task 6645") {
+		t.Fatalf("prompt = %q, should not keep replacement-child wording for verification closeout child", prompt)
+	}
+	if strings.Contains(prompt, "If you must inspect child lanes first") {
+		t.Fatalf("prompt = %q, should not keep child-inspection fallback for verification closeout child", prompt)
+	}
+}
+
 func TestShouldStopAfterBlockedTaskReviewPreferredTargetReread(t *testing.T) {
 	t.Parallel()
 

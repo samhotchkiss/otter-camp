@@ -6979,6 +6979,22 @@ func buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(compl
 	if line := projectContinuationSnapshotLineForRefForWorker(snapshot, focusRef, focusTaskID); line != "" {
 		laneSource = line
 	}
+	if projectContinuationPromptFocusLooksLikeVerificationCloseoutForWorker(laneSource) {
+		lines = append(lines,
+			"Your last continuation turn was blocked after broad rediscovery even though the next bounded closeout step was already named.",
+			fmt.Sprintf("Current focus task: %s.", focusRef),
+			"That focused draft is already a verification/closeout lane for a previously delivered artifact.",
+			"Do not create another replacement child from the project lane.",
+			"Do not call task.list, task.get, file.list, or file.read before acting.",
+			fmt.Sprintf("Do not inspect or mention other draft parents until %s is advanced.", focusLabel),
+		)
+		if focusTaskID != "" {
+			lines = append(lines, fmt.Sprintf("Your next assistant action must be one narrow task.update on task_id=%s for %s to queue or close it directly, or one concrete blocker sentence if the exact verification evidence is still missing.", focusTaskID, focusLabel))
+		} else {
+			lines = append(lines, fmt.Sprintf("Your next assistant action must be one narrow task.update for %s to queue or close it directly, or one concrete blocker sentence if the exact verification evidence is still missing.", focusLabel))
+		}
+		return strings.Join(lines, " ")
+	}
 	if strings.Contains(laneSource, "workspace_deliverable_present=true") {
 		if projectContinuationCompletedTaskLooksLikeVerification(completedTaskTitle) {
 			lines = append(lines,
@@ -7047,6 +7063,27 @@ func buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(compl
 		lines = append(lines, fmt.Sprintf("If you must inspect child lanes first, use only task.list(parent_task_id=%s).", focusTaskID))
 	}
 	return strings.Join(lines, " ")
+}
+
+func projectContinuationPromptFocusLooksLikeVerificationCloseoutForWorker(text string) bool {
+	text = strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(text)), " "))
+	if text == "" {
+		return false
+	}
+	if !projectContinuationContainsAnyForWorker(text, "verify ", "verification ", " confirmation", "confirm ") {
+		return false
+	}
+	return projectContinuationContainsAnyForWorker(text,
+		"close parent",
+		"close out parent",
+		"close the parent",
+		"parent can close",
+		"parent can be closed",
+		"complete the parent",
+		"confirms the parent",
+		"closeout",
+		"mark done immediately",
+	)
 }
 
 func buildProjectExecutionContinuationBoundedSizeRetryPromptForWorker(completedTaskNumber int, completedTaskTitle string, remainingDraftTasks int, snapshot projectExecutionContinuationSnapshotForWorker, focusLabelOverride string) string {

@@ -2028,3 +2028,13 @@
   - impact:
     - PM recovery could create the correct verification-closeout child and still immediately lose it from the next continuation snapshot
     - the lane fell back to broad rediscovery instead of staying focused on the smallest bounded closeout step
+- 2026-03-30 20:32 MDT - Verification-closeout child retries still used replacement-parent wording after the snapshot fix.
+  - fresh live evidence:
+    - live continuation `18575` finally focused task `6645`
+    - its content still said `That draft parent only has terminally blocked or malformed child lanes` and told the PM lane to `create the smallest fresh replacement child task beneath task 6645`
+    - the very next PM turn followed that bad guidance, attempted `task.list(parent_task_id=e088...)`, and ended `validation_loop_blocked`
+  - bug:
+    - replacement-child retry prompt builders only looked at descendant-lane markers like `malformed_child_tasks=` / `replaceable_blocked_child_tasks=`
+    - they did not recognize that the focused task itself was already an explicit verification-closeout child for a previously delivered artifact
+  - impact:
+    - once the PM lane moved from parent `297` to verification-closeout child `6645`, it kept reopening child-lane orchestration instead of issuing the direct queue/closeout update on `6645`
