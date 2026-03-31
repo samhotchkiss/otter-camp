@@ -246,6 +246,74 @@ func TestMaybeApplySyncOrganizationProjectKickoffPromptHint(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageSyncOrganizationProjectKickoffRetriesDeferralReply(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	if _, err := fixture.messages.UpdateContent(context.Background(), fixture.userMessageID, "hey frank, I want you to put together a new project. I want to build a website to track every author appearance across the country."); err != nil {
+		t.Fatalf("UpdateContent user message: %v", err)
+	}
+
+	var dispatched []string
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		dispatched = append(dispatched, call.Name)
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"project": map[string]any{
+					"id":   uuid.NewString(),
+					"slug": "author-appearance-tracker",
+				},
+			},
+		}, nil
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		round++
+		switch round {
+		case 1:
+			reply := "Let me think through the shape of this before I spin it up. Want me to create this?"
+			if err := onChunk(reply); err != nil {
+				return ModelResponse{}, err
+			}
+			return ModelResponse{Content: reply}, nil
+		case 2:
+			reply := "Creating the project now."
+			if err := onChunk(reply); err != nil {
+				return ModelResponse{}, err
+			}
+			return ModelResponse{
+				Content: reply,
+				ToolCalls: []ModelToolCall{{
+					ID:   "create-project",
+					Name: "project.create",
+					Tier: "tier1",
+					Arguments: map[string]any{
+						"name": "Author Appearance Tracker",
+						"slug": "author-appearance-tracker",
+					},
+				}},
+			}, nil
+		default:
+			reply := "Project created."
+			if err := onChunk(reply); err != nil {
+				return ModelResponse{}, err
+			}
+			return ModelResponse{Content: reply}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if len(dispatched) != 1 || dispatched[0] != "project.create" {
+		t.Fatalf("dispatched tools = %v, want one project.create after retry", dispatched)
+	}
+	if round < 2 {
+		t.Fatalf("model rounds = %d, want retry round", round)
+	}
+}
+
 func TestTurnRecoverableWorktreeRemoveError(t *testing.T) {
 	t.Parallel()
 

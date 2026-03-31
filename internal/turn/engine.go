@@ -12798,6 +12798,7 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 
 	continuations := 0
 	listeningChecked := false
+	syncOrgProjectKickoffRetryUsed := false
 	var previousManifest *prompt.MemoryManifest
 
 	for {
@@ -13005,6 +13006,14 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			}
 			if _, err := e.messages.UpdateStatus(ctx, assistantMessage.ID, "final", ""); err != nil {
 				return fmt.Errorf("no-tool →final (msg status=%s): %w", currentMessage.Status, err)
+			}
+			if !syncOrgProjectKickoffRetryUsed && e.shouldRetrySyncOrganizationProjectKickoffWithoutCreate(ctx, rt, response.Content) {
+				if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[New-project kickoff retry: the user already asked you to start the project. Do not ask permission or broad kickoff questions first. Call project.create now, then continue with a discovery-first chief-of-staff plan.]"); err != nil {
+					return fmt.Errorf("sync org kickoff retry system message: %w", err)
+				}
+				syncOrgProjectKickoffRetryUsed = true
+				listeningChecked = false
+				continue
 			}
 			if _, err := e.autoPersistBootstrapSetupFromWorkspace(ctx, rt); err != nil {
 				return fmt.Errorf("auto persist bootstrap setup: %w", err)
@@ -39518,6 +39527,44 @@ func looksLikeSyncOrganizationProjectKickoffMessage(content string) bool {
 		return false
 	}
 	return true
+}
+
+func (e *TurnEngine) shouldRetrySyncOrganizationProjectKickoffWithoutCreate(ctx context.Context, rt *turnRuntime, content string) bool {
+	if e == nil || !e.syncOrganizationProjectKickoffMessageActive(ctx, rt) {
+		return false
+	}
+	return looksLikeSyncOrganizationProjectKickoffDeferralReply(content)
+}
+
+func looksLikeSyncOrganizationProjectKickoffDeferralReply(content string) bool {
+	normalized := strings.ToLower(normalizeInstructionText(content))
+	if normalized == "" {
+		return true
+	}
+	if containsAny(normalized,
+		"want me to create this",
+		"want me to create it",
+		"before i do",
+		"before i spin it up",
+		"any strong opinions on scope",
+		"any strong opinions on",
+		"planning/spec project or a build-it project",
+		"planning/spec project or build-it project",
+		"let me think through the shape of this",
+		"what i'm envisioning",
+		"here's what i'd set up",
+	) {
+		return true
+	}
+	if containsAny(normalized,
+		"scope",
+		"tech stack",
+		"planning/spec",
+		"build-it project",
+	) && strings.Contains(normalized, "?") {
+		return true
+	}
+	return false
 }
 
 func (e *TurnEngine) callMainModel(
