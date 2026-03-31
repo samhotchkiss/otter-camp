@@ -1993,3 +1993,14 @@
     - for ordinary synthetic resume rebuilds, it always regenerated `buildProjectContinuationActionPrompt(summary, snapshot)` even when the trigger message was already a structured focused `project_continuation_resume`
   - impact:
     - the PM lane could keep `source=project_continuation_resume` metadata and still lose the actual `Current focus parent / repair this child draft` instructions needed to avoid rediscovery churn
+- 2026-03-30 19:18 MDT - Worker stale pending-message cleanup failed focused PM resumes before recovery could refresh them.
+  - fresh live evidence:
+    - sequence `18370` stored the full focused PM resume body correctly
+    - later inspection showed that exact row had been failed with `superseded stale pending message after terminal turn`
+    - once the focused resume was failed, the session fell back into the generic missing-continuation path and recreated broad `project_execution_continuation` rows `18378`, `18388`, `18393`, and `18398`
+  - bug:
+    - `PurgeStaleAgentTurnJobs()` condition 5d treated all pending user messages with a terminal turn as stale kickoff residue
+    - it did not exempt project continuation prompts, even though those prompts have dedicated refresh and suppression logic elsewhere in the worker
+  - impact:
+    - focused PM resumes could be generated correctly and still be deleted before the worker’s project-session recovery logic had a chance to reuse them
+    - the PM lane kept bouncing back to broad generic continuations despite the focused resume patches already being in place

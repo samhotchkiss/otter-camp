@@ -5616,6 +5616,107 @@ func TestJobWorkerPurgeStaleAgentTurnJobsFailsConsumedPendingMessagesForTerminal
 	}
 }
 
+func TestJobWorkerPurgeStaleAgentTurnJobsKeepsPendingProjectContinuationMessagesForProjectRecovery(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "purge-project-continuation-messages",
+		DisplayName: "Purge Project Continuation Messages",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "purge-project-continuation-" + uuid.NewString()[:8],
+		DisplayName:    "Purge Project Continuation",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Pat PM",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You are Pat.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Status:         "active",
+		Mode:           "async",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now. Current focus parent: task 297.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_continuation_resume","auto_continue":true}`),
+	})
+	if err != nil {
+		t.Fatalf("Create message: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	if _, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		TriggerMessageID: &message.ID,
+		RetryCount:       1,
+		StopReason:       &stopReason,
+	}); err != nil {
+		t.Fatalf("Create completed turn: %v", err)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 0 {
+		t.Fatalf("purged jobs = %d, want 0", purged)
+	}
+
+	var messageStatus, messageError string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, message.ID).Scan(&messageStatus, &messageError); err != nil {
+		t.Fatalf("query project continuation message: %v", err)
+	}
+	if messageStatus != "pending" {
+		t.Fatalf("project continuation status = %q, want pending", messageStatus)
+	}
+	if messageError != "" {
+		t.Fatalf("project continuation error = %q, want empty", messageError)
+	}
+}
+
 func TestJobWorkerPurgeStaleAgentTurnJobsRemovesDuplicateLiveMessageAttemptDispatches(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

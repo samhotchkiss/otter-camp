@@ -5307,3 +5307,12 @@
     - updated the focused generic-reply retry assertion to the shared retry wording
   - verified with:
     - `GOFLAGS='' go test ./internal/turn -run 'Test(AppendContinuationSummaryAndActionPreservesStructuredProjectResumePrompt|AppendContinuationSummaryAndActionUsesFocusedBoundedSizeProjectResumePrompt|HandleCompletedProjectExecutionContinuationTurnRetriesGenericFocusedResumeReplyWithFreshMessage)$' -count=1`
+- 2026-03-30 19:18 MDT - Excluded project continuation prompts from stale pending-message purge.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `PurgeStaleAgentTurnJobs()` condition 5d now skips pending user messages whose source is `project_execution_continuation`, `project_continuation_resume`, or `project_bootstrap`
+    - ordinary kickoff residues still get failed after terminal turns, but project continuation prompts are left for the dedicated project-session recovery logic to refresh or suppress
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerPurgeStaleAgentTurnJobsKeepsPendingProjectContinuationMessagesForProjectRecovery`
+    - kept the adjacent stale-kickoff purge canary green so ordinary pending kickoff cleanup remains covered
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerPurgeStaleAgentTurnJobs(FailsConsumedPendingMessagesForTerminalTurn|KeepsPendingProjectContinuationMessagesForProjectRecovery)$' -count=1`

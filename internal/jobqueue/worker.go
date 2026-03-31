@@ -1102,6 +1102,7 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		    updated_at = now()
 		WHERE cm.role = 'user'
 		  AND cm.status = 'pending'
+		  AND COALESCE(cm.metadata->>'source', '') NOT IN ('project_execution_continuation', 'project_continuation_resume', 'project_bootstrap')
 		  AND EXISTS (
 		    SELECT 1
 		    FROM chat_turn ct
