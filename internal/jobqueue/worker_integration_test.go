@@ -27159,6 +27159,201 @@ func TestJobWorkerEnsureProjectContinuationMessageRefreshesFailedExecutableContr
 	}
 }
 
+func TestJobWorkerEnsureProjectContinuationMessageRevivesStructuredFailedResume(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "ensure-project-continuation-revives-structured-resume",
+		DisplayName: "Ensure Project Continuation Revives Structured Resume",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "ensure-project-continuation-revives-structured-resume-project",
+		DisplayName:    "Ensure Project Continuation Revives Structured Resume Project",
+		Description:    "Project for structured failed resume refresh coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "ensure-project-continuation-revives-structured-resume-template",
+		DisplayName:    "Ensure Project Continuation Revives Structured Resume Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	doneTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      310,
+		Title:           "Write planning/sambot-prompts/test-conversations-level3.md",
+		WorkStatus:      "done",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &agent.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	parentDescription := "Write planning/sambot-prompts/test-conversations-level3.md with 3 deeply technical multi-turn conversations."
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      297,
+		Title:           "Write planning/sambot-prompts/test-conversations-level3.md",
+		Description:     &parentDescription,
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &agent.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	}); err != nil {
+		t.Fatalf("create parent draft task: %v", err)
+	}
+
+	resumeContent := "Continue the active project execution now. The latest completed task was task 310 (Write planning/sambot-prompts/test-conversations-level3.md). Active project id: " + project.ID.String() + " Your last continuation turn was blocked after broad rediscovery even though the next bounded work was already named. Current focus parent: task 297 (Write planning/sambot-prompts/test-conversations-level3.md). Actionable draft tasks already in the tree: task 297 (Write planning/sambot-prompts/test-conversations-level3.md)."
+	resumeMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   resumeContent,
+		Status:    "failed",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"project_continuation_resume","synthetic_user_message":true,"repo_version":"3749","completed_task_id":"%s","continuation_snapshot_fingerprint":"focus-297"}`, doneTask.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create structured failed continuation resume: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	resumeTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		TriggerMessageID: &resumeMessage.ID,
+		RetryCount:       1,
+		StopReason:       &stopReason,
+	})
+	if err != nil {
+		t.Fatalf("create completed resume turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &resumeTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation rediscovery guard blocked only broad rereads. Ending this turn early so the next continuation can act directly on the named tasks instead of repeating blocked PM discovery.]",
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create resume rediscovery stop message: %v", err)
+	}
+
+	genericMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now. The latest completed task was task 310.",
+		Status:    "failed",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"project_execution_continuation","synthetic_user_message":true,"repo_version":"3750","completed_task_id":"%s"}`, doneTask.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create failed generic continuation: %v", err)
+	}
+	genericTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       2,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		TriggerMessageID: &genericMessage.ID,
+		RetryCount:       0,
+		StopReason:       &stopReason,
+	})
+	if err != nil {
+		t.Fatalf("create completed generic continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &genericTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation rediscovery guard blocked only broad rereads. Ending this turn early so the next continuation can act directly on the named tasks instead of repeating blocked PM discovery.]",
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create generic rediscovery stop message: %v", err)
+	}
+
+	messageID, suppressed, err := worker.ensureProjectContinuationMessageDecision(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ensureProjectContinuationMessageDecision: %v", err)
+	}
+	if suppressed {
+		t.Fatal("suppressed = true, want revived structured continuation resume")
+	}
+	if messageID == uuid.Nil {
+		t.Fatal("messageID = nil, want revived structured continuation resume")
+	}
+
+	var source, content string
+	if err := pool.QueryRow(ctx, `
+		SELECT COALESCE(metadata->>'source', ''), content
+		FROM chat_message
+		WHERE id = $1
+	`, messageID).Scan(&source, &content); err != nil {
+		t.Fatalf("query revived continuation message: %v", err)
+	}
+	if source != "project_continuation_resume" {
+		t.Fatalf("revived continuation source = %q, want project_continuation_resume", source)
+	}
+	if content != resumeContent {
+		t.Fatalf("revived continuation content = %q, want prior focused resume content", content)
+	}
+}
+
 func TestJobWorkerEnsureProjectContinuationMessageFallsBackToEarlierCloseoutQueueStopAfterLaterGenericRediscovery(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

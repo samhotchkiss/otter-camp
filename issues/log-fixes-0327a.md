@@ -5316,3 +5316,12 @@
     - kept the adjacent stale-kickoff purge canary green so ordinary pending kickoff cleanup remains covered
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerPurgeStaleAgentTurnJobs(FailsConsumedPendingMessagesForTerminalTurn|KeepsPendingProjectContinuationMessagesForProjectRecovery)$' -count=1`
+- 2026-03-30 19:31 MDT - Revived structured failed PM resumes in missing-continuation recovery.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `ensureProjectContinuationMessageDecision(...)` now loads the latest consumed structured `project_continuation_resume` for the same completed task
+    - when that resume still shows no proof of progress, the chooser promotes it back to the next pending continuation instead of always synthesizing a broad `project_execution_continuation`
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added `TestJobWorkerEnsureProjectContinuationMessageRevivesStructuredFailedResume`
+    - kept the stale-kickoff purge and project-continuation purge canaries green in the same focused slice
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(EnsureProjectContinuationMessageRevivesStructuredFailedResume|PurgeStaleAgentTurnJobs(FailsConsumedPendingMessagesForTerminalTurn|KeepsPendingProjectContinuationMessagesForProjectRecovery))$' -count=1`

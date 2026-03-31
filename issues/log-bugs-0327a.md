@@ -2004,3 +2004,14 @@
   - impact:
     - focused PM resumes could be generated correctly and still be deleted before the worker’s project-session recovery logic had a chance to reuse them
     - the PM lane kept bouncing back to broad generic continuations despite the focused resume patches already being in place
+- 2026-03-30 19:31 MDT - Missing-continuation recovery still defaulted to broad PM continuations even after a fresher failed focused resume existed.
+  - fresh live evidence:
+    - after the stale-purge exclusion landed, live session history showed both:
+      - failed focused resume `18424`
+      - then fresh generic continuation `18436` on the new runtime
+    - that proved the PM lane was no longer losing the focused resume row, but the missing-continuation chooser still ignored it
+  - bug:
+    - `ensureProjectContinuationMessageDecision(...)` only synthesized `project_execution_continuation`
+    - it did not consider the latest consumed structured `project_continuation_resume` as a reusable higher-signal retry candidate for the same completed task
+  - impact:
+    - even with the focused resume preserved in history, the worker could still restart the session on a broad generic continuation and reopen the same rediscovery loop

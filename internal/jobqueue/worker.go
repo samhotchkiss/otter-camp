@@ -2834,6 +2834,9 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 	var latestConsumedProjectContinuationMessageID uuid.UUID
 	var latestConsumedProjectContinuationContent string
 	var latestConsumedProjectContinuationRepoVersion string
+	var latestConsumedStructuredResumeMessageID uuid.UUID
+	var latestConsumedStructuredResumeContent string
+	var latestConsumedStructuredResumeRepoVersion string
 	var sameCompletedTaskHistoryMessageIDs []uuid.UUID
 	if source == "project_execution_continuation" && expectedCompletedTaskID != "" {
 		err := lockConn.QueryRow(ctx, `
@@ -2855,6 +2858,27 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 		`, sessionID, source, expectedCompletedTaskID).Scan(&latestConsumedSameCompletedTaskMessageID, &latestConsumedSameCompletedTaskRepoVersion)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, false, fmt.Errorf("query latest consumed same-completed-task project continuation message: %w", err)
+		}
+		err = lockConn.QueryRow(ctx, `
+			SELECT cm.id,
+			       cm.content,
+			       COALESCE(cm.metadata->>'repo_version', '')
+			FROM chat_message cm
+			WHERE cm.session_id = $1
+			  AND cm.role = 'user'
+			  AND COALESCE(cm.metadata->>'source', '') = 'project_continuation_resume'
+			  AND COALESCE(cm.metadata->>'completed_task_id', '') = $2
+			  AND EXISTS (
+			        SELECT 1
+			        FROM chat_turn ct
+			        WHERE ct.trigger_message_id = cm.id
+			          AND ct.status IN ('completed', 'failed', 'cancelled')
+			  )
+			ORDER BY cm.created_at DESC, cm.id DESC
+			LIMIT 1
+		`, sessionID, expectedCompletedTaskID).Scan(&latestConsumedStructuredResumeMessageID, &latestConsumedStructuredResumeContent, &latestConsumedStructuredResumeRepoVersion)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, fmt.Errorf("query latest consumed structured project continuation resume: %w", err)
 		}
 		sameCompletedTaskHistoryMessageIDs, err = w.projectContinuationHistoryMessageIDsForCompletedTask(ctx, sessionID, expectedCompletedTaskID, 32)
 		if err != nil {
@@ -3115,6 +3139,21 @@ func (w *Worker) ensureProjectContinuationMessageDecision(ctx context.Context, s
 			metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
 			latestConsumedMatchingMessageID = uuid.Nil
 			latestConsumedMatchingRepoVersion = ""
+		}
+		if latestConsumedStructuredResumeMessageID != uuid.Nil && projectContinuationResumeMessageHasStructuredContextForWorker(latestConsumedStructuredResumeContent) {
+			progressed, progressErr := w.projectContinuationTurnShowsProgress(ctx, latestConsumedStructuredResumeMessageID)
+			if progressErr != nil {
+				return uuid.Nil, false, fmt.Errorf("check latest consumed structured project continuation resume progress: %w", progressErr)
+			}
+			if !progressed {
+				source = "project_continuation_resume"
+				content = strings.TrimSpace(latestConsumedStructuredResumeContent)
+				metadataMap["source"] = source
+				expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
+				metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+				latestConsumedMatchingMessageID = uuid.Nil
+				latestConsumedMatchingRepoVersion = ""
+			}
 		}
 		_ = boundedSizeReferenceMessageID
 	}
