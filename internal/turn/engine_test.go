@@ -244,6 +244,9 @@ func TestMaybeApplySyncOrganizationProjectKickoffPromptHint(t *testing.T) {
 	if !strings.Contains(updated.Messages[len(updated.Messages)-1].Content, "chief-of-staff discovery phase") {
 		t.Fatalf("kickoff hint = %q, want discovery-phase guidance", updated.Messages[len(updated.Messages)-1].Content)
 	}
+	if !strings.Contains(updated.Messages[len(updated.Messages)-1].Content, "Keep the immediate user-facing reply short and ownership-oriented") {
+		t.Fatalf("kickoff hint = %q, want short ownership-oriented reply guidance", updated.Messages[len(updated.Messages)-1].Content)
+	}
 }
 
 func TestHandleUserMessageSyncOrganizationProjectKickoffRetriesDeferralReply(t *testing.T) {
@@ -24663,6 +24666,9 @@ func TestBuildOrganizationContinuationActionPromptDiscoveryFirstProjectRequest(t
 	}
 	if !strings.Contains(prompt, "reviewable methodology/proposed-approach package") {
 		t.Fatalf("prompt = %q, want methodology package guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Keep the immediate post-create response brief and ownership-oriented") {
+		t.Fatalf("prompt = %q, want brief post-create reply guidance", prompt)
 	}
 	if !strings.Contains(prompt, "Do not jump straight into implementation backlog") {
 		t.Fatalf("prompt = %q, want anti-implementation-rush guidance", prompt)

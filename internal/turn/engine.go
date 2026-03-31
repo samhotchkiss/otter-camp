@@ -13008,7 +13008,7 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 				return fmt.Errorf("no-tool →final (msg status=%s): %w", currentMessage.Status, err)
 			}
 			if !syncOrgProjectKickoffRetryUsed && e.shouldRetrySyncOrganizationProjectKickoffWithoutCreate(ctx, rt, response.Content) {
-				if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[New-project kickoff retry: the user already asked you to start the project. Do not ask permission or broad kickoff questions first. Call project.create now, then continue with a discovery-first chief-of-staff plan.]"); err != nil {
+				if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[New-project kickoff retry: the user already asked you to start the project. Do not ask permission or broad kickoff questions first. Call project.create now. Keep the immediate reply short and ownership-oriented, then continue with a discovery-first chief-of-staff plan.]"); err != nil {
 					return fmt.Errorf("sync org kickoff retry system message: %w", err)
 				}
 				syncOrgProjectKickoffRetryUsed = true
@@ -24839,6 +24839,7 @@ func buildOrganizationContinuationActionPrompt(summary string) string {
 	if kickoffShouldStartWithDiscovery(summary) {
 		lines = append(lines,
 			"For discovery-first new initiatives, act like a chief of staff: create the project, acknowledge that you are taking point, and then drive a short discovery phase before implementation planning.",
+			"Keep the immediate post-create response brief and ownership-oriented. Do not turn that first reply into a long workstream dump or speculative implementation outline.",
 			"Your first substantive milestone should be a reviewable methodology/proposed-approach package: problem framing, research plan, assumptions, validation plan, proposed data/display/workflow approach, and only the few questions whose answers materially change direction.",
 			"Do not jump straight into implementation backlog, detailed architecture, or coding tasks until that discovery package is ready and the operator has had a chance to react.",
 		)
@@ -39371,7 +39372,7 @@ func (e *TurnEngine) maybeApplySyncOrganizationProjectKickoffPromptHint(ctx cont
 	clone := *assembled
 	clone.Messages = append(append([]prompt.PromptMessage(nil), assembled.Messages...), prompt.PromptMessage{
 		Role: "system",
-		Content: "Latest user message is an actionable request to start a new project. Do not ask permission to create the project when the user already asked for it. Unless the user explicitly says they are only brainstorming, your next step should be project.create in this turn. After the project exists, briefly acknowledge ownership and move into a chief-of-staff discovery phase when the request is still underdefined: run discovery, then come back with a proposed methodology, recommended direction, and only the few high-leverage questions that materially change the plan. Do not open with broad scope/tech-stack questions before project.create, and do not jump straight into implementation backlog if the request is discovery-first.",
+		Content: "Latest user message is an actionable request to start a new project. Do not ask permission to create the project when the user already asked for it. Unless the user explicitly says they are only brainstorming, your next step should be project.create in this turn. After the project exists, briefly acknowledge ownership and move into a chief-of-staff discovery phase when the request is still underdefined: run discovery, then come back with a proposed methodology, recommended direction, and only the few high-leverage questions that materially change the plan. Keep the immediate user-facing reply short and ownership-oriented: a concise \"I'm on it; I'll do discovery and return with a proposed approach\" response is better than a long speculative workstream list. Do not open with broad scope/tech-stack questions before project.create, do not dump a full implementation plan in the same first reply, and do not jump straight into implementation backlog if the request is discovery-first.",
 	})
 	return &clone
 }

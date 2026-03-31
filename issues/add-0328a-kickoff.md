@@ -167,3 +167,10 @@ A good kickoff is one where:
 - Focused coverage for this follow-on is in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) under `TestLooksLikeSyncOrganizationProjectKickoffMessage` and `TestMaybeApplySyncOrganizationProjectKickoffPromptHint`.
 - 2026-03-31 13:58 MDT - Added a second enforcement layer after the live pane still showed the old “Want me to create this?” behavior. Prompt hints alone were not enough. [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) now detects first-turn sync-org kickoff replies that stall with permission-seeking / scope-gating narration and no tool calls, appends a corrective system instruction, and retries the same turn so the next model action must move into `project.create`.
 - Focused coverage for this deterministic retry is in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) under `TestHandleUserMessageSyncOrganizationProjectKickoffRetriesDeferralReply`.
+- 2026-03-31 14:08 MDT - Follow-on refinement from the same manual-test thread: even after the retry/create enforcement, the desired first-turn behavior is still more chief-of-staff-like than “long speculative workstream dump.” Tightened both the sync kickoff prompt hint and the organization continuation discovery prompt in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so the immediate post-create reply is explicitly brief and ownership-oriented, while the substantive methodology package is deferred to the follow-up discovery milestone.
+- The new guidance now says, in effect:
+  - create the project now
+  - reply briefly that Frank is taking point and will go do discovery
+  - do not dump a long implementation/workstream outline in that same first response
+  - return later with the reviewable methodology / proposed-approach package
+- Focused coverage for this refinement is in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) under `TestMaybeApplySyncOrganizationProjectKickoffPromptHint` and `TestBuildOrganizationContinuationActionPromptDiscoveryFirstProjectRequest`.
