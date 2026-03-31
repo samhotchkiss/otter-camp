@@ -174,3 +174,6 @@ A good kickoff is one where:
   - do not dump a long implementation/workstream outline in that same first response
   - return later with the reviewable methodology / proposed-approach package
 - Focused coverage for this refinement is in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) under `TestMaybeApplySyncOrganizationProjectKickoffPromptHint` and `TestBuildOrganizationContinuationActionPromptDiscoveryFirstProjectRequest`.
+- 2026-03-31 14:14 MDT - Broadened `looksLikeSyncOrganizationProjectKickoffMessage(...)` in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go) so Frank recognizes implicit new-initiative asks like “I want you to build a website to track every author appearance...” as project kickoffs even when the user does not literally say “new project.”
+- This keeps the same create-now / discovery-first workflow available for natural operator phrasing instead of only the exact “create a new project” wording.
+- Focused coverage for the broadened detector is in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go) under `TestLooksLikeSyncOrganizationProjectKickoffMessage`.

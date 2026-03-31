@@ -208,6 +208,9 @@ func TestLooksLikeSyncOrganizationProjectKickoffMessage(t *testing.T) {
 	if !looksLikeSyncOrganizationProjectKickoffMessage("hey frank, I want you to put together a new project. I want to build a website to track every author appearance across the country") {
 		t.Fatal("expected project kickoff request to be detected")
 	}
+	if !looksLikeSyncOrganizationProjectKickoffMessage("hey frank, I want you to build a website to track every author appearance across the country") {
+		t.Fatal("expected implicit build request to be detected as project kickoff")
+	}
 	if looksLikeSyncOrganizationProjectKickoffMessage("hey frank, I'm only brainstorming a new project idea for now") {
 		t.Fatal("brainstorm-only message should not force project kickoff")
 	}

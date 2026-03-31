@@ -39508,14 +39508,41 @@ func looksLikeSyncOrganizationProjectKickoffMessage(content string) bool {
 	if normalized == "" {
 		return false
 	}
-	if !containsAny(normalized,
+	explicitProjectRequest := containsAny(normalized,
 		"new project",
 		"create a project",
 		"create a new project",
 		"start a project",
 		"start a new project",
 		"put together a new project",
-	) {
+	)
+	implicitProjectRequest := containsAny(normalized,
+		"i want to build a website",
+		"i want to build an app",
+		"i want to build a platform",
+		"i want to build a product",
+		"i want to build a tool",
+		"i want you to build a website",
+		"i want you to build an app",
+		"i want you to build a platform",
+		"i want you to build a product",
+		"i want you to build a tool",
+		"we need a website",
+		"we need an app",
+		"we need a platform",
+		"we need a product",
+		"we need a tool",
+		"put together a website",
+		"put together an app",
+		"put together a platform",
+		"build a website to",
+		"build an app to",
+		"build a platform to",
+		"create a website to",
+		"create an app to",
+		"create a platform to",
+	)
+	if !explicitProjectRequest && !implicitProjectRequest {
 		return false
 	}
 	if containsAny(normalized,
