@@ -51689,6 +51689,24 @@ func TestBuildTaskFileWriteRetryMessageBansCLIExecuteFallback(t *testing.T) {
 	}
 }
 
+func TestBuildTaskFileWriteRetryMessageRequiresHTMLStart(t *testing.T) {
+	t.Parallel()
+
+	message := buildTaskFileWriteRetryMessage("templates/layout-08-portfolio.html")
+	if !strings.Contains(message, "`<!DOCTYPE html>`") {
+		t.Fatalf("message = %q, want explicit HTML start guidance", message)
+	}
+}
+
+func TestBuildTaskCLIExecuteWithoutCommandRetryMessageRequiresHTMLStart(t *testing.T) {
+	t.Parallel()
+
+	message := buildTaskCLIExecuteWithoutCommandRetryMessage("templates/layout-08-portfolio.html")
+	if !strings.Contains(message, "`<!DOCTYPE html>`") {
+		t.Fatalf("message = %q, want explicit HTML start guidance", message)
+	}
+}
+
 func TestHandleTaskFileWriteWithoutContentPrefersWorkspaceTargetDraft(t *testing.T) {
 	t.Parallel()
 

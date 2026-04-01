@@ -19952,10 +19952,14 @@ func buildTaskFileWriteRetryMessage(targetPath string) string {
 	if path == "" {
 		path = "<target file>"
 	}
+	startHint := "The first non-whitespace character of your next assistant message must be the first character of the deliverable itself, not a sentence like 'I will write' or 'Let me provide'."
+	if htmlDirectWriteStartRequired(path) {
+		startHint = "Your next assistant message must begin immediately with `<!DOCTYPE html>` or the opening `<html` tag from the actual deliverable body. Do not put any narration, explanation, or planning sentence before the HTML."
+	}
 	if looksLikePromptConversationCorpusTarget(path) {
 		return fmt.Sprintf("[Task execution correction: file.write for `%s` was emitted without `content`. Rewrite the entire deliverable file body now in the assistant response, then resend file.write with both `path` and `content`. Do not switch to cli.execute, python3 shell wrappers, or another fallback mutation path first. Do not analyze the existing file again. Do not restate the requirements, gaps, or checklist. Do not begin with sentences like 'The file already exists', 'I can see', 'Let me check', 'I need to rewrite', or 'I will write'. The first non-whitespace character of your next assistant message must be the first character of the replacement deliverable body itself. Start immediately with the actual conversation file content.]", path)
 	}
-	return fmt.Sprintf("[Task execution correction: file.write for `%s` was emitted without `content`. Before retrying file mutation tools, draft the full file body in the assistant response or resend `file.write` with both `path` and `content` populated. Do not switch to cli.execute, python3 shell wrappers, or another fallback mutation path first. The first non-whitespace character of your next assistant message must be the first character of the deliverable itself, not a sentence like 'I will write' or 'Let me provide'.]", path)
+	return fmt.Sprintf("[Task execution correction: file.write for `%s` was emitted without `content`. Before retrying file mutation tools, draft the full file body in the assistant response or resend `file.write` with both `path` and `content` populated. Do not switch to cli.execute, python3 shell wrappers, or another fallback mutation path first. %s]", path, startHint)
 }
 
 func buildTaskCLIExecuteWithoutCommandRetryMessage(targetPath string) string {
@@ -19963,7 +19967,15 @@ func buildTaskCLIExecuteWithoutCommandRetryMessage(targetPath string) string {
 	if path == "" {
 		return "[Task execution correction: cli.execute was emitted without `command`. Do not retry shell mutation tools until you have a concrete command or a substantive draft. Prefer drafting the full file body in the assistant response, then use file.write with both `path` and `content` populated.]"
 	}
-	return fmt.Sprintf("[Task execution correction: cli.execute for `%s` was emitted without `command`. Do not retry cli.execute shell wrappers for `%s` until the full file body exists. Draft the concrete deliverable body in the assistant response first, then use file.write with both `path` and `content` populated. The first non-whitespace character of your next assistant message should be the first character of the deliverable body itself, not narration about using cli_execute or python3.]", path, path)
+	startHint := "The first non-whitespace character of your next assistant message should be the first character of the deliverable body itself, not narration about using cli_execute or python3."
+	if htmlDirectWriteStartRequired(path) {
+		startHint = "Your next assistant message should begin immediately with `<!DOCTYPE html>` or the opening `<html` tag from the actual deliverable body, not narration about using cli_execute or python3."
+	}
+	return fmt.Sprintf("[Task execution correction: cli.execute for `%s` was emitted without `command`. Do not retry cli.execute shell wrappers for `%s` until the full file body exists. Draft the concrete deliverable body in the assistant response first, then use file.write with both `path` and `content` populated. %s]", path, path, startHint)
+}
+
+func htmlDirectWriteStartRequired(targetPath string) bool {
+	return strings.EqualFold(strings.TrimSpace(path.Ext(strings.TrimSpace(targetPath))), ".html")
 }
 
 func buildTaskFileEditWithoutNewStringRetryMessage(targetPath string) string {
