@@ -2063,3 +2063,11 @@
     - that left the PM lane alternating between empty rediscovery retries and expensive full-project scans instead of issuing the direct `task.update` on the focused verification-closeout parent
   - paired runtime issue:
     - `FailRun(...)` left active `run_step` / `tool_execution` rows open after parent run failure, which preserved poisoned execution ownership and made stale-turn recovery harder to settle
+- 2026-03-31 21:45 MDT - Bounded-size PM retries were still allowed to drift after the one allowed child-list inspection, and stale worker recovery could reclaim live PM turns after fresh tool-call output.
+  - fresh live evidence:
+    - worker retry prompt `1321b82c-a940-4214-94b7-d081063b15f7` correctly focused `task 12527`, but the turn engine only treated the older `Draft parent tasks already have child work:` wording as direct-child inspection mode
+    - PM turn `39cb7b3e-b56a-404b-8f3b-3fb50697464f` executed the correct `task.list(parent_task_id=45c4264f-dd50-450b-b4c6-5d4169c117af)` and then kept running into `task.get`, `flow.list_templates`, and a second bounded-size stop instead of handing off cleanly
+    - in parallel, worker stale-turn recovery still had a false-positive reclaim path where earlier tool results in the same turn could make a later assistant `tool_calls` block look already-dispatched, which risked killing live PM turns mid-tool phase
+  - impact:
+    - bounded-size parent retries stayed noisier than necessary and could still waste the same turn on sibling inspection/tool drift after the one allowed child lookup
+    - PM turns that had already emitted the right tool call set could still be reclaimed as stale before the queued tool execution finished

@@ -19817,6 +19817,276 @@ func TestShouldStopAfterPreparingBoundedProjectChildSplitAccumulatesAcrossCalls(
 	}
 }
 
+func TestShouldStopAfterProjectContinuationDirectChildInspection(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: "Continue the active project execution now. " +
+			"Draft parent tasks already have child work: task 12526 (Write 6 technical test conversations for SamBot) id=" + focusTaskID.String() + ` title="Write 6 technical test conversations for SamBot" work_status=draft. ` +
+			"Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while those child tasks already exist. Let active child lanes continue, or inspect only that parent's direct children with parent_task_id if a concrete blocker must be verified.",
+	}
+
+	calls := []ToolCall{{
+		Name:      "task.list",
+		Arguments: map[string]any{"parent_task_id": focusTaskID.String()},
+	}}
+	results := []ToolResult{{
+		Name: "task.list",
+		Output: map[string]any{
+			"tasks": []any{
+				map[string]any{"id": uuid.NewString(), "work_status": "draft"},
+				map[string]any{"id": uuid.NewString(), "work_status": "draft"},
+			},
+		},
+	}}
+
+	if !shouldStopAfterProjectContinuationDirectChildInspection(rt, calls, results) {
+		t.Fatal("expected successful focused direct-child inspection to stop the PM turn")
+	}
+}
+
+func TestShouldStopAfterProjectContinuationDirectChildInspectionIgnoresEmptyResults(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: "Continue the active project execution now. " +
+			"Draft parent tasks already have child work: task 12526 (Write 6 technical test conversations for SamBot) id=" + focusTaskID.String() + ` title="Write 6 technical test conversations for SamBot" work_status=draft. ` +
+			"Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while those child tasks already exist. Let active child lanes continue, or inspect only that parent's direct children with parent_task_id if a concrete blocker must be verified.",
+	}
+
+	calls := []ToolCall{{
+		Name:      "task.list",
+		Arguments: map[string]any{"parent_task_id": focusTaskID.String()},
+	}}
+	results := []ToolResult{{
+		Name:   "task.list",
+		Output: map[string]any{"tasks": []any{}},
+	}}
+
+	if shouldStopAfterProjectContinuationDirectChildInspection(rt, calls, results) {
+		t.Fatal("empty direct-child inspection should not stop the PM turn")
+	}
+}
+
+func TestShouldStopAfterProjectContinuationDirectChildInspectionForBoundedRetryPrompt(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: "Continue the active project execution now. " +
+			"Your last continuation turn proved that this focused draft is still too broad to queue as-is. " +
+			"Current focus parent: task 12527 (Write technical test conversations 1-3) id=" + focusTaskID.String() + ". " +
+			"If you must inspect child lanes first, use only task.list(parent_task_id=" + focusTaskID.String() + ").",
+	}
+
+	calls := []ToolCall{{
+		Name:      "task.list",
+		Arguments: map[string]any{"parent_task_id": focusTaskID.String()},
+	}}
+	results := []ToolResult{{
+		Name: "task.list",
+		Output: map[string]any{
+			"tasks": []any{
+				map[string]any{"id": uuid.NewString(), "work_status": "draft"},
+			},
+		},
+	}}
+
+	if !shouldStopAfterProjectContinuationDirectChildInspection(rt, calls, results) {
+		t.Fatal("expected bounded-retry direct-child inspection to stop the PM turn")
+	}
+}
+
+func TestProjectContinuationExclusiveDirectChildInspectionCalls(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	kept := ToolCall{
+		ID:   "call-keep",
+		Name: "task.list",
+		Arguments: map[string]any{
+			"parent_task_id": focusTaskID.String(),
+		},
+	}
+	dropped := ToolCall{
+		ID:   "call-drop",
+		Name: "file.read",
+		Arguments: map[string]any{
+			"path": "planning/sambot-personality-spec.md",
+		},
+	}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: "Continue the active project execution now. " +
+			"Draft parent tasks already have child work: task 12526 (Write 6 technical test conversations for SamBot) id=" + focusTaskID.String() + ` title="Write 6 technical test conversations for SamBot" work_status=draft child_tasks=3. ` +
+			"Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while those child tasks already exist. Let active child lanes continue, or inspect only that parent's direct children with parent_task_id if a concrete blocker must be verified.",
+	}
+
+	narrowed := projectContinuationExclusiveDirectChildInspectionCalls(rt, []ToolCall{kept, dropped})
+	if len(narrowed) != 1 {
+		t.Fatalf("narrowed calls = %d, want 1", len(narrowed))
+	}
+	if narrowed[0].ID != kept.ID {
+		t.Fatalf("kept call = %q, want %q", narrowed[0].ID, kept.ID)
+	}
+}
+
+func TestProjectContinuationExclusiveDirectChildInspectionCallsForBoundedRetryPrompt(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	kept := ToolCall{
+		ID:   "call-keep",
+		Name: "task.list",
+		Arguments: map[string]any{
+			"parent_task_id": focusTaskID.String(),
+		},
+	}
+	dropped := ToolCall{
+		ID:   "call-drop",
+		Name: "file.read",
+		Arguments: map[string]any{
+			"path": "planning/sambot-prompts/test-conversations-level3.md",
+		},
+	}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: "Continue the active project execution now. " +
+			"Your last continuation turn proved that this focused draft is still too broad to queue as-is. " +
+			"Current focus parent: task 12527 (Write technical test conversations 1-3) id=" + focusTaskID.String() + ". " +
+			"If you must inspect child lanes first, use only task.list(parent_task_id=" + focusTaskID.String() + ").",
+	}
+
+	narrowed := projectContinuationExclusiveDirectChildInspectionCalls(rt, []ToolCall{kept, dropped})
+	if len(narrowed) != 1 {
+		t.Fatalf("narrowed calls = %d, want 1", len(narrowed))
+	}
+	if narrowed[0].ID != kept.ID {
+		t.Fatalf("kept call = %q, want %q", narrowed[0].ID, kept.ID)
+	}
+}
+
+func TestProjectContinuationExclusiveDirectChildInspectionModelCalls(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	kept := ModelToolCall{
+		ID:   "call-keep",
+		Name: "task_list",
+		Arguments: map[string]any{
+			"parent_task_id": focusTaskID.String(),
+		},
+	}
+	dropped := ModelToolCall{
+		ID:   "call-drop",
+		Name: "file_read",
+		Arguments: map[string]any{
+			"path": "planning/sambot-personality-spec.md",
+		},
+	}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: "Continue the active project execution now. " +
+			"Draft parent tasks already have child work: task 12526 (Write 6 technical test conversations for SamBot) id=" + focusTaskID.String() + ` title="Write 6 technical test conversations for SamBot" work_status=draft child_tasks=3. ` +
+			"Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while those child tasks already exist. Let active child lanes continue, or inspect only that parent's direct children with parent_task_id if a concrete blocker must be verified.",
+	}
+
+	narrowed := projectContinuationExclusiveDirectChildInspectionModelCalls(rt, []ModelToolCall{kept, dropped})
+	if len(narrowed) != 1 {
+		t.Fatalf("narrowed calls = %d, want 1", len(narrowed))
+	}
+	if narrowed[0].ID != kept.ID {
+		t.Fatalf("kept call = %q, want %q", narrowed[0].ID, kept.ID)
+	}
+}
+
+func TestProjectContinuationExclusiveDirectChildInspectionModelCallsForBoundedRetryPrompt(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	kept := ModelToolCall{
+		ID:   "call-keep",
+		Name: "task_list",
+		Arguments: map[string]any{
+			"parent_task_id": focusTaskID.String(),
+		},
+	}
+	dropped := ModelToolCall{
+		ID:   "call-drop",
+		Name: "file_read",
+		Arguments: map[string]any{
+			"path": "planning/sambot-prompts/test-conversations-level3.md",
+		},
+	}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: "Continue the active project execution now. " +
+			"Your last continuation turn proved that this focused draft is still too broad to queue as-is. " +
+			"Current focus parent: task 12527 (Write technical test conversations 1-3) id=" + focusTaskID.String() + ". " +
+			"If you must inspect child lanes first, use only task.list(parent_task_id=" + focusTaskID.String() + ").",
+	}
+
+	narrowed := projectContinuationExclusiveDirectChildInspectionModelCalls(rt, []ModelToolCall{kept, dropped})
+	if len(narrowed) != 1 {
+		t.Fatalf("narrowed calls = %d, want 1", len(narrowed))
+	}
+	if narrowed[0].ID != kept.ID {
+		t.Fatalf("kept call = %q, want %q", narrowed[0].ID, kept.ID)
+	}
+}
+
+func TestFilterToolResultsByCallIDs(t *testing.T) {
+	t.Parallel()
+
+	results := []ToolResult{
+		{ToolCallID: "call-keep", Name: "task.list"},
+		{ToolCallID: "call-drop-a", Name: "file.read"},
+		{ToolCallID: "call-drop-b", Name: "file.read"},
+	}
+	filtered := filterToolResultsByCallIDs(results, map[string]struct{}{
+		"call-keep": {},
+	})
+	if len(filtered) != 1 {
+		t.Fatalf("filtered results = %d, want 1", len(filtered))
+	}
+	if filtered[0].ToolCallID != "call-keep" {
+		t.Fatalf("kept result = %q, want call-keep", filtered[0].ToolCallID)
+	}
+}
+
 func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationIgnoresUnfocusedDraftChildCreate(t *testing.T) {
 	t.Parallel()
 
@@ -32876,6 +33146,58 @@ func TestShouldBlockProjectContinuationFocusedDraftReadToolAllowsParentScopedTas
 	})
 	if blocked {
 		t.Fatalf("expected parent-scoped task.list to remain allowed, got %q", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksChildDraftAdvanceFileSearch(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Draft parent tasks already have child work: task 12526 (Write 6 technical test conversations for SamBot) id=" + focusTaskID.String() + ` title="Write 6 technical test conversations for SamBot" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md child_tasks=3.`,
+			"Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while those child tasks already exist. Let active child lanes continue, or inspect only that parent's direct children with parent_task_id if a concrete blocker must be verified.",
+		}, " "),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, "file.search", map[string]any{
+		"path":  "planning/sambot-prompts",
+		"query": "technical conversations",
+	})
+	if !blocked {
+		t.Fatal("expected child-draft-advance file.search to be blocked")
+	}
+	if !strings.Contains(reason, focusTaskID.String()) || !strings.Contains(reason, "file.search") {
+		t.Fatalf("reason = %q, want focused child-draft guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftReadToolAllowsParentScopedTaskListForChildDraftAdvance(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Draft parent tasks already have child work: task 12526 (Write 6 technical test conversations for SamBot) id=" + focusTaskID.String() + ` title="Write 6 technical test conversations for SamBot" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md child_tasks=3.`,
+			"Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while those child tasks already exist. Let active child lanes continue, or inspect only that parent's direct children with parent_task_id if a concrete blocker must be verified.",
+		}, " "),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, "task.list", map[string]any{
+		"parent_task_id": focusTaskID.String(),
+	})
+	if blocked {
+		t.Fatalf("expected child-draft parent-scoped task.list to remain allowed, got %q", reason)
 	}
 }
 

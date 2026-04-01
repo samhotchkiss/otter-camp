@@ -5409,3 +5409,20 @@
     - worker startup on the patched binary created and dispatched fresh PM continuation `3c4018a8-9948-45fd-83d3-e6e6ada448ae` for session `5383ab5a-fecd-4a22-a403-d1e5620b96b8`, proving the idle-suppression bug was fixed
     - the first replay identified `OC-12040` beneath draft parent `OC-12039`, which exposed the retry-prompt gap
     - after the prompt fix and redeploy, `OC-12040` remained `in_progress` instead of the PM lane falling back into another idle rediscovery loop
+- 2026-03-31 22:20 MDT - Preserved live PM tool phases and stopped bounded-size child inspection turns immediately after the parent-scoped child list.
+  - changed [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go):
+    - `staleProjectTurnHasUndispatchedAssistantToolCalls(...)` now evaluates the latest assistant tool-call block by sequence number and ignores earlier tool results from older call groups in the same turn
+    - `RecoverClaimedAgentTurnsWithoutLiveOwnership(...)` and `RecoverStaleInProgressProjectTurnsWithoutOwnership(...)` now leave current PM turns alone when they still have undispatched assistant tool calls
+    - worker bounded-size retry prompts now expand bare task-number focus labels into full task refs before composing the continuation message
+  - changed [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go):
+    - added regressions covering undispatched PM tool-call ownership, repeated named bounded-size continuation refresh, and focus-label expansion
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - added shared activation for direct-child inspection mode so bounded-size retry prompts that explicitly say `If you must inspect child lanes first, use only task.list(parent_task_id=...)` trigger the same exclusive-call filter and post-list stop as the older child-active prompt family
+  - changed [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+    - added bounded-retry coverage for direct-child inspection stop and exclusive-call narrowing
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(StaleProjectTurnHasUndispatchedAssistantToolCallsIgnoresEarlierToolResults|RecoverClaimedAgentTurnsWithoutLiveOwnershipKeepsCurrentInProgressProjectAttemptWithUndispatchedToolCalls|RecoverStaleInProgressProjectTurnsWithoutOwnershipKeepsUndispatchedContinuationToolCalls|EnsureProjectContinuationMessageRefreshes(RepeatedConsumedNamedBoundedSizeContinuation|StalePendingNamedBoundedSizeDuplicate)|RequeueActiveProjectSessionsWithoutTurnsRefreshesRepeatedFailedNamedBoundedSizeContinuation|ProjectContinuationResolveFocusOverrideForWorkerExpandsTaskNumberToFullRef)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterProjectContinuationDirectChildInspection(ForBoundedRetryPrompt|IgnoresEmptyResults)?|ProjectContinuationExclusiveDirectChildInspection(Calls|CallsForBoundedRetryPrompt|ModelCalls|ModelCallsForBoundedRetryPrompt)|FilterToolResultsByCallIDs)$' -count=1`
+  - live proof:
+    - worker continuation `6d0e537a-1c15-4d32-8ba5-f26c9773f9b9` now carries `Current focus parent: task 12527 (...) id=45c4264f-dd50-450b-b4c6-5d4169c117af`
+    - PM turn `c20424ed-0fd4-4ec9-a3d2-d124ad749c45` executed only the parent-scoped `task.list(...)` and then ended with the new system stop `[Project continuation inspected the focused parent's direct child lanes...]`, proving the sibling-drift path is closed

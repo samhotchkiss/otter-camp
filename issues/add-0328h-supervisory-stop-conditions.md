@@ -815,6 +815,19 @@ They need sharper stopping rules than ordinary execution lanes.
       - `TestJobWorkerEnsureProjectContinuationMessageTreatsWorkspaceDeliverableParentAsCloseout`
   - verified with:
     - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'Test(JobWorkerProjectExecutionContinuationSnapshotTreats(WorkspaceDeliverableParentAsActionableDraft|CloseoutReadyParentAsActionableDraft)|JobWorkerEnsureProjectContinuationMessageTreatsWorkspaceDeliverableParentAsCloseout|BuildProjectExecutionContinuationPromptForWorkerTreatsWorkspaceDeliverableAsCloseout|ProjectContinuationTurnEndedWithFocusedCloseoutReadyRediscoveryStopRecognizesBlockedRediscovery|ProjectContinuationTurnCloseoutReadyTaskLabelFallsBackToPromptFocusParent)$' -count=1`
+- 2026-03-31 22:20 MDT - Tightened the same supervisory family for bounded-size PM retries with child-lane inspection.
+  - fresh live evidence:
+    - once the worker retry prompt named `Current focus parent: task 12527 (...) id=45c4264f-dd50-450b-b4c6-5d4169c117af`, the PM turn finally executed the correct `task.list(parent_task_id=45c4264f-dd50-450b-b4c6-5d4169c117af)` but then kept drifting into `task.get`, `flow.list_templates`, and another bounded-size stop
+    - worker stale-turn recovery also still had a reclaim path for PM turns with fresh assistant tool calls when earlier tool results from a different call group existed in the same turn
+  - landed fix:
+    - worker stale-turn reclaim now keys off the latest assistant tool-call block by sequence and preserves live PM turns with undispatched tool calls
+    - worker bounded-size retry prompts now expand bare task-number focus labels into full task refs before composing the continuation
+    - turn-engine direct-child inspection mode now covers the newer bounded-size prompt wording `If you must inspect child lanes first, use only task.list(parent_task_id=...)`, so the turn stops immediately after that one allowed child-list inspection
+  - verified with:
+    - `GOFLAGS='' go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(StaleProjectTurnHasUndispatchedAssistantToolCallsIgnoresEarlierToolResults|RecoverClaimedAgentTurnsWithoutLiveOwnershipKeepsCurrentInProgressProjectAttemptWithUndispatchedToolCalls|RecoverStaleInProgressProjectTurnsWithoutOwnershipKeepsUndispatchedContinuationToolCalls|EnsureProjectContinuationMessageRefreshes(RepeatedConsumedNamedBoundedSizeContinuation|StalePendingNamedBoundedSizeDuplicate)|RequeueActiveProjectSessionsWithoutTurnsRefreshesRepeatedFailedNamedBoundedSizeContinuation|ProjectContinuationResolveFocusOverrideForWorkerExpandsTaskNumberToFullRef)$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterProjectContinuationDirectChildInspection(ForBoundedRetryPrompt|IgnoresEmptyResults)?|ProjectContinuationExclusiveDirectChildInspection(Calls|CallsForBoundedRetryPrompt|ModelCalls|ModelCallsForBoundedRetryPrompt)|FilterToolResultsByCallIDs)$' -count=1`
+  - live proof:
+    - PM turn `c20424ed-0fd4-4ec9-a3d2-d124ad749c45` now ends immediately after the parent-scoped `task.list(...)` with `[Project continuation inspected the focused parent's direct child lanes...]` instead of drifting into sibling inspection
 - 2026-03-30 10:18 MDT - Added the blocked-tail direct-wake gap to the same supervisory family.
   - fresh live evidence:
     - after task `283` completed, the PM lane did not wake until the worker's stale-scan repair loop synthesized new continuations about `60s` later

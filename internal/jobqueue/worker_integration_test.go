@@ -14642,7 +14642,7 @@ func TestJobWorkerRecoverStaleInProgressProjectTurnsWithoutOwnershipRefreshesPro
 	}
 }
 
-func TestJobWorkerRecoverStaleInProgressProjectTurnsWithoutOwnershipRefreshesUndispatchedContinuationToolCalls(t *testing.T) {
+func TestJobWorkerRecoverStaleInProgressProjectTurnsWithoutOwnershipKeepsUndispatchedContinuationToolCalls(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
 		PollInterval:         time.Hour,
@@ -14824,46 +14824,156 @@ func TestJobWorkerRecoverStaleInProgressProjectTurnsWithoutOwnershipRefreshesUnd
 	if err != nil {
 		t.Fatalf("RecoverStaleInProgressProjectTurnsWithoutOwnership: %v", err)
 	}
-	if recovered != 1 {
-		t.Fatalf("recovered = %d, want 1", recovered)
+	if recovered != 0 {
+		t.Fatalf("recovered = %d, want 0", recovered)
 	}
 
-	var (
-		staleStatus     string
-		staleError      string
-		requeuedMessage uuid.UUID
-		requeuedRetry   int
-	)
-	if err := pool.QueryRow(ctx, `
-		SELECT status, COALESCE(error_message, '')
-		FROM chat_message
-		WHERE id = $1
-	`, staleMessage.ID).Scan(&staleStatus, &staleError); err != nil {
-		t.Fatalf("query stale continuation message: %v", err)
+	refreshedSession, err := repo.NewChatSessionRepo(pool).GetByID(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
 	}
-	if staleStatus != "failed" {
-		t.Fatalf("stale continuation status = %q, want failed", staleStatus)
+	if refreshedSession.CurrentTurnID == nil || *refreshedSession.CurrentTurnID != turn.ID {
+		t.Fatalf("current_turn_id = %v, want %s", refreshedSession.CurrentTurnID, turn.ID)
 	}
-	if !strings.Contains(staleError, "superseded") {
-		t.Fatalf("stale continuation error = %q, want superseded reason", staleError)
+
+	storedTurn, err := repo.NewChatTurnRepo(pool).GetByID(ctx, turn.ID)
+	if err != nil {
+		t.Fatalf("reload turn: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `
-		SELECT (payload->>'message_id')::uuid,
-		       COALESCE((payload->>'retry_count')::int, 0)
-		FROM job_queue
-		WHERE job_type = 'agent_turn'
-		  AND status = 'pending'
-		  AND (payload->>'session_id')::uuid = $1
-		ORDER BY created_at DESC, id DESC
-		LIMIT 1
-	`, session.ID).Scan(&requeuedMessage, &requeuedRetry); err != nil {
-		t.Fatalf("query refreshed continuation job: %v", err)
+	if storedTurn.Status != "in_progress" {
+		t.Fatalf("turn status = %q, want in_progress", storedTurn.Status)
 	}
-	if requeuedMessage == staleMessage.ID {
-		t.Fatalf("requeued message_id = %s, want fresh continuation message", requeuedMessage)
+}
+
+func TestJobWorkerStaleProjectTurnHasUndispatchedAssistantToolCallsIgnoresEarlierToolResults(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "stale-project-turn-undispatched-tool-calls-ignore-earlier-results",
+		DisplayName: "Stale Project Turn Undispatched Tool Calls Ignore Earlier Results",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
 	}
-	if requeuedRetry != 0 {
-		t.Fatalf("requeued retry_count = %d, want 0", requeuedRetry)
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "stale-project-turn-undispatched-tool-calls-ignore-earlier-results-project",
+		DisplayName:    "Stale Project Turn Undispatched Tool Calls Ignore Earlier Results Project",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","synthetic_user_message":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create trigger message: %v", err)
+	}
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "in_progress",
+		TriggerMessageID: &message.ID,
+	})
+	if err != nil {
+		t.Fatalf("create turn: %v", err)
+	}
+
+	firstAssistantMetadata, err := json.Marshal(map[string]any{
+		"tool_calls": []map[string]any{{
+			"id":   "toolu_first",
+			"name": "task_list",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal first assistant metadata: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &turn.ID,
+		Role:      "assistant",
+		Content:   "Checking child lanes first.",
+		Status:    "final",
+		Metadata:  firstAssistantMetadata,
+	}); err != nil {
+		t.Fatalf("create first assistant: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &turn.ID,
+		Role:      "tool_result",
+		Content:   `{"output":{"tasks":[]}}`,
+		Status:    "final",
+	}); err != nil {
+		t.Fatalf("create tool result: %v", err)
+	}
+	secondAssistantMetadata, err := json.Marshal(map[string]any{
+		"tool_calls": []map[string]any{{
+			"id":   "toolu_second",
+			"name": "task_create",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal second assistant metadata: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &turn.ID,
+		Role:      "assistant",
+		Content:   "No children exist. Creating bounded children now.",
+		Status:    "final",
+		Metadata:  secondAssistantMetadata,
+	}); err != nil {
+		t.Fatalf("create second assistant: %v", err)
+	}
+
+	undispatched, err := worker.staleProjectTurnHasUndispatchedAssistantToolCalls(ctx, turn.ID)
+	if err != nil {
+		t.Fatalf("staleProjectTurnHasUndispatchedAssistantToolCalls: %v", err)
+	}
+	if !undispatched {
+		t.Fatal("undispatched = false, want true for later assistant tool calls after earlier tool_result")
 	}
 }
 
@@ -27107,8 +27217,9 @@ func TestJobWorkerEnsureProjectContinuationMessageRefreshesRepeatedConsumedNamed
 	`, messageID).Scan(&refreshedContent); err != nil {
 		t.Fatalf("query refreshed bounded-size continuation content: %v", err)
 	}
-	if !strings.Contains(refreshedContent, fmt.Sprintf("Current focus parent: task %d", boundedSizeTask.TaskNumber)) {
-		t.Fatalf("refreshed continuation content = %q, want focused bounded-size parent", refreshedContent)
+	wantFocus := fmt.Sprintf("Current focus parent: task %d (%s) id=%s", boundedSizeTask.TaskNumber, boundedSizeTask.Title, boundedSizeTask.ID)
+	if !strings.Contains(refreshedContent, wantFocus) {
+		t.Fatalf("refreshed continuation content = %q, want focused bounded-size parent %q", refreshedContent, wantFocus)
 	}
 }
 
@@ -27551,8 +27662,92 @@ func TestJobWorkerEnsureProjectContinuationMessageRefreshesStalePendingNamedBoun
 	`, messageID).Scan(&refreshedContent); err != nil {
 		t.Fatalf("query refreshed bounded-size continuation content: %v", err)
 	}
-	if !strings.Contains(refreshedContent, fmt.Sprintf("Current focus parent: task %d", boundedSizeTask.TaskNumber)) {
-		t.Fatalf("refreshed continuation content = %q, want focused bounded-size parent", refreshedContent)
+	wantFocus := fmt.Sprintf("Current focus parent: task %d (%s) id=%s", boundedSizeTask.TaskNumber, boundedSizeTask.Title, boundedSizeTask.ID)
+	if !strings.Contains(refreshedContent, wantFocus) {
+		t.Fatalf("refreshed continuation content = %q, want focused bounded-size parent %q", refreshedContent, wantFocus)
+	}
+}
+
+func TestJobWorkerProjectContinuationResolveFocusOverrideForWorkerExpandsTaskNumberToFullRef(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "resolve-project-continuation-focus-override-task-number",
+		DisplayName: "Resolve Project Continuation Focus Override Task Number",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "resolve-project-continuation-focus-override-task-number-project",
+		DisplayName:    "Resolve Project Continuation Focus Override Task Number Project",
+		Description:    "Project for focus override resolution coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentDescription := "Write planning/sambot-prompts/test-conversations-technical.md."
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Write 6 technical test conversations for SamBot",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		CreatedByType:  "system",
+		CreatedByID:    func() *uuid.UUID { id := uuid.New(); return &id }(),
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	childMetadata, err := json.Marshal(map[string]any{
+		"decomposition_parent_task_id": parentTask.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	childDescription := "Write technical test conversations 1-3 in planning/sambot-prompts/test-conversations-technical.md."
+	childTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Write technical test conversations 1-3",
+		Description:    &childDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		CreatedByType:  "system",
+		CreatedByID:    func() *uuid.UUID { id := uuid.New(); return &id }(),
+		Metadata:       childMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create child task: %v", err)
+	}
+
+	snapshot := projectExecutionContinuationSnapshotForWorker{
+		ChildActiveDraftLine: fmt.Sprintf("Draft parent tasks already have child work: task %d (%s) id=%s title=%q work_status=draft", parentTask.TaskNumber, parentTask.Title, parentTask.ID, parentTask.Title),
+	}
+
+	resolved, err := worker.projectContinuationResolveFocusOverrideForWorker(ctx, project.ID, snapshot, fmt.Sprintf("task %d", childTask.TaskNumber))
+	if err != nil {
+		t.Fatalf("projectContinuationResolveFocusOverrideForWorker: %v", err)
+	}
+	want := fmt.Sprintf("task %d (%s) id=%s", childTask.TaskNumber, childTask.Title, childTask.ID)
+	if resolved != want {
+		t.Fatalf("resolved focus = %q, want %q", resolved, want)
 	}
 }
 
@@ -34426,6 +34621,165 @@ func TestJobWorkerRecoverClaimedAgentTurnsWithoutLiveOwnershipKeepsCurrentInProg
 		CompletedAt:       &completedAt,
 	}); err != nil {
 		t.Fatalf("create completed invocation: %v", err)
+	}
+
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, claimed_by, claimed_at, attempts, updated_at)
+		VALUES ('agent_turn', 'claimed', $1::jsonb, now(), 70, 'test-worker', now() - interval '2 minutes', 1, now() - interval '2 minutes')
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0}`, session.ID, message.ID)).Scan(&jobID); err != nil {
+		t.Fatalf("insert claimed agent_turn: %v", err)
+	}
+
+	recovered, err := worker.RecoverClaimedAgentTurnsWithoutLiveOwnership(ctx)
+	if err != nil {
+		t.Fatalf("RecoverClaimedAgentTurnsWithoutLiveOwnership: %v", err)
+	}
+	if recovered != 0 {
+		t.Fatalf("recovered claimed jobs = %d, want 0", recovered)
+	}
+
+	var (
+		status    string
+		claimedBy *string
+	)
+	if err := pool.QueryRow(ctx, `SELECT status, claimed_by FROM job_queue WHERE id = $1`, jobID).Scan(&status, &claimedBy); err != nil {
+		t.Fatalf("query claimed job: %v", err)
+	}
+	if status != "claimed" {
+		t.Fatalf("claimed job status = %q, want claimed", status)
+	}
+	if claimedBy == nil || *claimedBy == "" {
+		t.Fatalf("claimed job claimed_by = %v, want preserved owner", claimedBy)
+	}
+}
+
+func TestJobWorkerRecoverClaimedAgentTurnsWithoutLiveOwnershipKeepsCurrentInProgressProjectAttemptWithUndispatchedToolCalls(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "recover-claimed-agent-turn-keep-project-undispatched-tools",
+		DisplayName: "Recover Claimed Agent Turn Keep Project Undispatched Tools",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project work.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "recover-claimed-agent-turn-keep-project-undispatched-tools-project",
+		DisplayName:    "Recover Claimed Agent Turn Keep Project Undispatched Tools Project",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","synthetic_user_message":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create trigger message: %v", err)
+	}
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "in_progress",
+		TriggerMessageID: &message.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create current turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &turn.ID); err != nil {
+		t.Fatalf("set current turn: %v", err)
+	}
+
+	firstAssistantMetadata, err := json.Marshal(map[string]any{
+		"tool_calls": []map[string]any{{
+			"id":   "toolu_first",
+			"name": "task_list",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal first assistant metadata: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &turn.ID,
+		Role:      "assistant",
+		Content:   "Checking child lanes first.",
+		Status:    "final",
+		Metadata:  firstAssistantMetadata,
+	}); err != nil {
+		t.Fatalf("create first assistant: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &turn.ID,
+		Role:      "tool_result",
+		Content:   `{"output":{"tasks":[]}}`,
+		Status:    "final",
+	}); err != nil {
+		t.Fatalf("create tool result: %v", err)
+	}
+	secondAssistantMetadata, err := json.Marshal(map[string]any{
+		"tool_calls": []map[string]any{{
+			"id":   "toolu_second",
+			"name": "task_create",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal second assistant metadata: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &turn.ID,
+		Role:      "assistant",
+		Content:   "No children exist. Creating bounded children now.",
+		Status:    "final",
+		Metadata:  secondAssistantMetadata,
+	}); err != nil {
+		t.Fatalf("create second assistant: %v", err)
 	}
 
 	var jobID uuid.UUID
