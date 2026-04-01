@@ -35543,6 +35543,24 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsInterceptedFileReadFallbackNarr
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsSingularInterceptedFileWriteFallbackNarration(t *testing.T) {
+	t.Parallel()
+
+	content := "file_write is being intercepted. Using the python3 fallback as instructed."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected singular intercepted-file_write fallback narration to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsPythonFallbackMethodNarration(t *testing.T) {
+	t.Parallel()
+
+	content := "I'll write the complete portfolio template using the python3 fallback method. Let me craft the full HTML and write it in one pass."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected python3 fallback method narration to be treated as generic recovery output")
+	}
+}
+
 func TestLooksLikeRecoveryIntentNarrationPlaceholderDetectsCompleteDeliverableFileStub(t *testing.T) {
 	t.Parallel()
 
@@ -35864,6 +35882,15 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsGeneralExistingProjectProceedPr
 	content := "The project has already been created and the existing project is ready. Let me know whether to continue working there or start over."
 	if !looksLikeGenericTaskRecoveryReply(content) {
 		t.Fatal("expected generalized existing-project prompt to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsContentStrippedCLIExecuteFallbackNarration(t *testing.T) {
+	t.Parallel()
+
+	content := "The `content` parameter is being stripped. Using the python3 cli_execute fallback as instructed:"
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected content-stripped cli_execute fallback narration to be treated as generic recovery output")
 	}
 }
 
@@ -51562,8 +51589,23 @@ func TestHandleTaskCLIExecuteWithoutCommandAppendsCorrectionWithoutHighConfidenc
 	if !strings.EqualFold(last.Role, "system") {
 		t.Fatalf("last role = %q, want system", last.Role)
 	}
-	if !strings.Contains(last.Content, "cli.execute was emitted without `command`") {
+	if !strings.Contains(last.Content, "cli.execute for `config/pipeline-config-invalid.yaml` was emitted without `command`") {
 		t.Fatalf("last content = %q, want empty cli.execute correction", last.Content)
+	}
+	if !strings.Contains(last.Content, "Do not retry cli.execute shell wrappers") {
+		t.Fatalf("last content = %q, want direct anti-cli_execute guidance", last.Content)
+	}
+	if !strings.Contains(last.Content, "file.write with both `path` and `content` populated") {
+		t.Fatalf("last content = %q, want file.write fallback guidance", last.Content)
+	}
+}
+
+func TestBuildTaskFileWriteRetryMessageBansCLIExecuteFallback(t *testing.T) {
+	t.Parallel()
+
+	message := buildTaskFileWriteRetryMessage("templates/layout-08-portfolio.html")
+	if !strings.Contains(message, "Do not switch to cli.execute, python3 shell wrappers, or another fallback mutation path first.") {
+		t.Fatalf("message = %q, want anti-cli_execute fallback guidance", message)
 	}
 }
 
