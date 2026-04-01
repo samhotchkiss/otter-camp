@@ -29317,6 +29317,53 @@ func TestBuildProjectExecutionContinuationParentQueueRetryPromptForWorker(t *tes
 	}
 }
 
+func TestBuildProjectExecutionContinuationParentQueueRetryPromptForWorkerRejectsRejectedProofFocus(t *testing.T) {
+	prompt := buildProjectExecutionContinuationParentQueueRetryPromptForWorker(
+		12044,
+		"Internet Ethics & Platform Governance",
+		1,
+		projectExecutionContinuationSnapshotForWorker{
+			ProjectLine:   "Active project id: a6dbd331-7205-42d9-b0df-10105d5b5330",
+			FocusTaskLine: `Current focus parent: task 12038 (Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations) id=ab7330d1-e799-4909-a1f0-b755d4d97807 title="Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md proof_state=rejected assigned_agent_id=61b10b32-cdc2-4d75-a84a-6c3bcf25b5ed flow_template_id=9a60dfee-1fc7-4e3a-bd05-f9da1bb97552 outcome_satisfied=true workspace_deliverable_present=true malformed_child_tasks=3 completed_closeout_child_tasks=1`,
+			DraftTaskLine: `Actionable draft tasks already in the tree: task 12042 (Verify planning/sambot-prompts/test-conversations-technical.md exists with 6 technical conversations and commit) id=359e2a0a-da2e-46f6-9442-ba0f9454376b work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md`,
+		},
+		"",
+	)
+
+	if !strings.Contains(prompt, "proof_state=rejected") {
+		t.Fatalf("prompt = %q, want rejected-proof guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not issue task.update with work_status=queued") {
+		t.Fatalf("prompt = %q, want no-queued-parent guidance", prompt)
+	}
+	if !strings.Contains(prompt, "same-deliverable draft tasks") {
+		t.Fatalf("prompt = %q, want same-deliverable draft guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Actionable draft tasks already in the tree:") {
+		t.Fatalf("prompt = %q, want actionable draft line included for direct repair handoff", prompt)
+	}
+	if strings.Contains(prompt, "If the parent_orchestration evidence is already recorded") {
+		t.Fatalf("prompt = %q, should not keep closeout-ready queue guidance for rejected proof", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationParentQueueRetryPromptForWorkerAllowsParentScopedTaskListWhenNoDraftsNamed(t *testing.T) {
+	prompt := buildProjectExecutionContinuationParentQueueRetryPromptForWorker(
+		12044,
+		"Internet Ethics & Platform Governance",
+		1,
+		projectExecutionContinuationSnapshotForWorker{
+			ProjectLine:   "Active project id: a6dbd331-7205-42d9-b0df-10105d5b5330",
+			FocusTaskLine: `Current focus parent: task 12038 (Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations) id=ab7330d1-e799-4909-a1f0-b755d4d97807 title="Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md proof_state=rejected assigned_agent_id=61b10b32-cdc2-4d75-a84a-6c3bcf25b5ed flow_template_id=9a60dfee-1fc7-4e3a-bd05-f9da1bb97552 outcome_satisfied=true workspace_deliverable_present=true malformed_child_tasks=3 completed_closeout_child_tasks=1`,
+		},
+		"",
+	)
+
+	if !strings.Contains(prompt, "use only task.list(parent_task_id=ab7330d1-e799-4909-a1f0-b755d4d97807) once first") {
+		t.Fatalf("prompt = %q, want explicit narrow parent-scoped task.list allowance when drafts are not named", prompt)
+	}
+}
+
 func TestBuildProjectExecutionContinuationParentAdvanceRetryPromptForWorkerRecoversTaskIDFromLabelOverride(t *testing.T) {
 	prompt := buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(
 		259,
@@ -29331,6 +29378,36 @@ func TestBuildProjectExecutionContinuationParentAdvanceRetryPromptForWorkerRecov
 
 	if !strings.Contains(prompt, "task.update on task_id=77a2d4fa-b9e9-45b9-9ba9-b251052d5011") {
 		t.Fatalf("prompt = %q, want recovered task_id from draft snapshot line", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationParentAdvanceRetryPromptForWorkerRejectsRejectedProofFocus(t *testing.T) {
+	prompt := buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(
+		12044,
+		"Internet Ethics & Platform Governance",
+		1,
+		projectExecutionContinuationSnapshotForWorker{
+			ProjectLine:   "Active project id: a6dbd331-7205-42d9-b0df-10105d5b5330",
+			FocusTaskLine: `Current focus parent: task 12038 (Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations) id=ab7330d1-e799-4909-a1f0-b755d4d97807 title="Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md proof_state=rejected assigned_agent_id=61b10b32-cdc2-4d75-a84a-6c3bcf25b5ed flow_template_id=9a60dfee-1fc7-4e3a-bd05-f9da1bb97552 outcome_satisfied=true workspace_deliverable_present=true malformed_child_tasks=3 completed_closeout_child_tasks=1`,
+			DraftTaskLine: `Actionable draft tasks already in the tree: task 12042 (Verify planning/sambot-prompts/test-conversations-technical.md exists with 6 technical conversations and commit) id=359e2a0a-da2e-46f6-9442-ba0f9454376b work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md`,
+		},
+		"",
+	)
+
+	if !strings.Contains(prompt, "proof_state=rejected") {
+		t.Fatalf("prompt = %q, want rejected-proof guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not issue task.update with work_status=queued") {
+		t.Fatalf("prompt = %q, want no-queued-parent guidance", prompt)
+	}
+	if !strings.Contains(prompt, "same-deliverable draft tasks") {
+		t.Fatalf("prompt = %q, want same-deliverable draft guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Actionable draft tasks already in the tree:") {
+		t.Fatalf("prompt = %q, want actionable draft line included for direct repair handoff", prompt)
+	}
+	if strings.Contains(prompt, "If the parent still needs closeout metadata") {
+		t.Fatalf("prompt = %q, should not keep closeout-ready advance guidance for rejected proof", prompt)
 	}
 }
 
@@ -35698,6 +35775,13 @@ func TestJobWorkerRecoverStaleInProgressTriggeredTurnsFailsClaimedProjectSession
 		t.Fatalf("create streaming assistant message: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
+		UPDATE chat_message
+		SET created_at = now() - interval '25 minutes'
+		WHERE id = $1
+	`, assistantMessage.ID); err != nil {
+		t.Fatalf("age assistant message: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
 		INSERT INTO job_queue (job_type, status, payload, run_after, priority, claimed_by, claimed_at, attempts, updated_at)
 		VALUES ('agent_turn', 'claimed', $1::jsonb, now(), 70, 'test-worker', now() - interval '2 minutes', 1, now() - interval '2 minutes')
 	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":1}`, session.ID, message.ID)); err != nil {
@@ -35732,6 +35816,162 @@ func TestJobWorkerRecoverStaleInProgressTriggeredTurnsFailsClaimedProjectSession
 	}
 	if refreshedAssistant.Status != "failed" {
 		t.Fatalf("assistant message status = %q, want failed", refreshedAssistant.Status)
+	}
+}
+
+func TestJobWorkerRecoverStaleInProgressTriggeredTurnsKeepsProjectSessionWithRecentStreamingAssistantMessage(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "recover-stale-triggered-project-session-recent-streaming-assistant",
+		DisplayName: "Recover Stale Triggered Project Session Recent Streaming Assistant",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project work.",
+		AgentType:       "pm",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "recover-stale-triggered-project-session-recent-streaming-assistant-project",
+		DisplayName:    "Recover Stale Triggered Project Session Recent Streaming Assistant Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "continue project work",
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("create trigger message: %v", err)
+	}
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "in_progress",
+		TriggerMessageID: &message.ID,
+		RetryCount:       1,
+	})
+	if err != nil {
+		t.Fatalf("create triggered turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &turn.ID); err != nil {
+		t.Fatalf("set current turn: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET started_at = now() - interval '2 minutes'
+		WHERE id = $1
+	`, turn.ID); err != nil {
+		t.Fatalf("age triggered turn: %v", err)
+	}
+
+	provider, err := repo.NewModelProviderRepo(pool).Create(ctx, repo.ModelProvider{
+		Slug:        "recover-stale-triggered-project-session-recent-streaming-assistant-provider",
+		DisplayName: "Recover Stale Triggered Project Session Recent Streaming Assistant Provider",
+		APIBaseURL:  "https://example.invalid",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	completedAt := time.Now().Add(-2 * time.Minute)
+	if _, err := repo.NewModelInvocationRepo(pool).Create(ctx, repo.ModelInvocation{
+		OrganizationID:    org.ID,
+		ModelProviderID:   provider.ID,
+		InvocationPurpose: "agent_turn",
+		Status:            "completed",
+		ModelName:         "test-model",
+		AgentID:           &agent.ID,
+		ProjectID:         &project.ID,
+		SessionID:         &session.ID,
+		TurnID:            &turn.ID,
+		CompletedAt:       &completedAt,
+	}); err != nil {
+		t.Fatalf("create completed invocation: %v", err)
+	}
+	assistantMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &turn.ID,
+		Role:      "assistant",
+		Content:   "",
+		Status:    "streaming",
+	})
+	if err != nil {
+		t.Fatalf("create streaming assistant message: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, claimed_by, claimed_at, attempts, updated_at)
+		VALUES ('agent_turn', 'claimed', $1::jsonb, now(), 70, 'test-worker', now() - interval '2 minutes', 1, now() - interval '2 minutes')
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":1}`, session.ID, message.ID)); err != nil {
+		t.Fatalf("insert stale claimed backing job: %v", err)
+	}
+
+	repaired, err := worker.RecoverStaleInProgressTriggeredTurns(ctx)
+	if err != nil {
+		t.Fatalf("RecoverStaleInProgressTriggeredTurns: %v", err)
+	}
+	if repaired != 0 {
+		t.Fatalf("repaired triggered turns = %d, want 0", repaired)
+	}
+
+	refreshedTurn, err := repo.NewChatTurnRepo(pool).GetByID(ctx, turn.ID)
+	if err != nil {
+		t.Fatalf("reload turn: %v", err)
+	}
+	if refreshedTurn.Status != "in_progress" {
+		t.Fatalf("turn status = %q, want in_progress", refreshedTurn.Status)
+	}
+	refreshedSession, err := repo.NewChatSessionRepo(pool).GetByID(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	if refreshedSession.CurrentTurnID == nil || *refreshedSession.CurrentTurnID != turn.ID {
+		t.Fatalf("current_turn_id = %v, want %s", refreshedSession.CurrentTurnID, turn.ID)
+	}
+	refreshedAssistant, err := repo.NewChatMessageRepo(pool).GetByID(ctx, assistantMessage.ID)
+	if err != nil {
+		t.Fatalf("reload assistant message: %v", err)
+	}
+	if refreshedAssistant.Status != "streaming" {
+		t.Fatalf("assistant message status = %q, want streaming", refreshedAssistant.Status)
 	}
 }
 

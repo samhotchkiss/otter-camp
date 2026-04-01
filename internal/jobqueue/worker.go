@@ -4514,7 +4514,9 @@ func buildRecoveredTaskQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 	if description != "" {
 		base += "\n\nTask description:\n" + description
 	}
-	if recoveredTaskLooksLikeOrchestrationOnlyParent(taskRecord) {
+	if instruction := recoveredOrchestrationParentCloseoutKickoffInstruction(taskRecord); instruction != "" {
+		base += "\n\nExecution instruction:\n" + instruction
+	} else if recoveredTaskLooksLikeOrchestrationOnlyParent(taskRecord) {
 		base += "\n\nExecution instruction:\nThis task is an orchestration-only parent container. Do not execute the parent deliverable directly. Inspect the current child-task set and create or repair bounded executable child tasks beneath this parent. Do not begin by rereading planning artifacts unless a concrete blocker names one."
 	}
 	if instruction := recoveredInheritedSharedDeliverableKickoffInstruction(taskRecord); instruction != "" {
@@ -4524,6 +4526,20 @@ func buildRecoveredTaskQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 		base += "\n\nExecution instruction:\n" + instruction
 	}
 	return base
+}
+
+func recoveredOrchestrationParentCloseoutKickoffInstruction(taskRecord repo.ProjectTask) string {
+	if !recoveredTaskLooksLikeOrchestrationOnlyParent(taskRecord) {
+		return ""
+	}
+	state, ok := taskorchestration.Parse(taskRecord.Metadata)
+	if !ok || state.IntegrationCheck == nil || !strings.EqualFold(strings.TrimSpace(state.IntegrationCheck.Status), "passed") {
+		return ""
+	}
+	if state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied || len(state.ChildVerifications) == 0 {
+		return ""
+	}
+	return "This orchestration-only parent already has recorded parent_orchestration closeout evidence from its child outputs. Do not inspect child tasks again, do not recreate bounded child work, and do not rewrite the deliverable body. Your next assistant action should be flow.advance with the active flow_node_execution_id so the parent's own flow can finish."
 }
 
 func recoveredInheritedSharedDeliverableKickoffInstruction(taskRecord repo.ProjectTask) string {
@@ -8134,6 +8150,34 @@ func buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(complete
 	if line := projectContinuationSnapshotLineForRefForWorker(snapshot, focusRef, focusTaskID); line != "" {
 		laneSource = line
 	}
+	if strings.Contains(laneSource, "proof_state=rejected") || strings.Contains(focusRef, "proof_state=rejected") {
+		hasNamedRepairDraft := false
+		lines = append(lines,
+			"Your last continuation turn proved this focused parent already has proof_state=rejected.",
+			fmt.Sprintf("Current focus parent: %s.", focusRef),
+			"Do not call task.get, project.list, file.list, file.read, or any other broad rediscovery tool before acting.",
+			fmt.Sprintf("Do not create another replacement child beneath %s from the project lane.", focusLabel),
+			fmt.Sprintf("Do not issue task.update with work_status=queued on %s from the project lane.", focusLabel),
+			"Do not inspect or mention other draft parents until this rejected-proof repair path is advanced.",
+		)
+		if repairLine := strings.TrimSpace(snapshot.RepairDraftLine); repairLine != "" {
+			lines = append(lines, repairLine)
+			hasNamedRepairDraft = true
+		}
+		if draftLine := strings.TrimSpace(snapshot.DraftTaskLine); draftLine != "" {
+			lines = append(lines, draftLine)
+			hasNamedRepairDraft = true
+		}
+		lines = append(lines,
+			fmt.Sprintf("Treat %s as disproven by the latest recorded review instead of as a closeout-ready parent.", focusLabel),
+			"If the continuation snapshot already lists same-deliverable draft tasks, act on those existing drafts first.",
+			"Your next assistant action must create, queue, or advance the smallest bounded repair, replacement, or verification work that addresses the rejected findings.",
+		)
+		if !hasNamedRepairDraft && focusTaskID != "" {
+			lines = append(lines, fmt.Sprintf("If same-deliverable draft tasks are not already named above, use only task.list(parent_task_id=%s) once first.", focusTaskID))
+		}
+		return strings.Join(lines, " ")
+	}
 	if strings.Contains(laneSource, "workspace_deliverable_present=true") &&
 		!projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusRef) &&
 		!strings.Contains(laneSource, "completed_closeout_child_tasks=") &&
@@ -8205,6 +8249,34 @@ func buildProjectExecutionContinuationParentQueueRetryPromptForWorker(completedT
 	}
 	if line := projectContinuationSnapshotLineForRefForWorker(snapshot, focusRef, focusTaskID); line != "" {
 		laneSource = line
+	}
+	if strings.Contains(laneSource, "proof_state=rejected") || strings.Contains(focusRef, "proof_state=rejected") {
+		hasNamedRepairDraft := false
+		lines = append(lines,
+			"Your last continuation turn proved this focused parent already has proof_state=rejected.",
+			fmt.Sprintf("Current focus parent: %s.", focusRef),
+			"Do not call task.get, project.list, file.list, file.read, or any other broad rediscovery tool before acting.",
+			fmt.Sprintf("Do not create another replacement child beneath %s from the project lane.", focusLabel),
+			fmt.Sprintf("Do not issue task.update with work_status=queued on %s from the project lane.", focusLabel),
+			"Do not inspect or mention other draft parents until this rejected-proof repair path is advanced.",
+		)
+		if repairLine := strings.TrimSpace(snapshot.RepairDraftLine); repairLine != "" {
+			lines = append(lines, repairLine)
+			hasNamedRepairDraft = true
+		}
+		if draftLine := strings.TrimSpace(snapshot.DraftTaskLine); draftLine != "" {
+			lines = append(lines, draftLine)
+			hasNamedRepairDraft = true
+		}
+		lines = append(lines,
+			fmt.Sprintf("Treat %s as disproven by the latest recorded review instead of as a closeout-ready parent.", focusLabel),
+			"If the continuation snapshot already lists same-deliverable draft tasks, act on those existing drafts first.",
+			"Your next assistant action must create, queue, or advance the smallest bounded repair, replacement, or verification work that addresses the rejected findings.",
+		)
+		if !hasNamedRepairDraft && focusTaskID != "" {
+			lines = append(lines, fmt.Sprintf("If same-deliverable draft tasks are not already named above, use only task.list(parent_task_id=%s) once first.", focusTaskID))
+		}
+		return strings.Join(lines, " ")
 	}
 	if strings.Contains(laneSource, "workspace_deliverable_present=true") &&
 		!projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusRef) &&
@@ -8829,6 +8901,17 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		  AND COALESCE(live_turn.status, ct.status, '') = 'in_progress'
 		  AND COALESCE(live_turn.trigger_message_id, ct.trigger_message_id) IS NOT NULL
 		  AND COALESCE(live_turn.started_at, ct.started_at) IS NOT NULL
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_message cm
+		    WHERE cm.turn_id = COALESCE(live_turn.id, ct.id)
+		      AND cm.role = 'assistant'
+		      AND cm.status IN ('pending', 'streaming')
+		      AND cm.created_at >= CASE
+		            WHEN cs.scope_type = 'project' THEN $4::timestamptz
+		            ELSE $2::timestamptz
+		          END
+		  )
 		  AND (
 		        (
 		          cs.scope_type = 'project_task'
@@ -9014,7 +9097,7 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		            )
 		          )
 		  )
-	`, w.clock.Now().UTC().Add(-staleContinuationThreshold), w.clock.Now().UTC().Add(-postModelOrphanTurnThreshold), w.clock.Now().UTC().Add(-claimedAgentTurnHeartbeatGrace))
+	`, w.clock.Now().UTC().Add(-staleContinuationThreshold), w.clock.Now().UTC().Add(-postModelOrphanTurnThreshold), w.clock.Now().UTC().Add(-claimedAgentTurnHeartbeatGrace), w.clock.Now().UTC().Add(-slowProjectAsyncModelThreshold))
 	if err != nil {
 		return 0, fmt.Errorf("list stale in-progress triggered turns: %w", err)
 	}
@@ -10997,7 +11080,7 @@ func (w *Worker) claimPendingAgentTurns(ctx context.Context, limit int) ([]Job, 
 	`, agentTurnJobType); err != nil {
 		return nil, fmt.Errorf("dead-letter stale settled project continuation dispatches before claim: %w", err)
 	}
-	if _, err := w.pool.Exec(ctx, `
+	purgedTerminalAttempts, err := w.pool.Exec(ctx, `
 		UPDATE job_queue jq
 		SET status = 'dead_letter',
 		    claimed_by = NULL,
@@ -11014,8 +11097,23 @@ func (w *Worker) claimPendingAgentTurns(ctx context.Context, limit int) ([]Job, 
 		      AND ct.retry_count = COALESCE((jq.payload->>'retry_count')::int, 0)
 		      AND ct.status IN ('completed', 'cancelled', 'failed')
 		  )
-	`, agentTurnJobType); err != nil {
+	`, agentTurnJobType)
+	if err != nil {
 		return nil, fmt.Errorf("dead-letter stale terminal agent_turn jobs before claim: %w", err)
+	}
+	if purgedTerminalAttempts.RowsAffected() > 0 {
+		if w.logger != nil {
+			w.logger.Info("job queue: dead-lettered stale terminal message-attempt dispatches before claim", "count", purgedTerminalAttempts.RowsAffected())
+		}
+		if _, err := w.RequeueActiveExecutionSessionsWithoutTurns(ctx); err != nil {
+			return nil, fmt.Errorf("requeue active execution sessions after terminal dispatch cleanup: %w", err)
+		}
+		if _, err := w.RequeueActiveProjectSessionsWithoutTurns(ctx); err != nil {
+			return nil, fmt.Errorf("requeue active project sessions after terminal dispatch cleanup: %w", err)
+		}
+		if _, err := w.RequeueActiveProjectSessionsMissingContinuation(ctx); err != nil {
+			return nil, fmt.Errorf("requeue active project sessions missing continuation after terminal dispatch cleanup: %w", err)
+		}
 	}
 	stalePendingOrphanBefore := w.clock.Now().UTC().Add(-w.staleClaimThreshold)
 	purgedOrphanDispatches, err := w.pool.Exec(ctx, `

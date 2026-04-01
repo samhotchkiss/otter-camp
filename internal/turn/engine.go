@@ -6589,6 +6589,20 @@ func buildProjectExecutionContinuationParentCompletionRetryPrompt(
 	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot)
 	focusLabel := projectBootstrapTaskLabel(focusTask)
 	focusRef := projectExecutionContinuationTaskRef(focusTask, focusActivity, focusHints)
+	if snapshotFocus := strings.TrimSpace(projectContinuationPromptCurrentFocusParentLine(retryPrompt)); snapshotFocus != "" {
+		focusRef = snapshotFocus
+	}
+	if strings.Contains(focusRef, "proof_state=rejected") {
+		retryPrompt += fmt.Sprintf(" Your last continuation turn proved that %s already has proof_state=rejected.", focusRef)
+		retryPrompt += fmt.Sprintf(" Do not treat %s as a closeout-ready parent and do not issue task.update with work_status=queued on %s from the project lane now.", focusLabel, focusLabel)
+		retryPrompt += " Do not reread the deliverable file again and do not relist the broader project task tree."
+		if deliverablePath := strings.TrimSpace(focusHints.DeliverablePath); deliverablePath != "" {
+			retryPrompt += fmt.Sprintf(" Do not reread `%s` again from the project lane.", deliverablePath)
+		}
+		retryPrompt += " Instead, create, queue, or advance the smallest bounded repair, replacement, or verification work that addresses the rejected findings."
+		retryPrompt += " If the continuation prompt already lists same-deliverable draft tasks, act on those existing drafts first instead of reopening the rejected parent."
+		return retryPrompt
+	}
 	retryPrompt += fmt.Sprintf(" Your last continuation turn proved that %s is already closeout-ready, but the parent completion gate still needs explicit parent_orchestration evidence before %s can finish.", focusRef, focusLabel)
 	retryPrompt += " Do not reread the deliverable file again and do not relist the broader project task tree."
 	if deliverablePath := strings.TrimSpace(focusHints.DeliverablePath); deliverablePath != "" {
@@ -9660,7 +9674,12 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 		lines = append(lines, draftLine)
 		lines = append(lines, "Do not begin with broad project.get, task.list, task.get, or flow.get_execution rediscovery when the actionable draft tasks above already identify the remaining bounded work.")
 		lines = append(lines, "If a named draft task above shows assigned_agent_id=missing, flow_template_id=missing, or requires_human_review=true, repair that exact prerequisite before trying to queue it.")
-		if strings.Contains(draftLine, "completed_closeout_child_tasks=") || strings.Contains(draftLine, "outcome_satisfied=true") {
+		draftHasRejectedProof := strings.Contains(draftLine, "proof_state=rejected")
+		if draftHasRejectedProof {
+			lines = append(lines, "proof_state=rejected means the latest recorded review rejected that draft's current implementation. Do not treat outcome_satisfied=true or completed_closeout_child_tasks=... as permission to queue or close that parent directly.")
+			lines = append(lines, "Route to the smallest bounded repair, replacement, or verification work that addresses the rejected findings instead of re-queuing the disproven parent.")
+		}
+		if !draftHasRejectedProof && (strings.Contains(draftLine, "completed_closeout_child_tasks=") || strings.Contains(draftLine, "outcome_satisfied=true")) {
 			lines = append(lines, "If a named draft task above already shows completed_closeout_child_tasks=... or outcome_satisfied=true, treat that parent as closeout-ready and advance or close it instead of creating another replacement child.")
 			lines = append(lines, "When closeout-ready parent evidence and completed-task batch evidence are already present, do not re-verify broad artifact roots on disk before advancing the parent unless a concrete tool error says the artifact is missing.")
 			lines = append(lines, "Before marking that closeout-ready parent done, send child_output_verifications for the concrete child or superseding outputs that already satisfy the deliverable plus integration_check.status=passed and outcome_assessment.satisfied=true in the same task.update so the parent_orchestration metadata is recorded on the parent task.")
@@ -9700,8 +9719,9 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 	}
 	if focusLine := strings.TrimSpace(snapshot.FocusTaskLine); focusLine != "" {
 		lines = append(lines, focusLine)
-		focusHasCompletedCloseout := strings.Contains(focusLine, "completed_closeout_child_tasks=") ||
-			strings.Contains(focusLine, "outcome_satisfied=true")
+		focusHasRejectedProof := strings.Contains(focusLine, "proof_state=rejected")
+		focusHasCompletedCloseout := !focusHasRejectedProof && (strings.Contains(focusLine, "completed_closeout_child_tasks=") ||
+			strings.Contains(focusLine, "outcome_satisfied=true"))
 		focusHasMissingPrerequisites := strings.Contains(focusLine, "assigned_agent_id=missing") ||
 			strings.Contains(focusLine, "flow_template_id=missing")
 		if strings.Contains(focusLine, "child_tasks=") && strings.TrimSpace(snapshot.ActiveTaskLine) != "" {
@@ -9730,6 +9750,11 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 				(strings.Contains(snapshot.ActiveTaskLine, "flow_template_id=") || strings.Contains(snapshot.ReplacementDraftLine, "flow_template_id=") || strings.Contains(snapshot.DraftTaskLine, "flow_template_id=")) {
 				lines = append(lines, "Reuse the already-named flow_template_id from matching sibling work in this continuation prompt when it fits the same lane; do not call flow.list_templates just to rediscover it.")
 			}
+		}
+		if focusHasRejectedProof {
+			lines = append(lines, "Because that focus parent already shows proof_state=rejected, do not queue or close the parent directly from the project lane.")
+			lines = append(lines, "Treat the current parent-orchestration evidence as disproven by the latest review. Your next assistant action must create, queue, or advance the smallest bounded repair, replacement, or verification work that addresses the rejected findings instead of re-queuing that parent.")
+			lines = append(lines, "If same-deliverable draft tasks are already listed elsewhere in this prompt, act on those existing drafts first instead of reopening the rejected parent.")
 		}
 		if focusHasCompletedCloseout {
 			lines = append(lines, "Because that focus parent is already closeout-ready, advance or close the parent directly instead of creating another replacement child.")
@@ -34325,6 +34350,9 @@ func projectContinuationCloseoutReadyParentPromptActive(rt *turnRuntime) bool {
 	if initial == "" {
 		return false
 	}
+	if projectContinuationPromptCurrentFocusProofState(initial) == "rejected" {
+		return false
+	}
 	lower := strings.ToLower(initial)
 	return strings.Contains(initial, "outcome_satisfied=true") ||
 		strings.Contains(initial, "completed_closeout_child_tasks=") ||
@@ -34610,6 +34638,9 @@ func projectExecutionBlockedMutationStopMessage(rt *turnRuntime, results []ToolR
 			return "[Project continuation focus task still has explicit prerequisite fields missing. Do not inspect deliverables or sibling artifacts from the project lane. Repair the named assigned_agent_id / flow_template_id gaps on that exact task with one narrow task.update first, then continue the replacement-child handoff if it is still needed.]"
 		}
 		if strings.Contains(errText, "closeout-ready state for the same deliverable") {
+			if rt != nil && projectContinuationPromptCurrentFocusProofState(strings.TrimSpace(rt.initialMessageText)) == "rejected" {
+				return "[Project continuation already proved that the focused parent has proof_state=rejected. Do not rediscover sibling or child state from the project lane again. Do not re-queue or close that disproven parent. Create, queue, or advance the smallest bounded repair, replacement, or verification work that addresses the rejected findings instead.]"
+			}
 			return "[Project continuation already proved that the focused parent is closeout-ready for this deliverable. Do not rediscover sibling or child state from the project lane again. Advance or close that same parent directly, and if parent_orchestration evidence is still missing record it in one narrow task.update now.]"
 		}
 		if strings.Contains(errText, "project continuation already has focused draft task") {
@@ -38681,6 +38712,13 @@ func buildProjectContinuationFocusedCloseoutReadyGuardError(focusTaskID uuid.UUI
 	return fmt.Sprintf("project continuation already has a focused closeout-ready parent for the same deliverable. Do not call %s from the project lane now; advance or close that same parent directly, and if parent_orchestration evidence is still missing record it in one narrow task.update first.", strings.TrimSpace(toolName))
 }
 
+func buildProjectContinuationFocusedRejectedProofReadGuardError(focusTaskID uuid.UUID, toolName string) string {
+	if focusTaskID != uuid.Nil {
+		return fmt.Sprintf("project continuation already has focused draft task id=%s with proof_state=rejected. Do not call %s from the project lane now. Do not re-queue or close that disproven parent; create, queue, or advance the smallest bounded repair, replacement, or verification work that addresses the rejected findings instead.", focusTaskID.String(), strings.TrimSpace(toolName))
+	}
+	return fmt.Sprintf("project continuation already has a focused draft parent with proof_state=rejected. Do not call %s from the project lane now. Do not re-queue or close that disproven parent; create, queue, or advance the smallest bounded repair, replacement, or verification work that addresses the rejected findings instead.", strings.TrimSpace(toolName))
+}
+
 func projectContinuationFocusedDraftReadGuardActive(initial string) bool {
 	initial = strings.TrimSpace(initial)
 	if initial == "" {
@@ -38722,6 +38760,9 @@ func projectContinuationFocusedCloseoutReadyActive(initial string) bool {
 	if initial == "" {
 		return false
 	}
+	if projectContinuationPromptCurrentFocusProofState(initial) == "rejected" {
+		return false
+	}
 	return strings.Contains(initial, "already closeout-ready for the same deliverable") ||
 		strings.Contains(initial, "closeout-ready parent still needs parent_orchestration evidence")
 }
@@ -38752,6 +38793,14 @@ func projectContinuationFocusedCloseoutReadyAllowsParentScopedTaskList(initial s
 	return strings.Contains(initial, "If any child task IDs are still unknown, use only task.list(parent_task_id=")
 }
 
+func projectContinuationRejectedProofAllowsParentScopedTaskList(initial string) bool {
+	initial = strings.TrimSpace(initial)
+	if initial == "" {
+		return false
+	}
+	return strings.Contains(initial, "If same-deliverable draft tasks are not already named above, use only task.list(parent_task_id=")
+}
+
 func projectContinuationFocusedTaskID(initial string) uuid.UUID {
 	if focusTaskID := projectContinuationPromptCurrentFocusParentTaskID(initial); focusTaskID != uuid.Nil {
 		return focusTaskID
@@ -38768,13 +38817,14 @@ func shouldBlockProjectContinuationFocusedDraftReadTool(rt *turnRuntime, toolNam
 		return false, ""
 	}
 	initial := strings.TrimSpace(rt.initialMessageText)
+	rejectedProofActive := projectContinuationPromptCurrentFocusProofState(initial) == "rejected"
 	prerequisiteRepairActive := projectContinuationFocusedPrerequisiteRepairActive(initial)
 	closeoutReadyActive := projectContinuationFocusedCloseoutReadyActive(initial)
 	workspaceCloseoutProofActive := projectContinuationFocusedWorkspaceCloseoutProofActive(initial)
-	if !projectContinuationReplacementChildHandoffActive(rt) && !prerequisiteRepairActive && !closeoutReadyActive && !workspaceCloseoutProofActive {
+	if !projectContinuationReplacementChildHandoffActive(rt) && !prerequisiteRepairActive && !closeoutReadyActive && !workspaceCloseoutProofActive && !rejectedProofActive {
 		return false, ""
 	}
-	if !projectContinuationFocusedDraftReadGuardActive(initial) && !prerequisiteRepairActive && !closeoutReadyActive && !workspaceCloseoutProofActive {
+	if !projectContinuationFocusedDraftReadGuardActive(initial) && !prerequisiteRepairActive && !closeoutReadyActive && !workspaceCloseoutProofActive && !rejectedProofActive {
 		return false, ""
 	}
 	focusTaskID := projectContinuationFocusedTaskID(initial)
@@ -38785,6 +38835,9 @@ func shouldBlockProjectContinuationFocusedDraftReadTool(rt *turnRuntime, toolNam
 	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "file.read", "file.list", "file.search", "task.get":
+		if rejectedProofActive {
+			return true, buildProjectContinuationFocusedRejectedProofReadGuardError(focusTaskID, toolName)
+		}
 		if closeoutReadyActive || workspaceCloseoutProofActive {
 			return true, buildProjectContinuationFocusedCloseoutReadyGuardError(focusTaskID, toolName)
 		}
@@ -38793,6 +38846,14 @@ func shouldBlockProjectContinuationFocusedDraftReadTool(rt *turnRuntime, toolNam
 		}
 		return true, buildProjectContinuationFocusedDraftReadGuardError(focusTaskID, toolName)
 	case "task.list":
+		if rejectedProofActive {
+			parentTaskID, ok := parseUUIDAny(arguments["parent_task_id"])
+			if projectContinuationRejectedProofAllowsParentScopedTaskList(initial) &&
+				ok && parentTaskID != uuid.Nil && focusTaskID != uuid.Nil && parentTaskID == focusTaskID {
+				return false, ""
+			}
+			return true, buildProjectContinuationFocusedRejectedProofReadGuardError(focusTaskID, toolName)
+		}
 		if closeoutReadyActive || workspaceCloseoutProofActive {
 			parentTaskID, ok := parseUUIDAny(arguments["parent_task_id"])
 			if !projectContinuationFocusedCloseoutReadyAllowsParentScopedTaskList(initial) ||
@@ -39021,6 +39082,11 @@ func buildProjectContinuationFocusedDraftCloseoutTaskCreateGuardError(focusTask 
 	return fmt.Sprintf("project continuation already has focused draft task %s in a closeout-ready state for the same deliverable. Do not create another replacement child beneath %s from the project lane; advance or close %s directly instead.", label, label, label)
 }
 
+func buildProjectContinuationFocusedDraftRejectedProofTaskCreateGuardError(focusTask repo.ProjectTask) string {
+	label := projectBootstrapTaskLabel(focusTask)
+	return fmt.Sprintf("project continuation already has focused draft task %s with proof_state=rejected. Do not create another broad same-deliverable child beneath %s from the project lane. Create, queue, or advance only the smallest bounded repair, replacement, or verification work that addresses the rejected findings, or use the already-listed same-deliverable draft if one exists.", label, label)
+}
+
 func buildProjectContinuationFocusedDraftExistingChildGuardError(focusTask repo.ProjectTask, draftChildren []repo.ProjectTask) string {
 	label := projectBootstrapTaskLabel(focusTask)
 	if len(draftChildren) == 0 {
@@ -39133,6 +39199,11 @@ func buildProjectContinuationFocusedDraftCloseoutMetadataGuardError(focusTask re
 func buildProjectContinuationFocusedDraftQueueRequiredGuardError(focusTask repo.ProjectTask) string {
 	label := projectBootstrapTaskLabel(focusTask)
 	return fmt.Sprintf("project continuation already proved that closeout-ready parent %s cannot jump straight from draft to done from the project lane. Do not set work_status=done on %s here; use one narrow task.update with work_status=queued instead, and include any missing child_output_verifications, integration_check.status=passed, and outcome_assessment.satisfied=true in that same update when needed so the parent_orchestration metadata is recorded.", label, label)
+}
+
+func buildProjectContinuationFocusedDraftRejectedProofDoneGuardError(focusTask repo.ProjectTask) string {
+	label := projectBootstrapTaskLabel(focusTask)
+	return fmt.Sprintf("project continuation already has focused parent %s with proof_state=rejected. Do not set work_status=done or work_status=queued on %s from the project lane now. Create or queue the smallest bounded repair, replacement, or verification work that addresses the rejected review findings instead of trying to close the disproven parent.", label, label)
 }
 
 func buildProjectContinuationFocusedDraftRejectedProofGuardError(focusTask repo.ProjectTask) string {
@@ -39400,6 +39471,9 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 	if targetTaskID == focusTaskID &&
 		nextStatus == "done" &&
 		projectContinuationCloseoutReadyParentPromptActive(rt) {
+		if projectContinuationPromptCurrentFocusProofState(strings.TrimSpace(rt.initialMessageText)) == "rejected" {
+			return true, buildProjectContinuationFocusedDraftRejectedProofDoneGuardError(focusTask)
+		}
 		return true, buildProjectContinuationFocusedDraftQueueRequiredGuardError(focusTask)
 	}
 	if targetTaskID == focusTaskID &&
@@ -39435,6 +39509,9 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 	if _, malformed := malformedChildTaskIDs[targetTaskID]; malformed {
 		if projectContinuationDraftTaskHasDirectCloseoutProof(focusTask, focusActivity) {
 			if projectContinuationTaskHasRecordedParentCompletionEvidence(focusTask) {
+				if projectContinuationPromptCurrentFocusProofState(strings.TrimSpace(rt.initialMessageText)) == "rejected" {
+					return true, buildProjectContinuationFocusedDraftRejectedProofDoneGuardError(focusTask)
+				}
 				return true, buildProjectContinuationFocusedDraftQueueRequiredGuardError(focusTask)
 			}
 			return true, buildProjectContinuationFocusedDraftCloseoutMetadataGuardError(focusTask, projectContinuationCompletedChildTaskLabels(projectTasks, focusTask.ID))
@@ -39559,9 +39636,11 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 		return false, ""
 	}
 	initial := strings.TrimSpace(rt.initialMessageText)
+	rejectedProofActive := projectContinuationPromptCurrentFocusProofState(initial) == "rejected"
 	boundedWorkspaceCloseoutRetry := projectContinuationFocusedWorkspaceBoundedCloseoutRetryActive(initial)
 	focusTaskID := projectContinuationFocusedTaskID(initial)
 	if projectContinuationFocusedWorkspaceCloseoutProofActive(initial) &&
+		!rejectedProofActive &&
 		!boundedWorkspaceCloseoutRetry &&
 		focusTaskID != uuid.Nil &&
 		parentTaskID == focusTaskID {
@@ -39605,6 +39684,9 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 	}
 	focusActivity := childActivity[focusTask.ID]
 	focusHints := taskHintsByTask[focusTask.ID]
+	if rejectedProofActive && focusTask.ID == parentTaskID {
+		return false, ""
+	}
 	if focusActivity.workspaceDeliverablePresent && !boundedWorkspaceCloseoutRetry {
 		return true, buildProjectContinuationFocusedDraftCloseoutTaskCreateGuardError(focusTask)
 	}
@@ -39643,6 +39725,9 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 	}
 	if boundedWorkspaceCloseoutRetry {
 		return false, ""
+	}
+	if rejectedProofActive {
+		return true, buildProjectContinuationFocusedDraftRejectedProofTaskCreateGuardError(focusTask)
 	}
 	return true, buildProjectContinuationFocusedDraftCloseoutTaskCreateGuardError(focusTask)
 }

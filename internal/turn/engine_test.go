@@ -19376,6 +19376,28 @@ func TestProjectExecutionBlockedMutationStopMessageOnFocusedCloseoutReadyGuard(t
 	}
 }
 
+func TestProjectExecutionBlockedMutationStopMessageOnRejectedProofCloseoutGuard(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		initialMessageText: "Continue the active project execution now. " +
+			"Current focus parent: task 12038 (Write planning/sambot-prompts/test-conversations-technical.md) id=ab7330d1-e799-4909-a1f0-b755d4d97807 " +
+			"work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md proof_state=rejected outcome_satisfied=true completed_closeout_child_tasks=1. " +
+			"Your next assistant action must create, queue, or advance the smallest bounded repair, replacement, or verification work that addresses the rejected findings.",
+	}
+	message := projectExecutionBlockedMutationStopMessage(rt, []ToolResult{{
+		Name:  "task.list",
+		Error: "project continuation already has focused draft task id=ab7330d1-e799-4909-a1f0-b755d4d97807 in a closeout-ready state for the same deliverable. Do not call task.list from the project lane now; advance or close that same parent directly. If parent_orchestration evidence is still missing, record it with child_output_verifications, integration_check.status=passed, and outcome_assessment.satisfied=true in one narrow task.update on that task first.",
+	}})
+
+	if !strings.Contains(message, "proof_state=rejected") {
+		t.Fatalf("message = %q, want rejected-proof stop summary", message)
+	}
+	if !strings.Contains(message, "Do not re-queue or close that disproven parent") {
+		t.Fatalf("message = %q, want anti-requeue guidance", message)
+	}
+}
+
 func TestTaskReviewBlockedPreferredTargetStopMessage(t *testing.T) {
 	t.Parallel()
 
@@ -30880,6 +30902,74 @@ func TestBuildProjectContinuationActionPromptAddsSatisfiedCloseoutGuidance(t *te
 	}
 }
 
+func TestBuildProjectContinuationActionPromptRejectsCloseoutGuidanceForRejectedProofFocus(t *testing.T) {
+	prompt := buildProjectContinuationActionPrompt("Active project request: recover the rejected technical conversations parent", projectExecutionContinuationSnapshot{
+		ProjectLine:   "Active project id: 123",
+		DraftTaskLine: "Actionable draft tasks already in the tree: task 12038 (Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations) id=bbb title=\"Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations\" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md proof_state=rejected outcome_satisfied=true child_tasks=1 blocked_child_tasks=1 replaceable_blocked_child_tasks=1",
+		FocusTaskLine: "Current focus parent: task 12038 (Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations) id=bbb title=\"Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations\" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md proof_state=rejected outcome_satisfied=true child_tasks=1 blocked_child_tasks=1 replaceable_blocked_child_tasks=1",
+	})
+
+	if !strings.Contains(prompt, "proof_state=rejected means the latest recorded review rejected") {
+		t.Fatalf("prompt = %q, want rejected-proof draft guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Because that focus parent already shows proof_state=rejected") {
+		t.Fatalf("prompt = %q, want rejected-proof focus guidance", prompt)
+	}
+	if strings.Contains(prompt, "Because that focus parent is already closeout-ready") {
+		t.Fatalf("prompt = %q, should not keep closeout-ready focus guidance when proof is rejected", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationParentCompletionRetryPromptRejectsRejectedProofFocus(t *testing.T) {
+	completedTask := repo.ProjectTask{TaskNumber: 12044, Title: "Internet Ethics & Platform Governance"}
+	focusTaskID := uuid.New()
+	doneChildID := uuid.New()
+	focusTask := repo.ProjectTask{
+		ID:         focusTaskID,
+		TaskNumber: 12038,
+		Title:      "Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations",
+		WorkStatus: "draft",
+	}
+	focusHints := projectContinuationTaskHints{
+		DeliverablePath: "planning/sambot-prompts/test-conversations-technical.md",
+	}
+	focusActivity := projectContinuationChildActivity{
+		childTaskCount:                  1,
+		blockedChildTaskCount:           1,
+		completedCloseoutChildTaskCount: 1,
+	}
+	snapshot := projectExecutionContinuationSnapshot{
+		ProjectLine: "Active project id: 123",
+		FocusTaskLine: "Current focus parent: task 12038 (Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations) id=" + focusTaskID.String() +
+			" title=\"Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations\" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md proof_state=rejected outcome_satisfied=true completed_closeout_child_tasks=1",
+		DraftTaskLine: "Actionable draft tasks already in the tree: task 12042 (Verify planning/sambot-prompts/test-conversations-technical.md exists with 6 technical conversations and commit) id=" + uuid.NewString() + " work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md",
+	}
+
+	prompt := buildProjectExecutionContinuationParentCompletionRetryPrompt(
+		completedTask,
+		4,
+		snapshot,
+		focusTask,
+		focusActivity,
+		focusHints,
+		[]string{"OC-12053"},
+		[]string{"OC-12053 task_id=" + doneChildID.String()},
+	)
+
+	if !strings.Contains(prompt, "proof_state=rejected") {
+		t.Fatalf("prompt = %q, want rejected-proof retry guidance", prompt)
+	}
+	if !strings.Contains(prompt, "do not issue task.update with work_status=queued") {
+		t.Fatalf("prompt = %q, want no-queued-parent guidance", prompt)
+	}
+	if !strings.Contains(prompt, "same-deliverable draft tasks") {
+		t.Fatalf("prompt = %q, want existing-draft guidance", prompt)
+	}
+	if strings.Contains(prompt, "parent completion gate still needs explicit parent_orchestration evidence") {
+		t.Fatalf("prompt = %q, should not keep parent-completion retry guidance for rejected proof", prompt)
+	}
+}
+
 func TestShouldBlockProjectContinuationFocusedDraftMutationForAncestorPromotion(t *testing.T) {
 	t.Parallel()
 
@@ -31530,6 +31620,33 @@ func TestShouldBlockProjectContinuationFocusedDraftTaskCreateAllowsBoundedWorksp
 	})
 	if blocked {
 		t.Fatalf("reason = %q, want bounded closeout-handoff task.create to be allowed", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftTaskCreateAllowsRejectedProofRepairChild(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	focusTaskID := uuid.New()
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: "Continue the active project execution now. Current focus parent: task 12038 (Write planning/sambot-prompts/test-conversations-technical.md) id=" + focusTaskID.String() +
+			" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md proof_state=rejected workspace_deliverable_present=true completed_closeout_child_tasks=1. " +
+			"Do not issue task.update with work_status=queued on task 12038 from the project lane. " +
+			"Your next assistant action must create, queue, or advance the smallest bounded repair, replacement, or verification work that addresses the rejected findings.",
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftTaskCreateTool(context.Background(), rt, "task.create", map[string]any{
+		"parent_task_id": focusTaskID.String(),
+		"title":          "Repair missing technical conversations rejected in review",
+	})
+	if blocked {
+		t.Fatalf("reason = %q, want rejected-proof repair child task.create to be allowed", reason)
 	}
 }
 
@@ -32913,6 +33030,62 @@ func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksWorkspaceCloseo
 	}
 	if !strings.Contains(reason, "task.list") || !strings.Contains(reason, "closeout-ready state for the same deliverable") {
 		t.Fatalf("reason = %q, want closeout-ready task.list guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksRejectedProofTaskList(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Current focus parent: task 12038 (Write planning/sambot-prompts/test-conversations-technical.md) id=" + focusTaskID.String() + " work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md proof_state=rejected workspace_deliverable_present=true completed_closeout_child_tasks=1.",
+			"Do not call task.get, project.list, file.list, file.read, or any other broad rediscovery tool before acting.",
+			"Do not issue task.update with work_status=queued on task 12038 from the project lane.",
+			"Your next assistant action must create, queue, or advance the smallest bounded repair, replacement, or verification work that addresses the rejected findings.",
+		}, " "),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, "task.list", map[string]any{
+		"parent_task_id": focusTaskID.String(),
+	})
+	if !blocked {
+		t.Fatal("expected rejected-proof task.list to be blocked")
+	}
+	if !strings.Contains(reason, "proof_state=rejected") || !strings.Contains(reason, "task.list") {
+		t.Fatalf("reason = %q, want rejected-proof task.list guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftReadToolAllowsRejectedProofParentScopedTaskListWhenExplicitlyAllowed(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Current focus parent: task 12038 (Write planning/sambot-prompts/test-conversations-technical.md) id=" + focusTaskID.String() + " work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md proof_state=rejected workspace_deliverable_present=true completed_closeout_child_tasks=1.",
+			"Do not issue task.update with work_status=queued on task 12038 from the project lane.",
+			"If same-deliverable draft tasks are not already named above, use only task.list(parent_task_id=" + focusTaskID.String() + ") once first.",
+		}, " "),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, "task.list", map[string]any{
+		"parent_task_id": focusTaskID.String(),
+	})
+	if blocked {
+		t.Fatalf("reason = %q, want explicitly allowed parent-scoped task.list", reason)
 	}
 }
 
