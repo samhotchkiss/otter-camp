@@ -112,6 +112,48 @@ func TestRecoveredTaskLooksLikeOrchestrationOnlyParentIgnoresLegacySatisfiedClos
 	}
 }
 
+func TestBuildRecoveredTaskQueueKickoffMessageForCloseoutReadyOrchestrationParent(t *testing.T) {
+	description := "Write planning/sambot-example-conversations.md containing paired example conversations."
+	metadata, err := json.Marshal(map[string]any{
+		"decomposition": map[string]any{
+			"orchestration_only": true,
+		},
+		"parent_orchestration": map[string]any{
+			"integration_check": map[string]any{
+				"status": "passed",
+			},
+			"outcome_assessment": map[string]any{
+				"satisfied": true,
+			},
+			"child_verifications": []map[string]any{
+				{
+					"task_id": uuid.NewString(),
+					"summary": "verified",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+	taskRecord := repo.ProjectTask{
+		Title:       "Write paired SamBot example conversations (casual + expert)",
+		Description: &description,
+		Metadata:    metadata,
+	}
+
+	message := buildRecoveredTaskQueueKickoffMessage(taskRecord)
+	if !strings.Contains(message, "already has recorded parent_orchestration closeout evidence") {
+		t.Fatalf("kickoff message = %q, want closeout-ready parent guidance", message)
+	}
+	if !strings.Contains(message, "Your next assistant action should be flow.advance") {
+		t.Fatalf("kickoff message = %q, want flow.advance guidance", message)
+	}
+	if strings.Contains(message, "create or repair bounded executable child tasks beneath this parent") {
+		t.Fatalf("kickoff message = %q, did not want child-creation guidance once closeout proof exists", message)
+	}
+}
+
 func TestBuildProjectExecutionContinuationPromptForWorkerIncludesLeafTaskGuidance(t *testing.T) {
 	prompt := buildProjectExecutionContinuationPromptForWorker(56, "Import post", 0, projectExecutionContinuationSnapshotForWorker{
 		ProjectLine:        "Active project id: 123",
@@ -155,6 +197,28 @@ func TestBuildProjectExecutionContinuationPromptForWorkerSkipsPathHintsWhenFocus
 	}
 }
 
+func TestBuildProjectExecutionContinuationPromptForWorkerSkipsMissingPrerequisitesForReplacementParent(t *testing.T) {
+	prompt := buildProjectExecutionContinuationPromptForWorker(246, "Write planning/sambot-personality-spec.md", 1, projectExecutionContinuationSnapshotForWorker{
+		ProjectLine:          "Active project id: 123",
+		ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 250 (Include example exchanges) id=aaa title=\"Include example exchanges\" work_status=blocked deliverable_path=planning/sambot-personality-spec.md assigned_agent_id=worker-1 flow_template_id=ft-1 blocker=\"shared deliverable\"",
+		ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 246 (Write planning/sambot-personality-spec.md) id=bbb title=\"Write planning/sambot-personality-spec.md\" work_status=draft deliverable_path=planning/sambot-personality-spec.md assigned_agent_id=missing flow_template_id=missing child_tasks=3 replaceable_blocked_child_tasks=3 malformed_child_tasks=1",
+		FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 246 (Write planning/sambot-personality-spec.md) id=bbb title=\"Write planning/sambot-personality-spec.md\" work_status=draft deliverable_path=planning/sambot-personality-spec.md assigned_agent_id=missing flow_template_id=missing child_tasks=3 replaceable_blocked_child_tasks=3 malformed_child_tasks=1",
+	})
+
+	if strings.Contains(prompt, "Because that focus parent still has explicit prerequisite fields missing") {
+		t.Fatalf("prompt = %q, did not want missing-prerequisite priority guidance for a replacement parent", prompt)
+	}
+	if strings.Contains(prompt, "Repair the named assigned_agent_id / flow_template_id gaps on that exact task with one narrow task.update") {
+		t.Fatalf("prompt = %q, did not want direct task.update prerequisite guidance for a replacement parent", prompt)
+	}
+	if !strings.Contains(prompt, "Your next assistant action must create the smallest fresh replacement child task beneath task 246") {
+		t.Fatalf("prompt = %q, want replacement-child guidance to remain dominant", prompt)
+	}
+	if strings.Contains(prompt, "Reuse one of the already-named project assignee ids") {
+		t.Fatalf("prompt = %q, did not want assignee reuse guidance for a replacement parent", prompt)
+	}
+}
+
 func TestBuildProjectExecutionContinuationBoundedSizeRetryPromptForWorkerIncludesSuggestedTitles(t *testing.T) {
 	prompt := buildProjectExecutionContinuationBoundedSizeRetryPromptForWorker(6660, "Expert version", 1, projectExecutionContinuationSnapshotForWorker{
 		ProjectLine:   "Active project id: 123",
@@ -172,6 +236,163 @@ func TestBuildProjectExecutionContinuationBoundedSizeRetryPromptForWorkerInclude
 	}
 	if !strings.Contains(prompt, "Do not create one replacement child that still owns the whole deliverable; create multiple bounded child tasks that follow that split directly.") {
 		t.Fatalf("prompt = %q, want anti-broad-child guidance", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationBoundedRetryPromptFromSnapshotForWorkerPrefersReplacementChildPromptWhenChildDraftsExist(t *testing.T) {
+	t.Parallel()
+
+	parentID := uuid.NewString()
+	childAID := uuid.NewString()
+	childBID := uuid.NewString()
+
+	prompt := buildProjectExecutionContinuationBoundedRetryPromptFromSnapshotForWorker(
+		12525,
+		"Write 6 technical test conversations for SamBot",
+		4,
+		projectExecutionContinuationSnapshotForWorker{
+			ProjectLine:          "Active project id: 123",
+			FocusTaskLine:        `Current focus parent: task 12526 (Write 6 technical test conversations for SamBot) id=` + parentID + ` title="Write 6 technical test conversations for SamBot" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md`,
+			ChildActiveDraftLine: `Draft parent tasks already have child work: task 12527 (Write technical test conversations 1-3) id=` + childAID + ` title="Write technical test conversations 1-3" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md; task 12528 (Write technical test conversations 4-6) id=` + childBID + ` title="Write technical test conversations 4-6" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md`,
+		},
+		`task 12526 (Write 6 technical test conversations for SamBot) id=`+parentID+` title="Write 6 technical test conversations for SamBot" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md`,
+		[]string{"Write technical test conversations 1-3", "Write technical test conversations 4-6"},
+	)
+
+	if !strings.Contains(prompt, "focused draft parent already has direct child work to advance") {
+		t.Fatalf("prompt = %q, want replacement-child retry guidance", prompt)
+	}
+	if strings.Contains(prompt, "still too broad to queue as-is") {
+		t.Fatalf("prompt = %q, did not want generic bounded-size retry guidance once child drafts exist", prompt)
+	}
+	if !strings.Contains(prompt, "Those direct child lanes are not individually named yet in this prompt.") {
+		t.Fatalf("prompt = %q, want unnamed direct-child guidance", prompt)
+	}
+	if !strings.Contains(prompt, "task.list(parent_task_id="+parentID+")") {
+		t.Fatalf("prompt = %q, want narrow direct-child inspection guidance", prompt)
+	}
+	if strings.Contains(prompt, "one narrow task.update on one already-named direct child task above") {
+		t.Fatalf("prompt = %q, did not want direct child task.update before child ids are named", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationBoundedRetryPromptFromSnapshotForWorkerPrefersRepairDraftPromptWhenRepairDraftExists(t *testing.T) {
+	t.Parallel()
+
+	parentID := uuid.NewString()
+	repairID := uuid.NewString()
+
+	prompt := buildProjectExecutionContinuationBoundedRetryPromptFromSnapshotForWorker(
+		12525,
+		"Write 6 technical test conversations for SamBot",
+		4,
+		projectExecutionContinuationSnapshotForWorker{
+			ProjectLine:     "Active project id: 123",
+			FocusTaskLine:   `Current focus parent: task 12526 (Write 6 technical test conversations for SamBot) id=` + parentID + ` title="Write 6 technical test conversations for SamBot" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md malformed_child_tasks=3`,
+			RepairDraftLine: `Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 12527 (Write technical test conversations 1-3) id=` + repairID + ` title="Write technical test conversations 1-3" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md`,
+		},
+		`task 12526 (Write 6 technical test conversations for SamBot) id=`+parentID+` title="Write 6 technical test conversations for SamBot" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md`,
+		[]string{"Conversation 1", "Conversation 2"},
+	)
+
+	if !strings.Contains(prompt, "Current focus parent: task 12527 (Write technical test conversations 1-3)") {
+		t.Fatalf("prompt = %q, want repair child promoted to focus", prompt)
+	}
+	if !strings.Contains(prompt, "Do not begin with task.list(parent_task_id=...), task.get, or phrases like 'Let me inspect it first' or 'Let me check the current children first'.") {
+		t.Fatalf("prompt = %q, want explicit no-reread guidance for repair child retry", prompt)
+	}
+	if !strings.Contains(prompt, "Your last continuation turn proved that the named repair child is still too broad to queue as-is.") {
+		t.Fatalf("prompt = %q, want repair-child bounded-size lead-in", prompt)
+	}
+	if !strings.Contains(prompt, "Your next assistant action must split task 12527 (Write technical test conversations 1-3)") {
+		t.Fatalf("prompt = %q, want repair-child bounded split guidance", prompt)
+	}
+	if !strings.Contains(prompt, "The last bounded-size tool result already suggested a concrete split:") {
+		t.Fatalf("prompt = %q, want bounded-size split hint retained", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationBoundedRetryPromptFromSnapshotForWorkerKeepsChildBoundedSizeFocus(t *testing.T) {
+	t.Parallel()
+
+	parentID := uuid.NewString()
+	childAID := uuid.NewString()
+	childBID := uuid.NewString()
+
+	prompt := buildProjectExecutionContinuationBoundedRetryPromptFromSnapshotForWorker(
+		12525,
+		"Write 6 technical test conversations for SamBot",
+		4,
+		projectExecutionContinuationSnapshotForWorker{
+			ProjectLine:          "Active project id: 123",
+			DraftTaskLine:        `Actionable draft tasks already in the tree: task 12527 (Write technical test conversations 1-3) id=` + childAID + ` title="Write technical test conversations 1-3" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md; task 12528 (Write technical test conversations 4-6) id=` + childBID + ` title="Write technical test conversations 4-6" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md`,
+			ChildActiveDraftLine: `Draft parent tasks already have child work: task 12526 (Write 6 technical test conversations for SamBot) id=` + parentID + ` title="Write 6 technical test conversations for SamBot" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md child_tasks=3`,
+		},
+		"task 12527 (Write technical test conversations 1-3)",
+		[]string{"Conversation 1", "Conversation 2"},
+	)
+
+	if !strings.Contains(prompt, "still too broad to queue as-is") {
+		t.Fatalf("prompt = %q, want bounded-size child focus guidance", prompt)
+	}
+	if strings.Contains(prompt, "focused draft parent already has direct child work to advance") {
+		t.Fatalf("prompt = %q, did not want parent-level replacement-child guidance for specific child bounded retry", prompt)
+	}
+	if !strings.Contains(prompt, "Current focus parent: task 12527 (Write technical test conversations 1-3)") {
+		t.Fatalf("prompt = %q, want specific child focus label", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationBoundedRetryPromptFromSnapshotForWorkerKeepsUnresolvedChildLabelFocus(t *testing.T) {
+	t.Parallel()
+
+	parentID := uuid.NewString()
+
+	prompt := buildProjectExecutionContinuationBoundedRetryPromptFromSnapshotForWorker(
+		12525,
+		"Write 6 technical test conversations for SamBot",
+		4,
+		projectExecutionContinuationSnapshotForWorker{
+			ProjectLine:          "Active project id: 123",
+			ChildActiveDraftLine: `Draft parent tasks already have child work: task 12526 (Write 6 technical test conversations for SamBot) id=` + parentID + ` title="Write 6 technical test conversations for SamBot" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md child_tasks=3`,
+		},
+		"task 12527",
+		[]string{"Conversation 1", "Conversation 2"},
+	)
+
+	if !strings.Contains(prompt, "still too broad to queue as-is") {
+		t.Fatalf("prompt = %q, want bounded-size child focus guidance", prompt)
+	}
+	if strings.Contains(prompt, "focused draft parent already has direct child work to advance") {
+		t.Fatalf("prompt = %q, did not want parent-level replacement-child guidance for unresolved child label", prompt)
+	}
+	if !strings.Contains(prompt, "Current focus parent: task 12527.") {
+		t.Fatalf("prompt = %q, want raw child label preserved", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationBoundedRetryPromptFromSnapshotForWorkerCanonicalizesMalformedOverrideWithTaskID(t *testing.T) {
+	t.Parallel()
+
+	parentID := uuid.NewString()
+
+	prompt := buildProjectExecutionContinuationBoundedRetryPromptFromSnapshotForWorker(
+		12651,
+		"Write planning/sambot-prompts/test-conversations-technical.md — 6 SamBot technical test conversations (final replacement)",
+		1,
+		projectExecutionContinuationSnapshotForWorker{
+			ProjectLine:   "Active project id: a6dbd331-7205-42d9-b0df-10105d5b5330",
+			FocusTaskLine: `Current focus parent: task 12532 (Write SamBot test conversation: Startup CTO asks about AI agent orchestration) id=` + parentID + ` title="Write SamBot test conversation: Startup CTO asks about AI agent orchestration" work_status=draft deliverable_path=content/sambot/test-conversations/01-startup-cto-ai-orchestration.md malformed_child_tasks=2`,
+		},
+		`Startup CTO asks about AI agent orchestration) id=`+parentID+` title="Write SamBot test conversation: Startup CTO asks about AI agent orchestration" work_status=draft deliverable_path=content/sambot/test-conversations/01-startup-cto-ai-orchestration.md assigned_agent_id=missing flow_template_id=9a60dfee-1fc7-4e3a-bd05-f9da1bb97552 malformed_child_tasks=2`,
+		nil,
+	)
+
+	if !strings.Contains(prompt, "Current focus parent: task 12532 (Write SamBot test conversation: Startup CTO asks about AI agent orchestration)") {
+		t.Fatalf("prompt = %q, want canonical snapshot focus ref", prompt)
+	}
+	if strings.Contains(prompt, "Current focus parent: Startup CTO asks about AI agent orchestration)") {
+		t.Fatalf("prompt = %q, did not want malformed raw override focus", prompt)
 	}
 }
 
@@ -194,6 +415,181 @@ func TestBuildProjectExecutionContinuationPromptForWorkerIncludesBlockedOnlyStop
 	}
 	if !strings.Contains(prompt, "do not read that blocked deliverable from disk first just to decide what to do") {
 		t.Fatalf("prompt = %q, want blocked-deliverable no-reread guidance", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationRediscoveryRetryPromptForWorkerPrefersBoundedRepairChildWhenLatestBoundedContextExists(t *testing.T) {
+	t.Parallel()
+
+	parentID := uuid.NewString()
+	repairID := uuid.NewString()
+
+	prompt := buildProjectExecutionContinuationRediscoveryRetryPromptForWorker(
+		12525,
+		"Write 6 technical test conversations for SamBot",
+		4,
+		projectExecutionContinuationSnapshotForWorker{
+			ProjectLine:     "Active project id: 123",
+			FocusTaskLine:   `Current focus parent: task 12526 (Write 6 technical test conversations for SamBot) id=` + parentID + ` title="Write 6 technical test conversations for SamBot" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md malformed_child_tasks=1 workspace_deliverable_present=true`,
+			RepairDraftLine: `Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 12527 (Write technical test conversations 1-3) id=` + repairID + ` title="Write technical test conversations 1-3" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md`,
+		},
+		`task 12527 (Write technical test conversations 1-3) id=`+repairID+` title="Write technical test conversations 1-3" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md`,
+		[]string{"Conversation 1", "Conversation 2"},
+	)
+
+	if !strings.Contains(prompt, "Your last continuation turn proved that the named repair child is still too broad to queue as-is.") {
+		t.Fatalf("prompt = %q, want bounded repair-child rediscovery retry guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Current focus parent: task 12527 (Write technical test conversations 1-3)") {
+		t.Fatalf("prompt = %q, want repair child as rediscovery retry focus", prompt)
+	}
+	if strings.Contains(prompt, "create the smallest closeout/verification child task beneath task 12526") {
+		t.Fatalf("prompt = %q, did not want parent closeout retry guidance once bounded repair child context exists", prompt)
+	}
+}
+
+func TestProjectContinuationMalformedSameDeliverableDraftChildrenForWorkerIncludesInheritedSharedFileTopicChild(t *testing.T) {
+	t.Parallel()
+
+	parentID := uuid.New()
+	childID := uuid.New()
+
+	parentDescription := "Write planning/sambot-prompts/test-conversations-technical.md with six technical conversation scenarios."
+	childDescription := "Technical conversation scenarios 1-3 for planning/sambot-prompts/test-conversations-technical.md."
+	childMetadata, err := json.Marshal(map[string]any{
+		"decomposition_parent_task_id": parentID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+
+	parent := repo.ProjectTask{
+		ID:          parentID,
+		TaskNumber:  12526,
+		Title:       "Write 6 technical test conversations for SamBot",
+		Description: &parentDescription,
+		WorkStatus:  "draft",
+	}
+	child := repo.ProjectTask{
+		ID:          childID,
+		TaskNumber:  12527,
+		Title:       "Technical test conversations 1-3",
+		Description: &childDescription,
+		WorkStatus:  "draft",
+		Metadata:    childMetadata,
+	}
+
+	malformed := projectContinuationMalformedSameDeliverableDraftChildrenForWorker(
+		[]repo.ProjectTask{parent, child},
+		parent,
+		map[uuid.UUID]struct{}{childID: {}},
+	)
+	if len(malformed) != 1 || malformed[0].ID != childID {
+		t.Fatalf("malformed same-deliverable children = %+v, want child %s included", malformed, childID)
+	}
+}
+
+func TestProjectContinuationMalformedSameDeliverableDraftChildrenForWorkerSkipsConflictingDuplicateSharedFileChild(t *testing.T) {
+	t.Parallel()
+
+	parentTaskID := uuid.New()
+	childTaskID := uuid.New()
+	parentDescription := "Create the SamBot technical test conversations at planning/sambot-prompts/test-conversations-technical.md."
+	childDescription := "## Deliverable\n\n**File:** `planning/sambot-prompts/test-conversations-technical.md`\n\nWrite exactly 6 multi-turn test conversations in planning/sambot-prompts/test-conversations-technical.md."
+	childMetadata, err := json.Marshal(map[string]any{
+		"decomposition_parent_task_id": parentTaskID.String(),
+		"decomposition": map[string]any{
+			"source_description":  "Write a single SamBot test conversation file at sambot/test-conversations/tech-01-ai-orchestration.md.",
+			"primary_deliverable": "Write a single SamBot test conversation file at sambot/test-conversations/tech-01-ai-orchestration.md.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+
+	tasks := []repo.ProjectTask{
+		{
+			ID:          parentTaskID,
+			TaskNumber:  12526,
+			Title:       "Write planning/sambot-prompts/test-conversations-technical.md",
+			Description: &parentDescription,
+			WorkStatus:  "draft",
+		},
+		{
+			ID:          childTaskID,
+			TaskNumber:  12527,
+			Title:       "Write technical test conversations 1-3",
+			Description: &childDescription,
+			WorkStatus:  "draft",
+			Metadata:    childMetadata,
+		},
+	}
+	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDsForWorker(tasks)
+	if _, ok := malformedChildTaskIDs[childTaskID]; !ok {
+		t.Fatalf("malformedChildTaskIDs missing conflicting duplicate child")
+	}
+	malformed := projectContinuationMalformedSameDeliverableDraftChildrenForWorker(tasks, tasks[0], malformedChildTaskIDs)
+	if len(malformed) != 0 {
+		t.Fatalf("malformed same-deliverable children = %v, want none for conflicting duplicate child", malformed)
+	}
+}
+
+func TestProjectContinuationOwnDeliverableHintsForWorkerPreferDecompositionSourcePath(t *testing.T) {
+	t.Parallel()
+
+	childMetadata, err := json.Marshal(map[string]any{
+		"decomposition": map[string]any{
+			"source_description":  "Write a single SamBot test conversation file at sambot/test-conversations/tech-01-ai-orchestration.md.",
+			"primary_deliverable": "Write a single SamBot test conversation file at sambot/test-conversations/tech-01-ai-orchestration.md.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal child metadata: %v", err)
+	}
+	task := repo.ProjectTask{
+		Title:      "Test Conversations 2-3: Ethics researcher + Engineering manager hiring signal",
+		WorkStatus: "draft",
+		Metadata:   childMetadata,
+	}
+
+	explicit, root := projectContinuationOwnDeliverableHintsForWorker(task)
+	if explicit != "sambot/test-conversations/tech-01-ai-orchestration.md" {
+		t.Fatalf("explicit = %q, want decomposition-source deliverable path", explicit)
+	}
+	if root != "" {
+		t.Fatalf("root = %q, want empty root when explicit path is available", root)
+	}
+}
+
+func TestBuildProjectExecutionContinuationPromptForWorkerPrefersNamedChildDraftActionOverRelisting(t *testing.T) {
+	prompt := buildProjectExecutionContinuationPromptForWorker(12525, "Write 6 technical test conversations for SamBot", 3, projectExecutionContinuationSnapshotForWorker{
+		ProjectLine:          "Active project id: 123",
+		DraftTaskLine:        `Actionable draft tasks already in the tree: task 12527 (Write technical test conversations 1-3) id=aaa title="Write technical test conversations 1-3" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md; task 12528 (Write technical test conversations 4-6) id=bbb title="Write technical test conversations 4-6" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md`,
+		ChildActiveDraftLine: `Draft parent tasks already have child work: task 12526 (Write 6 technical test conversations for SamBot) id=parent title="Write 6 technical test conversations for SamBot" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md child_tasks=3`,
+	})
+
+	if !strings.Contains(prompt, "Your last continuation turn was blocked after broad rediscovery even though the next bounded work was already named.") {
+		t.Fatalf("prompt = %q, want strict handoff guidance", prompt)
+	}
+	if strings.Contains(prompt, "Recently completed work may have unlocked the next wave of bounded tasks.") {
+		t.Fatalf("prompt = %q, did not want generic continuation summary", prompt)
+	}
+	if !strings.Contains(prompt, "Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.") {
+		t.Fatalf("prompt = %q, want no-broad-rediscovery guard", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationPromptForWorkerDefaultsToReplacementChildRetryWhenChildDraftsExist(t *testing.T) {
+	prompt := buildProjectExecutionContinuationPromptForWorker(12525, "Write 6 technical test conversations for SamBot", 3, projectExecutionContinuationSnapshotForWorker{
+		ProjectLine:          "Active project id: 123",
+		ChildActiveDraftLine: `Draft parent tasks already have child work: task 12526 (Write 6 technical test conversations for SamBot) id=parent title="Write 6 technical test conversations for SamBot" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md child_tasks=3`,
+	})
+
+	if !strings.Contains(prompt, "focused draft parent already has direct child work to advance") {
+		t.Fatalf("prompt = %q, want replacement-child retry guidance", prompt)
+	}
+	if strings.Contains(prompt, "Recently completed work may have unlocked the next wave of bounded tasks.") {
+		t.Fatalf("prompt = %q, did not want generic continuation summary", prompt)
 	}
 }
 
@@ -250,6 +646,21 @@ func TestProjectContinuationResumePromptMatchesSnapshotForWorkerRejectsStaleStru
 	}
 }
 
+func TestProjectContinuationResumePromptMatchesSnapshotForWorkerRejectsBroadBoundedPromptWhenChildDraftsNowExist(t *testing.T) {
+	t.Parallel()
+
+	stale := "Continue the active project execution now. Your last continuation turn proved that this focused draft is still too broad to queue as-is. Current focus parent: task 12532 (Write SamBot test conversation: Startup CTO asks about AI agent orchestration) id=focus."
+	snapshot := projectExecutionContinuationSnapshotForWorker{
+		ProjectLine:          "Active project id: 123",
+		ChildActiveDraftLine: `Draft parent tasks already have child work: task 12639 (Write Turn 1 (User): Startup CTO introduces themselves and asks about multi-agent systems) id=child title="Write Turn 1 (User): Startup CTO introduces themselves and asks about multi-agent systems" work_status=draft`,
+		FocusTaskLine:        `Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 12532 (Write SamBot test conversation: Startup CTO asks about AI agent orchestration) id=focus title="Write SamBot test conversation: Startup CTO asks about AI agent orchestration" work_status=draft`,
+	}
+
+	if projectContinuationResumePromptMatchesSnapshotForWorker(stale, snapshot) {
+		t.Fatal("stale broad bounded-size resume should not match once child draft work exists in the current worker snapshot")
+	}
+}
+
 func TestProjectContinuationWorkspaceDeliverableEvidenceEligibleForWorkerRejectsSharedSectionChildren(t *testing.T) {
 	t.Parallel()
 
@@ -289,6 +700,7 @@ func TestProjectContinuationWorkspaceDeliverableEvidenceEligibleForWorkerRejects
 
 func TestBuildProjectExecutionContinuationReplacementChildRetryPromptForWorkerFallsBackToNamedSnapshotContext(t *testing.T) {
 	t.Parallel()
+	parentID := uuid.NewString()
 
 	prompt := buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(
 		297,
@@ -297,21 +709,62 @@ func TestBuildProjectExecutionContinuationReplacementChildRetryPromptForWorkerFa
 		projectExecutionContinuationSnapshotForWorker{
 			ProjectLine:          "Active project id: a6dbd331-7205-42d9-b0df-10105d5b5330",
 			ActiveTaskLine:       `Already-active non-terminal tasks in the tree: task 6650 (Verify planning/sambot-prompts/test-conversations-level3.md contains exactly 3 deeply technical multi-turn SamBot test conversations) id=aaa title="Verify planning/sambot-prompts/test-conversations-level3.md contains exactly 3 deeply technical multi-turn SamBot test conversations" work_status=review deliverable_path=planning/sambot-prompts/test-conversations-level3.md`,
-			ChildActiveDraftLine: `Draft parent tasks already have child work: task 814 (Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations that exercise SamBot's ability to speak as Sam Hotchkiss on hard technical subjects.) id=bbb title="Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations that exercise SamBot's ability to speak as Sam Hotchkiss on hard technical subjects." work_status=draft`,
+			ChildActiveDraftLine: `Draft parent tasks already have child work: task 814 (Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations that exercise SamBot's ability to speak as Sam Hotchkiss on hard technical subjects.) id=` + parentID + ` title="Write the file planning/sambot-prompts/test-conversations-level3.md containing exactly 3 deeply technical multi-turn test conversations that exercise SamBot's ability to speak as Sam Hotchkiss on hard technical subjects." work_status=draft`,
 		},
 	)
 
-	if !strings.Contains(prompt, "Already-active non-terminal tasks in the tree: task 6650") {
-		t.Fatalf("prompt = %q, want active-task snapshot carried into fallback", prompt)
+	if !strings.Contains(prompt, "focused draft parent already has direct child work to advance") {
+		t.Fatalf("prompt = %q, want direct-child retry guidance", prompt)
 	}
-	if !strings.Contains(prompt, "Draft parent tasks already have child work: task 814") {
-		t.Fatalf("prompt = %q, want child-active draft snapshot carried into fallback", prompt)
+	if !strings.Contains(prompt, "Current focus parent: task 814") {
+		t.Fatalf("prompt = %q, want focused child lane reference", prompt)
 	}
-	if !strings.Contains(prompt, "Your last continuation turn was blocked after broad rediscovery even though the active-task snapshot already names the remaining blocked lanes.") {
-		t.Fatalf("prompt = %q, want active-lane rediscovery retry guidance", prompt)
+	if !strings.Contains(prompt, "Those direct child lanes are not individually named yet in this prompt.") {
+		t.Fatalf("prompt = %q, want unnamed-child guidance", prompt)
 	}
-	if !strings.Contains(prompt, "Use one direct task.update or task.create to address the blocker or resume_policy on one named task above") {
-		t.Fatalf("prompt = %q, want direct blocked-lane action guidance", prompt)
+	if !strings.Contains(prompt, "task.list(parent_task_id="+parentID+")") {
+		t.Fatalf("prompt = %q, want narrow direct-child task.list guidance", prompt)
+	}
+	if strings.Contains(prompt, "one narrow task.update on one already-named direct child task above") {
+		t.Fatalf("prompt = %q, did not want direct child task.update before naming child ids", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationDirectChildActionRetryPromptForWorkerUsesNamedChildRefs(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildProjectExecutionContinuationDirectChildActionRetryPromptForWorker(
+		12644,
+		"Write SamBot example conversation: Engineering manager hiring evaluation",
+		1,
+		projectExecutionContinuationSnapshotForWorker{
+			ProjectLine:          "Active project id: 123",
+			FocusTaskLine:        `Current focus parent: task 12643 (Write SamBot example conversation: Ethics researcher inquiry) id=fe14406e-c2ed-4471-923e-ec8225f7b2e0 title="Write SamBot example conversation: Ethics researcher inquiry" work_status=draft deliverable_path=planning/sambot-example-conversations-ethics-researcher.md`,
+			ChildActiveDraftLine: `Draft parent tasks already have child work: task 12643 (Write SamBot example conversation: Ethics researcher inquiry) id=fe14406e-c2ed-4471-923e-ec8225f7b2e0 title="Write SamBot example conversation: Ethics researcher inquiry" work_status=draft deliverable_path=planning/sambot-example-conversations-ethics-researcher.md active_child_tasks=1 malformed_child_tasks=1`,
+		},
+		[]string{
+			`task 12648 (Draft ethics researcher inquiry conversation (turns 1-5)) id=bd632279-c9f1-419e-bfd2-37acb3dc1e23 work_status=in_progress`,
+			`task 12649 (Draft ethics researcher inquiry conversation (turns 6-10 + wrap-up)) id=3866c817-772a-46ad-a1f7-d1772ac23810 work_status=blocked`,
+		},
+	)
+
+	if !strings.Contains(prompt, "already inspected the focused parent's direct child lanes") {
+		t.Fatalf("prompt = %q, want prior-inspection lead-in", prompt)
+	}
+	if !strings.Contains(prompt, "Named direct child lanes from the last inspection:") {
+		t.Fatalf("prompt = %q, want named child lane list", prompt)
+	}
+	if !strings.Contains(prompt, "task 12648 (Draft ethics researcher inquiry conversation (turns 1-5))") {
+		t.Fatalf("prompt = %q, want first named child ref", prompt)
+	}
+	if !strings.Contains(prompt, "Do not inspect child lanes again for task_id=fe14406e-c2ed-4471-923e-ec8225f7b2e0 from the project lane.") {
+		t.Fatalf("prompt = %q, want no-repeat child inspection guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Your next assistant action must be one narrow task.update on one named direct child task above") {
+		t.Fatalf("prompt = %q, want direct child action requirement", prompt)
+	}
+	if strings.Contains(prompt, "task 12609") {
+		t.Fatalf("prompt = %q, did not want unrelated task refs", prompt)
 	}
 }
 

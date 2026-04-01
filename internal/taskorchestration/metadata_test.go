@@ -467,6 +467,87 @@ func TestValidateCompletionAllowsVerifiedSatisfiedParentWithoutCompletedDirectCh
 	}
 }
 
+func TestValidateCompletionAllowsVerifiedReplacementChildWithStaleSameDeliverableDraftShells(t *testing.T) {
+	parentID := uuid.New()
+	duplicateShellID := uuid.New()
+	proceduralShellID := uuid.New()
+	replacementChildID := uuid.New()
+	now := time.Date(2026, 4, 1, 8, 23, 18, 0, time.UTC)
+	description := "Write the opening section (approximately 4-6 exchange pairs) of the SamBot test conversation where a startup CTO initiates a discussion about AI agent orchestration."
+	parent := repo.ProjectTask{
+		ID:         parentID,
+		TaskNumber: 12532,
+		Title:      "Write SamBot test conversation: Startup CTO asks about AI agent orchestration",
+		Metadata: taskdecomp.ApplyMetadata(json.RawMessage(`{}`), taskdecomp.Plan{
+			RequiresDecomposition: true,
+			PrimaryDeliverable:    "Write the opening section (approximately 4-6 exchange pairs) of the SamBot test conversation where a startup CTO initiates a discussion about AI agent orchestration.",
+			Deliverables: []string{
+				"Write the opening section (approximately 4-6 exchange pairs) of the SamBot test conversation where a startup CTO initiates a discussion about AI agent orchestration.",
+				"SamBot speaks as Sam Hotchkiss — direct, opinionated, technically deep but accessible",
+			},
+		}, description, []uuid.UUID{duplicateShellID, proceduralShellID, replacementChildID}),
+	}
+	metadata, err := Apply(parent.Metadata, Update{
+		ChildVerifications: []ChildVerification{
+			NewChildVerification(replacementChildID, "OC-12654 completed: Delivered content/sambot/test-conversations/01-startup-cto-ai-orchestration.md and passed review.", now),
+		},
+		IntegrationCheck:  NewIntegrationCheck("passed", "Deliverable exists in workspace and passed review via OC-12654.", now),
+		OutcomeAssessment: NewOutcomeAssessment(true, "Task objective is fully met by the approved replacement child output.", now),
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	parent.Metadata = metadata
+
+	duplicateShellMetadata, err := json.Marshal(map[string]any{
+		"decomposition_parent_task_id": parentID.String(),
+		"workstream_index":             2,
+	})
+	if err != nil {
+		t.Fatalf("marshal duplicate shell metadata: %v", err)
+	}
+	proceduralShellMetadata, err := json.Marshal(map[string]any{
+		"decomposition_parent_task_id": parentID.String(),
+		"workstream_index":             3,
+	})
+	if err != nil {
+		t.Fatalf("marshal procedural shell metadata: %v", err)
+	}
+	replacementChildMetadata, err := json.Marshal(map[string]any{
+		"decomposition_parent_task_id": parentID.String(),
+		"workstream_index":             4,
+	})
+	if err != nil {
+		t.Fatalf("marshal replacement child metadata: %v", err)
+	}
+
+	duplicateShell := repo.ProjectTask{
+		ID:         duplicateShellID,
+		TaskNumber: 12533,
+		Title:      "Write the opening section (approximately 4-6 exchange pairs) of the SamBot test conversation where a startup CTO initiates a discussion about AI agent orchestration.",
+		Metadata:   duplicateShellMetadata,
+		WorkStatus: "draft",
+	}
+	proceduralShell := repo.ProjectTask{
+		ID:         proceduralShellID,
+		TaskNumber: 12534,
+		Title:      "SamBot speaks as Sam Hotchkiss — direct, opinionated, technically deep but accessible",
+		Metadata:   proceduralShellMetadata,
+		WorkStatus: "draft",
+	}
+	replacementChild := repo.ProjectTask{
+		ID:         replacementChildID,
+		TaskNumber: 12654,
+		Title:      "Write SamBot test conversation: Startup CTO asks about AI agent orchestration",
+		Metadata:   replacementChildMetadata,
+		WorkStatus: "done",
+	}
+
+	if err := ValidateCompletion(parent, []repo.ProjectTask{duplicateShell, proceduralShell, replacementChild}); err != nil {
+		t.Fatalf("ValidateCompletion err = %v, want nil for verified replacement child with stale same-deliverable draft shells", err)
+	}
+}
+
 func TestValidateCompletionStillRequiresVerificationWhenNoCompletedDirectChildRemains(t *testing.T) {
 	parentID := uuid.New()
 	blockedChildID := uuid.New()

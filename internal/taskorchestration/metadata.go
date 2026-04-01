@@ -404,6 +404,9 @@ func malformedChildDoesNotBlockParentCompletion(parentTask, childTask repo.Proje
 	if status != "blocked" && status != "draft" {
 		return false
 	}
+	if duplicateSameDeliverableChildShell(parentTask, childTask) {
+		return true
+	}
 	if taskdecomp.TaskLooksProceduralInstructionArtifact(strings.TrimSpace(childTask.Title), childTask.Description) {
 		return true
 	}
@@ -411,6 +414,17 @@ func malformedChildDoesNotBlockParentCompletion(parentTask, childTask repo.Proje
 		return true
 	}
 	return parentSourceDescriptionForbidsDecomposition(parentTask.Metadata)
+}
+
+func duplicateSameDeliverableChildShell(parentTask, childTask repo.ProjectTask) bool {
+	if taskdecomp.ParseParentTaskID(childTask.Metadata) != parentTask.ID {
+		return false
+	}
+	parentPrimary := strings.TrimSpace(taskdecomp.ParsePrimaryDeliverable(parentTask.Metadata))
+	if parentPrimary == "" {
+		return false
+	}
+	return strings.TrimSpace(childTask.Title) == parentPrimary
 }
 
 func childTaskClosesParent(parentTask, childTask repo.ProjectTask) bool {
