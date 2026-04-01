@@ -35243,6 +35243,26 @@ func TestBuildRecoveryResumeActionPromptRequiresConcreteCLICommandAfterMissingCo
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReasonRejectsPortfolioIntentNarration(t *testing.T) {
+	t.Parallel()
+
+	content := "Understood — the system wants me to write the deliverable directly. Let me create the full portfolio template now."
+	reason := recoveryFileWriteDraftRejectReason(content, "templates/layout-08-portfolio.html")
+	if !strings.Contains(reason, "described intent to write the deliverable instead of the file body") {
+		t.Fatalf("reason = %q, want intent-only recovery draft rejection", reason)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsPortfolioRequirementsNarration(t *testing.T) {
+	t.Parallel()
+
+	content := "I'll write the portfolio template directly. Based on the task requirements, I need a full standalone HTML file with embedded CSS featuring a portfolio showcase design for Sam Hotchkiss's personal website."
+	reason := recoveryFileWriteDraftRejectReason(content, "templates/layout-08-portfolio.html")
+	if !strings.Contains(reason, "described intent to write the deliverable instead of the file body") {
+		t.Fatalf("reason = %q, want portfolio requirements narration rejection", reason)
+	}
+}
+
 func TestBuildRecoveryResumeActionPromptForTrackedContentMigrationOutputsPrefersCheckpointContext(t *testing.T) {
 	t.Parallel()
 
@@ -47634,6 +47654,40 @@ func TestShouldStopAfterBlockedTaskRecoveryDirectWriteOnlyBatch(t *testing.T) {
 	}
 	if shouldStopAfterBlockedTaskRecoveryDirectWriteOnlyBatch(rt, blocked, mutatingTail) {
 		t.Fatal("did not expect mutating tail after blocked direct-write-only batch to stop")
+	}
+}
+
+func TestShouldBlockTaskRecoveryDirectWriteMutationTool(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		recoveryTurn:            true,
+		recoveryDirectWriteOnly: true,
+		recoveryTargetPath:      "templates/layout-08-portfolio.html",
+	}
+
+	blocked, reason := shouldBlockTaskRecoveryDirectWriteMutationTool(rt, "cli.execute", map[string]any{
+		"command": "python3 - <<'PY'\nfrom pathlib import Path\nPath('templates/layout-08-portfolio.html').write_text('<html></html>')\nPY",
+	})
+	if !blocked {
+		t.Fatal("expected direct-write-only recovery to block cli.execute mutation fallback")
+	}
+	if !strings.Contains(reason, "Do not use cli.execute shell wrappers now") {
+		t.Fatalf("reason = %q, want shell-wrapper prohibition", reason)
+	}
+	if !strings.Contains(reason, "concrete file body for `templates/layout-08-portfolio.html` itself") {
+		t.Fatalf("reason = %q, want concrete file-body guidance", reason)
+	}
+
+	blocked, _ = shouldBlockTaskRecoveryDirectWriteMutationTool(rt, "cli.execute", map[string]any{
+		"command": "ls templates/",
+	})
+	if blocked {
+		t.Fatal("did not expect read-only cli discovery to use the mutation-only guard")
 	}
 }
 

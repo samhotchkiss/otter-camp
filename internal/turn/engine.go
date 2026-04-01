@@ -17846,6 +17846,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := shouldBlockTaskRecoveryDirectWriteMutationTool(rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if shouldBlockTaskRecoveryReadScopeTool(rt, name, arguments) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -27955,6 +27963,23 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	) {
 		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
 	}
+	if len(trimmed) < 220 && containsAny(lower,
+		"understood",
+		"the system wants me to write the deliverable directly",
+		"the recovery system is directing me to write the deliverable directly",
+		"i'll write the portfolio template directly using `cli_execute`",
+		"i'll write the portfolio template directly using cli_execute",
+		"i'll write the portfolio template directly",
+		"i will write the portfolio template directly",
+		"let me create the full portfolio template now",
+		"let me create the portfolio template now",
+		"let me draft the portfolio template now",
+		"let me draft the full portfolio template now",
+		"based on the task requirements",
+		"i need a full standalone html file with embedded css",
+	) {
+		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
+	}
 	if containsAny(lower,
 		"i can see the situation clearly now",
 		"now i understand the situation",
@@ -37705,6 +37730,27 @@ func shouldBlockTaskRecoveryReadScopeTool(rt *turnRuntime, toolName string, argu
 		return false
 	}
 	return true
+}
+
+func shouldBlockTaskRecoveryDirectWriteMutationTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if rt == nil || rt.session == nil || !rt.recoveryTurn || !rt.recoveryDirectWriteOnly {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(toolName), "cli.execute") {
+		return false, ""
+	}
+	if isReadOnlyDiscoveryCLIExecuteCall(arguments) {
+		return false, ""
+	}
+	target := strings.TrimSpace(rt.recoveryTargetPath)
+	if target == "" {
+		return true, "task recovery is already in direct-write mode after empty or non-substantive file-body retries. Do not use cli.execute shell wrappers now; your next assistant message must be the concrete file body itself or one concrete blocker sentence."
+	}
+	return true, fmt.Sprintf("task recovery for `%s` is already in direct-write mode after empty or non-substantive file-body retries. Do not use cli.execute shell wrappers now; your next assistant message must be the concrete file body for `%s` itself or one concrete blocker sentence.", target, target)
 }
 
 func recoveryTargetNeedsSourceFetchWriteFocus(rt *turnRuntime) bool {
