@@ -1017,15 +1017,21 @@ func ValidateExecutableTaskContract(title string, description *string) error {
 }
 
 func TaskLooksProceduralInstructionArtifact(title string, description *string) bool {
-	normalizedTitle := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(title)), " "))
+	normalizedTitle := normalizeProceduralFragmentText(title)
 	if normalizedTitle == "" || !isInstructionOnlyDeliverable(normalizedTitle) {
-		return looksLikeVerificationChecklistFragment(normalizedTitle, strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(deref(description))), " ")))
+		return looksLikeVerificationChecklistFragment(normalizedTitle, normalizeProceduralFragmentText(deref(description)))
 	}
 	if looksLikeSupportOnlyRequirementFragment(normalizedTitle) {
 		return true
 	}
-	normalizedDescription := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(deref(description))), " "))
+	normalizedDescription := normalizeProceduralFragmentText(deref(description))
 	return normalizedDescription == "" || normalizedDescription == normalizedTitle || isInstructionOnlyDeliverable(normalizedDescription)
+}
+
+func normalizeProceduralFragmentText(raw string) string {
+	normalized := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(raw)), " "))
+	normalized = strings.TrimSpace(strings.TrimPrefix(normalized, "•"))
+	return normalized
 }
 
 func looksLikeVerificationChecklistFragment(normalizedTitle, normalizedDescription string) bool {
@@ -1228,6 +1234,10 @@ func looksLikeTemplateStyleSupportFragment(normalized string) bool {
 		strings.Contains(normalized, "template") {
 		return true
 	}
+	if strings.HasPrefix(normalized, "responsive") &&
+		(strings.Contains(normalized, "mobile") || strings.Contains(normalized, "desktop")) {
+		return true
+	}
 	return false
 }
 
@@ -1281,6 +1291,9 @@ func containsWorkspaceArtifactReference(normalized string) bool {
 
 func isExecutableDeliverable(item, normalized string) bool {
 	if normalized == "" {
+		return false
+	}
+	if looksLikeSupportOnlyRequirementFragment(normalized) {
 		return false
 	}
 	if leadingTaskActionPattern.MatchString(normalized) {
@@ -1778,6 +1791,8 @@ func cleanSegment(raw string) string {
 			item = strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
 		case strings.HasPrefix(trimmed, "*"):
 			item = strings.TrimSpace(strings.TrimPrefix(trimmed, "*"))
+		case strings.HasPrefix(trimmed, "•"):
+			item = strings.TrimSpace(strings.TrimPrefix(trimmed, "•"))
 		default:
 			item = trimmed
 			goto cleanedPrefixes

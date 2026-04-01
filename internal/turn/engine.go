@@ -40424,6 +40424,12 @@ func buildProjectContinuationFocusedDraftMalformedSameDeliverableChildGuardError
 	return fmt.Sprintf("project continuation already has malformed same-deliverable direct child draft task(s) beneath focused draft task %s: %s. Do not create another child beneath %s from the project lane; pick the best existing same-deliverable child draft such as %s, queue or repair that draft if it is still usable, and block or consolidate the duplicate siblings before attempting any new replacement.", label, strings.Join(childLabels, ", "), label, preferredLabel)
 }
 
+func buildProjectContinuationFocusedDraftOtherParentTaskCreateGuardError(focusTask repo.ProjectTask, parentTask repo.ProjectTask) string {
+	focusLabel := projectBootstrapTaskLabel(focusTask)
+	parentLabel := projectBootstrapTaskLabel(parentTask)
+	return fmt.Sprintf("project continuation is explicitly focused on %s and the prompt already said to ignore every other draft parent until that handoff is advanced. Do not create child work beneath %s from the project lane in this turn; finish the focused handoff for %s first.", focusLabel, parentLabel, focusLabel)
+}
+
 func buildProjectContinuationFocusedDraftExecutableRepairGuardError(focusTask repo.ProjectTask, deliverable string) string {
 	label := projectBootstrapTaskLabel(focusTask)
 	target := strings.TrimSpace(deliverable)
@@ -41022,7 +41028,17 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 	if !ok || focusTask.ID == uuid.Nil || strings.EqualFold(strings.TrimSpace(focusTask.WorkStatus), "cancelled") {
 		focusTask, ok = projectContinuationCurrentFocusTaskWithActivity(projectTasks, taskHintsByTask, childActivity, priorityPaths)
 	}
-	if !ok || focusTask.ID == uuid.Nil || focusTask.ID != parentTaskID {
+	if !ok || focusTask.ID == uuid.Nil {
+		return false, ""
+	}
+	if strings.Contains(initial, "ignore every other draft parent until this focused replacement handoff is advanced") &&
+		parentTaskID != focusTask.ID {
+		if parentTask, parentOK := tasksByID[parentTaskID]; parentOK && parentTask.ID != uuid.Nil {
+			return true, buildProjectContinuationFocusedDraftOtherParentTaskCreateGuardError(focusTask, parentTask)
+		}
+		return true, buildProjectContinuationFocusedDraftOtherParentTaskCreateGuardError(focusTask, repo.ProjectTask{ID: parentTaskID})
+	}
+	if focusTask.ID != parentTaskID {
 		return false, ""
 	}
 	if projectContinuationTaskCreateLooksProceduralInstructionArtifact(arguments) {

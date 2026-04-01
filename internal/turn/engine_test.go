@@ -31870,6 +31870,59 @@ func TestShouldBlockProjectContinuationFocusedDraftTaskCreateForProceduralFragme
 	}
 }
 
+func TestShouldBlockProjectContinuationFocusedDraftTaskCreateForOtherParentWhileFocusHandoffActive(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	focusTaskID := uuid.New()
+	otherParentID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			focusTaskID: {
+				ID:          focusTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  12678,
+				Title:       "Write templates/layout-10-conversational.html — replacement for blocked OC-24",
+				WorkStatus:  "draft",
+			},
+			otherParentID: {
+				ID:          otherParentID,
+				ProjectID:   projectID,
+				TaskNumber:  12677,
+				Title:       "Write templates/layout-09-academic.html — replacement for blocked OC-23",
+				WorkStatus:  "draft",
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: strings.Join([]string{
+			"Continue the active project execution now.",
+			"There are 2 remaining draft project tasks, but ignore every other draft parent until this focused replacement handoff is advanced.",
+			"Current focus parent: task 12678 (Write templates/layout-10-conversational.html — replacement for blocked OC-24) id=" + focusTaskID.String() + ".",
+			"Do not inspect or mention other draft parents until this handoff is advanced.",
+			"Your next assistant action must create the smallest fresh replacement child task beneath task 12678 now, or queue an existing direct child draft there if one already fits unchanged.",
+		}, " "),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftTaskCreateTool(context.Background(), rt, "task.create", map[string]any{
+		"parent_task_id": otherParentID.String(),
+		"title":          "Write templates/layout-09-academic.html as a single self-contained HTML page",
+		"description":    "Replacement child beneath the academic layout parent.",
+	})
+	if !blocked {
+		t.Fatal("expected other-parent task.create to be blocked while focused handoff is active")
+	}
+	if !strings.Contains(reason, "ignore every other draft parent") || !strings.Contains(reason, "task 12678") {
+		t.Fatalf("reason = %q, want focused-parent-only guidance", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationFocusedDraftMutationSkipsProjectScanForDirectedReplacementChildQueue(t *testing.T) {
 	t.Parallel()
 

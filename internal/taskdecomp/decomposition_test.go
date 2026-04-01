@@ -174,6 +174,11 @@ func TestTaskLooksProceduralInstructionArtifact(t *testing.T) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for conversation follow-up requirement fragment")
 	}
 
+	responsiveDescription := "• Responsive — works on mobile and desktop."
+	if !TaskLooksProceduralInstructionArtifact("• Responsive — works on mobile and desktop.", &responsiveDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for responsive requirement fragment")
+	}
+
 	ifFileExistsDescription := "If the file exists and has substantial content (50+ lines), document that in your work output and advance — no rewrite needed."
 	if !TaskLooksProceduralInstructionArtifact("If the file exists and has substantial content (50+ lines), document that in your work output and advance — no rewrite needed.", &ifFileExistsDescription) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for file-exists procedural fragment")
@@ -708,6 +713,27 @@ func TestExtractDeliverablesIgnoresIncludeColonGuidance(t *testing.T) {
 	items := extractDeliverables(description)
 	want := []string{
 		"Write the About page copy for Sam.",
+	}
+	if !reflect.DeepEqual(items, want) {
+		t.Fatalf("extractDeliverables() = %v, want %v", items, want)
+	}
+}
+
+func TestExtractDeliverablesIgnoresResponsiveRequirementBullet(t *testing.T) {
+	description := strings.Join([]string{
+		"Write the file templates/layout-10-conversational.html as a single self-contained HTML template (inline CSS, no external dependencies) for Sam.blog.",
+		"",
+		"Design intent:",
+		"• Hero section with Sam's name and a prominent chat CTA.",
+		"• Responsive — works on mobile and desktop.",
+		"• Clean semantic HTML5.",
+		"",
+		"Deliverable: templates/layout-10-conversational.html",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	want := []string{
+		"Write the file templates/layout-10-conversational.html as a single self-contained HTML template (inline CSS, no external dependencies) for Sam.blog.",
 	}
 	if !reflect.DeepEqual(items, want) {
 		t.Fatalf("extractDeliverables() = %v, want %v", items, want)
