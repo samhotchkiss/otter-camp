@@ -19782,8 +19782,37 @@ func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *
 		draft, draftOK = e.taskContinuationDraftContent(ctx, rt, targetPath)
 	}
 	if !draftOK {
+		output := map[string]any{}
+		if targetPath != "" {
+			output["deliverable_path"] = targetPath
+		}
+		blocked, err := e.handleToolValidationResults(ctx, rt, []ToolCall{*call}, []ToolResult{{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Error:      "content_required",
+			Output:     output,
+		}})
+		if err != nil {
+			return true, false, err
+		}
+		if blocked {
+			return true, true, nil
+		}
 		if rt.taskFileFixes >= taskFileWriteRepairBudget {
-			return false, false, nil
+			rt.stopReason = stopReasonValidationBlocked
+			state := taskValidationGuardState{
+				ToolName:       "file.write",
+				FailureClass:   "tool_validation",
+				FailureCode:    "content_required",
+				FailureReason:  buildRecoveryFileWriteMissingContentFailureReason(targetPath),
+				Count:          validationLoopBlockThreshold,
+				BlockThreshold: validationLoopBlockThreshold,
+				Blocked:        true,
+			}
+			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildValidationLoopTurnStopSystemMessage(state)); err != nil {
+				return true, false, err
+			}
+			return true, true, nil
 		}
 		rt.taskFileFixes++
 		if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskFileWriteRetryMessage(targetPath)); err != nil {

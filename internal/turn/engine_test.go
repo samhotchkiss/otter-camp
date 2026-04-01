@@ -51126,6 +51126,68 @@ func TestHandleTaskFileWriteWithoutContentAppendsCorrectionWhenNoDraftExists(t *
 	}
 }
 
+func TestHandleTaskFileWriteWithoutContentStopsAfterRepeatedValidationFailure(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "templates/layout-08-portfolio.html"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.write",
+			"output": map[string]any{
+				"deliverable_path": targetPath,
+				"error":            "content_required",
+				"message":          "file.write requires content. Provide file contents in `content`.",
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		taskFileFixes: 1,
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path": targetPath,
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWithoutContent(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWithoutContent: %v", err)
+	}
+	if !handled || !abort {
+		t.Fatalf("handled=%v abort=%v, want true true", handled, abort)
+	}
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	last := messages[len(messages)-1]
+	if !strings.EqualFold(last.Role, "system") {
+		t.Fatalf("last role = %q, want system", last.Role)
+	}
+	if !strings.Contains(last.Content, "Repeated identical file.write validation failure in this turn") {
+		t.Fatalf("last content = %q, want repeated validation stop", last.Content)
+	}
+}
+
 func TestHandleTaskFileWriteWithoutContentAcceptsFileWriteAlias(t *testing.T) {
 	t.Parallel()
 
