@@ -51221,6 +51221,112 @@ func TestHandleTaskCLIExecuteWithoutCommandPrefersWorkspaceTargetDraft(t *testin
 	}
 }
 
+func TestHandleTaskCLIExecuteWithoutCommandPrefersSiblingTaskWorkspaceDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.dataDir = t.TempDir()
+
+	projectID := uuid.New()
+	taskID := uuid.New()
+	siblingTaskID := uuid.New()
+	turnID := uuid.New()
+	projectSlug := "sam-blog-rebuild-restart-12"
+	targetPath := "planning/sambot-prompts/test-conversations-technical.md"
+	siblingDraft := "# SamBot Technical Test Conversations\n\n## Conversation 1: AI Orchestration\n- Substantive sibling draft.\n\n## Conversation 6: DevOps / CI-CD\n- Tail conversation.\n"
+
+	projectRepo := &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:   projectID,
+				Slug: projectSlug,
+			},
+		},
+	}
+	fixture.engine.projects = projectRepo
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:         taskID,
+				ProjectID:  projectID,
+				TaskNumber: 12671,
+				Title:      "Verify test-conversations-technical.md exists and contains conversations 1-3",
+				WorkStatus: "in_progress",
+				Description: stringPtr(
+					"Deliverable: " + targetPath + "\n\nThe file already exists on disk with conversations 4-6. Prepend conversations 1-3.",
+				),
+			},
+			siblingTaskID: {
+				ID:         siblingTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 12525,
+				Title:      "Write technical prompt conversations",
+				WorkStatus: "done",
+				Description: stringPtr(
+					"Write `" + targetPath + "` with all six technical prompt conversations.",
+				),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	projectRoot, err := workspace.ProjectRoot(fixture.engine.dataDir, projectSlug)
+	if err != nil {
+		t.Fatalf("ProjectRoot: %v", err)
+	}
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll project root: %v", err)
+	}
+	initializeTurnTestGitRepo(t, projectRoot)
+	siblingRoot, err := fixture.engine.taskWorkspaceRoot(context.Background(), taskRepo.items[siblingTaskID])
+	if err != nil {
+		t.Fatalf("taskWorkspaceRoot sibling: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(siblingRoot, filepath.Dir(targetPath)), 0o755); err != nil {
+		t.Fatalf("MkdirAll sibling target dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(siblingRoot, filepath.FromSlash(targetPath)), []byte(siblingDraft), 0o644); err != nil {
+		t.Fatalf("WriteFile sibling draft: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "cli-1",
+		Name: "cli.execute",
+		Arguments: map[string]any{
+			"command": "",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskCLIExecuteWithoutCommand(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskCLIExecuteWithoutCommand: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if call.Name != "file.write" {
+		t.Fatalf("call.Name = %q, want file.write", call.Name)
+	}
+	if got := stringValue(call.Arguments["path"]); got != targetPath {
+		t.Fatalf("path = %q, want %q", got, targetPath)
+	}
+	if got := stringValue(call.Arguments["content"]); !strings.Contains(got, "Substantive sibling draft.") || !strings.Contains(got, "## Conversation 6") {
+		t.Fatalf("content = %q, want sibling task worktree draft", got)
+	}
+}
+
 func TestHandleTaskCLIExecuteWithoutCommandAppendsCorrectionWithoutHighConfidenceDraft(t *testing.T) {
 	t.Parallel()
 

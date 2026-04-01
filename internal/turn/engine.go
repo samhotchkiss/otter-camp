@@ -20250,6 +20250,7 @@ func (e *TurnEngine) handleTaskMalformedFileEditWithoutNewString(ctx context.Con
 }
 
 func (e *TurnEngine) taskContinuationDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
+	taskRecord, haveTaskRecord := e.taskRecordForContinuationDraftSearch(ctx, rt)
 	if draft, ok := e.latestSubstantiveAssistantDraftContent(ctx, rt, targetPath); ok {
 		return draft, true
 	}
@@ -20267,6 +20268,11 @@ func (e *TurnEngine) taskContinuationDraftContent(ctx context.Context, rt *turnR
 	if draft, ok := e.latestTaskHistoricalSubstantiveDraftContent(ctx, rt, targetPath); ok {
 		return draft, true
 	}
+	if haveTaskRecord {
+		if draft, ok := e.latestSiblingTaskWorkspaceDraftContent(ctx, taskRecord, targetPath); ok {
+			return draft, true
+		}
+	}
 	if draft, rejectReason, ok := e.recoveryPersistedDraftContent(ctx, rt, targetPath); ok && strings.TrimSpace(rejectReason) == "" && looksLikeRecoveryFileDraft(draft) {
 		return draft, true
 	}
@@ -20279,6 +20285,7 @@ func (e *TurnEngine) taskContinuationDraftContent(ctx context.Context, rt *turnR
 }
 
 func (e *TurnEngine) taskContinuationHighConfidenceDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
+	taskRecord, haveTaskRecord := e.taskRecordForContinuationDraftSearch(ctx, rt)
 	if draft, ok := e.latestSubstantiveAssistantDraftContent(ctx, rt, targetPath); ok {
 		return draft, true
 	}
@@ -20291,6 +20298,86 @@ func (e *TurnEngine) taskContinuationHighConfidenceDraftContent(ctx context.Cont
 		return draft, true
 	}
 	if draft, ok := e.latestContinuationSummaryDraftContent(ctx, rt, targetPath); ok {
+		return draft, true
+	}
+	if haveTaskRecord {
+		if draft, ok := e.latestSiblingTaskWorkspaceDraftContent(ctx, taskRecord, targetPath); ok {
+			return draft, true
+		}
+	}
+	return "", false
+}
+
+func (e *TurnEngine) taskRecordForContinuationDraftSearch(ctx context.Context, rt *turnRuntime) (repo.ProjectTask, bool) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return repo.ProjectTask{}, false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		return repo.ProjectTask{}, false
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return repo.ProjectTask{}, false
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return repo.ProjectTask{}, false
+	}
+	return taskRecord, true
+}
+
+func (e *TurnEngine) latestSiblingTaskWorkspaceDraftContent(ctx context.Context, taskRecord repo.ProjectTask, targetPath string) (string, bool) {
+	if e == nil || e.tasks == nil || e.projects == nil || taskRecord.ProjectID == uuid.Nil || taskRecord.ID == uuid.Nil {
+		return "", false
+	}
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	if targetPath == "" {
+		return "", false
+	}
+	projectRecord, err := e.projects.GetByID(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return "", false
+	}
+	projectSlug := strings.TrimSpace(projectRecord.Slug)
+	if projectSlug == "" {
+		return "", false
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, taskRecord.ProjectID)
+	if err != nil || len(projectTasks) == 0 {
+		return "", false
+	}
+	sort.SliceStable(projectTasks, func(i, j int) bool {
+		if !projectTasks[i].UpdatedAt.Equal(projectTasks[j].UpdatedAt) {
+			return projectTasks[i].UpdatedAt.After(projectTasks[j].UpdatedAt)
+		}
+		if projectTasks[i].TaskNumber != projectTasks[j].TaskNumber {
+			return projectTasks[i].TaskNumber > projectTasks[j].TaskNumber
+		}
+		return strings.Compare(projectTasks[i].ID.String(), projectTasks[j].ID.String()) > 0
+	})
+
+	taskWorktreeRoot := filepath.Join(workspace.ResolveDataDir(e.dataDir), "task-worktrees", projectSlug)
+	checked := 0
+	for _, candidate := range projectTasks {
+		if checked >= 64 {
+			break
+		}
+		if candidate.ID == taskRecord.ID || candidate.TaskNumber <= 0 {
+			continue
+		}
+		checked++
+		absPath := filepath.Join(taskWorktreeRoot, fmt.Sprintf("task-%d", candidate.TaskNumber), filepath.FromSlash(targetPath))
+		body, readErr := os.ReadFile(absPath)
+		if readErr != nil {
+			continue
+		}
+		draft := strings.TrimSpace(string(body))
+		if draft == "" {
+			continue
+		}
+		if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason != "" || !looksLikeRecoveryFileDraft(draft) {
+			continue
+		}
 		return draft, true
 	}
 	return "", false
