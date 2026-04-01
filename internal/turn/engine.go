@@ -18062,6 +18062,13 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectContinuationRediscoveryTurnStopSystemMessage())
 			return true, nil
 		}
+		if shouldStopAfterBlockedTaskReviewPreferredTargetReread(rt, []ToolResult{result}) {
+			rt.stopReason = stopReasonValidationBlocked
+			if message := taskReviewBlockedPreferredTargetStopMessage(rt, []ToolResult{result}); message != "" {
+				_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, message)
+			}
+			return true, nil
+		}
 		if missingPath, ok := missingProjectContinuationDependencyArtifactPath(rt, []ToolCall{call}, []ToolResult{result}); ok {
 			rt.stopReason = stopReasonValidationBlocked
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, projectContinuationMissingDependencyStopMessage(missingPath))

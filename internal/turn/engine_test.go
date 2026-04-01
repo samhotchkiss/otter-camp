@@ -5052,6 +5052,117 @@ func TestDispatchToolsStopsSameTurnAfterDirtyWorkspaceReviewApprovalFailure(t *t
 	}
 }
 
+func TestDispatchToolsStopsSameTurnAfterBlockedTaskReviewPreferredTargetReread(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+	targetPath := "planning/sambot-prompts/test-conversations-technical.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.chat.session.Mode = fixture.session.Mode
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	description := "Rewrite planning/sambot-prompts/test-conversations-technical.md with 6 technical SamBot conversations."
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:              taskID,
+		OrganizationID:  fixture.session.OrganizationID,
+		ProjectID:       projectID,
+		TaskNumber:      12524,
+		Title:           "Rewrite planning/sambot-prompts/test-conversations-technical.md",
+		Description:     &description,
+		WorkStatus:      "review",
+		AssignedAgentID: &assignedID,
+	}
+
+	dispatched := make([]string, 0, 2)
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched = append(dispatched, call.Name)
+		runID := uuid.New()
+		onRunStarted(runID)
+		if len(dispatched) > 1 {
+			t.Fatalf("unexpected extra tier2 dispatch after blocked review reread: %+v", dispatched)
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       "cli.execute",
+			Output: map[string]any{
+				"error":            buildTaskReviewRepeatedPreferredDeliverableGapReadGuardError(targetPath),
+				"deliverable_path": targetPath,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		agent: repo.Agent{
+			ID:             assignedID,
+			OrganizationID: fixture.session.OrganizationID,
+		},
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		startedAt: time.Now(),
+		toolSet: []tools.ToolDescriptor{
+			{Name: "cli.execute", APIName: "cli.execute", Tier: "tier2"},
+			{Name: "git.status", APIName: "git.status", Tier: "tier2"},
+		},
+		initialMessageText: "Review only.\n" +
+			"Inspect the current deliverables and use flow.review_decision to approve or reject this review step.\n" +
+			"Start with the preferred deliverable target `" + targetPath + "`.\n",
+		reviewPreferredDeliverablePath:          targetPath,
+		reviewPreferredDeliverableByteSize:      20027,
+		reviewPreferredDeliverableHeadTruncated: true,
+		reviewPreferredDeliverableTailReadSeen:  true,
+		reviewPreferredDeliverableGapReadSeen:   true,
+	}
+
+	stop, err := fixture.engine.dispatchTools(context.Background(), rt, []ModelToolCall{
+		{
+			ID:   "read-target",
+			Name: "cli.execute",
+			Tier: "tier2",
+			Arguments: map[string]any{
+				"command": "python3 - <<'PY'\nprint('retry reread')\nPY",
+			},
+		},
+		{
+			ID:        "git-status-1",
+			Name:      "git.status",
+			Tier:      "tier2",
+			Arguments: map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dispatchTools: %v", err)
+	}
+	if !stop {
+		t.Fatal("expected dispatchTools to stop after blocked review preferred-target reread")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(dispatched) != 1 || dispatched[0] != "cli.execute" {
+		t.Fatalf("dispatched = %#v, want only cli.execute", dispatched)
+	}
+	if !fixture.messages.containsContentSubstring("already has enough bounded evidence") {
+		t.Fatal("expected same-turn bounded-evidence stop message")
+	}
+}
+
 func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsAddsMaxBytes(t *testing.T) {
 	engine := &TurnEngine{}
 	rt := &turnRuntime{
