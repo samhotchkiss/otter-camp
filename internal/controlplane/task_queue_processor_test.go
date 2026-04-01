@@ -185,6 +185,101 @@ func TestTaskQueueProcessorHandleTaskQueuedEventCreatesOrReusesCanonicalTaskSess
 	}
 }
 
+func TestTaskQueueProcessorHandleTaskQueuedEventContinuesCloseoutReadyQueuedExecutionAfterOrchestrationOnlyGuard(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	agentID := uuid.New()
+	templateID := uuid.New()
+	sessionID := uuid.New()
+	executionID := uuid.New()
+	flowNodeID := uuid.New()
+
+	metadata, err := taskorchestration.Apply(taskdecomp.ApplyOrchestrationOnlyMetadata(nil), taskorchestration.Update{
+		ChildVerifications: []taskorchestration.ChildVerification{
+			taskorchestration.NewChildVerification(uuid.New(), "verified closeout child", time.Now().UTC()),
+		},
+		IntegrationCheck:  taskorchestration.NewIntegrationCheck("passed", "verified shared deliverable", time.Now().UTC()),
+		OutcomeAssessment: taskorchestration.NewOutcomeAssessment(true, "closeout is satisfied", time.Now().UTC()),
+	})
+	if err != nil {
+		t.Fatalf("build task metadata: %v", err)
+	}
+	taskMetadataMap := map[string]any{}
+	if err := json.Unmarshal(metadata, &taskMetadataMap); err != nil {
+		t.Fatalf("unmarshal task metadata: %v", err)
+	}
+	taskMetadataMap["decomposition"] = map[string]any{
+		"orchestration_only": true,
+		"child_task_ids":     []string{uuid.NewString()},
+	}
+	metadata, err = json.Marshal(taskMetadataMap)
+	if err != nil {
+		t.Fatalf("marshal task metadata: %v", err)
+	}
+
+	runService := &fakeTaskQueueRunStarter{}
+	flowExecutions := &fakeTaskQueueFlowExecutionRepository{
+		execution: repo.FlowNodeExecution{ID: executionID, TaskID: taskID, FlowNodeID: flowNodeID, Status: "active", SessionID: &sessionID},
+	}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:              taskID,
+				OrganizationID:  orgID,
+				ProjectID:       projectID,
+				WorkStatus:      "queued",
+				Title:           "Write results/verify-test-conversations-level3.md",
+				AssignedAgentID: &agentID,
+				FlowTemplateID:  &templateID,
+				Metadata:        metadata,
+			},
+		},
+		taskService: &fakeTaskQueueStatusTransitioner{
+			onTransition: func(taskID uuid.UUID, toStatus string, actor tasksvc.Actor) error {
+				if toStatus == "in_progress" {
+					return tasksvc.ErrTaskMustRemainOrchestrationOnly
+				}
+				return nil
+			},
+		},
+		flow:           &fakeTaskQueueFlowStarter{execution: repo.FlowNodeExecution{ID: executionID, TaskID: taskID, FlowNodeID: flowNodeID, Status: "active", SessionID: &sessionID}},
+		flowExecutions: flowExecutions,
+		chats: &fakeTaskQueueChatService{
+			session: &chat.ChatSession{ID: sessionID, Status: "active"},
+		},
+		runs: runService,
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":    taskID,
+		"project_id": projectID,
+		"to_status":  "queued",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	if err := processor.handleTaskQueuedEvent(ctx, eventbus.DomainEvent{
+		ID:        uuid.New(),
+		EventType: "task.status_changed",
+		Payload:   payload,
+	}); err != nil {
+		t.Fatalf("handleTaskQueuedEvent: %v", err)
+	}
+
+	if len(runService.createRunInputs) != 1 {
+		t.Fatalf("CreateExecutionWakeup calls = %d, want 1", len(runService.createRunInputs))
+	}
+	if runService.createRunInputs[0].FlowNodeID == nil || *runService.createRunInputs[0].FlowNodeID != flowNodeID {
+		t.Fatalf("FlowNodeID = %v, want %s", runService.createRunInputs[0].FlowNodeID, flowNodeID)
+	}
+	if len(flowExecutions.updateCalls) != 1 {
+		t.Fatalf("UpdateMetadata calls = %d, want 1", len(flowExecutions.updateCalls))
+	}
+}
+
 func TestTaskQueueProcessorHandleTaskQueuedEventRepeatedStartReusesCanonicalTaskSession(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
@@ -847,6 +942,33 @@ func TestBuildQueueKickoffMessageForOrchestrationOnlyParent(t *testing.T) {
 	}
 }
 
+func TestBuildQueueKickoffMessageForCloseoutReadyOrchestrationParent(t *testing.T) {
+	description := "Write planning/sambot-example-conversations.md containing paired example conversations."
+	taskRecord := repo.ProjectTask{
+		Title:       "Write paired SamBot example conversations (casual + expert)",
+		Description: &description,
+		Metadata: json.RawMessage(`{
+			"decomposition":{"orchestration_only":true},
+			"parent_orchestration":{
+				"integration_check":{"status":"passed"},
+				"outcome_assessment":{"satisfied":true},
+				"child_verifications":[{"task_id":"5b7336b2-b60b-4919-9543-f2133c4c5093","summary":"verified"}]
+			}
+		}`),
+	}
+
+	message := buildQueueKickoffMessage(taskRecord)
+	if !strings.Contains(message, "already has recorded parent_orchestration closeout evidence") {
+		t.Fatalf("kickoff message = %q, want closeout-ready parent guidance", message)
+	}
+	if !strings.Contains(message, "Your next assistant action should be flow.advance") {
+		t.Fatalf("kickoff message = %q, want flow.advance guidance", message)
+	}
+	if strings.Contains(message, "create or repair bounded executable child tasks beneath this parent") {
+		t.Fatalf("kickoff message = %q, did not want child-creation guidance once closeout proof exists", message)
+	}
+}
+
 func TestBuildQueueKickoffMessageForInheritedSharedDeliverableChild(t *testing.T) {
 	taskRecord := repo.ProjectTask{
 		Title: "Append the serverless tradeoff section",
@@ -928,6 +1050,50 @@ func TestBuildQueueKickoffMessageForReadOnlyVerificationTaskWithSeparateResultsO
 	}
 	if !strings.Contains(message, "write the verification findings only to `results/sambot-personality-spec-verification.md`") {
 		t.Fatalf("kickoff message = %q, want results-only write guidance", message)
+	}
+}
+
+func TestBuildQueueKickoffMessagePrefersSourceDescriptionForReplacementShellChild(t *testing.T) {
+	description := "Write technical SamBot test conversations — fresh replacement 4-6"
+	taskRecord := repo.ProjectTask{
+		Title:       "Write technical SamBot test conversations — fresh replacement 4-6",
+		Description: &description,
+		Metadata: json.RawMessage(`{
+			"decomposition":{
+				"source_description":"## Deliverable\nWrite \u0060planning/sambot-prompts/test-conversations-technical.md\u0060 — six complete multi-turn test conversations demonstrating SamBot handling technical topics.\n\n## Requirements\nCover the six required scenarios and keep the full file consistent.\n\n## File Instructions\nWrite the complete file to \u0060planning/sambot-prompts/test-conversations-technical.md\u0060."
+			}
+		}`),
+	}
+
+	message := buildQueueKickoffMessage(taskRecord)
+	if !strings.Contains(message, "## Deliverable") {
+		t.Fatalf("kickoff message = %q, want structured source_description contract", message)
+	}
+	if strings.Contains(message, "Task description:\nWrite technical SamBot test conversations — fresh replacement 4-6") {
+		t.Fatalf("kickoff message = %q, did not want shallow replacement-shell description", message)
+	}
+}
+
+func TestBuildFlowTransitionKickoffMessagePrefersSourceDescriptionForReplacementShellReview(t *testing.T) {
+	description := "Write technical SamBot test conversations — fresh replacement 4-6"
+	taskRecord := repo.ProjectTask{
+		Title:       "Write technical SamBot test conversations — fresh replacement 4-6",
+		Description: &description,
+		Metadata: json.RawMessage(`{
+			"decomposition":{
+				"source_description":"## Deliverable\nWrite \u0060planning/sambot-prompts/test-conversations-technical.md\u0060 — six complete multi-turn test conversations demonstrating SamBot handling technical topics.\n\n## Requirements\nCover the six required scenarios and keep the full file consistent."
+			}
+		}`),
+	}
+	node := repo.FlowNode{DisplayName: "Internal Review", NodeType: "review"}
+	execution := repo.FlowNodeExecution{ID: uuid.New()}
+
+	message := buildFlowTransitionKickoffMessage(taskRecord, node, execution, "flow.rejected", "")
+	if !strings.Contains(message, "## Deliverable") {
+		t.Fatalf("kickoff message = %q, want structured source_description in review kickoff", message)
+	}
+	if strings.Contains(message, "Task description:\nWrite technical SamBot test conversations — fresh replacement 4-6") {
+		t.Fatalf("kickoff message = %q, did not want shallow replacement-shell review description", message)
 	}
 }
 

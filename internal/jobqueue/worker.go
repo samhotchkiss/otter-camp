@@ -4846,22 +4846,55 @@ func recoveredTaskSourceDescription(taskRecord repo.ProjectTask) string {
 }
 
 func recoveredTaskShouldUseSourceDescription(taskRecord repo.ProjectTask) bool {
-	description := strings.ToLower(strings.TrimSpace(valueOrEmpty(taskRecord.Description)))
-	if description == "" {
-		return false
-	}
-	if !strings.Contains(description, "already satisfied") && !strings.Contains(description, "no work needed") {
-		return false
-	}
-	sourceDescription := strings.ToLower(strings.TrimSpace(recoveredTaskSourceDescription(taskRecord)))
+	description := strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+	sourceDescription := strings.TrimSpace(recoveredTaskSourceDescription(taskRecord))
 	if sourceDescription == "" {
 		return false
 	}
-	if !strings.Contains(strings.ToLower(strings.TrimSpace(taskRecord.Title)), "verify") {
+	descriptionLower := strings.ToLower(description)
+	sourceDescriptionLower := strings.ToLower(sourceDescription)
+	if description != "" &&
+		(strings.Contains(descriptionLower, "already satisfied") || strings.Contains(descriptionLower, "no work needed")) {
+		if !strings.Contains(strings.ToLower(strings.TrimSpace(taskRecord.Title)), "verify") {
+			return false
+		}
+		return strings.Contains(sourceDescriptionLower, "closeout verification task") ||
+			(strings.Contains(sourceDescriptionLower, "already exists on disk") && strings.Contains(sourceDescriptionLower, "do not rewrite"))
+	}
+	return recoveredTaskVisibleDescriptionIsShell(taskRecord, description) &&
+		recoveredTaskSourceDescriptionLooksStructured(sourceDescription)
+}
+
+func recoveredTaskVisibleDescriptionIsShell(taskRecord repo.ProjectTask, description string) bool {
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return true
+	}
+	descriptionNormalized := strings.Join(strings.Fields(strings.ToLower(description)), " ")
+	titleNormalized := strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(taskRecord.Title))), " ")
+	if descriptionNormalized == "" {
+		return true
+	}
+	if descriptionNormalized == titleNormalized {
+		return true
+	}
+	if strings.Contains(descriptionNormalized, "fresh replacement") &&
+		!strings.Contains(description, "\n") &&
+		!strings.Contains(description, "`") {
+		return true
+	}
+	return false
+}
+
+func recoveredTaskSourceDescriptionLooksStructured(sourceDescription string) bool {
+	text := strings.ToLower(strings.TrimSpace(sourceDescription))
+	if text == "" {
 		return false
 	}
-	return strings.Contains(sourceDescription, "closeout verification task") ||
-		(strings.Contains(sourceDescription, "already exists on disk") && strings.Contains(sourceDescription, "do not rewrite"))
+	return strings.Contains(text, "## deliverable") ||
+		strings.Contains(text, "## requirements") ||
+		strings.Contains(text, "## file instructions") ||
+		strings.Contains(text, "write `")
 }
 
 func recoveredTaskKickoffDescription(taskRecord repo.ProjectTask) string {
@@ -5697,6 +5730,17 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 			snapshot.ActionableDraftCount++
 			if len(draftTasks) < 4 {
 				draftTasks = append(draftTasks, taskRef)
+			}
+			if focusTask == "" {
+				focusTask = taskRef
+				focusTaskRecord = task
+			}
+			continue
+		}
+		if status == "blocked" && projectContinuationDraftTaskReadyForParentClosureForWorkerTask(task, activity) {
+			snapshot.HasActionableBlocked = true
+			if len(activeTasks) < 4 {
+				activeTasks = append(activeTasks, taskRef)
 			}
 			if focusTask == "" {
 				focusTask = taskRef
@@ -6966,10 +7010,11 @@ func projectTaskExecutionActiveForWorker(status string) bool {
 
 func projectExecutionContinuationTaskRefForWorker(task repo.ProjectTask, activity projectContinuationChildActivityForWorker, hints projectContinuationTaskHintsForWorker) string {
 	parts := []string{projectTaskLabelForWorker(task), "id=" + task.ID.String()}
+	status := strings.TrimSpace(task.WorkStatus)
 	if title := strings.TrimSpace(task.Title); title != "" && task.TaskNumber > 0 {
 		parts = append(parts, "title="+strconv.Quote(title))
 	}
-	if status := strings.TrimSpace(task.WorkStatus); status != "" {
+	if status != "" {
 		parts = append(parts, "work_status="+status)
 	}
 	if deliverablePath := strings.TrimSpace(hints.DeliverablePath); deliverablePath != "" {
@@ -7000,15 +7045,15 @@ func projectExecutionContinuationTaskRefForWorker(task repo.ProjectTask, activit
 	if task.RequiresHumanReview {
 		parts = append(parts, "requires_human_review=true")
 	}
-	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") &&
+	if (strings.EqualFold(status, "draft") || strings.EqualFold(status, "blocked")) &&
 		projectContinuationDraftTaskOutcomeSatisfiedForWorker(task) &&
 		projectContinuationDraftTaskOutcomeSatisfiedMarkerAllowedForWorker(task, activity) {
 		parts = append(parts, "outcome_satisfied=true")
 	}
-	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") && activity.workspaceDeliverablePresent {
+	if (strings.EqualFold(status, "draft") || strings.EqualFold(status, "blocked")) && activity.workspaceDeliverablePresent {
 		parts = append(parts, "workspace_deliverable_present=true")
 	}
-	if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
+	if strings.EqualFold(status, "blocked") {
 		if hints.ResumePolicy != "" {
 			parts = append(parts, "resume_policy="+hints.ResumePolicy)
 		}
@@ -8194,6 +8239,9 @@ func buildProjectExecutionContinuationPromptForWorker(completedTaskNumber int, c
 		return buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNumber, completedTaskTitle, remainingDraftTasks, snapshot)
 	}
 	focusLine := strings.TrimSpace(snapshot.FocusTaskLine)
+	if focusLine != "" && projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, "") {
+		return buildProjectExecutionContinuationParentQueueRetryPromptForWorker(completedTaskNumber, completedTaskTitle, remainingDraftTasks, snapshot, "")
+	}
 	if focusLine != "" &&
 		!strings.Contains(focusLine, "completed_closeout_child_tasks=") &&
 		(strings.Contains(focusLine, "replaceable_blocked_child_tasks=") || strings.Contains(focusLine, "malformed_child_tasks=")) {

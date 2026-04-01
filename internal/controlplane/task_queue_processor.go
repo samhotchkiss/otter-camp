@@ -314,8 +314,10 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 	}
 
 	status := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
+	continueQueuedExecution := false
 	if status == "queued" {
-		if _, err := p.ensureTaskFlowExecutionState(ctx, taskRecord); err != nil {
+		execution, err := p.ensureTaskFlowExecutionState(ctx, taskRecord)
+		if err != nil {
 			return err
 		}
 		targetStatus, err := p.queuedTaskRuntimeStatus(ctx, taskRecord)
@@ -333,6 +335,11 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 						return holdErr
 					}
 				}
+			} else if errors.Is(err, tasksvc.ErrTaskMustRemainOrchestrationOnly) &&
+				targetStatus == "in_progress" &&
+				execution != nil &&
+				closeoutReadyQueuedExecutionCanContinue(taskRecord) {
+				continueQueuedExecution = true
 			} else {
 				var transitionErr tasksvc.ErrInvalidStatusTransition
 				if !errors.As(err, &transitionErr) && !errors.Is(err, repo.ErrConflict) {
@@ -349,6 +356,9 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 		}
 	}
 	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "in_progress") {
+		if continueQueuedExecution && taskRecord.FlowTemplateID != nil && strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "queued") {
+			return p.ensureFlowRun(ctx, event, taskRecord)
+		}
 		if taskRecord.FlowTemplateID != nil && strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
 			return p.ensureFlowRun(ctx, event, taskRecord)
 		}
@@ -377,6 +387,20 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 		return p.ensureAssignedAgentRun(ctx, event, taskRecord)
 	}
 	return nil
+}
+
+func closeoutReadyQueuedExecutionCanContinue(taskRecord repo.ProjectTask) bool {
+	if len(taskdecomp.ParseChildTaskIDs(taskRecord.Metadata)) == 0 {
+		return false
+	}
+	state, ok := taskorchestration.Parse(taskRecord.Metadata)
+	if !ok || state.IntegrationCheck == nil || !strings.EqualFold(strings.TrimSpace(state.IntegrationCheck.Status), "passed") {
+		return false
+	}
+	if state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied {
+		return false
+	}
+	return len(state.ChildVerifications) > 0
 }
 
 func (p *TaskQueueProcessor) queuedTaskRuntimeStatus(ctx context.Context, taskRecord repo.ProjectTask) (string, error) {
@@ -1267,12 +1291,14 @@ func buildQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 		title = "Untitled task"
 	}
 
-	description := strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+	description := queueKickoffDescription(taskRecord)
 	base := "Start work on task: " + title
 	if description != "" {
 		base += "\n\nTask description:\n" + description
 	}
-	if taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+	if instruction := orchestrationParentCloseoutKickoffInstruction(taskRecord); instruction != "" {
+		base += "\n\nExecution instruction:\n" + instruction
+	} else if taskLooksLikeOrchestrationOnlyParent(taskRecord) {
 		base += "\n\nExecution instruction:\nThis task is an orchestration-only parent container. Do not execute the parent deliverable directly. Inspect the current child-task set and create or repair bounded executable child tasks beneath this parent. Do not begin by rereading planning artifacts unless a concrete blocker names one."
 	}
 	if instruction := inheritedSharedDeliverableKickoffInstruction(taskRecord); instruction != "" {
@@ -1287,6 +1313,85 @@ func buildQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 	return base
 }
 
+func queueKickoffDescription(taskRecord repo.ProjectTask) string {
+	if queueKickoffShouldUseSourceDescription(taskRecord) {
+		return queueKickoffSourceDescription(taskRecord)
+	}
+	return strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+}
+
+func queueKickoffSourceDescription(taskRecord repo.ProjectTask) string {
+	metadata := taskQueueMetadataMap(taskRecord.Metadata)
+	decomposition, _ := metadata["decomposition"].(map[string]any)
+	return strings.TrimSpace(stringValue(decomposition["source_description"]))
+}
+
+func queueKickoffShouldUseSourceDescription(taskRecord repo.ProjectTask) bool {
+	description := strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+	sourceDescription := strings.TrimSpace(queueKickoffSourceDescription(taskRecord))
+	if sourceDescription == "" {
+		return false
+	}
+	descriptionLower := strings.ToLower(description)
+	sourceDescriptionLower := strings.ToLower(sourceDescription)
+	if description != "" &&
+		(strings.Contains(descriptionLower, "already satisfied") || strings.Contains(descriptionLower, "no work needed")) {
+		if !strings.Contains(strings.ToLower(strings.TrimSpace(taskRecord.Title)), "verify") {
+			return false
+		}
+		return strings.Contains(sourceDescriptionLower, "closeout verification task") ||
+			(strings.Contains(sourceDescriptionLower, "already exists on disk") && strings.Contains(sourceDescriptionLower, "do not rewrite"))
+	}
+	return queueKickoffVisibleDescriptionIsShell(taskRecord, description) &&
+		queueKickoffSourceDescriptionLooksStructured(sourceDescription)
+}
+
+func queueKickoffVisibleDescriptionIsShell(taskRecord repo.ProjectTask, description string) bool {
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return true
+	}
+	descriptionNormalized := strings.Join(strings.Fields(strings.ToLower(description)), " ")
+	titleNormalized := strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(taskRecord.Title))), " ")
+	if descriptionNormalized == "" {
+		return true
+	}
+	if descriptionNormalized == titleNormalized {
+		return true
+	}
+	if strings.Contains(descriptionNormalized, "fresh replacement") &&
+		!strings.Contains(description, "\n") &&
+		!strings.Contains(description, "`") {
+		return true
+	}
+	return false
+}
+
+func queueKickoffSourceDescriptionLooksStructured(sourceDescription string) bool {
+	text := strings.ToLower(strings.TrimSpace(sourceDescription))
+	if text == "" {
+		return false
+	}
+	return strings.Contains(text, "## deliverable") ||
+		strings.Contains(text, "## requirements") ||
+		strings.Contains(text, "## file instructions") ||
+		strings.Contains(text, "write `")
+}
+
+func orchestrationParentCloseoutKickoffInstruction(taskRecord repo.ProjectTask) string {
+	if !taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+		return ""
+	}
+	state, ok := taskorchestration.Parse(taskRecord.Metadata)
+	if !ok || state.IntegrationCheck == nil || !strings.EqualFold(strings.TrimSpace(state.IntegrationCheck.Status), "passed") {
+		return ""
+	}
+	if state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied || len(state.ChildVerifications) == 0 {
+		return ""
+	}
+	return "This orchestration-only parent already has recorded parent_orchestration closeout evidence from its child outputs. Do not inspect child tasks again, do not recreate bounded child work, and do not rewrite the deliverable body. Your next assistant action should be flow.advance with the active flow_node_execution_id so the parent's own flow can finish."
+}
+
 func buildFlowKickoffMessage(taskRecord repo.ProjectTask, execution repo.FlowNodeExecution, node *repo.FlowNode) string {
 	base := buildQueueKickoffMessage(taskRecord)
 	if node != nil && strings.EqualFold(strings.TrimSpace(node.NodeType), "review") {
@@ -1294,7 +1399,7 @@ func buildFlowKickoffMessage(taskRecord repo.ProjectTask, execution repo.FlowNod
 		if title == "" {
 			title = "Untitled task"
 		}
-		description := strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+		description := queueKickoffDescription(taskRecord)
 		base = "Start review on task: " + title
 		if description != "" {
 			base += "\n\nTask description:\n" + description
@@ -2147,7 +2252,7 @@ func buildFlowTransitionKickoffMessage(
 		if title == "" {
 			title = "Untitled task"
 		}
-		description := strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+		description := queueKickoffDescription(taskRecord)
 		base = "Start review on task: " + title
 		if description != "" {
 			base += "\n\nTask description:\n" + description

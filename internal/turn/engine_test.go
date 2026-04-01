@@ -13066,6 +13066,48 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolForParentScopedTas
 	}
 }
 
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolForParentScopedTaskListUsesCloseoutChildGuidanceWhenWorkspaceCloseoutRetryActive(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: fmt.Sprintf(
+			"Continue the active project execution now. Active project id: %s. "+
+				"Current focus parent: task 12526 (Write planning/sambot-prompts/test-conversations-technical.md) id=%s work_status=draft workspace_deliverable_present=true malformed_child_tasks=1. "+
+				"Your last continuation turn proved that task 12526 (Write planning/sambot-prompts/test-conversations-technical.md) id=%s "+
+				"title=\"Write planning/sambot-prompts/test-conversations-technical.md\" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md "+
+				"workspace_deliverable_present=true malformed_child_tasks=1 already has its deliverable body on disk. "+
+				"Keep the closeout child intentionally terse: use a short verification title and a 1-2 sentence description only. "+
+				"Your next assistant action must create the smallest closeout/verification child task beneath task 12526 (Write planning/sambot-prompts/test-conversations-technical.md) now, "+
+				"queue an already-bounded direct child there if one already exists unchanged, or report one concrete blocker sentence naming the exact missing review or verification evidence. "+
+				"If you must inspect child lanes first, use only task.list(parent_task_id=%s).",
+			projectID.String(),
+			parentTaskID.String(),
+			parentTaskID.String(),
+			parentTaskID.String(),
+		),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "task.list", map[string]any{
+		"parent_task_id": parentTaskID.String(),
+	})
+	if !blocked {
+		t.Fatal("expected parent-scoped task.list to be blocked for workspace closeout retry")
+	}
+	if !strings.Contains(reason, "deliverable body on disk") {
+		t.Fatalf("reason = %q, want workspace-closeout guidance", reason)
+	}
+	if strings.Contains(reason, "same-deliverable repair child") {
+		t.Fatalf("reason = %q, should not fall back to repair-draft guidance", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksLeafParentScopedTaskList(t *testing.T) {
 	t.Parallel()
 
@@ -14503,6 +14545,12 @@ func TestBuildProjectExecutionContinuationBoundedSizeRetryPromptTreatsWorkspaceD
 	if !strings.Contains(prompt, "already has its deliverable body on disk") {
 		t.Fatalf("prompt = %q, want workspace-deliverable closeout guidance", prompt)
 	}
+	if !strings.Contains(prompt, "The exact focus task id is already named in that current-focus line.") {
+		t.Fatalf("prompt = %q, want explicit focus-task-id guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not call project.get or task.get just to recover the task details first") {
+		t.Fatalf("prompt = %q, want no project.get/task.get guidance", prompt)
+	}
 	if !strings.Contains(prompt, "Do not treat task 245") {
 		t.Fatalf("prompt = %q, want no-fresh-authoring guidance", prompt)
 	}
@@ -14588,6 +14636,137 @@ func TestProjectContinuationBoundedSizeFocusTaskPrefersNamedRemainingDraftOverPr
 	}
 	if focusTask.ID != boundedTaskID {
 		t.Fatalf("focusTask.ID = %s, want %s", focusTask.ID, boundedTaskID)
+	}
+}
+
+func TestProjectContinuationBoundedSizeFocusTaskPrefersParentIDFromTaskUpdateBoundedSizeError(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentTaskID := uuid.New()
+	otherTaskID := uuid.New()
+	turnID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	parentDescription := "Write technical test conversations 1-3."
+	otherDescription := "Write planning/sambot-tech-architecture.md."
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentTaskID: {
+				ID:          parentTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  12527,
+				Title:       "Write technical test conversations 1-3",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+			},
+			otherTaskID: {
+				ID:          otherTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  245,
+				Title:       "Write planning/sambot-tech-architecture.md",
+				Description: &otherDescription,
+				WorkStatus:  "draft",
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+
+	latestUser := &repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Current focus parent: task 12526 (Write 6 technical test conversations for SamBot) id=focus.",
+			"Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 12527 (Write technical test conversations 1-3) id=" + parentTaskID.String() + ".",
+		}, " "),
+	}
+	messages := []repo.ChatMessage{
+		{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			TurnID:    &turnID,
+			Role:      "tool_result",
+			Status:    "final",
+			Content: string(mustJSONRaw(map[string]any{
+				"tool_name": "task.update",
+				"output": map[string]any{
+					"error": "queue decomposition child for parent " + parentTaskID.String() + ": task exceeds bounded size policy (estimated 75 minutes > 30 minute limit): split the work into smaller reviewable tasks before queueing",
+				},
+			})),
+		},
+	}
+
+	focusTask, ok, err := fixture.engine.projectContinuationBoundedSizeFocusTask(context.Background(), projectID, latestUser, messages, turnID)
+	if err != nil {
+		t.Fatalf("projectContinuationBoundedSizeFocusTask: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected bounded-size focus task")
+	}
+	if focusTask.ID != parentTaskID {
+		t.Fatalf("focusTask.ID = %s, want %s", focusTask.ID, parentTaskID)
+	}
+}
+
+func TestProjectContinuationRecentBoundedSizeStopForRepairDraftMatchesTaskUpdateParentID(t *testing.T) {
+	t.Parallel()
+
+	repairTaskID := uuid.New()
+	currentTurnID := uuid.New()
+	previousTurnID := uuid.New()
+
+	messages := []repo.ChatMessage{
+		{
+			ID:     uuid.New(),
+			TurnID: &previousTurnID,
+			Role:   "tool_result",
+			Status: "final",
+			Content: string(mustJSONRaw(map[string]any{
+				"tool_name": "task.update",
+				"output": map[string]any{
+					"error": "queue decomposition child for parent " + repairTaskID.String() + ": task exceeds bounded size policy (estimated 75 minutes > 30 minute limit): split the work into smaller reviewable tasks before queueing",
+				},
+			})),
+		},
+		{
+			ID:      uuid.New(),
+			TurnID:  &previousTurnID,
+			Role:    "system",
+			Status:  "final",
+			Content: projectContinuationBoundedSizeStopPrefix + " Ending this turn now.",
+		},
+	}
+
+	if !projectContinuationRecentBoundedSizeStopForRepairDraft(messages, currentTurnID, repairTaskID, 12527) {
+		t.Fatal("expected recent bounded-size stop to match repair child")
+	}
+	if projectContinuationRecentBoundedSizeStopForRepairDraft(messages, currentTurnID, uuid.Nil, 0) {
+		t.Fatal("did not expect bounded-size repair match without repair child identity")
+	}
+}
+
+func TestProjectContinuationResumePromptMatchesSnapshotRejectsBroadBoundedPromptWhenChildDraftsNowExist(t *testing.T) {
+	t.Parallel()
+
+	content := strings.Join([]string{
+		"Continue the active project execution now.",
+		"Your last continuation turn proved that this focused draft is still too broad to queue as-is.",
+		"Current focus parent: task 12532 (Write SamBot test conversation: Startup CTO asks about AI agent orchestration) id=focus.",
+	}, " ")
+	snapshot := projectExecutionContinuationSnapshot{
+		ProjectLine:          "Active project id: 123",
+		ChildActiveDraftLine: `Draft parent tasks already have child work: task 12639 (Write Turn 1 (User): Startup CTO introduces themselves and asks about multi-agent systems) id=child title="Write Turn 1 (User): Startup CTO introduces themselves and asks about multi-agent systems" work_status=draft`,
+		FocusTaskLine:        `Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 12532 (Write SamBot test conversation: Startup CTO asks about AI agent orchestration) id=focus title="Write SamBot test conversation: Startup CTO asks about AI agent orchestration" work_status=draft`,
+	}
+
+	if projectContinuationResumePromptMatchesSnapshot(content, snapshot) {
+		t.Fatal("stale broad bounded-size resume should not match once child draft work exists in the current snapshot")
 	}
 }
 
@@ -19746,6 +19925,46 @@ func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationRequiresObserve
 	}
 }
 
+func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationForChildDraftAdvanceQueue(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	childTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Active project id: " + uuid.NewString(),
+			`Current focus parent: task 12532 (Write SamBot test conversation: Startup CTO asks about AI agent orchestration) id=` + focusTaskID.String() + ` title="Write SamBot test conversation: Startup CTO asks about AI agent orchestration" work_status=draft deliverable_path=content/sambot/test-conversations/01-startup-cto-ai-orchestration.md child_tasks=2.`,
+			`Draft parent tasks already have child work: task 12639 (Write Turn 1 (User): Startup CTO introduces themselves and asks about multi-agent systems) id=` + childTaskID.String() + ` title="Write Turn 1 (User): Startup CTO introduces themselves and asks about multi-agent systems" work_status=draft deliverable_path=content/sambot/test-conversations/01-startup-cto-ai-orchestration.md`,
+			"Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while those child tasks already exist.",
+			"Your next assistant action must queue the smallest unchanged direct child draft if it already fits, or update/block the stale draft child first before attempting any new replacement.",
+		}, " "),
+	}
+
+	calls := []ToolCall{{
+		Name:      "task.update",
+		Arguments: map[string]any{"task_id": childTaskID.String(), "work_status": "queued"},
+	}}
+	results := []ToolResult{{
+		Name: "task.update",
+		Output: map[string]any{
+			"task": map[string]any{
+				"id":          childTaskID.String(),
+				"work_status": "queued",
+			},
+		},
+	}}
+
+	if !shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
+		t.Fatal("expected named child-draft queue handoff to stop the PM turn")
+	}
+}
+
 func TestShouldStopAfterPreparingBoundedProjectChildSplit(t *testing.T) {
 	t.Parallel()
 
@@ -19911,6 +20130,42 @@ func TestShouldStopAfterProjectContinuationDirectChildInspectionForBoundedRetryP
 
 	if !shouldStopAfterProjectContinuationDirectChildInspection(rt, calls, results) {
 		t.Fatal("expected bounded-retry direct-child inspection to stop the PM turn")
+	}
+}
+
+func TestShouldStopAfterProjectContinuationDirectChildInspectionForLiveStillNeedPrompt(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: "Continue the active project execution now. " +
+			"Your last continuation turn was blocked after broad rediscovery even though the focused draft parent already has direct child work to advance. " +
+			"Current focus parent: task 12644 (Write SamBot example conversation: Engineering manager hiring evaluation) id=" + focusTaskID.String() + ". " +
+			"If you still need to inspect child lanes first, use only task.list(parent_task_id=" + focusTaskID.String() + "). " +
+			"The moment that direct-child list returns a runnable draft or queued child, stop rediscovery and issue one narrow task.update on that child immediately.",
+	}
+
+	calls := []ToolCall{{
+		Name:      "task.list",
+		Arguments: map[string]any{"parent_task_id": focusTaskID.String()},
+	}}
+	results := []ToolResult{{
+		Name: "task.list",
+		Output: map[string]any{
+			"tasks": []any{
+				map[string]any{"id": uuid.NewString(), "work_status": "in_progress"},
+				map[string]any{"id": uuid.NewString(), "work_status": "in_progress"},
+			},
+		},
+	}}
+
+	if !shouldStopAfterProjectContinuationDirectChildInspection(rt, calls, results) {
+		t.Fatal("expected live 'still need' direct-child inspection prompt to stop the PM turn")
 	}
 }
 
@@ -27549,7 +27804,7 @@ func TestBuildProjectContinuationActionPromptAddsReplacementChildGuidanceForBloc
 	}
 }
 
-func TestBuildProjectContinuationActionPromptPrioritizesMissingFocusPrerequisites(t *testing.T) {
+func TestBuildProjectContinuationActionPromptSkipsMissingFocusPrerequisitesForReplacementParent(t *testing.T) {
 	prompt := buildProjectContinuationActionPrompt("Active project request: restore planning/sambot-personality-spec.md", projectExecutionContinuationSnapshot{
 		ProjectLine:          "Active project id: 123",
 		ActiveTaskLine:       "Already-active non-terminal tasks in the tree: task 250 (Include example exchanges) id=aaa title=\"Include example exchanges\" work_status=blocked deliverable_path=planning/sambot-personality-spec.md assigned_agent_id=worker-1 flow_template_id=ft-1 blocker=\"shared deliverable\"",
@@ -27557,17 +27812,17 @@ func TestBuildProjectContinuationActionPromptPrioritizesMissingFocusPrerequisite
 		FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 246 (Write planning/sambot-personality-spec.md) id=bbb title=\"Write planning/sambot-personality-spec.md\" work_status=draft deliverable_path=planning/sambot-personality-spec.md assigned_agent_id=missing flow_template_id=missing child_tasks=3 replaceable_blocked_child_tasks=3 malformed_child_tasks=1",
 	})
 
-	if !strings.Contains(prompt, "Because that focus parent still has explicit prerequisite fields missing") {
-		t.Fatalf("prompt = %q, want missing-prerequisite priority guidance", prompt)
+	if strings.Contains(prompt, "Because that focus parent still has explicit prerequisite fields missing") {
+		t.Fatalf("prompt = %q, did not want missing-prerequisite priority guidance for a replacement parent", prompt)
 	}
-	if !strings.Contains(prompt, "Repair the named assigned_agent_id / flow_template_id gaps on that exact task with one narrow task.update") {
-		t.Fatalf("prompt = %q, want direct task.update prerequisite guidance", prompt)
+	if strings.Contains(prompt, "Repair the named assigned_agent_id / flow_template_id gaps on that exact task with one narrow task.update") {
+		t.Fatalf("prompt = %q, did not want direct task.update prerequisite guidance for a replacement parent", prompt)
 	}
-	if !strings.Contains(prompt, "Reuse one of the already-named project assignee ids") {
-		t.Fatalf("prompt = %q, want direct assignee reuse guidance", prompt)
+	if !strings.Contains(prompt, "Because that focus parent only has terminally blocked child lanes, create or queue the smallest fresh replacement child task under it now") {
+		t.Fatalf("prompt = %q, want replacement-child guidance to remain dominant", prompt)
 	}
-	if !strings.Contains(prompt, "Reuse the already-named flow_template_id") {
-		t.Fatalf("prompt = %q, want direct template reuse guidance", prompt)
+	if strings.Contains(prompt, "Reuse one of the already-named project assignee ids") {
+		t.Fatalf("prompt = %q, did not want assignee reuse guidance for a replacement parent", prompt)
 	}
 }
 
@@ -27602,6 +27857,9 @@ func TestBuildProjectContinuationActionPromptPrefersRepairOfMalformedSameDeliver
 	}
 	if !strings.Contains(prompt, "Do not create another replacement child while that preferred same-deliverable draft still exists.") {
 		t.Fatalf("prompt = %q, want anti-duplicate guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not begin with task.list(parent_task_id=...), task.get, or phrases like 'Let me inspect it first' or 'Let me check the current children first'.") {
+		t.Fatalf("prompt = %q, want explicit no-reread guidance for repair child", prompt)
 	}
 	if !strings.Contains(prompt, "Your next assistant action should repair and queue that exact child with one narrow task.update") {
 		t.Fatalf("prompt = %q, want direct repair guidance", prompt)
@@ -29279,11 +29537,145 @@ func TestProjectExecutionContinuationSnapshotIgnoresMalformedConflictingDelivera
 	if strings.Contains(snapshot.DraftTaskLine, "task 249") {
 		t.Fatalf("DraftTaskLine = %q, should omit malformed conflicting-deliverable child", snapshot.DraftTaskLine)
 	}
+	if strings.Contains(snapshot.RepairDraftLine, "task 249") {
+		t.Fatalf("RepairDraftLine = %q, should not prefer malformed conflicting-deliverable child as a repair draft", snapshot.RepairDraftLine)
+	}
 	if !strings.Contains(snapshot.ReplacementDraftLine, "task 246") {
 		t.Fatalf("ReplacementDraftLine = %q, want parent restored as replacement draft", snapshot.ReplacementDraftLine)
 	}
 	if !strings.Contains(snapshot.ReplacementDraftLine, "malformed_child_tasks=1") {
 		t.Fatalf("ReplacementDraftLine = %q, want malformed child count", snapshot.ReplacementDraftLine)
+	}
+}
+
+func TestProjectContinuationMalformedSameDeliverableDraftChildrenSkipsConflictingDuplicateSharedFileChild(t *testing.T) {
+	t.Parallel()
+
+	parentTaskID := uuid.New()
+	childTaskID := uuid.New()
+	parentDescription := "Create the SamBot technical test conversations at planning/sambot-prompts/test-conversations-technical.md."
+	childDescription := "## Deliverable\n\n**File:** `planning/sambot-prompts/test-conversations-technical.md`\n\nWrite exactly 6 multi-turn test conversations in planning/sambot-prompts/test-conversations-technical.md."
+	tasks := []repo.ProjectTask{
+		{
+			ID:          parentTaskID,
+			TaskNumber:  12526,
+			Title:       "Write planning/sambot-prompts/test-conversations-technical.md",
+			Description: &parentDescription,
+			WorkStatus:  "draft",
+		},
+		{
+			ID:          childTaskID,
+			TaskNumber:  12527,
+			Title:       "Write technical test conversations 1-3",
+			Description: &childDescription,
+			WorkStatus:  "draft",
+			Metadata: mustJSONRaw(map[string]any{
+				"decomposition_parent_task_id": parentTaskID.String(),
+				"decomposition": map[string]any{
+					"source_description":  "Write a single SamBot test conversation file at sambot/test-conversations/tech-01-ai-orchestration.md.",
+					"primary_deliverable": "Write a single SamBot test conversation file at sambot/test-conversations/tech-01-ai-orchestration.md.",
+				},
+			}),
+		},
+	}
+	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(tasks)
+	if _, ok := malformedChildTaskIDs[childTaskID]; !ok {
+		t.Fatalf("malformedChildTaskIDs missing conflicting duplicate child")
+	}
+	malformed := projectContinuationMalformedSameDeliverableDraftChildren(tasks, tasks[0], malformedChildTaskIDs)
+	if len(malformed) != 0 {
+		t.Fatalf("malformed same-deliverable children = %v, want none for conflicting duplicate child", malformed)
+	}
+}
+
+func TestProjectContinuationOwnDeliverableHintsPreferDecompositionSourcePath(t *testing.T) {
+	t.Parallel()
+
+	task := repo.ProjectTask{
+		Title:      "Test Conversations 2-3: Ethics researcher + Engineering manager hiring signal",
+		WorkStatus: "draft",
+		Metadata: mustJSONRaw(map[string]any{
+			"decomposition": map[string]any{
+				"source_description":  "Write a single SamBot test conversation file at sambot/test-conversations/tech-01-ai-orchestration.md.",
+				"primary_deliverable": "Write a single SamBot test conversation file at sambot/test-conversations/tech-01-ai-orchestration.md.",
+			},
+		}),
+	}
+
+	explicit, root := projectContinuationOwnDeliverableHints(task)
+	if explicit != "sambot/test-conversations/tech-01-ai-orchestration.md" {
+		t.Fatalf("explicit = %q, want decomposition-source deliverable path", explicit)
+	}
+	if root != "" {
+		t.Fatalf("root = %q, want empty root when explicit path is available", root)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftTaskCreateIgnoresMalformedConflictingDeliverableChildForSameDeliverableGuard(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentTaskID := uuid.New()
+	childTaskID := uuid.New()
+	parentDescription := "Create the SamBot personality and tone specification at planning/sambot-personality-spec.md."
+	childDescription := "Add a Technical Depth Calibration section to planning/sambot-personality-spec.md."
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentTaskID: {
+				ID:          parentTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  246,
+				Title:       "Write planning/sambot-personality-spec.md",
+				Description: &parentDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"applied":             true,
+						"mode":                "parallel_children",
+						"orchestration_only":  true,
+						"source_description":  parentDescription,
+						"primary_deliverable": "planning/sambot-personality-spec.md",
+					},
+				}),
+			},
+			childTaskID: {
+				ID:          childTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  249,
+				Title:       "Technical depth calibration section",
+				Description: &childDescription,
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition_parent_task_id": parentTaskID.String(),
+					"decomposition": map[string]any{
+						"source_description":  "Create a markdown file at planning/sambot-prompts/complexity-test-conversations.md containing paired conversations.",
+						"primary_deliverable": "planning/sambot-prompts/complexity-test-conversations.md",
+					},
+				}),
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: recover the blocked SamBot personality spec", projectExecutionContinuationSnapshot{
+			ProjectLine:          "Active project id: " + projectID.String(),
+			ReplacementDraftLine: "Draft parent tasks need fresh replacement child work: task 246 (Write planning/sambot-personality-spec.md) id=" + parentTaskID.String() + " title=\"Write planning/sambot-personality-spec.md\" work_status=draft malformed_child_tasks=1",
+			FocusTaskLine:        "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 246 (Write planning/sambot-personality-spec.md) id=" + parentTaskID.String() + " title=\"Write planning/sambot-personality-spec.md\" work_status=draft malformed_child_tasks=1",
+		}),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftTaskCreateTool(context.Background(), rt, "task.create", map[string]any{
+		"parent_task_id": parentTaskID.String(),
+		"title":          "Write planning/sambot-personality-spec.md",
+		"description":    "Fresh replacement child beneath OC-246 after malformed conflicting child blocked.",
+	})
+	if blocked {
+		t.Fatalf("reason = %q, want malformed conflicting-deliverable child to stop blocking replacement create as a same-deliverable repair", reason)
 	}
 }
 
@@ -33160,6 +33552,12 @@ func TestBuildProjectExecutionContinuationReplacementChildRetryPromptPrefersRepa
 	if !strings.Contains(prompt, "repair and queue the preferred existing same-deliverable child draft named above with one narrow task.update") {
 		t.Fatalf("prompt = %q, want direct repair task.update guidance", prompt)
 	}
+	if !strings.Contains(prompt, "The exact focus task id is already named in that current-focus line.") {
+		t.Fatalf("prompt = %q, want explicit focus-task-id guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not call project.get or task.get just to recover the task details first") {
+		t.Fatalf("prompt = %q, want no project.get/task.get guidance", prompt)
+	}
 	if !strings.Contains(prompt, "file.search before acting") {
 		t.Fatalf("prompt = %q, want file.search ban in repair guidance", prompt)
 	}
@@ -33567,6 +33965,37 @@ func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksCloseoutReadyTa
 	}
 	if !strings.Contains(reason, "task.list") || !strings.Contains(reason, "closeout-ready state for the same deliverable") {
 		t.Fatalf("reason = %q, want closeout-ready task.list guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftReadToolBlocksDirectChildInspectionTaskGet(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Your last continuation turn was blocked after broad rediscovery even though the focused draft parent already has direct child work to advance.",
+			"Current focus parent: task 12644 (Write SamBot example conversation: Engineering manager hiring evaluation) id=" + focusTaskID.String() + ".",
+			"Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.",
+			"If you still need to inspect child lanes first, use only task.list(parent_task_id=" + focusTaskID.String() + ").",
+			"The moment that direct-child list returns a runnable draft or queued child, stop rediscovery and issue one narrow task.update on that child immediately.",
+		}, " "),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationFocusedDraftReadTool(rt, "task.get", map[string]any{
+		"task_id": uuid.NewString(),
+	})
+	if !blocked {
+		t.Fatal("expected direct-child inspection task.get to be blocked")
+	}
+	if !strings.Contains(reason, "direct child inspection path") || !strings.Contains(reason, focusTaskID.String()) {
+		t.Fatalf("reason = %q, want direct-child inspection guidance", reason)
 	}
 }
 
@@ -34460,6 +34889,24 @@ func TestProjectExecutionContinuationSnapshotForSummaryFallsBackWhenPriorityFilt
 	}
 	if !projectExecutionContinuationSnapshotHasStructuredContext(snapshot) {
 		t.Fatalf("snapshot = %#v, want fallback to structured unfiltered snapshot when priority filter collapses", snapshot)
+	}
+}
+
+func TestBuildProjectContinuationFocusedResumeRetryPromptForRepairDraft(t *testing.T) {
+	t.Parallel()
+
+	content := "Continue the active project execution now. Current focus parent: task 12526 (Write 6 technical test conversations for SamBot) id=focus. " +
+		"Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 12527 (Write technical test conversations 1-3) id=repair."
+
+	prompt := buildProjectContinuationFocusedResumeRetryPrompt(content)
+	if !strings.Contains(prompt, "Your last continuation turn did not complete the focused project action already required above.") {
+		t.Fatalf("prompt = %q, want focused retry lead-in", prompt)
+	}
+	if !strings.Contains(prompt, "Do not begin with task.list(parent_task_id=...), task.get, or phrases like 'Let me check the current children first'.") {
+		t.Fatalf("prompt = %q, want explicit no-task.list guidance for repair draft retry", prompt)
+	}
+	if !strings.Contains(prompt, "Start with one narrow task.update on the named repair child now") {
+		t.Fatalf("prompt = %q, want direct repair-child task.update guidance", prompt)
 	}
 }
 
@@ -40819,6 +41266,65 @@ func TestMaybeSynthesizeTaskReviewDecisionToolCallsInfersRejectFromStructuredRev
 	}
 	if got := stringValue(toolCalls[0].Arguments["decision"]); got != "reject" {
 		t.Fatalf("decision = %q, want reject", got)
+	}
+	if got := stringValue(toolCalls[0].Arguments["flow_node_execution_id"]); got != executionID.String() {
+		t.Fatalf("flow_node_execution_id = %q, want %s", got, executionID)
+	}
+}
+
+func TestMaybeSynthesizeTaskReviewDecisionToolCallsInfersApproveFromStructuredReviewAssessmentSuccess(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		TaskNumber: 12655,
+		Title:      "Review planning/sambot-personality-spec.md",
+		WorkStatus: "review",
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	content := "## Review Assessment\n\n### Coverage Check\n1. Voice & Tone -> Present and aligned with the task brief.\n2. Personality Traits -> Present with concrete guidance.\n3. Topic Expertise Areas -> Present.\n4. Boundaries -> Present with clear redirect language.\n5. Response Style -> Present.\n6. Sample Responses -> Present.\n\n### Verdict\nThe deliverable meets the stated requirements and all required sections are present. There is sufficient evidence to approve."
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskReviewDecisionToolCalls(
+		context.Background(),
+		rt,
+		content,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskReviewDecisionToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "flow.review_decision" {
+		t.Fatalf("toolCalls = %+v, want one flow.review_decision", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["decision"]); got != "approve" {
+		t.Fatalf("decision = %q, want approve", got)
 	}
 	if got := stringValue(toolCalls[0].Arguments["flow_node_execution_id"]); got != executionID.String() {
 		t.Fatalf("flow_node_execution_id = %q, want %s", got, executionID)

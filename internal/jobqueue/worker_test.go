@@ -95,6 +95,26 @@ func TestBuildRecoveredTaskQueueKickoffMessagePrefersSourceDescriptionForLegacyS
 	}
 }
 
+func TestBuildRecoveredTaskQueueKickoffMessagePrefersSourceDescriptionForReplacementShellChild(t *testing.T) {
+	description := "Write technical SamBot test conversations — fresh replacement 4-6"
+	taskRecord := repo.ProjectTask{
+		Title:       "Write technical SamBot test conversations — fresh replacement 4-6",
+		Description: &description,
+		Metadata: taskdecomp.ApplyMetadata(nil, taskdecomp.Plan{
+			RequiresDecomposition: true,
+			PrimaryDeliverable:    "planning/sambot-prompts/test-conversations-technical.md",
+		}, "## Deliverable\nWrite `planning/sambot-prompts/test-conversations-technical.md` — six complete multi-turn test conversations demonstrating SamBot handling technical topics.\n\n## Requirements\nCover the six required scenarios and keep the full file consistent.\n\n## File Instructions\nWrite the complete file to `planning/sambot-prompts/test-conversations-technical.md`.", nil),
+	}
+
+	message := buildRecoveredTaskQueueKickoffMessage(taskRecord)
+	if !strings.Contains(message, "## Deliverable") {
+		t.Fatalf("kickoff message = %q, want structured source_description contract", message)
+	}
+	if strings.Contains(message, "Task description:\nWrite technical SamBot test conversations — fresh replacement 4-6") {
+		t.Fatalf("kickoff message = %q, did not want shallow replacement-shell description", message)
+	}
+}
+
 func TestRecoveredTaskLooksLikeOrchestrationOnlyParentIgnoresLegacySatisfiedCloseout(t *testing.T) {
 	description := "## Already Satisfied — No Work Needed\n\nThis child task can be closed as the deliverable already exists in the target file."
 	taskRecord := repo.ProjectTask{
@@ -967,17 +987,34 @@ func TestBuildProjectExecutionContinuationPromptForWorkerIncludesCompletedCloseo
 		CompletedTaskLine: "Recently implementation-complete bounded tasks already in the tree: task 75 (Verify content/technonymous-index.json delivered - close parent OC-44) id=bbb work_status=done deliverable_path=content/technonymous-index.json proof_state=approved",
 	})
 
-	if !strings.Contains(prompt, "use that completed child proof to advance or close the parent instead of creating another replacement child") {
-		t.Fatalf("prompt = %q, want completed-closeout draft guidance", prompt)
+	if !strings.Contains(prompt, "already closeout-ready, but the project lane cannot jump it directly from draft to done") {
+		t.Fatalf("prompt = %q, want closeout-ready parent queue guidance", prompt)
 	}
-	if !strings.Contains(prompt, "Because that focus parent already has completed closeout child proof, advance or close the parent directly instead of creating another replacement child.") {
-		t.Fatalf("prompt = %q, want completed-closeout focus guidance", prompt)
-	}
-	if !strings.Contains(prompt, "Do not relist `content/posts`, reread sibling batch outputs, or re-verify the same deliverable on disk") {
-		t.Fatalf("prompt = %q, want no re-verification guidance", prompt)
+	if !strings.Contains(prompt, "If the parent_orchestration evidence is already recorded on task 44") {
+		t.Fatalf("prompt = %q, want direct parent queue instruction", prompt)
 	}
 	if strings.Contains(prompt, "Create the smallest fresh replacement child task under it now instead.") {
 		t.Fatalf("prompt = %q, should not fall back to malformed-child replacement guidance once closeout proof exists", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationPromptForWorkerPrefersParentQueueRetryForBlockedCloseoutReadyFocus(t *testing.T) {
+	parentID := uuid.NewString()
+
+	prompt := buildProjectExecutionContinuationPromptForWorker(12532, "Write SamBot test conversation: Startup CTO asks about AI agent orchestration", 0, projectExecutionContinuationSnapshotForWorker{
+		ProjectLine:    "Active project id: 123",
+		ActiveTaskLine: `Already-active non-terminal tasks in the tree: task 12526 (Write 6 technical test conversations for SamBot) id=` + parentID + ` title="Write 6 technical test conversations for SamBot" work_status=blocked deliverable_path=planning/sambot-prompts/test-conversations-technical.md outcome_satisfied=true completed_closeout_child_tasks=2 blocker="duplicates older terminal lanes"`,
+		FocusTaskLine:  `Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 12526 (Write 6 technical test conversations for SamBot) id=` + parentID + ` title="Write 6 technical test conversations for SamBot" work_status=blocked deliverable_path=planning/sambot-prompts/test-conversations-technical.md outcome_satisfied=true completed_closeout_child_tasks=2 blocker="duplicates older terminal lanes"`,
+	})
+
+	if !strings.Contains(prompt, "Your last continuation turn confirmed this focused parent is already closeout-ready, but the project lane cannot jump it directly from draft to done.") {
+		t.Fatalf("prompt = %q, want blocked closeout-ready parent queue guidance", prompt)
+	}
+	if !strings.Contains(prompt, "If the parent_orchestration evidence is already recorded on task 12526") {
+		t.Fatalf("prompt = %q, want direct parent queue instruction", prompt)
+	}
+	if strings.Contains(prompt, "Let me check what's actually on disk") {
+		t.Fatalf("prompt = %q, did not want generic rediscovery framing", prompt)
 	}
 }
 
