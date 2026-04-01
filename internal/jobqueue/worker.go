@@ -5210,6 +5210,9 @@ func buildRecoveredTaskQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 	if instruction := recoveredInheritedSharedDeliverableKickoffInstruction(taskRecord); instruction != "" {
 		base += "\n\nExecution instruction:\n" + instruction
 	}
+	if instruction := recoveredDirectWriteCheckpointKickoffInstruction(taskRecord); instruction != "" {
+		base += "\n\nExecution instruction:\n" + instruction
+	}
 	if instruction := recoveredSinglePassCLIWriteKickoffInstruction(taskRecord); instruction != "" {
 		base += "\n\nExecution instruction:\n" + instruction
 	}
@@ -5268,6 +5271,28 @@ func recoveredSinglePassCLIWriteKickoffInstruction(taskRecord repo.ProjectTask) 
 		return ""
 	}
 	return fmt.Sprintf("This task already specifies a single-pass cli_execute write for `%s`. Do not begin with git.status, file.list, file.read, or readiness narration. Your next assistant message must contain one concrete non-empty cli.execute.command that writes `%s`, or one concrete blocker sentence if that exact write is impossible.", targetPath, targetPath)
+}
+
+func recoveredDirectWriteCheckpointKickoffInstruction(taskRecord repo.ProjectTask) string {
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if !ok || strings.TrimSpace(checkpoint.TargetPath) == "" {
+		return ""
+	}
+	targetPath := strings.TrimSpace(checkpoint.TargetPath)
+	failureReason := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(checkpoint.FailureReason)), " "))
+	priorReasons := strings.ToLower(strings.Join(taskcheckpoint.RecoveryFileWriteFailureHistory(&checkpoint), " "))
+	metadata := workerMessageMetadataMap(taskRecord.Metadata)
+	guard, _ := metadata["agent_turn_validation_guard"].(map[string]any)
+	failureCode := strings.ToLower(strings.TrimSpace(fmt.Sprint(guard["failure_code"])))
+	if !strings.Contains(failureReason, "content_required") &&
+		!strings.Contains(priorReasons, "content_required") &&
+		failureCode != "recovery_target_focus_required" {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(filepath.Ext(targetPath)), ".html") {
+		return fmt.Sprintf("Recovery already narrowed this task to `%s`. Do not begin with file.list, file.read, planning-artifact rereads, or design-consistency discovery. Write `%s` directly as the full standalone HTML deliverable with file.write using both `path` and `content`, or give one concrete blocker sentence if you cannot produce the full body from the current task context.", targetPath, targetPath)
+	}
+	return fmt.Sprintf("Recovery already narrowed this task to `%s`. Do not begin with file.list, file.read, or broad context-gathering. Write `%s` directly with file.write using both `path` and `content`, or give one concrete blocker sentence if the full body still cannot be produced from the current task context.", targetPath, targetPath)
 }
 
 func workerMessageMetadataMap(metadata json.RawMessage) map[string]any {

@@ -1181,3 +1181,36 @@ func TestProjectContinuationChildTaskActivityForWorkerIgnoresStaleVerificationCl
 		t.Fatalf("blockedChildTaskCount = %d, want 0 once self-proved closeout child is retired", activity.blockedChildTaskCount)
 	}
 }
+
+func TestBuildRecoveredTaskQueueKickoffMessageIncludesDirectWriteCheckpointInstruction(t *testing.T) {
+	description := "Create templates/layout-08-portfolio.html — a portfolio showcase layout template."
+	metadata, err := json.Marshal(map[string]any{
+		"agent_turn_validation_guard": map[string]any{
+			"failure_code": "recovery_target_focus_required",
+		},
+		"recovery_file_write_checkpoint": map[string]any{
+			"version":               1,
+			"target_path":           "templates/layout-08-portfolio.html",
+			"failure_reason":        "content_required",
+			"prior_failure_reasons": []string{"recovery_target_focus_required"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	message := buildRecoveredTaskQueueKickoffMessage(repo.ProjectTask{
+		Title:       "Write templates/layout-08-portfolio.html — replacement for blocked OC-22",
+		Description: &description,
+		Metadata:    metadata,
+	})
+	if !strings.Contains(message, "Recovery already narrowed this task to `templates/layout-08-portfolio.html`.") {
+		t.Fatalf("message = %q, want narrowed checkpoint instruction", message)
+	}
+	if !strings.Contains(message, "Do not begin with file.list, file.read, planning-artifact rereads, or design-consistency discovery.") {
+		t.Fatalf("message = %q, want anti-discovery instruction", message)
+	}
+	if !strings.Contains(message, "file.write using both `path` and `content`") {
+		t.Fatalf("message = %q, want direct file.write instruction", message)
+	}
+}
