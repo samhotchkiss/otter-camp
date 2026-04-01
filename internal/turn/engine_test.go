@@ -7962,6 +7962,186 @@ func TestHandleTurnCompletedEventBlocksRepeatedGenericTaskQueueKickoffReply(t *t
 	}
 }
 
+func TestHandleTurnCompletedEventEscalatesRepeatedGenericTaskQueueKickoffReplyForDirectWriteCheckpoint(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	base := time.Unix(1700003000, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+				Metadata: mustRawJSON(t, map[string]any{
+					"recovery_file_write_checkpoint": map[string]any{
+						"version":        1,
+						"target_path":    "templates/layout-08-portfolio.html",
+						"failure_reason": "content_required",
+					},
+				}),
+			},
+		},
+	}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = taskRepo
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work"},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.taskTransitions = blocker
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	message.Content = "Start work on task: Write templates/layout-08-portfolio.html"
+	message.Metadata = mustRawJSON(t, map[string]any{
+		"source":                 "task_queue_processor",
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.messages.upsert(message)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "Writing the portfolio template directly now.")
+	fixture.chat.mu.Lock()
+	fixture.chat.turns[turnID].RetryCount = maxGenericRecoveryReplyRetries
+	fixture.chat.mu.Unlock()
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil || jobs[0].payload.RetryCount != maxGenericRecoveryReplyRetries+1 {
+		t.Fatalf("payload.retry_count = %#v, want %d", jobs[0].payload, maxGenericRecoveryReplyRetries+1)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked calls = %d, want 0", len(blocker.calls))
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updated.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", updated.WorkStatus)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	latest := messages[len(messages)-1]
+	if latest.Role != "user" {
+		t.Fatalf("latest role = %q, want user", latest.Role)
+	}
+	if !strings.Contains(latest.Content, "Recovery escalation:") || !strings.Contains(latest.Content, "must begin immediately with `<!DOCTYPE html>`") {
+		t.Fatalf("latest content = %q, want direct-write escalation prompt", latest.Content)
+	}
+	meta := messageMetadataMap(latest.Metadata)
+	escalated, _ := meta["recovery_direct_write_body_escalated"].(bool)
+	if !escalated {
+		t.Fatalf("latest metadata = %#v, want recovery_direct_write_body_escalated=true", meta)
+	}
+	if got := strings.TrimSpace(stringValue(meta["source"])); got != "task_queue_processor" {
+		t.Fatalf("metadata source = %q, want task_queue_processor", got)
+	}
+}
+
+func TestHandleTurnCompletedEventBlocksEscalatedGenericTaskQueueKickoffReplyForDirectWriteCheckpoint(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+				Metadata: mustRawJSON(t, map[string]any{
+					"recovery_file_write_checkpoint": map[string]any{
+						"version":        1,
+						"target_path":    "templates/layout-08-portfolio.html",
+						"failure_reason": "content_required",
+					},
+				}),
+			},
+		},
+	}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = taskRepo
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work"},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.taskTransitions = blocker
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	message.Content = "Start work on task: Write templates/layout-08-portfolio.html"
+	message.Metadata = mustRawJSON(t, map[string]any{
+		"source":                            "task_queue_processor",
+		"flow_node_execution_id":            executionID.String(),
+		"recovery_direct_write_body_escalated": true,
+	})
+	fixture.messages.upsert(message)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "Writing the portfolio template directly now.")
+	fixture.chat.mu.Lock()
+	fixture.chat.turns[turnID].RetryCount = maxGenericRecoveryReplyRetries
+	fixture.chat.mu.Unlock()
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+	if len(blocker.calls) != 1 {
+		t.Fatalf("blocked calls = %d, want 1", len(blocker.calls))
+	}
+	if !strings.Contains(blocker.calls[0].reason, "generic non-action replies") {
+		t.Fatalf("blocked reason = %q, want generic non-action reply reason", blocker.calls[0].reason)
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updated.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updated.WorkStatus)
+	}
+}
+
 func TestHandleTurnCompletedEventSkipsAutoContinuationForRecoveryHaltMessage(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 

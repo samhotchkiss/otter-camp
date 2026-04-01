@@ -1641,6 +1641,41 @@ func (e *TurnEngine) handleCompletedTaskResumeWithoutUsableAssistant(
 	}
 
 	if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
+		if targetPath, ok := directWriteKickoffRecoveryEscalationTarget(taskRecord, *latestUser); ok {
+			nextMessageID := latestUser.ID
+			escalatedMetadata := taskDirectWriteBodyEscalationMetadata(latestUser.Metadata)
+			escalatedContent := buildTaskExecutionDirectWriteBodyEscalationPrompt(latestUser.Content, targetPath)
+			if e.chat != nil {
+				retryMessage, appendErr := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+					SessionID: session.ID,
+					TurnID:    &latestCompleted.ID,
+					Role:      "user",
+					Content:   escalatedContent,
+					Metadata:  escalatedMetadata,
+				})
+				if appendErr != nil {
+					return true, appendErr
+				}
+				if retryMessage != nil && retryMessage.ID != uuid.Nil {
+					nextMessageID = retryMessage.ID
+				}
+			}
+			nextPayload := AgentTurnPayload{
+				SessionID:  session.ID,
+				MessageID:  nextMessageID,
+				RetryCount: latestCompleted.RetryCount + 1,
+			}
+			if latestCompleted.RespondingID != uuid.Nil {
+				agentID := latestCompleted.RespondingID
+				nextPayload.AgentID = &agentID
+			}
+			runAfter := e.now().Add(defaultAutoContinueDelay).UTC()
+			enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+			if err != nil {
+				return true, err
+			}
+			return enqueued, nil
+		}
 		reason := buildGenericRecoveryReplyBlockedReason(assistantContent, latestCompleted.RetryCount+1)
 		haltLabel := "Recovery turn halted"
 		if isExecutionKickoff {
@@ -1703,6 +1738,49 @@ func buildTaskExecutionMissingDeliverableRetryPrompt(targetPath string) string {
 		"Do not reply with a plan, explanation, or narration about what you will write.",
 	}
 	return strings.Join(lines, " ")
+}
+
+func directWriteKickoffRecoveryEscalationTarget(taskRecord repo.ProjectTask, latestUser repo.ChatMessage) (string, bool) {
+	if !taskExecutionKickoffMessage(latestUser) {
+		return "", false
+	}
+	if escalated, _ := messageMetadataMap(latestUser.Metadata)["recovery_direct_write_body_escalated"].(bool); escalated {
+		return "", false
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if !ok {
+		return "", false
+	}
+	targetPath := normalizeWorkspaceRelativePath(checkpoint.TargetPath)
+	if targetPath == "" || !htmlDirectWriteStartRequired(targetPath) {
+		return "", false
+	}
+	return targetPath, true
+}
+
+func taskDirectWriteBodyEscalationMetadata(existing json.RawMessage) json.RawMessage {
+	payload := messageMetadataMap(existing)
+	payload["recovery_direct_write_body_escalated"] = true
+	payload["synthetic_user_message"] = true
+	return mustJSONRaw(payload)
+}
+
+func buildTaskExecutionDirectWriteBodyEscalationPrompt(existingPrompt, targetPath string) string {
+	prompt := strings.TrimSpace(existingPrompt)
+	if prompt == "" {
+		prompt = fmt.Sprintf("Start work on task: write `%s` directly.", targetPath)
+	}
+	lines := []string{
+		prompt,
+		"",
+		"Recovery escalation:",
+		"Your prior retries returned only narration or blank file.write calls.",
+		"Do not explain what you will write.",
+		"Do not use cli.execute, python3, file.list, or file.read.",
+		fmt.Sprintf("Your next assistant message must begin immediately with `<!DOCTYPE html>` or `<html` from the actual body for `%s`.", targetPath),
+		fmt.Sprintf("Then send file.write with both `path` and `content` for `%s`, or give one short blocker sentence with no tool calls.", targetPath),
+	}
+	return strings.Join(lines, "\n")
 }
 
 func buildTaskExecutionRecoveryTargetFocusRetryPrompt(targetPath string) string {
