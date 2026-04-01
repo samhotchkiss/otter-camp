@@ -35966,6 +35966,15 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsWritingFullTemplateNowStub(t *t
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsWritingDeliverableNowStub(t *testing.T) {
+	t.Parallel()
+
+	content := "Writing the deliverable now."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected generic deliverable-progress stub to be treated as generic recovery output")
+	}
+}
+
 func TestIsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts(t *testing.T) {
 	t.Parallel()
 
