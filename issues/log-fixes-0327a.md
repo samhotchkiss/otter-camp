@@ -5426,3 +5426,20 @@
   - live proof:
     - worker continuation `6d0e537a-1c15-4d32-8ba5-f26c9773f9b9` now carries `Current focus parent: task 12527 (...) id=45c4264f-dd50-450b-b4c6-5d4169c117af`
     - PM turn `c20424ed-0fd4-4ec9-a3d2-d124ad749c45` executed only the parent-scoped `task.list(...)` and then ended with the new system stop `[Project continuation inspected the focused parent's direct child lanes...]`, proving the sibling-drift path is closed
+- 2026-03-31 22:45 MDT - Closed the leaked PM stop-turn gap and blocked voice-fragment child creation on bounded replacement handoffs.
+  - changed [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go):
+    - leaked async project continuation turns that already emitted terminal PM stop system messages now complete directly instead of being failed later by stale-turn recovery
+    - directed replacement-child `task.create` skips no longer bypass the project scan when the prompt already names direct child work or a preferred malformed same-deliverable repair draft
+    - PM `task.create` now blocks procedural/support fragments like `SamBot speaks as Sam Hotchkiss — direct, opinionated, technically deep but accessible` even on the fast-path replacement handoff
+  - changed [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go):
+    - `TaskLooksProceduralInstructionArtifact(...)` now recognizes `SamBot speaks as ...` voice-only titles as support fragments even when the paired description is ordinary prose
+  - changed tests:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go)
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'TestTaskLooksProceduralInstructionArtifact$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(EnsureTurnRunExitInvariant(RejectsLeakedInProgressTurn|CompletesLeakedProjectContinuationValidationStop)|ShouldBlockProjectContinuationFocusedDraftTaskCreate(SkipsProjectScanForDirectedReplacementChild|DoesNotSkipProjectScanWhenDirectChildDraftsAlreadyNamed|ForProceduralFragmentOnDirectedReplacementFastPath)|ShouldStopAfterProjectContinuationDirectChildInspection(ForBoundedRetryPrompt|IgnoresEmptyResults)?|ProjectContinuationExclusiveDirectChildInspection(Calls|CallsForBoundedRetryPrompt|ModelCalls|ModelCallsForBoundedRetryPrompt)|FilterToolResultsByCallIDs)$' -count=1`
+  - live proof:
+    - historical leaked PM turns like `ae07f96f-eef0-483b-9695-ac7abcbb44ca` and `94527521-a16b-460b-9afd-047a3bb11ce2` had already written terminal PM stop messages but were later failed by stale-turn recovery; after the patch, PM turn `18828882-6765-4c4d-89fe-9a8937b1d134` completed cleanly with `stop_reason=validation_loop_blocked`
+    - after restart on the same patch, the PM lane advanced past the old `SamBot speaks as ...` fragment family on task `12532` and prepared bounded child tasks `12637`-`12640` instead of creating any new fragment tasks beyond `12540`
+    - the next continuation then reused and advanced the clean bounded children `12639` and `12640`, while `max(task_number)` for the project stayed at `12640`, proving the fragment-duplication wave stopped on the new binary

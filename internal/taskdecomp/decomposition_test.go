@@ -184,6 +184,11 @@ func TestTaskLooksProceduralInstructionArtifact(t *testing.T) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for opinionated-voice support fragment")
 	}
 
+	sambotVoiceDescription := "Voice and tone requirements for the shared conversation file."
+	if !TaskLooksProceduralInstructionArtifact("SamBot speaks as Sam Hotchkiss — direct, opinionated, technically deep but accessible", &sambotVoiceDescription) {
+		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for SamBot voice-only support fragment")
+	}
+
 	codeSnippetDescription := "Include a code snippet showing a state transition table or a Python/TS enum + transition function."
 	if !TaskLooksProceduralInstructionArtifact("Include a code snippet showing a state transition table or a Python/TS enum + transition function.", &codeSnippetDescription) {
 		t.Fatal("TaskLooksProceduralInstructionArtifact = false, want true for code-snippet requirement fragment")

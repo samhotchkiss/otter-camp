@@ -24654,6 +24654,45 @@ func TestEnsureTurnRunExitInvariantRejectsLeakedInProgressTurn(t *testing.T) {
 	}
 }
 
+func TestEnsureTurnRunExitInvariantCompletesLeakedProjectContinuationValidationStop(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+
+	turn, err := fixture.chat.CreateTurn(context.Background(), fixture.session.ID, fixture.chat.participants[0].ParticipantID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := fixture.chat.StartTurn(context.Background(), turn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+	if _, err := fixture.engine.appendSystemMessage(context.Background(), turn.ID, fixture.session.ID, projectContinuationBoundedSizeStopPrefix+" Ending this turn now."); err != nil {
+		t.Fatalf("appendSystemMessage: %v", err)
+	}
+
+	rt := &turnRuntime{session: fixture.session, turn: turn}
+	if err := fixture.engine.ensureTurnRunExitInvariant(context.Background(), rt); err != nil {
+		t.Fatalf("ensureTurnRunExitInvariant leaked project continuation stop: %v", err)
+	}
+
+	updated, err := fixture.chat.GetTurn(context.Background(), turn.ID)
+	if err != nil {
+		t.Fatalf("GetTurn: %v", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(updated.Status), "completed") {
+		t.Fatalf("turn status = %q, want completed", updated.Status)
+	}
+	if updated.StopReason == nil || !strings.EqualFold(strings.TrimSpace(*updated.StopReason), stopReasonValidationBlocked) {
+		got := ""
+		if updated.StopReason != nil {
+			got = strings.TrimSpace(*updated.StopReason)
+		}
+		t.Fatalf("stop_reason = %q, want %q", got, stopReasonValidationBlocked)
+	}
+}
+
 func TestProjectBootstrapHasPriorMaxToolCallsContinuation(t *testing.T) {
 	cycleID := uuid.New()
 	previousStop := stopReasonMaxToolCalls
@@ -31204,6 +31243,110 @@ func TestShouldBlockProjectContinuationFocusedDraftTaskCreateSkipsProjectScanFor
 	})
 	if blocked {
 		t.Fatalf("blocked = true, reason = %q; want directed replacement-child creation to pass without project scan", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftTaskCreateDoesNotSkipProjectScanWhenDirectChildDraftsAlreadyNamed(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	focusTaskID := uuid.New()
+	childTaskID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			focusTaskID: {
+				ID:         focusTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 12532,
+				Title:      "Write SamBot test conversation: Startup CTO asks about AI agent orchestration",
+				WorkStatus: "draft",
+			},
+			childTaskID: {
+				ID:          childTaskID,
+				ProjectID:   projectID,
+				TaskNumber:  12533,
+				Title:       "Write opening section of content/sambot/test-conversations/01-startup-cto-ai-orchestration.md",
+				Description: stringPtr("Write the opening section of content/sambot/test-conversations/01-startup-cto-ai-orchestration.md covering the startup CTO orchestration prompt."),
+				WorkStatus:  "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition_parent_task_id": focusTaskID.String(),
+				}),
+			},
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Active project id: " + projectID.String(),
+			`Current focus parent: task 12532 (Write SamBot test conversation: Startup CTO asks about AI agent orchestration) id=` + focusTaskID.String() + ` title="Write SamBot test conversation: Startup CTO asks about AI agent orchestration" work_status=draft deliverable_path=content/sambot/test-conversations/01-startup-cto-ai-orchestration.md child_tasks=1.`,
+			`Draft parent tasks already have child work: task 12533 (Write opening section of content/sambot/test-conversations/01-startup-cto-ai-orchestration.md) id=` + childTaskID.String() + ` title="Write opening section of content/sambot/test-conversations/01-startup-cto-ai-orchestration.md" work_status=draft deliverable_path=content/sambot/test-conversations/01-startup-cto-ai-orchestration.md`,
+			"Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while those child tasks already exist.",
+			"Your next assistant action must create the smallest fresh replacement child task beneath task 12532 now, or queue an existing direct child draft there if one already fits unchanged.",
+			"If you must inspect child lanes first, use only task.list(parent_task_id=" + focusTaskID.String() + ").",
+		}, " "),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftTaskCreateTool(context.Background(), rt, "task.create", map[string]any{
+		"parent_task_id": focusTaskID.String(),
+		"title":          "Write another startup CTO orchestration section for content/sambot/test-conversations/01-startup-cto-ai-orchestration.md",
+		"description":    "Create a second same-file child draft even though a direct child already exists.",
+	})
+	if !blocked {
+		t.Fatal("expected existing direct child drafts named in the prompt to block another task.create")
+	}
+	if !strings.Contains(reason, "direct child draft task(s)") || !strings.Contains(reason, "task 12533") {
+		t.Fatalf("reason = %q, want existing child draft guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationFocusedDraftTaskCreateForProceduralFragmentOnDirectedReplacementFastPath(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	focusTaskID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{},
+		listByProjectFn: func(_ context.Context, _ uuid.UUID, _ ...string) ([]repo.ProjectTask, error) {
+			t.Fatal("ListByProject should not be called for procedural-fragment rejection on directed replacement-child creation")
+			return nil, nil
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Active project id: " + projectID.String(),
+			`Current focus parent: task 12532 (Write SamBot test conversation: Startup CTO asks about AI agent orchestration) id=` + focusTaskID.String() + ` title="Write SamBot test conversation: Startup CTO asks about AI agent orchestration" work_status=draft deliverable_path=content/sambot/test-conversations/01-startup-cto-ai-orchestration.md malformed_child_tasks=4.`,
+			"That draft parent only has malformed or stale child artifact lanes.",
+			"Do not call task.list without parent_task_id, task.get, file.list, file.read, or file.search before acting.",
+			"Do not queue parent task task 12532 again from the project lane.",
+			"Do not inspect or mention other draft parents until this handoff is advanced.",
+			"Your next assistant action must create the smallest fresh replacement child task beneath task 12532 now, or queue an existing direct child draft there if one already fits unchanged.",
+			"If you must inspect child lanes first, use only task.list(parent_task_id=" + focusTaskID.String() + ").",
+		}, " "),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftTaskCreateTool(context.Background(), rt, "task.create", map[string]any{
+		"parent_task_id": focusTaskID.String(),
+		"title":          "SamBot speaks as Sam Hotchkiss — direct, opinionated, technically deep but accessible",
+		"description":    "Voice and tone requirements for the shared conversation file.",
+	})
+	if !blocked {
+		t.Fatal("expected procedural fragment replacement child to be blocked on the directed replacement fast path")
+	}
+	if !strings.Contains(reason, "procedural/support fragment child") || !strings.Contains(reason, "concrete bounded deliverable child") {
+		t.Fatalf("reason = %q, want procedural fragment guidance", reason)
 	}
 }
 

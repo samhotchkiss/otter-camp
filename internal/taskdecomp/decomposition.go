@@ -1021,6 +1021,9 @@ func TaskLooksProceduralInstructionArtifact(title string, description *string) b
 	if normalizedTitle == "" || !isInstructionOnlyDeliverable(normalizedTitle) {
 		return looksLikeVerificationChecklistFragment(normalizedTitle, strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(deref(description))), " ")))
 	}
+	if looksLikeSupportOnlyRequirementFragment(normalizedTitle) {
+		return true
+	}
 	normalizedDescription := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(deref(description))), " "))
 	return normalizedDescription == "" || normalizedDescription == normalizedTitle || isInstructionOnlyDeliverable(normalizedDescription)
 }
@@ -1066,6 +1069,7 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 		"commit in ",
 		"must include ",
 		"include a code snippet",
+		"sambot speaks as ",
 		"sambot should ",
 		"sam should ",
 		"show sam's ",
@@ -1168,6 +1172,13 @@ func looksLikeSupportOnlyRequirementFragment(normalized string) bool {
 		return true
 	}
 	if strings.Contains(normalized, "reflects sam's writing voice") {
+		return true
+	}
+	if strings.HasPrefix(normalized, "sambot speaks as ") &&
+		(strings.Contains(normalized, "sam hotchkiss") ||
+			strings.Contains(normalized, "direct") ||
+			strings.Contains(normalized, "opinionated") ||
+			strings.Contains(normalized, "voice")) {
 		return true
 	}
 	if strings.HasPrefix(normalized, "opinionated,") &&

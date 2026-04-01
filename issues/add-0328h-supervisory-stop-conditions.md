@@ -828,6 +828,20 @@ They need sharper stopping rules than ordinary execution lanes.
     - `GOFLAGS='' go test ./internal/turn -run 'Test(ShouldStopAfterProjectContinuationDirectChildInspection(ForBoundedRetryPrompt|IgnoresEmptyResults)?|ProjectContinuationExclusiveDirectChildInspection(Calls|CallsForBoundedRetryPrompt|ModelCalls|ModelCallsForBoundedRetryPrompt)|FilterToolResultsByCallIDs)$' -count=1`
   - live proof:
     - PM turn `c20424ed-0fd4-4ec9-a3d2-d124ad749c45` now ends immediately after the parent-scoped `task.list(...)` with `[Project continuation inspected the focused parent's direct child lanes...]` instead of drifting into sibling inspection
+- 2026-03-31 22:45 MDT - Extended the supervisory stop family to leaked PM terminal stops and bounded-split fragment titles.
+  - fresh live evidence:
+    - PM turns that had already emitted terminal stop messages like `[Project continuation found that the remaining draft work still violates the bounded size policy ...]` were still being failed later by stale-turn recovery instead of being completed with a stable stop reason
+    - bounded replacement handoffs under `OC-12532` were also minting voice-only fragment children titled `SamBot speaks as Sam Hotchkiss — direct, opinionated, technically deep but accessible`
+  - landed fix:
+    - leaked async project continuation turns now complete directly when the turn already contains one of the terminal PM stop messages from this supervisory family
+    - the directed replacement-child fast path no longer skips the project scan when child work is already named in the prompt
+    - PM `task.create` now rejects support-fragment titles like `SamBot speaks as ...` before they can become new child lanes
+  - verified with:
+    - `GOFLAGS='' go test ./internal/taskdecomp -run 'TestTaskLooksProceduralInstructionArtifact$' -count=1`
+    - `GOFLAGS='' go test ./internal/turn -run 'Test(EnsureTurnRunExitInvariant(RejectsLeakedInProgressTurn|CompletesLeakedProjectContinuationValidationStop)|ShouldBlockProjectContinuationFocusedDraftTaskCreate(SkipsProjectScanForDirectedReplacementChild|DoesNotSkipProjectScanWhenDirectChildDraftsAlreadyNamed|ForProceduralFragmentOnDirectedReplacementFastPath)|ShouldStopAfterProjectContinuationDirectChildInspection(ForBoundedRetryPrompt|IgnoresEmptyResults)?|ProjectContinuationExclusiveDirectChildInspection(Calls|CallsForBoundedRetryPrompt|ModelCalls|ModelCallsForBoundedRetryPrompt)|FilterToolResultsByCallIDs)$' -count=1`
+  - live proof:
+    - PM turn `18828882-6765-4c4d-89fe-9a8937b1d134` completed with `stop_reason=validation_loop_blocked` instead of being failed after its terminal PM stop message
+    - after redeploy, the PM lane prepared child tasks `12637`-`12640` and then reused `12639` / `12640`; no new `SamBot speaks as ...` tasks were created past `12540`
 - 2026-03-30 10:18 MDT - Added the blocked-tail direct-wake gap to the same supervisory family.
   - fresh live evidence:
     - after task `283` completed, the PM lane did not wake until the worker's stale-scan repair loop synthesized new continuations about `60s` later

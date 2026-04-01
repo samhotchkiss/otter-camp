@@ -244,6 +244,8 @@ const projectContinuationTaskLaneBoundaryGuardPrefix = "[Project continuation fo
 const projectContinuationReplacementHandoffPrefix = "[Project continuation already has a focused replacement-parent handoff."
 const projectContinuationSuccessfulHandoffPrefix = "[Project continuation successfully handed off the focused replacement child work."
 const projectContinuationPreparedBoundedSplitPrefix = "[Project continuation successfully prepared the bounded child split."
+const projectContinuationDirectChildInspectionPrefix = "[Project continuation inspected the focused parent's direct child lanes."
+const projectContinuationBoundedSizeStopPrefix = "[Project continuation found that the remaining draft work still violates the bounded size policy."
 const projectContinuationReviewLaneResumePrefix = "[Project continuation resumed blocked review lane "
 
 var errTurnBranchAttachedToMainWorktree = errors.New("branch attached to main worktree")
@@ -11657,6 +11659,26 @@ func (e *TurnEngine) recoverLeakedAsyncContinuationTurn(ctx context.Context, rt 
 		return false, nil
 	}
 	if !strings.EqualFold(strings.TrimSpace(stopReason), stopReasonMaxToolCalls) {
+		if strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") {
+			inferredStopReason, ok, err := e.leakedProjectContinuationTurnTerminalStop(ctx, currentTurn)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				return false, nil
+			}
+			if strings.TrimSpace(stopReason) == "" && inferredStopReason != "" {
+				rt.turn = currentTurn
+				rt.stopReason = inferredStopReason
+				if err := e.recordStopReason(ctx, rt); err != nil {
+					return false, err
+				}
+			}
+			if err := e.chat.CompleteTurn(ctx, currentTurn.ID); err != nil && !errors.Is(err, chat.ErrInvalidStatusTransition) {
+				return false, err
+			}
+			return true, nil
+		}
 		return false, nil
 	}
 	failureReason := "recovered leaked in-progress turn after max-tool-calls continuation handoff"
@@ -11667,6 +11689,25 @@ func (e *TurnEngine) recoverLeakedAsyncContinuationTurn(ctx context.Context, rt 
 		return false, err
 	}
 	return true, nil
+}
+
+func (e *TurnEngine) leakedProjectContinuationTurnTerminalStop(ctx context.Context, currentTurn *chat.ChatTurn) (string, bool, error) {
+	if e == nil || e.messages == nil || currentTurn == nil || currentTurn.ID == uuid.Nil || currentTurn.SessionID == uuid.Nil {
+		return "", false, nil
+	}
+	messages, err := e.messages.ListBySession(ctx, currentTurn.SessionID)
+	if err != nil {
+		return "", false, err
+	}
+	if turnHasSystemMessageContaining(messages, currentTurn.ID, projectContinuationDirectChildInspectionPrefix) ||
+		turnHasSystemMessageContaining(messages, currentTurn.ID, projectContinuationBoundedSizeStopPrefix) {
+		return stopReasonValidationBlocked, true, nil
+	}
+	if turnHasSystemMessageContaining(messages, currentTurn.ID, projectContinuationSuccessfulHandoffPrefix) ||
+		turnHasSystemMessageContaining(messages, currentTurn.ID, projectContinuationPreparedBoundedSplitPrefix) {
+		return "", true, nil
+	}
+	return "", false, nil
 }
 
 func (e *TurnEngine) handleAsyncTurnWatchdogTimeout(ctx context.Context, rt *turnRuntime, timeoutErr *asyncTurnTimeoutError) (bool, error) {
@@ -40236,6 +40277,9 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 		return true, buildProjectContinuationFocusedCloseoutReadyGuardError(focusTaskID, toolName)
 	}
 	if projectContinuationFocusedReplacementChildCreateCanSkipProjectScan(rt, parentTaskID) {
+		if projectContinuationTaskCreateLooksProceduralInstructionArtifact(arguments) {
+			return true, buildProjectContinuationFocusedDraftProceduralTaskCreateGuardError(parentTaskID, arguments)
+		}
 		return false, ""
 	}
 	projectID := resolveProjectID(ctx, rt.session, e.tasks)
@@ -40270,6 +40314,9 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 	}
 	if !ok || focusTask.ID == uuid.Nil || focusTask.ID != parentTaskID {
 		return false, ""
+	}
+	if projectContinuationTaskCreateLooksProceduralInstructionArtifact(arguments) {
+		return true, buildProjectContinuationFocusedDraftProceduralTaskCreateGuardError(focusTask.ID, arguments)
 	}
 	focusActivity := childActivity[focusTask.ID]
 	focusHints := taskHintsByTask[focusTask.ID]
@@ -40338,6 +40385,12 @@ func projectContinuationFocusedReplacementChildCreateCanSkipProjectScan(rt *turn
 	if initial == "" || projectContinuationFocusedCloseoutReadyActive(initial) {
 		return false
 	}
+	if strings.Contains(initial, "Draft parent tasks already have child work:") {
+		return false
+	}
+	if strings.Contains(initial, "Preferred existing same-deliverable malformed child draft to repair before any new replacement work:") {
+		return false
+	}
 	if !strings.Contains(initial, "Current focus parent:") {
 		return false
 	}
@@ -40346,6 +40399,29 @@ func projectContinuationFocusedReplacementChildCreateCanSkipProjectScan(rt *turn
 	}
 	focusTaskID := projectContinuationPromptCurrentFocusParentTaskID(initial)
 	return focusTaskID != uuid.Nil && focusTaskID == parentTaskID
+}
+
+func projectContinuationTaskCreateLooksProceduralInstructionArtifact(arguments map[string]any) bool {
+	title := strings.TrimSpace(stringValue(arguments["title"]))
+	if title == "" {
+		return false
+	}
+	descriptionText := strings.TrimSpace(stringValue(arguments["description"]))
+	if descriptionText == "" {
+		return taskdecomp.TaskLooksProceduralInstructionArtifact(title, nil)
+	}
+	return taskdecomp.TaskLooksProceduralInstructionArtifact(title, &descriptionText)
+}
+
+func buildProjectContinuationFocusedDraftProceduralTaskCreateGuardError(focusTaskID uuid.UUID, arguments map[string]any) string {
+	title := strings.TrimSpace(stringValue(arguments["title"]))
+	if title == "" {
+		title = "the proposed child task"
+	}
+	if focusTaskID != uuid.Nil {
+		return fmt.Sprintf("project continuation proposed procedural/support fragment child %q beneath focused draft task id=%s. Do not create fragment children from the project lane; either queue an existing bounded direct child beneath that parent or create one concrete bounded deliverable child instead.", title, focusTaskID.String())
+	}
+	return fmt.Sprintf("project continuation proposed procedural/support fragment child %q beneath the focused draft parent. Do not create fragment children from the project lane; either queue an existing bounded direct child or create one concrete bounded deliverable child instead.", title)
 }
 
 func (e *TurnEngine) projectContinuationFocusedReplacementChildQueueCanSkipProjectScan(ctx context.Context, rt *turnRuntime, targetTaskID uuid.UUID, nextStatus string) bool {
