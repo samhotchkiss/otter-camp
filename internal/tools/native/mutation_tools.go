@@ -505,6 +505,19 @@ func looksLikeRecoveryRetryNarrationPlaceholder(content string) bool {
 	}
 	lower := strings.ToLower(trimmed)
 	if containsAnySubstring(lower,
+		"contains only 2 lines of recovery checkpoint text",
+		"contains only two lines of recovery checkpoint text",
+		"the file needs to be overwritten with proper content",
+		"recovery system intercepting file writes from a previous attempt",
+	) && containsAnySubstring(lower,
+		"let me also check the level-3 file",
+		"let me also check the level 3 file",
+		"for reference on the expected format",
+		"not actual test conversations",
+	) {
+		return true
+	}
+	if containsAnySubstring(lower,
 		"there's already a solid start",
 		"there is already a solid start",
 	) && containsAnySubstring(lower,
@@ -576,10 +589,84 @@ func looksLikeRecoveryRetryNarrationPlaceholder(content string) bool {
 		return true
 	}
 	if containsAnySubstring(lower,
+		"i need to read",
+		"let me read",
+	) && containsAnySubstring(lower,
+		"feature spec",
+		"parent task",
+		"task description",
+	) && containsAnySubstring(lower,
+		"existing draft is explicitly a placeholder",
+		"existing draft explicitly says it needs this context",
+		"placeholder saying it needs this context",
+		"needs this context",
+		"grounded expert conversation",
+		"ground the expert conversation",
+		"ground the expert conversation properly",
+		"ground the expert conversation content",
+		"write the actual expert conversation",
+		"write a grounded expert conversation",
+	) {
+		return true
+	}
+	if containsAnySubstring(lower,
+		"i need to read",
+		"let me read",
+	) && containsAnySubstring(lower,
+		"feature spec",
+		"parent task",
+	) && containsAnySubstring(lower,
+		"expert conversation",
+		"expert conversation content",
+		"actual expert conversation",
+	) {
+		return true
+	}
+	if containsAnySubstring(lower,
+		"i need to ground myself",
+		"let me check the key artifacts quickly",
+		"what this task requires",
+		"what sambot context exists",
+	) && containsAnySubstring(lower,
+		"expert conversation",
+		"task requires",
+		"key artifacts",
+		"context exists",
+	) {
+		return true
+	}
+	if containsAnySubstring(lower,
 		"i have the substantive draft from the recovery checkpoint",
 		"target file is truncated at",
 		"need to see how much of the file already exists on disk",
 		"complete it or write fresh",
+	) {
+		return true
+	}
+	if containsAnySubstring(lower,
+		"the recovery checkpoint says:",
+		"checkpoint demands",
+		"exact task_update the checkpoint demands",
+	) && containsAnySubstring(lower,
+		"issue one narrow task.update on the current task",
+		"child_output_verifications",
+		"set integration_check.status=passed",
+		"set outcome_assessment.satisfied=true",
+		"keep the task in_progress, then call flow.advance",
+		"flow_advance",
+	) {
+		return true
+	}
+	if containsAnySubstring(lower,
+		"the file exists with",
+		"is missing several requirements",
+		"i need to expand it with:",
+	) && containsAnySubstring(lower,
+		"conversations",
+		"missing topics:",
+		"more level-2 scenarios",
+		"need 5+ total",
+		"expected behavior notes",
 	) {
 		return true
 	}
@@ -795,6 +882,54 @@ func looksLikeReviewerAssessmentInDeliverable(path, content string) bool {
 func looksLikeStrongDeliverableReviewerSummaryPlaceholder(lower string) bool {
 	if lower == "" {
 		return false
+	}
+	if containsAnySubstring(lower,
+		"this file does **not** contain any test conversations",
+		"this file does not contain any test conversations",
+		"does **not** contain the required deliverable",
+		"does not contain the required deliverable",
+		"internal reasoning/checkpoint note",
+		"internal reasoning/checkpoint",
+		"contains what appears to be an agent's internal reasoning/recovery checkpoint text",
+		"contains what appears to be an agent's internal reasoning/recovery checkpoint",
+		"internal monologue about task management operations",
+		"this is a clear case of **mismatched deliverable context**",
+		"this is a clear case of mismatched deliverable context",
+	) && containsAnySubstring(lower,
+		"not the deliverable content",
+		"not the actual deliverable",
+		"instead, it contains what appears to be",
+		"rejecting this review",
+		"rejecting.",
+		"this is not a test-conversations document",
+	) {
+		return true
+	}
+	if containsAnySubstring(lower,
+		"contains a self-review/assessment note rather than the actual",
+		"contains a self-review assessment note rather than the actual",
+		"contains a self-referential assessment note rather than the actual",
+		"the file content is a self-referential assessment note",
+		"the file at the deliverable path is a placeholder",
+		"contains only a planning note/scratchpad",
+		"self-narration about what the author *intended* to write",
+		"self-narration about what the author intended to write",
+		"does not contain the deliverable specified in the task description",
+		"required by the task",
+	) && containsAnySubstring(lower,
+		"this is a `mismatched_deliverable_context`",
+		"this is a mismatched_deliverable_context",
+		"this is a `placeholder_deliverable`",
+		"this is a placeholder_deliverable",
+		"this is a clear `placeholder_deliverable` situation",
+		"this is a clear placeholder_deliverable situation",
+		"this clearly fails the task requirements",
+		"the work node wrote planning notes to the deliverable path",
+		"rejecting immediately per review protocol",
+		"rejecting per review protocol",
+		"rejecting.",
+	) {
+		return true
 	}
 	if strings.Contains(lower, "mismatched_deliverable_context") && containsAnySubstring(lower,
 		"self-referential placeholder",
@@ -1140,12 +1275,34 @@ func looksLikeRuntimeOwnedCommitHandoffPlaceholder(content string) bool {
 		return false
 	}
 	lower := strings.ToLower(trimmed)
+	commitIntent := containsAnySubstring(lower,
+		"committing it now",
+		"now i need to commit it",
+		"let me clean up by staging",
+		"let me commit the current state",
+		"let me commit everything cleanly",
+		"let me check git status and commit",
+		"let me update the task status",
+		"let me advance the flow",
+		"advance the flow execution",
+		"advance flow execution",
+	)
+	if !commitIntent {
+		return false
+	}
+	if containsAnySubstring(lower, "was written successfully in the previous turn") {
+		return containsAnySubstring(lower,
+			"target file",
+			"the file `",
+			"flow execution",
+			"merge step",
+		)
+	}
 	if !containsAnySubstring(lower,
 		"the posts are all committed",
 		"the deliverables are all committed",
 		"the only uncommitted changes are",
 		"the only uncommitted change is",
-		"was written successfully in the previous turn",
 	) {
 		return false
 	}
@@ -1157,15 +1314,7 @@ func looksLikeRuntimeOwnedCommitHandoffPlaceholder(content string) bool {
 	) {
 		return false
 	}
-	return containsAnySubstring(lower,
-		"committing it now",
-		"let me clean up by staging",
-		"let me commit the current state",
-		"let me commit everything cleanly",
-		"let me check git status and commit",
-		"let me update the task status",
-		"let me advance the flow",
-	)
+	return true
 }
 
 func looksLikeRuntimeAdvanceCompletionSummaryPlaceholder(content string) bool {
@@ -1249,6 +1398,17 @@ func looksLikeTaskBriefEchoPlaceholder(path, content string) bool {
 		if strings.Contains(lower, marker) {
 			sectionHits++
 		}
+	}
+	if sectionHits >= 3 &&
+		strings.Contains(lower, "## objective") &&
+		strings.Contains(lower, "## validation criteria") &&
+		strings.Contains(lower, "## evidence expectations") &&
+		containsAnySubstring(lower,
+			"define explicit pass/fail checks for each relevant stage",
+			"note the required evidence or observable outputs for each check",
+			"reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete",
+		) {
+		return true
 	}
 	if sectionHits < 4 {
 		return false
@@ -4169,7 +4329,21 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		current.FlowTemplateID = &flowTemplateID
 	}
 	if assignedAgentID, ok := readUUID(input, "assigned_agent_id"); ok && assignedAgentID != uuid.Nil {
-		current.AssignedAgentID = &assignedAgentID
+		if resolvedAssignedAgentID, exact, resolveErr := e.resolveActiveProjectAssigneeID(ctx, current.ProjectID, assignedAgentID); resolveErr != nil {
+			return nil, resolveErr
+		} else if resolvedAssignedAgentID != nil {
+			current.AssignedAgentID = resolvedAssignedAgentID
+		} else if e.assignments != nil {
+			assignments, listErr := e.assignments.ListByProject(ctx, current.ProjectID)
+			if listErr != nil {
+				return nil, listErr
+			}
+			if !exact {
+				return activeProjectAssigneeError(current.ProjectID, assignedAgentID, assignments), nil
+			}
+		} else {
+			current.AssignedAgentID = &assignedAgentID
+		}
 	}
 	if value, ok := readString(input, "blocks_scope"); ok {
 		normalized, valid := normalizeTaskBlocksScope(value)
@@ -4224,6 +4398,14 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	var desiredStatus string
 	if status, ok := readString(input, "work_status"); ok && status != "" {
 		desiredStatus = normalizeTaskWorkStatusAlias(strings.TrimSpace(status))
+		if current.AssignedAgentID == nil &&
+			(strings.EqualFold(desiredStatus, "queued") || strings.EqualFold(desiredStatus, "in_progress")) {
+			if inheritedAssignedAgentID, inheritErr := e.inheritParentAssignedAgentForExecutableTask(ctx, current); inheritErr != nil {
+				return nil, inheritErr
+			} else if inheritedAssignedAgentID != nil {
+				current.AssignedAgentID = inheritedAssignedAgentID
+			}
+		}
 		if current.FlowTemplateID == nil &&
 			strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
 			strings.EqualFold(desiredStatus, "queued") {
@@ -4264,8 +4446,12 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 				return nil, err
 			}
 		}
+		closeoutReadyQueueBypass := strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
+			strings.EqualFold(desiredStatus, "queued") &&
+			hasCloseoutReadyOrchestrationStateNative(current)
 		if strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
-			strings.EqualFold(desiredStatus, "queued") {
+			strings.EqualFold(desiredStatus, "queued") &&
+			!closeoutReadyQueueBypass {
 			decompResult, decompErr := e.applyQueueDecomposition(ctx, &current)
 			if decompErr != nil {
 				if errors.Is(decompErr, taskdecomp.ErrBoundedTaskTooLarge) {
@@ -4482,6 +4668,29 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		response["planning"] = reviewPlanningResponse(planning)
 	}
 	return response, nil
+}
+
+func (e *NativeToolExecutor) inheritParentAssignedAgentForExecutableTask(ctx context.Context, taskRecord repo.ProjectTask) (*uuid.UUID, error) {
+	if taskRecord.AssignedAgentID != nil && *taskRecord.AssignedAgentID != uuid.Nil {
+		assigned := *taskRecord.AssignedAgentID
+		return &assigned, nil
+	}
+	parentTaskID := taskdecomp.ParseParentTaskID(taskRecord.Metadata)
+	if parentTaskID == uuid.Nil {
+		return nil, nil
+	}
+	parentTask, err := e.tasks.GetByID(ctx, parentTaskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if parentTask.AssignedAgentID == nil || *parentTask.AssignedAgentID == uuid.Nil {
+		return nil, nil
+	}
+	assigned := *parentTask.AssignedAgentID
+	return &assigned, nil
 }
 
 func normalizeTaskWorkStatusAlias(status string) string {
@@ -6147,14 +6356,7 @@ func executableTasks(tasks []repo.ProjectTask) []repo.ProjectTask {
 }
 
 func closeoutReadyOrchestrationParentCanQueueDirectlyNative(task repo.ProjectTask, childTasks []repo.ProjectTask) bool {
-	if !taskRequiresBoundedChildren(task) || len(childTasks) == 0 {
-		return false
-	}
-	state, ok := taskorchestration.Parse(task.Metadata)
-	if !ok || state.IntegrationCheck == nil || !strings.EqualFold(strings.TrimSpace(state.IntegrationCheck.Status), "passed") {
-		return false
-	}
-	if state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied || len(state.ChildVerifications) == 0 {
+	if !hasCloseoutReadyOrchestrationStateNative(task) {
 		return false
 	}
 	for _, child := range childTasks {
@@ -6167,14 +6369,7 @@ func closeoutReadyOrchestrationParentCanQueueDirectlyNative(task repo.ProjectTas
 }
 
 func allowsCloseoutReadyOrchestrationParentQueueNative(task repo.ProjectTask, executableChildren []repo.ProjectTask) bool {
-	if !taskRequiresBoundedChildren(task) || len(executableChildren) == 0 {
-		return false
-	}
-	state, ok := taskorchestration.Parse(task.Metadata)
-	if !ok || state.IntegrationCheck == nil || !strings.EqualFold(strings.TrimSpace(state.IntegrationCheck.Status), "passed") {
-		return false
-	}
-	if state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied || len(state.ChildVerifications) == 0 {
+	if !hasCloseoutReadyOrchestrationStateNative(task) {
 		return false
 	}
 	parentPath := parseExplicitDeliverablePath(task)
@@ -6207,6 +6402,20 @@ func allowsCloseoutReadyOrchestrationParentQueueNative(task repo.ProjectTask, ex
 		if status != "blocked" && status != "draft" {
 			return false
 		}
+	}
+	return true
+}
+
+func hasCloseoutReadyOrchestrationStateNative(task repo.ProjectTask) bool {
+	if !taskRequiresBoundedChildren(task) {
+		return false
+	}
+	state, ok := taskorchestration.Parse(task.Metadata)
+	if !ok || state.IntegrationCheck == nil || !strings.EqualFold(strings.TrimSpace(state.IntegrationCheck.Status), "passed") {
+		return false
+	}
+	if state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied || len(state.ChildVerifications) == 0 {
+		return false
 	}
 	return true
 }
@@ -6291,6 +6500,62 @@ func (e *NativeToolExecutor) inferBootstrapExecutableAssignee(ctx context.Contex
 		activeWorkerID = &id
 	}
 	return activeWorkerID, nil
+}
+
+func (e *NativeToolExecutor) resolveActiveProjectAssigneeID(ctx context.Context, projectID, requestedAgentID uuid.UUID) (*uuid.UUID, bool, error) {
+	if projectID == uuid.Nil || requestedAgentID == uuid.Nil || e == nil || e.assignments == nil {
+		if requestedAgentID == uuid.Nil {
+			return nil, false, nil
+		}
+		resolved := requestedAgentID
+		return &resolved, true, nil
+	}
+	assignments, err := e.assignments.ListByProject(ctx, projectID)
+	if err != nil {
+		return nil, false, err
+	}
+	firstSegment := strings.ToLower(strings.TrimSpace(strings.SplitN(requestedAgentID.String(), "-", 2)[0]))
+	var prefixMatches []uuid.UUID
+	for _, assignment := range assignments {
+		if !assignment.IsActive {
+			continue
+		}
+		if assignment.AgentID == requestedAgentID {
+			resolved := requestedAgentID
+			return &resolved, true, nil
+		}
+		assignmentSegment := strings.ToLower(strings.TrimSpace(strings.SplitN(assignment.AgentID.String(), "-", 2)[0]))
+		if firstSegment != "" && assignmentSegment == firstSegment {
+			prefixMatches = append(prefixMatches, assignment.AgentID)
+		}
+	}
+	if len(prefixMatches) == 1 {
+		resolved := prefixMatches[0]
+		return &resolved, true, nil
+	}
+	return nil, false, nil
+}
+
+func activeProjectAssigneeError(projectID, requestedAgentID uuid.UUID, assignments []repo.AgentProjectAssignment) map[string]any {
+	output := map[string]any{
+		"error":   "assigned_agent_id_not_active_project_assignee",
+		"message": fmt.Sprintf("assigned_agent_id %s is not an active assignee on project %s. Use one of the active project assignee ids instead.", requestedAgentID.String(), projectID.String()),
+	}
+	if len(assignments) == 0 {
+		return output
+	}
+	active := make([]string, 0, len(assignments))
+	for _, assignment := range assignments {
+		if !assignment.IsActive || assignment.AgentID == uuid.Nil {
+			continue
+		}
+		active = append(active, assignment.AgentID.String())
+	}
+	sort.Strings(active)
+	if len(active) > 0 {
+		output["active_project_assignee_ids"] = active
+	}
+	return output
 }
 
 func (e *NativeToolExecutor) findReusableScopedSession(ctx context.Context, organizationID uuid.UUID, scopeType string, scopeID uuid.UUID, mode string) (*repo.ChatSession, error) {

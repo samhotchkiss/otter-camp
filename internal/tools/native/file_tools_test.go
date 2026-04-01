@@ -2021,6 +2021,62 @@ func TestFileReadRejectsRuntimeAdvanceCompletionSummaryPlaceholderAtInProgressDe
 	}
 }
 
+func TestFileReadRejectsRuntimeOwnedCommitHandoffPreviousTurnMergeMemoAtPlanningDeliverablePath(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "planning/sambot-example-conversations.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "planning"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(planning): %v", err)
+	}
+	placeholder := "The target file was written successfully in the previous turn (9,144 bytes at `planning/sambot-example-conversations.md`). " +
+		"Now I need to commit it and advance the flow execution which is at the Merge step."
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+
+	description := "Deliverable: planning/sambot-example-conversations.md\n\nWrite the expert SamBot example conversations in markdown."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Write expert SamBot example conversations",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{
+			{
+				SessionID: sessionID,
+				Role:      "user",
+				Content:   "Continue the active task recovery now.",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+	if got := out["deliverable_path"]; got != targetPath {
+		t.Fatalf("deliverable_path = %v, want %s", got, targetPath)
+	}
+}
+
 func TestFileReadRejectsVerificationReportStubPlaceholderAtExplicitDeliverablePath(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()
@@ -2384,6 +2440,190 @@ func TestFileReadRejectsRecoveryRetryNarrationPlaceholderAtExplicitDeliverablePa
 		t.Fatalf("os.MkdirAll(planning/sambot-prompts): %v", err)
 	}
 	placeholder := "There's already a solid start — 2 Level 2 conversations and 2 Level 3 conversations are in place. Let me also check for Sam's voice/bio materials before finishing the deliverable."
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+
+	description := "Deliverable: planning/sambot-prompts/test-conversations-technical.md\n\nWrite level-2 SamBot conversations in authentic voice."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Write level-2 SamBot test conversations",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{{SessionID: sessionID, Role: "user", Content: "Continue the active task recovery now."}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+}
+
+func TestFileReadRejectsPromptConversationMismatchedDeliverableContextReviewMemo(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "planning/sambot-prompts/test-conversations-technical.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "planning", "sambot-prompts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(planning/sambot-prompts): %v", err)
+	}
+	placeholder := "This file does **not** contain any test conversations. It contains what appears to be an agent's internal reasoning/recovery checkpoint text — not the deliverable content (6 multi-turn technical test conversations covering AI orchestration, ethics/technology, and consulting topics).\n\nThis is a clear case of **mismatched deliverable context**. The file exists but its content is an agent's internal monologue about task management operations, not the required test conversations.\n\nRejecting this review.\n"
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+
+	description := "Deliverable: planning/sambot-prompts/test-conversations-technical.md\n\nWrite level-2 SamBot conversations in authentic voice."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Write level-2 SamBot test conversations",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{{SessionID: sessionID, Role: "user", Content: "Continue the active task recovery now."}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+}
+
+func TestFileReadRejectsPromptConversationRequiredDeliverableRejectionMemo(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "planning/sambot-prompts/test-conversations-technical.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "planning", "sambot-prompts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(planning/sambot-prompts): %v", err)
+	}
+	placeholder := "The file at `planning/sambot-prompts/test-conversations-technical.md` does **not** contain the required deliverable. Instead, it contains what appears to be an internal reasoning/checkpoint note from a previous agent session — essentially scratchpad text about task orchestration. This is not a test-conversations document; it's a mismatched deliverable context.\n\nRejecting."
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+
+	description := "Deliverable: planning/sambot-prompts/test-conversations-technical.md\n\nWrite level-2 SamBot conversations in authentic voice."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Write level-2 SamBot test conversations",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{{SessionID: sessionID, Role: "user", Content: "Continue the active task recovery now."}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+}
+
+func TestFileReadRejectsPromptConversationRecoveryCheckpointNarrationMemo(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "planning/sambot-prompts/test-conversations-technical.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "planning", "sambot-prompts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(planning/sambot-prompts): %v", err)
+	}
+	placeholder := "The file contains only 2 lines of recovery checkpoint text — not actual test conversations. This is the recovery system intercepting file writes from a previous attempt. The file needs to be overwritten with proper content: three distinct technical test conversations (numbered 4, 5, and 6) with multi-turn exchanges about SamBot's AI/orchestration domain expertise.\n\nLet me also check the level-3 file for reference on the expected format.\n"
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+
+	description := "Deliverable: planning/sambot-prompts/test-conversations-technical.md\n\nWrite level-2 SamBot conversations in authentic voice."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Write level-2 SamBot test conversations",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.messages = &fakeMessageRepo{
+		messages: []repo.ChatMessage{{SessionID: sessionID, Role: "user", Content: "Continue the active task recovery now."}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+}
+
+func TestFileReadRejectsRecoveryCheckpointTaskUpdateMemoAtPromptConversationDeliverablePath(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "planning/sambot-prompts/test-conversations-technical.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "planning", "sambot-prompts"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(planning/sambot-prompts): %v", err)
+	}
+	placeholder := "The recovery checkpoint says: \"Issue one narrow task.update on the current task with child_output_verifications for the concrete completed child or superseding outputs that satisfy the deliverable, set integration_check.status=passed, and set outcome_assessment.satisfied=true. Keep the task in_progress, then call flow.advance.\"\n\nThe child tasks are listed as OC-12663 and OC-12664, both marked \"(verified)\" in the context. I don't have their UUIDs directly, but I can reference them by constructing the child_output_verifications with the parent task ID as the superseding output reference since the target file already exists with substantive content. Let me issue the exact task_update the checkpoint demands, then flow_advance.\n"
 	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte(placeholder), 0o644); err != nil {
 		t.Fatalf("os.WriteFile(target): %v", err)
 	}
@@ -3183,6 +3423,62 @@ func TestFileReadRejectsReviewEvidenceSummaryPlaceholderAtExplicitDeliverablePat
 	}
 }
 
+func TestFileReadRejectsRecoveryGroundingNarrationPlaceholderAtPlanningDeliverablePath(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "planning/sambot-example-conversations.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "planning"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(planning): %v", err)
+	}
+	placeholder := "I need to ground myself on what this task requires and what SamBot context exists before writing the expert conversation. Let me check the key artifacts quickly."
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+
+	description := "Deliverable: Write expert-level SamBot example conversations to planning/sambot-example-conversations.md. Produce the actual conversation corpus instead of planning or recovery narration."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Write expert-level SamBot example conversations",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+	if got := out["deliverable_path"]; got != targetPath {
+		t.Fatalf("deliverable_path = %v, want %q", got, targetPath)
+	}
+}
+
 func TestFileReadRejectsReviewEvidenceSummaryPlaceholderWithReviewInstructionsAtExplicitDeliverablePath(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()
@@ -3526,6 +3822,74 @@ func TestFileReadRejectsPromptConversationPlaceholderAtRootConversationCorpusPat
 			SessionID: sessionID,
 			Role:      "user",
 			Content:   "Start work on task: Append deeply technical state machines conversation to test-conversations-level3.md",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("executor.Execute(file.read): %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+	if got := out["deliverable_path"]; got != targetPath {
+		t.Fatalf("deliverable_path = %v, want %q", got, targetPath)
+	}
+}
+
+func TestFileReadRejectsCompactValidationScaffoldPlaceholderAtPlanningDeliverablePath(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	targetPath := "planning/sambot-example-conversations.md"
+
+	if err := os.MkdirAll(filepath.Join(root, "planning"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(planning): %v", err)
+	}
+	placeholder := `# Expert version — the same or similar topic handled at professional/technical depth, with SamBot demonstrating Sam's deep expertise
+
+## Objective
+Expert version — the same or similar topic handled at professional/technical depth, with SamBot demonstrating Sam's deep expertise.
+
+## Validation Criteria
+- Define explicit pass/fail checks for each relevant stage.
+- Note the required evidence or observable outputs for each check.
+- Call out key failure conditions or edge cases reviewers should expect to verify.
+
+## Evidence Expectations
+- Reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.
+`
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(targetPath)), []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target): %v", err)
+	}
+
+	description := "Deliverable: Write expert-level SamBot example conversations to planning/sambot-example-conversations.md. Produce the actual conversation corpus instead of a task brief or validation scaffold."
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Write expert-level SamBot example conversations",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
 		}},
 	}
 

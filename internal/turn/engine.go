@@ -28819,6 +28819,10 @@ func looksLikeStrongDeliverableReviewerSummaryPlaceholder(lower string) bool {
 	if containsAny(lower,
 		"this file does **not** contain any test conversations",
 		"this file does not contain any test conversations",
+		"does **not** contain the required deliverable",
+		"does not contain the required deliverable",
+		"internal reasoning/checkpoint note",
+		"internal reasoning/checkpoint",
 		"contains what appears to be an agent's internal reasoning/recovery checkpoint text",
 		"contains what appears to be an agent's internal reasoning/recovery checkpoint",
 		"internal monologue about task management operations",
@@ -28827,8 +28831,10 @@ func looksLikeStrongDeliverableReviewerSummaryPlaceholder(lower string) bool {
 	) && containsAny(lower,
 		"not the deliverable content",
 		"not the actual deliverable",
+		"instead, it contains what appears to be",
 		"rejecting this review",
 		"rejecting.",
+		"this is not a test-conversations document",
 	) {
 		return true
 	}

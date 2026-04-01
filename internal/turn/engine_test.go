@@ -54517,6 +54517,16 @@ func TestRecoveryFileWriteDraftRejectReasonRejectsPromptConversationMismatchedDe
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReasonRejectsPromptConversationRequiredDeliverableRejectionMemo(t *testing.T) {
+	t.Parallel()
+
+	content := "The file at `planning/sambot-prompts/test-conversations-technical.md` does **not** contain the required deliverable. Instead, it contains what appears to be an internal reasoning/checkpoint note from a previous agent session — essentially scratchpad text about task orchestration. This is not a test-conversations document; it's a mismatched deliverable context.\n\nRejecting."
+	got := recoveryFileWriteDraftRejectReason(content, "planning/sambot-prompts/test-conversations-technical.md")
+	if !strings.Contains(got, "reviewer assessment or rejection commentary") {
+		t.Fatalf("reason = %q, want reviewer-assessment rejection", got)
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReasonRejectsPromptConversationRecoveryCheckpointNarrationMemo(t *testing.T) {
 	t.Parallel()
 
