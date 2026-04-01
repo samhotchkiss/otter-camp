@@ -35930,6 +35930,24 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsGoingDirectlyToWritingStub(t *t
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsNeedToWriteDirectlyStub(t *testing.T) {
+	t.Parallel()
+
+	content := "Understood — I need to write the deliverable directly. Let me create the complete portfolio HTML template now."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected direct-write acknowledgement stub to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsFullTemplateLeadInStub(t *testing.T) {
+	t.Parallel()
+
+	content := "Understood — I need to write the deliverable directly. Here's the full portfolio template:"
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected full-template lead-in stub to be treated as generic recovery output")
+	}
+}
+
 func TestIsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts(t *testing.T) {
 	t.Parallel()
 
