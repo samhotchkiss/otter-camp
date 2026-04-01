@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -40,6 +41,8 @@ var readOnlyVerificationTargetPattern = regexp.MustCompile("(?i)^\\s*(?:verify|r
 var workspacePathInBackticksPattern = regexp.MustCompile("`([^`]+)`")
 var readOnlyVerificationOutputPathPattern = regexp.MustCompile("(?i)\\b(?:deliverable|output|file)\\b(?:[*_]+)?\\s*:\\s*(?:[*_]+)?\\s*(?:write|create|produce|append|add|update)\\b[^.;:\\n]{0,160}?[`\"']?([A-Za-z0-9._/-]+)[`\"']?")
 
+const orchestrationParentOpenChildLanesGuardFragment = "still has open direct child task lanes."
+
 type taskQueueEventSubscriber interface {
 	Subscribe(consumerName string, orgID *uuid.UUID, handler eventbus.EventHandler) eventbus.Subscription
 }
@@ -55,6 +58,7 @@ type taskQueueProjectRepository interface {
 
 type taskQueueStatusTransitioner interface {
 	TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
+	MarkBlocked(ctx context.Context, taskID uuid.UUID, reason string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
 	CreateInboxItem(ctx context.Context, req tasksvc.CreateInboxItemRequest) (*tasksvc.InboxItem, error)
 	RequestHumanApproval(ctx context.Context, taskID uuid.UUID) (*tasksvc.InboxItem, error)
 }
@@ -445,6 +449,11 @@ func (p *TaskQueueProcessor) processNextEligibleQueuedTask(ctx context.Context, 
 }
 
 func (p *TaskQueueProcessor) applyAsyncDecisionPolicy(ctx context.Context, event eventbus.DomainEvent, taskRecord repo.ProjectTask) (bool, error) {
+	if skip, err := p.shouldSkipAsyncDecisionPolicyForTaskState(ctx, taskRecord); err != nil {
+		return false, err
+	} else if skip {
+		return false, nil
+	}
 	decision := taskplan.AssessAsyncDecision(taskRecord.Title, taskRecord.Description)
 	if !decision.NeedsReviewArtifact() {
 		return false, nil
@@ -474,6 +483,23 @@ func (p *TaskQueueProcessor) applyAsyncDecisionPolicy(ctx context.Context, event
 		return false, err
 	}
 	return true, nil
+}
+
+func (p *TaskQueueProcessor) shouldSkipAsyncDecisionPolicyForTaskState(ctx context.Context, taskRecord repo.ProjectTask) (bool, error) {
+	if taskRecord.FlowTemplateID == nil || taskRecord.CurrentFlowNodeID == nil || p.flowNodes == nil {
+		return false, nil
+	}
+	currentNode, err := p.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(currentNode.NodeType), "work") {
+		return true, nil
+	}
+	return false, nil
 }
 
 func (p *TaskQueueProcessor) ensureTaskFlowExecutionState(ctx context.Context, taskRecord repo.ProjectTask) (*repo.FlowNodeExecution, error) {
@@ -1074,7 +1100,7 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if err != nil {
 			return err
 		}
-		return p.appendWakeupKickoff(ctx, runRecord, session.ID, buildQueueKickoffMessage(taskRecord), messageMetadata)
+		return p.appendWakeupKickoff(ctx, runRecord, session.ID, p.buildQueueKickoffMessage(ctx, taskRecord), messageMetadata)
 	case "flow_current":
 		executionID, ok := metadataUUIDValue(runRecord.Metadata, "flow_node_execution_id")
 		if !ok {
@@ -1125,7 +1151,31 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 				flowNode = &node
 			}
 		}
-		if err := p.appendWakeupKickoff(ctx, runRecord, *execution.SessionID, buildFlowKickoffMessage(taskRecord, execution, flowNode), messageMetadata); err != nil {
+		content := p.buildFlowKickoffMessage(ctx, taskRecord, execution, flowNode)
+		terminalDirectWriteStop := false
+		terminalTargetPath := ""
+		content, messageMetadata, terminalDirectWriteStop, terminalTargetPath, err = p.maybeEscalateRecoveredDirectWriteKickoff(ctx, *execution.SessionID, taskRecord, content, messageMetadata)
+		if err != nil {
+			return err
+		}
+		if terminalDirectWriteStop {
+			if _, err := p.flowExecutions.Abandon(ctx, execution.ID); err != nil {
+				return err
+			}
+			if _, err := p.taskService.MarkBlocked(ctx, taskRecord.ID, buildControlplaneDirectWriteBodyEscalationBlockedReason(terminalTargetPath), tasksvc.Actor{Type: "system"}); err != nil {
+				return err
+			}
+			if err := p.chats.CloseSession(ctx, *execution.SessionID); err != nil && !errors.Is(err, chat.ErrTurnInProgress) {
+				return err
+			}
+			if runRecord.ID != uuid.Nil {
+				if err := p.runs.FailRun(ctx, runRecord.ID, buildControlplaneDirectWriteBodyEscalationBlockedReason(terminalTargetPath), "terminal"); err != nil && !errors.Is(err, repo.ErrNotFound) {
+					return err
+				}
+			}
+			return nil
+		}
+		if err := p.appendWakeupKickoff(ctx, runRecord, *execution.SessionID, content, messageMetadata); err != nil {
 			return err
 		}
 		return p.markExecutionRunning(ctx, execution.ID)
@@ -1177,7 +1227,7 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if err != nil {
 			return err
 		}
-		if err := p.appendWakeupKickoff(ctx, runRecord, *execution.SessionID, buildFlowTransitionKickoffMessage(taskRecord, node, execution, eventType, rejectionFeedback), messageMetadata); err != nil {
+		if err := p.appendWakeupKickoff(ctx, runRecord, *execution.SessionID, p.buildFlowTransitionKickoffMessage(ctx, taskRecord, node, execution, eventType, rejectionFeedback), messageMetadata); err != nil {
 			return err
 		}
 		return p.markExecutionRunning(ctx, execution.ID)
@@ -1226,6 +1276,89 @@ func (p *TaskQueueProcessor) updateExecutionWaitingSubstateForTask(ctx context.C
 func (p *TaskQueueProcessor) dispatchSupervisorWakeup(ctx context.Context, runRecord Run) error {
 	if runRecord.SessionID == nil || *runRecord.SessionID == uuid.Nil {
 		return nil
+	}
+	if runRecord.TaskID != nil && *runRecord.TaskID != uuid.Nil {
+		if executionID, ok := metadataUUIDValue(runRecord.Metadata, "flow_node_execution_id"); ok {
+			taskRecord, err := p.tasks.GetByID(ctx, *runRecord.TaskID)
+			if errors.Is(err, repo.ErrNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			execution, err := p.flowExecutions.GetByID(ctx, executionID)
+			if errors.Is(err, repo.ErrNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if strings.EqualFold(strings.TrimSpace(execution.Status), "active") {
+				principalID := runRecord.PrincipalID
+				if principalID == uuid.Nil && taskRecord.AssignedAgentID != nil {
+					principalID = *taskRecord.AssignedAgentID
+				}
+				execution, err = p.repairFlowExecutionSession(ctx, taskRecord, execution, principalID)
+				if err != nil {
+					return err
+				}
+				if execution.SessionID != nil && *execution.SessionID != uuid.Nil {
+					messageMetadata, err := json.Marshal(map[string]any{
+						"source":                 "task_queue_processor",
+						"run_id":                 runRecord.ID.String(),
+						"task_id":                taskRecord.ID.String(),
+						"flow_node_execution_id": execution.ID.String(),
+						"recovery_source":        "supervisor",
+					})
+					if err != nil {
+						return err
+					}
+					var payload map[string]any
+					if err := json.Unmarshal(messageMetadata, &payload); err != nil {
+						return err
+					}
+					appendWakeupRecoveryMetadata(payload, runRecord.Metadata)
+					messageMetadata, err = json.Marshal(payload)
+					if err != nil {
+						return err
+					}
+					var flowNode *repo.FlowNode
+					if p.flowNodes != nil {
+						if node, nodeErr := p.flowNodes.GetByID(ctx, execution.FlowNodeID); nodeErr == nil {
+							flowNode = &node
+						}
+					}
+					content := p.buildFlowKickoffMessage(ctx, taskRecord, execution, flowNode)
+					terminalDirectWriteStop := false
+					terminalTargetPath := ""
+					content, messageMetadata, terminalDirectWriteStop, terminalTargetPath, err = p.maybeEscalateRecoveredDirectWriteKickoff(ctx, *execution.SessionID, taskRecord, content, messageMetadata)
+					if err != nil {
+						return err
+					}
+					if terminalDirectWriteStop {
+						if _, err := p.flowExecutions.Abandon(ctx, execution.ID); err != nil {
+							return err
+						}
+						if _, err := p.taskService.MarkBlocked(ctx, taskRecord.ID, buildControlplaneDirectWriteBodyEscalationBlockedReason(terminalTargetPath), tasksvc.Actor{Type: "system"}); err != nil {
+							return err
+						}
+						if err := p.chats.CloseSession(ctx, *execution.SessionID); err != nil && !errors.Is(err, chat.ErrTurnInProgress) {
+							return err
+						}
+						if runRecord.ID != uuid.Nil {
+							if err := p.runs.FailRun(ctx, runRecord.ID, buildControlplaneDirectWriteBodyEscalationBlockedReason(terminalTargetPath), "terminal"); err != nil && !errors.Is(err, repo.ErrNotFound) {
+								return err
+							}
+						}
+						return nil
+					}
+					if err := p.appendWakeupKickoff(ctx, runRecord, *execution.SessionID, content, messageMetadata); err != nil {
+						return err
+					}
+					return p.markExecutionRunning(ctx, execution.ID)
+				}
+			}
+		}
 	}
 	messageMetadata, err := json.Marshal(map[string]any{
 		"source": "supervisor",
@@ -1278,6 +1411,94 @@ func (p *TaskQueueProcessor) appendWakeupKickoff(ctx context.Context, runRecord 
 	return err
 }
 
+func (p *TaskQueueProcessor) maybeEscalateRecoveredDirectWriteKickoff(ctx context.Context, sessionID uuid.UUID, taskRecord repo.ProjectTask, content string, metadata json.RawMessage) (string, json.RawMessage, bool, string, error) {
+	targetPath, escalate, terminal, err := p.recoveredDirectWriteKickoffEscalation(ctx, sessionID, taskRecord)
+	if err != nil || terminal || !escalate {
+		return content, metadata, terminal, targetPath, err
+	}
+	payload := taskQueueMetadataMap(metadata)
+	payload["recovery_direct_write_body_escalated"] = true
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return content, metadata, false, targetPath, err
+	}
+	return buildControlplaneDirectWriteBodyEscalationPrompt(content, targetPath), encoded, false, targetPath, nil
+}
+
+func (p *TaskQueueProcessor) recoveredDirectWriteKickoffEscalation(ctx context.Context, sessionID uuid.UUID, taskRecord repo.ProjectTask) (string, bool, bool, error) {
+	if p == nil || p.chats == nil {
+		return "", false, false, nil
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if !ok {
+		return "", false, false, nil
+	}
+	targetPath := normalizeControlplaneWorkspaceRelativePath(checkpoint.TargetPath)
+	if targetPath == "" || !strings.EqualFold(strings.TrimSpace(filepath.Ext(targetPath)), ".html") {
+		return "", false, false, nil
+	}
+	scanMessages := func(messages []*chat.ChatMessage) (bool, bool) {
+		targetMarker := "`" + targetPath + "`"
+		for i := len(messages) - 1; i >= 0; i-- {
+			message := messages[i]
+			if message == nil || !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+				continue
+			}
+			content := strings.TrimSpace(message.Content)
+			if !strings.Contains(content, targetMarker) {
+				continue
+			}
+			if strings.Contains(content, "requires direct human operator continuation") && strings.Contains(content, "escalated direct-write recovery") {
+				return false, true
+			}
+			if strings.Contains(content, "generic direct-write stub") ||
+				strings.Contains(content, "assistant response body was empty") ||
+				(strings.Contains(content, "cli.execute") && strings.Contains(content, "without `command`")) {
+				return true, false
+			}
+		}
+		return false, false
+	}
+
+	if sessionID != uuid.Nil {
+		messages, err := p.chats.ListMessages(ctx, sessionID, chat.MessageFilter{Limit: 200})
+		if err != nil {
+			return "", false, false, err
+		}
+		if escalate, terminal := scanMessages(messages); escalate || terminal {
+			return targetPath, escalate, terminal, nil
+		}
+	}
+	if p.flowExecutions == nil {
+		return targetPath, false, false, nil
+	}
+	executions, err := p.flowExecutions.ListByTask(ctx, taskRecord.ID)
+	if err != nil {
+		return "", false, false, err
+	}
+	for _, execution := range executions {
+		if execution.SessionID == nil || *execution.SessionID == uuid.Nil || *execution.SessionID == sessionID {
+			continue
+		}
+		messages, err := p.chats.ListMessages(ctx, *execution.SessionID, chat.MessageFilter{Limit: 200})
+		if err != nil {
+			return "", false, false, err
+		}
+		if escalate, terminal := scanMessages(messages); escalate || terminal {
+			return targetPath, escalate, terminal, nil
+		}
+	}
+	return targetPath, false, false, nil
+}
+
+func buildControlplaneDirectWriteBodyEscalationBlockedReason(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = "the target deliverable"
+	}
+	return fmt.Sprintf("recovery halted after escalated direct-write retries for `%s` kept emitting blank or narration-only file.write calls without content; requires direct human operator continuation", path)
+}
+
 func taskOwnedByFlowExecution(taskRecord repo.ProjectTask) bool {
 	if taskRecord.FlowTemplateID != nil && *taskRecord.FlowTemplateID != uuid.Nil {
 		return true
@@ -1285,7 +1506,15 @@ func taskOwnedByFlowExecution(taskRecord repo.ProjectTask) bool {
 	return taskRecord.CurrentFlowNodeID != nil && *taskRecord.CurrentFlowNodeID != uuid.Nil
 }
 
+func (p *TaskQueueProcessor) buildQueueKickoffMessage(ctx context.Context, taskRecord repo.ProjectTask) string {
+	return buildQueueKickoffMessageWithChildren(taskRecord, p.queueKickoffDirectChildTasks(ctx, taskRecord))
+}
+
 func buildQueueKickoffMessage(taskRecord repo.ProjectTask) string {
+	return buildQueueKickoffMessageWithChildren(taskRecord, nil)
+}
+
+func buildQueueKickoffMessageWithChildren(taskRecord repo.ProjectTask, childTasks []repo.ProjectTask) string {
 	title := strings.TrimSpace(taskRecord.Title)
 	if title == "" {
 		title = "Untitled task"
@@ -1296,7 +1525,7 @@ func buildQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 	if description != "" {
 		base += "\n\nTask description:\n" + description
 	}
-	if instruction := orchestrationParentCloseoutKickoffInstruction(taskRecord); instruction != "" {
+	if instruction := orchestrationParentCloseoutKickoffInstruction(taskRecord, childTasks); instruction != "" {
 		base += "\n\nExecution instruction:\n" + instruction
 	} else if taskLooksLikeOrchestrationOnlyParent(taskRecord) {
 		base += "\n\nExecution instruction:\nThis task is an orchestration-only parent container. Do not execute the parent deliverable directly. Inspect the current child-task set and create or repair bounded executable child tasks beneath this parent. Do not begin by rereading planning artifacts unless a concrete blocker names one."
@@ -1311,6 +1540,24 @@ func buildQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 		base += "\n\nExecution instruction:\n" + instruction
 	}
 	return base
+}
+
+func (p *TaskQueueProcessor) queueKickoffDirectChildTasks(ctx context.Context, taskRecord repo.ProjectTask) []repo.ProjectTask {
+	if p == nil || p.tasks == nil || taskRecord.ID == uuid.Nil || taskRecord.ProjectID == uuid.Nil {
+		return nil
+	}
+	projectTasks, err := p.tasks.ListByProject(ctx, taskRecord.ProjectID)
+	if err != nil || len(projectTasks) == 0 {
+		return nil
+	}
+	children := make([]repo.ProjectTask, 0)
+	for _, candidate := range projectTasks {
+		if taskdecomp.ParseParentTaskID(candidate.Metadata) != taskRecord.ID {
+			continue
+		}
+		children = append(children, candidate)
+	}
+	return children
 }
 
 func queueKickoffDescription(taskRecord repo.ProjectTask) string {
@@ -1378,7 +1625,7 @@ func queueKickoffSourceDescriptionLooksStructured(sourceDescription string) bool
 		strings.Contains(text, "write `")
 }
 
-func orchestrationParentCloseoutKickoffInstruction(taskRecord repo.ProjectTask) string {
+func orchestrationParentCloseoutKickoffInstruction(taskRecord repo.ProjectTask, childTasks []repo.ProjectTask) string {
 	if !taskLooksLikeOrchestrationOnlyParent(taskRecord) {
 		return ""
 	}
@@ -1389,7 +1636,34 @@ func orchestrationParentCloseoutKickoffInstruction(taskRecord repo.ProjectTask) 
 	if state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied || len(state.ChildVerifications) == 0 {
 		return ""
 	}
+	if status := taskorchestration.Evaluate(taskRecord, childTasks); status.IsParent {
+		for _, missing := range status.Missing {
+			if strings.Contains(strings.ToLower(strings.TrimSpace(missing)), "all child tasks must complete before the parent can finish integration") {
+				return ""
+			}
+		}
+	}
 	return "This orchestration-only parent already has recorded parent_orchestration closeout evidence from its child outputs. Do not inspect child tasks again, do not recreate bounded child work, and do not rewrite the deliverable body. Your next assistant action should be flow.advance with the active flow_node_execution_id so the parent's own flow can finish."
+}
+
+func (p *TaskQueueProcessor) buildFlowKickoffMessage(ctx context.Context, taskRecord repo.ProjectTask, execution repo.FlowNodeExecution, node *repo.FlowNode) string {
+	base := buildQueueKickoffMessageWithChildren(taskRecord, p.queueKickoffDirectChildTasks(ctx, taskRecord))
+	if node != nil && strings.EqualFold(strings.TrimSpace(node.NodeType), "review") {
+		title := strings.TrimSpace(taskRecord.Title)
+		if title == "" {
+			title = "Untitled task"
+		}
+		description := queueKickoffDescription(taskRecord)
+		base = "Start review on task: " + title
+		if description != "" {
+			base += "\n\nTask description:\n" + description
+		}
+		base += "\n\nReview instruction:\nInspect the current deliverables and use flow.review_decision to approve or reject this review step. Approval closes with an empty review commit. Rejection may add review-scoped CriticMarkup notes."
+	}
+	if execution.ID == uuid.Nil {
+		return base
+	}
+	return base + "\n\nFlow node execution: " + execution.ID.String()
 }
 
 func buildFlowKickoffMessage(taskRecord repo.ProjectTask, execution repo.FlowNodeExecution, node *repo.FlowNode) string {
@@ -1410,6 +1684,24 @@ func buildFlowKickoffMessage(taskRecord repo.ProjectTask, execution repo.FlowNod
 		return base
 	}
 	return base + "\n\nFlow node execution: " + execution.ID.String()
+}
+
+func buildControlplaneDirectWriteBodyEscalationPrompt(existingPrompt, targetPath string) string {
+	prompt := strings.TrimSpace(existingPrompt)
+	if prompt == "" {
+		prompt = fmt.Sprintf("Start work on task: write `%s` directly.", targetPath)
+	}
+	lines := []string{
+		prompt,
+		"",
+		"Recovery escalation:",
+		"Your prior retries returned only narration or blank file.write calls.",
+		"Do not explain what you will write.",
+		"Do not use cli.execute, python3, file.list, or file.read.",
+		fmt.Sprintf("Your next assistant message must begin immediately with `<!DOCTYPE html>` or `<html` from the actual body for `%s`.", targetPath),
+		fmt.Sprintf("Then send file.write with both `path` and `content` for `%s`, or give one short blocker sentence with no tool calls.", targetPath),
+	}
+	return strings.Join(lines, "\n")
 }
 
 func inheritedSharedDeliverableKickoffInstruction(taskRecord repo.ProjectTask) string {
@@ -1462,6 +1754,19 @@ func readOnlyVerificationKickoffInstruction(taskRecord repo.ProjectTask) string 
 		return fmt.Sprintf("This is a verification task for `%s` with output `%s`. Do not use file.write or file.edit to rewrite `%s`. Read `%s` and any explicitly named acceptance-criteria or reference artifacts, then write the verification findings only to `%s`.", targetPath, outputPath, targetPath, targetPath, outputPath)
 	}
 	return fmt.Sprintf("This is a read-only verification task for `%s`. Do not use file.write or file.edit to rewrite `%s`. Read `%s` and any explicitly named acceptance-criteria or reference artifacts, keep the deliverable unchanged, and summarize the verification findings in your assistant response instead of mutating the file.", targetPath, targetPath, targetPath)
+}
+
+func normalizeControlplaneWorkspaceRelativePath(value string) string {
+	trimmed := strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	if trimmed == "" {
+		return ""
+	}
+	cleaned := filepath.ToSlash(filepath.Clean(trimmed))
+	cleaned = strings.TrimPrefix(cleaned, "./")
+	if cleaned == "." {
+		return ""
+	}
+	return cleaned
 }
 
 func readOnlyVerificationOutputPath(taskRecord repo.ProjectTask) string {
@@ -1965,6 +2270,12 @@ func (p *TaskQueueProcessor) handleTurnTerminalEvent(ctx context.Context, event 
 	if err != nil {
 		return err
 	}
+	holdingDeferred := false
+	if halted, haltErr := p.turnEndedWaitingOnOpenChildLanes(ctx, session.ID, payload.TurnID); haltErr != nil {
+		return haltErr
+	} else if halted {
+		holdingDeferred = true
+	}
 	if err := p.updateExecutionWaitingSubstateForTask(ctx, taskRecord, session.ID); err != nil {
 		return err
 	}
@@ -1982,7 +2293,19 @@ func (p *TaskQueueProcessor) handleTurnTerminalEvent(ctx context.Context, event 
 		return nil
 	}
 	var result executionWakeupResult
-	if releaseRunID != uuid.Nil {
+	if holdingDeferred {
+		if releaser, ok := p.runs.(taskQueueDeferredWakeupReleaser); ok {
+			if releaseRunID != uuid.Nil {
+				result, err = releaser.ReleaseExecutionOwnerForRunHoldingDeferred(ctx, session.ScopeID, session.ID, releaseRunID, event.EventType)
+			} else {
+				result, err = releaser.ReleaseExecutionOwnerHoldingDeferred(ctx, session.ScopeID, session.ID, event.EventType)
+			}
+		} else if releaseRunID != uuid.Nil {
+			result, err = p.runs.ReleaseExecutionOwnerForRun(ctx, session.ScopeID, session.ID, releaseRunID, event.EventType)
+		} else {
+			result, err = p.runs.ReleaseExecutionOwner(ctx, session.ScopeID, session.ID, event.EventType)
+		}
+	} else if releaseRunID != uuid.Nil {
 		result, err = p.runs.ReleaseExecutionOwnerForRun(ctx, session.ScopeID, session.ID, releaseRunID, event.EventType)
 	} else {
 		result, err = p.runs.ReleaseExecutionOwner(ctx, session.ScopeID, session.ID, event.EventType)
@@ -1997,6 +2320,28 @@ func (p *TaskQueueProcessor) handleTurnTerminalEvent(ctx context.Context, event 
 		return nil
 	}
 	return p.dispatchWakeupRun(ctx, result.Run)
+}
+
+func (p *TaskQueueProcessor) turnEndedWaitingOnOpenChildLanes(ctx context.Context, sessionID, turnID uuid.UUID) (bool, error) {
+	if p == nil || p.chats == nil || sessionID == uuid.Nil || turnID == uuid.Nil {
+		return false, nil
+	}
+	messages, err := p.chats.ListMessages(ctx, sessionID, chat.MessageFilter{Limit: 200})
+	if err != nil {
+		return false, err
+	}
+	for _, message := range messages {
+		if message == nil || message.TurnID == nil || *message.TurnID != turnID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		if strings.Contains(strings.TrimSpace(message.Content), orchestrationParentOpenChildLanesGuardFragment) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (p *TaskQueueProcessor) resolveTurnRunID(ctx context.Context, turnID uuid.UUID) (uuid.UUID, error) {
@@ -2237,6 +2582,46 @@ func flowNodeRoleFromMetadata(metadata json.RawMessage) string {
 		}
 	}
 	return ""
+}
+
+func (p *TaskQueueProcessor) buildFlowTransitionKickoffMessage(
+	ctx context.Context,
+	taskRecord repo.ProjectTask,
+	node repo.FlowNode,
+	execution repo.FlowNodeExecution,
+	eventType string,
+	rejectionFeedback string,
+) string {
+	base := buildQueueKickoffMessageWithChildren(taskRecord, p.queueKickoffDirectChildTasks(ctx, taskRecord))
+	if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") || node.RequiresHumanReview {
+		title := strings.TrimSpace(taskRecord.Title)
+		if title == "" {
+			title = "Untitled task"
+		}
+		description := queueKickoffDescription(taskRecord)
+		base = "Start review on task: " + title
+		if description != "" {
+			base += "\n\nTask description:\n" + description
+		}
+		base += "\n\nReview instruction:\nInspect the current deliverables and use flow.review_decision to approve or reject this review step. Approval closes with an empty review commit. Rejection may add review-scoped CriticMarkup notes."
+	}
+	nodeName := strings.TrimSpace(node.DisplayName)
+	if nodeName != "" {
+		base += "\n\nFlow node: " + nodeName
+	}
+	if strings.EqualFold(strings.TrimSpace(eventType), "flow.rejected") {
+		base += "\n\nPrevious flow step was rejected."
+		if trimmed := strings.TrimSpace(rejectionFeedback); trimmed != "" {
+			base += "\nFeedback:\n" + trimmed
+		}
+		if taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+			base += "\n\nRejection recovery instruction:\nThis task remains orchestration-only after rejection. Use the rejection feedback to adjust or recreate bounded executable child tasks beneath this parent instead of treating the parent as a normal deliverable."
+		}
+	}
+	if execution.ID != uuid.Nil {
+		base += "\n\nFlow node execution: " + execution.ID.String()
+	}
+	return base
 }
 
 func buildFlowTransitionKickoffMessage(

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -644,6 +645,46 @@ func TestProcessQueuedTaskRequestsHumanApprovalAndHoldsLegacyApprovalGatedTask(t
 	}
 }
 
+func TestApplyAsyncDecisionPolicySkipsTerminalMergeNodeReplay(t *testing.T) {
+	ctx := context.Background()
+	taskID := uuid.New()
+	projectID := uuid.New()
+	nodeID := uuid.New()
+
+	description := "This pricing decision is irreversible, affects billing, and must not be guessed."
+	flow := &fakeTaskQueueFlowStarter{}
+	processor := &TaskQueueProcessor{
+		taskService: &fakeTaskQueueStatusTransitioner{},
+		flow:        flow,
+		flowNodes: &fakeTaskQueueFlowNodeRepository{
+			node: repo.FlowNode{
+				ID:          nodeID,
+				DisplayName: "Merge",
+				NodeType:    "merge",
+			},
+		},
+	}
+
+	paused, err := processor.applyAsyncDecisionPolicy(ctx, eventbus.DomainEvent{ID: uuid.New()}, repo.ProjectTask{
+		ID:                taskID,
+		ProjectID:         projectID,
+		Title:             "Resolve production pricing migration",
+		Description:       &description,
+		WorkStatus:        "in_progress",
+		FlowTemplateID:    uuidPtr(uuid.New()),
+		CurrentFlowNodeID: &nodeID,
+	})
+	if err != nil {
+		t.Fatalf("applyAsyncDecisionPolicy: %v", err)
+	}
+	if paused {
+		t.Fatal("applyAsyncDecisionPolicy paused = true, want false")
+	}
+	if flow.pauseCalls != 0 {
+		t.Fatalf("PauseAtReviewCheckpoint calls = %d, want 0", flow.pauseCalls)
+	}
+}
+
 func TestTaskQueueProcessorHandleFlowAdvancedEventCreatesRunForAgentNode(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
@@ -969,6 +1010,47 @@ func TestBuildQueueKickoffMessageForCloseoutReadyOrchestrationParent(t *testing.
 	}
 }
 
+func TestBuildQueueKickoffMessageWithChildrenForCloseoutReadyOrchestrationParentWithOpenChildDrafts(t *testing.T) {
+	description := "Write planning/sambot-example-conversations.md containing paired example conversations."
+	taskRecord := repo.ProjectTask{
+		ID:          uuid.MustParse("11111111-1111-1111-1111-111111111111"),
+		ProjectID:   uuid.MustParse("22222222-2222-2222-2222-222222222222"),
+		Title:       "Write paired SamBot example conversations (casual + expert)",
+		Description: &description,
+		Metadata: json.RawMessage(`{
+			"decomposition":{"orchestration_only":true},
+			"parent_orchestration":{
+				"integration_check":{"status":"passed"},
+				"outcome_assessment":{"satisfied":true},
+				"child_verifications":[{"task_id":"5b7336b2-b60b-4919-9543-f2133c4c5093","summary":"verified"}]
+			}
+		}`),
+	}
+	childDescription := "Write planning/sambot-example-conversations.md — casual pair"
+	childTasks := []repo.ProjectTask{
+		{
+			ID:          uuid.MustParse("5b7336b2-b60b-4919-9543-f2133c4c5093"),
+			ProjectID:   taskRecord.ProjectID,
+			TaskNumber:  42,
+			Title:       "Write casual pair",
+			Description: &childDescription,
+			WorkStatus:  "draft",
+			Metadata:    json.RawMessage(`{"decomposition_parent_task_id":"11111111-1111-1111-1111-111111111111"}`),
+		},
+	}
+
+	message := buildQueueKickoffMessageWithChildren(taskRecord, childTasks)
+	if strings.Contains(message, "Your next assistant action should be flow.advance") {
+		t.Fatalf("kickoff message = %q, did not want flow.advance guidance while open child drafts still exist", message)
+	}
+	if !strings.Contains(message, "orchestration-only parent container") {
+		t.Fatalf("kickoff message = %q, want orchestration parent guidance instead", message)
+	}
+	if !strings.Contains(message, "create or repair bounded executable child tasks beneath this parent") {
+		t.Fatalf("kickoff message = %q, want child-task guidance while executable child drafts still exist", message)
+	}
+}
+
 func TestBuildQueueKickoffMessageForInheritedSharedDeliverableChild(t *testing.T) {
 	taskRecord := repo.ProjectTask{
 		Title: "Append the serverless tradeoff section",
@@ -996,6 +1078,163 @@ func TestBuildQueueKickoffMessageForInheritedSharedDeliverableChild(t *testing.T
 	}
 	if !strings.Contains(message, "Do not use file.write") {
 		t.Fatalf("kickoff message = %q, want file.write prohibition", message)
+	}
+}
+
+func TestMaybeEscalateRecoveredDirectWriteKickoffCarriesHTMLBodyEscalation(t *testing.T) {
+	processor := &TaskQueueProcessor{
+		chats: &fakeTaskQueueChatService{
+			listMessages: []*chat.ChatMessage{
+				{
+					ID:      uuid.New(),
+					Role:    "system",
+					Content: "[Task execution correction: file.write for `templates/layout-08-portfolio.html` was emitted without `content` and the assistant response body was empty. Ending the turn early so the next continuation can retry with the actual file body instead of another blank write attempt.]",
+				},
+			},
+		},
+	}
+	taskRecord := repo.ProjectTask{
+		Title: "Write templates/layout-08-portfolio.html",
+		Metadata: json.RawMessage(`{
+			"recovery_file_write_checkpoint":{
+				"version":1,
+				"target_path":"templates/layout-08-portfolio.html",
+				"failure_reason":"content_required"
+			}
+		}`),
+	}
+	metadata, err := json.Marshal(map[string]any{
+		"source":                 "task_queue_processor",
+		"recovered_missing_kickoff": true,
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	content, updatedMetadata, terminal, _, err := processor.maybeEscalateRecoveredDirectWriteKickoff(context.Background(), uuid.New(), taskRecord, "Start work on task: Write templates/layout-08-portfolio.html", metadata)
+	if err != nil {
+		t.Fatalf("maybeEscalateRecoveredDirectWriteKickoff: %v", err)
+	}
+	if terminal {
+		t.Fatal("maybeEscalateRecoveredDirectWriteKickoff terminal = true, want false")
+	}
+	if !strings.Contains(content, "Recovery escalation:") {
+		t.Fatalf("content = %q, want recovery escalation section", content)
+	}
+	if !strings.Contains(content, "`<!DOCTYPE html>`") {
+		t.Fatalf("content = %q, want explicit HTML start requirement", content)
+	}
+	payload := taskQueueMetadataMap(updatedMetadata)
+	if got := strings.TrimSpace(stringValue(payload["recovery_direct_write_body_escalated"])); got != "true" {
+		t.Fatalf("recovery_direct_write_body_escalated = %q, want true", got)
+	}
+}
+
+func TestMaybeEscalateRecoveredDirectWriteKickoffEscalatesAfterCliExecuteMissingCommandStop(t *testing.T) {
+	processor := &TaskQueueProcessor{
+		chats: &fakeTaskQueueChatService{
+			listMessages: []*chat.ChatMessage{
+				{
+					ID:      uuid.New(),
+					Role:    "system",
+					Content: "[Task execution correction: cli.execute for `templates/layout-08-portfolio.html` was emitted without `command`. Do not retry cli.execute shell wrappers for `templates/layout-08-portfolio.html` until the full file body exists. Draft the concrete deliverable body first.]",
+				},
+			},
+		},
+	}
+	taskRecord := repo.ProjectTask{
+		Title: "Write templates/layout-08-portfolio.html",
+		Metadata: json.RawMessage(`{
+			"recovery_file_write_checkpoint":{
+				"version":1,
+				"target_path":"templates/layout-08-portfolio.html",
+				"failure_reason":"content_required"
+			}
+		}`),
+	}
+	metadata, err := json.Marshal(map[string]any{
+		"source":                   "task_queue_processor",
+		"recovered_missing_kickoff": true,
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	content, updatedMetadata, terminal, _, err := processor.maybeEscalateRecoveredDirectWriteKickoff(context.Background(), uuid.New(), taskRecord, "Start work on task: Write templates/layout-08-portfolio.html", metadata)
+	if err != nil {
+		t.Fatalf("maybeEscalateRecoveredDirectWriteKickoff: %v", err)
+	}
+	if terminal {
+		t.Fatal("maybeEscalateRecoveredDirectWriteKickoff terminal = true, want false")
+	}
+	if !strings.Contains(content, "Recovery escalation:") {
+		t.Fatalf("content = %q, want recovery escalation section", content)
+	}
+	payload := taskQueueMetadataMap(updatedMetadata)
+	if got := strings.TrimSpace(stringValue(payload["recovery_direct_write_body_escalated"])); got != "true" {
+		t.Fatalf("recovery_direct_write_body_escalated = %q, want true", got)
+	}
+}
+
+func TestMaybeEscalateRecoveredDirectWriteKickoffDetectsTerminalHistoryAcrossTaskExecutions(t *testing.T) {
+	taskID := uuid.New()
+	currentSessionID := uuid.New()
+	previousSessionID := uuid.New()
+	processor := &TaskQueueProcessor{
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			executionsByTask: map[uuid.UUID][]repo.FlowNodeExecution{
+				taskID: {
+					{ID: uuid.New(), TaskID: taskID, SessionID: &previousSessionID, Status: "abandoned"},
+					{ID: uuid.New(), TaskID: taskID, SessionID: &currentSessionID, Status: "active"},
+				},
+			},
+		},
+		chats: &fakeTaskQueueChatService{
+			listMessages: []*chat.ChatMessage{
+				{
+					ID:        uuid.New(),
+					SessionID: previousSessionID,
+					Role:      "system",
+					Content:   "[Task execution halted: escalated direct-write recovery for `templates/layout-08-portfolio.html` still produced blank or narration-only file.write calls without content. This lane now requires direct human operator continuation instead of another automatic retry.]",
+				},
+			},
+		},
+	}
+	taskRecord := repo.ProjectTask{
+		ID:    taskID,
+		Title: "Write templates/layout-08-portfolio.html",
+		Metadata: json.RawMessage(`{
+			"recovery_file_write_checkpoint":{
+				"version":1,
+				"target_path":"templates/layout-08-portfolio.html",
+				"failure_reason":"content_required"
+			}
+		}`),
+	}
+	metadata, err := json.Marshal(map[string]any{
+		"source":                   "task_queue_processor",
+		"recovered_missing_kickoff": true,
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	content, updatedMetadata, terminal, targetPath, err := processor.maybeEscalateRecoveredDirectWriteKickoff(context.Background(), currentSessionID, taskRecord, "Start work on task: Write templates/layout-08-portfolio.html", metadata)
+	if err != nil {
+		t.Fatalf("maybeEscalateRecoveredDirectWriteKickoff: %v", err)
+	}
+	if !terminal {
+		t.Fatal("maybeEscalateRecoveredDirectWriteKickoff terminal = false, want true")
+	}
+	if targetPath != "templates/layout-08-portfolio.html" {
+		t.Fatalf("targetPath = %q, want templates/layout-08-portfolio.html", targetPath)
+	}
+	if content != "Start work on task: Write templates/layout-08-portfolio.html" {
+		t.Fatalf("content = %q, want unchanged kickoff content", content)
+	}
+	payload := taskQueueMetadataMap(updatedMetadata)
+	if _, exists := payload["recovery_direct_write_body_escalated"]; exists {
+		t.Fatalf("recovery_direct_write_body_escalated unexpectedly present in terminal suppression payload: %#v", payload["recovery_direct_write_body_escalated"])
 	}
 }
 
@@ -2606,6 +2845,105 @@ func TestDispatchTaskQueueWakeupFlowTransitionUsesExecutionSession(t *testing.T)
 	}
 }
 
+func TestDispatchSupervisorWakeupUsesExecutionKickoffForStrandedTaskExecution(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	runID := uuid.New()
+	agentID := uuid.New()
+	executionSessionID := uuid.New()
+
+	chatService := &fakeTaskQueueChatService{
+		nodeSession: &chat.ChatSession{ID: executionSessionID, OrganizationID: orgID, ScopeType: "project_task", ScopeID: taskID, Mode: "async", Status: "active"},
+	}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:              taskID,
+				OrganizationID:  orgID,
+				ProjectID:       projectID,
+				Title:           "Recover stranded execution",
+				AssignedAgentID: &agentID,
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{ID: executionID, TaskID: taskID, FlowNodeID: nodeID, SessionID: &executionSessionID, Status: "active"},
+		},
+		flowNodes: &fakeTaskQueueFlowNodeRepository{
+			node: repo.FlowNode{ID: nodeID, DisplayName: "Work", NodeType: "work"},
+		},
+		chats: chatService,
+	}
+	flowRepo := processor.flowExecutions.(*fakeTaskQueueFlowExecutionRepository)
+
+	metadata, err := json.Marshal(map[string]any{
+		"execution_wakeup": map[string]any{
+			"source": "supervisor",
+			"kind":   "stranded_execution",
+		},
+		"flow_node_execution_id":     executionID.String(),
+		"supervisor_recovery_reason": "active execution lost live task turn",
+		"stranded_execution":         true,
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	err = processor.dispatchSupervisorWakeup(ctx, Run{
+		ID:             runID,
+		OrganizationID: orgID,
+		PrincipalType:  "agent",
+		PrincipalID:    agentID,
+		TaskID:         &taskID,
+		FlowNodeID:     &nodeID,
+		SessionID:      &executionSessionID,
+		Metadata:       metadata,
+	})
+	if err != nil {
+		t.Fatalf("dispatchSupervisorWakeup() error = %v", err)
+	}
+
+	if len(chatService.appendMessages) != 1 {
+		t.Fatalf("appendMessage calls = %d, want 1", len(chatService.appendMessages))
+	}
+	appendInput := chatService.appendMessages[0]
+	if appendInput.SessionID != executionSessionID {
+		t.Fatalf("kickoff session_id = %s, want execution session %s", appendInput.SessionID, executionSessionID)
+	}
+	if strings.Contains(appendInput.Content, "supervisor recovery: resume task") {
+		t.Fatalf("kickoff content = %q, want execution kickoff instead of generic supervisor recovery", appendInput.Content)
+	}
+	if !strings.Contains(appendInput.Content, "Start work on task: Recover stranded execution") {
+		t.Fatalf("kickoff content = %q, want task kickoff", appendInput.Content)
+	}
+	if !strings.Contains(appendInput.Content, executionID.String()) {
+		t.Fatalf("kickoff content = %q, want flow node execution id %s", appendInput.Content, executionID)
+	}
+
+	var kickoffMetadata map[string]any
+	if err := json.Unmarshal(appendInput.Metadata, &kickoffMetadata); err != nil {
+		t.Fatalf("unmarshal kickoff metadata: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", kickoffMetadata["source"])); got != "task_queue_processor" {
+		t.Fatalf("kickoff source = %q, want task_queue_processor", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", kickoffMetadata["flow_node_execution_id"])); got != executionID.String() {
+		t.Fatalf("kickoff flow_node_execution_id = %q, want %s", got, executionID)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", kickoffMetadata["recovery_source"])); got != "supervisor" {
+		t.Fatalf("kickoff recovery_source = %q, want supervisor", got)
+	}
+	if len(flowRepo.updateRuntimeSubstateCalls) != 1 {
+		t.Fatalf("UpdateRuntimeSubstate calls = %d, want 1", len(flowRepo.updateRuntimeSubstateCalls))
+	}
+	if flowRepo.updateRuntimeSubstateCalls[0].runtimeSubstate == nil || *flowRepo.updateRuntimeSubstateCalls[0].runtimeSubstate != "running" {
+		t.Fatalf("runtime_substate update = %v, want running", flowRepo.updateRuntimeSubstateCalls[0].runtimeSubstate)
+	}
+}
+
 func TestAppendWakeupKickoffSuppressesConcurrentDuplicateRunKickoffs(t *testing.T) {
 	ctx := context.Background()
 	sessionID := uuid.New()
@@ -2888,6 +3226,92 @@ func TestHandleTurnTerminalEventSetsWaitingForReviewForReviewTask(t *testing.T) 
 	}
 }
 
+func TestHandleTurnTerminalEventHoldsDeferredWakeupForOpenChildLanesGuard(t *testing.T) {
+	ctx := context.Background()
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	sessionID := uuid.New()
+	turnID := uuid.New()
+	messageID := uuid.New()
+	runID := uuid.New()
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id": sessionID.String(),
+		"turn_id":    turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	runService := &fakeTaskQueueRunStarter{}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:                taskID,
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{
+				ID:              executionID,
+				TaskID:          taskID,
+				FlowNodeID:      nodeID,
+				Status:          "active",
+				RuntimeSubstate: func() *string { value := "running"; return &value }(),
+				SessionID:       &sessionID,
+			},
+		},
+		runs: runService,
+		chats: &fakeTaskQueueChatService{
+			session: &chat.ChatSession{
+				ID:        sessionID,
+				ScopeType: "project_task",
+				ScopeID:   taskID,
+			},
+			turn: &chat.ChatTurn{
+				ID:               turnID,
+				SessionID:        sessionID,
+				Status:           "completed",
+				TriggerMessageID: &messageID,
+			},
+			listMessages: []*chat.ChatMessage{
+				{
+					ID:        messageID,
+					SessionID: sessionID,
+					Role:      "user",
+					Metadata:  json.RawMessage(`{"run_id":"` + runID.String() + `"}`),
+				},
+				{
+					ID:        uuid.New(),
+					SessionID: sessionID,
+					TurnID:    &turnID,
+					Role:      "system",
+					Content:   "[Task lane halted: OC-12526 still has open direct child task lanes. Let the direct child lanes queue or finish first.]",
+				},
+			},
+		},
+	}
+
+	if err := processor.handleTurnTerminalEvent(ctx, eventbus.DomainEvent{
+		EventType: "chat.turn.completed",
+		Payload:   payload,
+	}); err != nil {
+		t.Fatalf("handleTurnTerminalEvent: %v", err)
+	}
+
+	if len(runService.releaseExecutionHoldingDeferredCalls) != 1 {
+		t.Fatalf("releaseExecutionHoldingDeferredCalls = %d, want 1", len(runService.releaseExecutionHoldingDeferredCalls))
+	}
+	if runService.releaseExecutionHoldingDeferredCalls[0].runID != runID {
+		t.Fatalf("held deferred run_id = %s, want %s", runService.releaseExecutionHoldingDeferredCalls[0].runID, runID)
+	}
+	if len(runService.releaseExecutionCalls) != 0 {
+		t.Fatalf("releaseExecutionCalls = %d, want 0 when open-child-lanes halt should hold deferred wakeup", len(runService.releaseExecutionCalls))
+	}
+}
+
 func TestEnsureFlowRunKickoffIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
@@ -3165,6 +3589,12 @@ type fakeTaskQueueStatusTransitioner struct {
 	transitionTask  *tasksvc.ProjectTask
 	transitionErr   error
 	onTransition    func(taskID uuid.UUID, toStatus string, actor tasksvc.Actor) error
+	blockCalls      []struct {
+		taskID uuid.UUID
+		reason string
+		actor  tasksvc.Actor
+	}
+	blockErr      error
 	approvalCalls   []uuid.UUID
 	approvalErr     error
 }
@@ -3189,6 +3619,23 @@ func (f *fakeTaskQueueStatusTransitioner) TransitionStatus(_ context.Context, ta
 	return &tasksvc.ProjectTask{ID: taskID, WorkStatus: toStatus}, nil
 }
 
+func (f *fakeTaskQueueStatusTransitioner) MarkBlocked(_ context.Context, taskID uuid.UUID, reason string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
+	f.blockCalls = append(f.blockCalls, struct {
+		taskID uuid.UUID
+		reason string
+		actor  tasksvc.Actor
+	}{taskID: taskID, reason: reason, actor: actor})
+	if f.blockErr != nil {
+		return nil, f.blockErr
+	}
+	if f.transitionTask != nil {
+		blocked := *f.transitionTask
+		blocked.WorkStatus = "blocked"
+		return &blocked, nil
+	}
+	return &tasksvc.ProjectTask{ID: taskID, WorkStatus: "blocked"}, nil
+}
+
 func (f *fakeTaskQueueStatusTransitioner) CreateInboxItem(context.Context, tasksvc.CreateInboxItemRequest) (*tasksvc.InboxItem, error) {
 	return &tasksvc.InboxItem{}, nil
 }
@@ -3204,6 +3651,7 @@ func (f *fakeTaskQueueStatusTransitioner) RequestHumanApproval(_ context.Context
 type fakeTaskQueueFlowStarter struct {
 	execution        repo.FlowNodeExecution
 	err              error
+	pauseCalls       int
 	advanceCalls     int
 	lastAdvanceTask  uuid.UUID
 	lastAdvanceActor flowsvc.Actor
@@ -3229,6 +3677,7 @@ func (f *fakeTaskQueueFlowStarter) PauseAtReviewCheckpoint(context.Context, uuid
 	if f.err != nil {
 		return nil, f.err
 	}
+	f.pauseCalls++
 	execution := f.execution
 	return &execution, nil
 }
@@ -3260,26 +3709,27 @@ func (f *fakeTaskQueueProjectRepository) GetByID(_ context.Context, id uuid.UUID
 }
 
 type fakeTaskQueueRunStarter struct {
-	run                     Run
-	createErr               error
-	startErr                error
-	completeErr             error
-	failErr                 error
-	confirmCancelledErr     error
-	getRunErr               error
-	runByID                 map[uuid.UUID]Run
-	listRunsByTaskResponses map[string][]Run
-	completeRunCalls        []completeRunCall
-	failRunCalls            []failRunCall
-	confirmCancelledCalls   []uuid.UUID
-	listRunsByTaskCalls     []listRunsByTaskCall
-	releaseExecutionCalls   []releaseExecutionCall
-	retireRuntimeTaskCalls  []retireRuntimeTaskCall
-	retireRuntimeProjCalls  []retireRuntimeProjectCall
-	createRunInputs         []CreateRunInput
-	dedupeByIdempotency     bool
-	idempotentRuns          map[string]Run
-	uniqueCreateRunCount    int
+	run                                  Run
+	createErr                            error
+	startErr                             error
+	completeErr                          error
+	failErr                              error
+	confirmCancelledErr                  error
+	getRunErr                            error
+	runByID                              map[uuid.UUID]Run
+	listRunsByTaskResponses              map[string][]Run
+	completeRunCalls                     []completeRunCall
+	failRunCalls                         []failRunCall
+	confirmCancelledCalls                []uuid.UUID
+	listRunsByTaskCalls                  []listRunsByTaskCall
+	releaseExecutionCalls                []releaseExecutionCall
+	releaseExecutionHoldingDeferredCalls []releaseExecutionCall
+	retireRuntimeTaskCalls               []retireRuntimeTaskCall
+	retireRuntimeProjCalls               []retireRuntimeProjectCall
+	createRunInputs                      []CreateRunInput
+	dedupeByIdempotency                  bool
+	idempotentRuns                       map[string]Run
+	uniqueCreateRunCount                 int
 }
 
 type completeRunCall struct {
@@ -3481,6 +3931,25 @@ func (f *fakeTaskQueueRunStarter) ReleaseExecutionOwnerForRun(_ context.Context,
 		runID:     runID,
 	})
 	return executionWakeupResult{}, nil
+}
+
+func (f *fakeTaskQueueRunStarter) ReleaseExecutionOwnerHoldingDeferred(_ context.Context, taskID, sessionID uuid.UUID, reason string) (executionWakeupResult, error) {
+	f.releaseExecutionHoldingDeferredCalls = append(f.releaseExecutionHoldingDeferredCalls, releaseExecutionCall{
+		taskID:    taskID,
+		sessionID: sessionID,
+		reason:    reason,
+	})
+	return executionWakeupResult{Decision: executionWakeupDeferred}, nil
+}
+
+func (f *fakeTaskQueueRunStarter) ReleaseExecutionOwnerForRunHoldingDeferred(_ context.Context, taskID, sessionID, runID uuid.UUID, reason string) (executionWakeupResult, error) {
+	f.releaseExecutionHoldingDeferredCalls = append(f.releaseExecutionHoldingDeferredCalls, releaseExecutionCall{
+		taskID:    taskID,
+		sessionID: sessionID,
+		runID:     runID,
+		reason:    reason,
+	})
+	return executionWakeupResult{Decision: executionWakeupDeferred}, nil
 }
 
 func (f *fakeTaskQueueRunStarter) RetireRuntimeStateForTask(_ context.Context, taskID uuid.UUID, reason string) error {
@@ -3844,9 +4313,23 @@ func (f *fakeTaskQueueChatService) AppendMessage(_ context.Context, input chat.A
 	return message, nil
 }
 
-func (f *fakeTaskQueueChatService) ListMessages(context.Context, uuid.UUID, chat.MessageFilter) ([]*chat.ChatMessage, error) {
+func (f *fakeTaskQueueChatService) ListMessages(_ context.Context, sessionID uuid.UUID, _ chat.MessageFilter) ([]*chat.ChatMessage, error) {
 	if f.listMessagesErr != nil {
 		return nil, f.listMessagesErr
+	}
+	filtered := make([]*chat.ChatMessage, 0, len(f.listMessages))
+	hasScopedMessages := false
+	for _, message := range f.listMessages {
+		if message != nil && message.SessionID != uuid.Nil {
+			hasScopedMessages = true
+			if sessionID != uuid.Nil && message.SessionID != sessionID {
+				continue
+			}
+		}
+		filtered = append(filtered, message)
+	}
+	if hasScopedMessages {
+		return filtered, nil
 	}
 	return f.listMessages, nil
 }

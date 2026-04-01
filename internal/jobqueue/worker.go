@@ -84,6 +84,8 @@ const (
 	taskSiblingResponsibilityGuardPrefix      = "[Task sibling-responsibility guard blocked a discovery-only child lane from mutating the shared deliverable."
 	taskInheritedSharedDeliverableGuardPrefix = "[Task shared-deliverable guard blocked a decomposed child lane from replacing the inherited parent file with file.write."
 	taskRecoveryDirectWriteOnlyGuardPrefix    = "[Recovery direct-write-only mode blocked read-only discovery"
+	taskRecoveryDirectWriteEscalationStopLike = "[Task execution halted: escalated direct-write recovery for %"
+	taskHumanContinuationGuardLike            = "%requires direct human operator continuation%"
 	taskOpenChildLanesGuardLike               = "%still has open direct child task lanes%"
 )
 
@@ -2743,21 +2745,13 @@ func latestRecoveryResumeTurnShowsTerminalBlockedStopWithQuerier(ctx context.Con
 			  AND cm.session_id = $1
 			  AND cm.role = 'user'
 			  AND (
-			        COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
+			        COALESCE(cm.metadata->>'flow_node_execution_id', '') = $2::text
+			     OR COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
 			     OR (
 			          COALESCE(cm.metadata->>'source', '') = 'supervisor'
 			      AND cm.content = 'supervisor recovery: resume task'
 			        )
-			     OR (
-			          COALESCE(cm.metadata->>'source', '') = 'task_queue_processor'
-			      AND (
-			           COALESCE(cm.metadata->>'recovery_source', '') = 'supervisor'
-			        OR COALESCE(cm.metadata->>'recovered_missing_kickoff', '') = 'true'
-			        OR COALESCE(cm.metadata->>'synthetic_user_message', '') = 'true'
-			          )
-			        )
 			      )
-			  AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = $2::text
 			ORDER BY ct.turn_number DESC,
 			         ct.retry_count DESC,
 			         COALESCE(ct.completed_at, ct.created_at) DESC,
@@ -2775,6 +2769,8 @@ func latestRecoveryResumeTurnShowsTerminalBlockedStopWithQuerier(ctx context.Con
 			   OR sm.content LIKE $5
 			   OR sm.content LIKE $6
 			   OR sm.content LIKE $7
+			   OR sm.content LIKE $8
+			   OR sm.content LIKE $9
 		)
 	`, sessionID, executionID,
 		recoverySharedDeliverableGuardPrefix+"%",
@@ -2782,6 +2778,8 @@ func latestRecoveryResumeTurnShowsTerminalBlockedStopWithQuerier(ctx context.Con
 		taskInheritedSharedDeliverableGuardPrefix+"%",
 		taskRecoveryDirectWriteOnlyGuardPrefix+"%",
 		taskOpenChildLanesGuardLike,
+		taskRecoveryDirectWriteEscalationStopLike,
+		taskHumanContinuationGuardLike,
 	).Scan(&blocked); err != nil {
 		return false, err
 	}
@@ -5124,12 +5122,21 @@ func (w *Worker) ensureTaskExecutionKickoffMessage(ctx context.Context, sessionI
 		return uuid.Nil, fmt.Errorf("next task execution kickoff sequence number: %w", err)
 	}
 
-	metadata, err := json.Marshal(map[string]any{
+	metadataPayload := map[string]any{
 		"source":                    "task_queue_processor",
 		"flow_node_execution_id":    executionID.String(),
 		"synthetic_user_message":    true,
 		"recovered_missing_kickoff": true,
-	})
+	}
+	content := buildRecoveredTaskExecutionKickoffMessage(taskRecord, execution, &node)
+	if targetPath, escalate, escalateErr := recoveredTaskExecutionDirectWriteEscalation(ctx, tx, sessionID, taskRecord); escalateErr != nil {
+		return uuid.Nil, escalateErr
+	} else if escalate {
+		metadataPayload["recovery_direct_write_body_escalated"] = true
+		content = buildRecoveredTaskExecutionDirectWriteBodyEscalationPrompt(content, targetPath)
+	}
+
+	metadata, err := json.Marshal(metadataPayload)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("marshal task execution kickoff metadata: %w", err)
 	}
@@ -5141,8 +5148,6 @@ func (w *Worker) ensureTaskExecutionKickoffMessage(ctx context.Context, sessionI
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("remarshal task execution kickoff metadata: %w", err)
 	}
-
-	content := buildRecoveredTaskExecutionKickoffMessage(taskRecord, execution, &node)
 	var messageID uuid.UUID
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO chat_message (
@@ -5170,6 +5175,51 @@ func (w *Worker) ensureTaskExecutionKickoffMessage(ctx context.Context, sessionI
 		return uuid.Nil, fmt.Errorf("commit task execution kickoff repair: %w", err)
 	}
 	return messageID, nil
+}
+
+func recoveredTaskExecutionDirectWriteEscalation(ctx context.Context, q queryExecutor, sessionID uuid.UUID, taskRecord repo.ProjectTask) (string, bool, error) {
+	if q == nil || sessionID == uuid.Nil {
+		return "", false, nil
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if !ok {
+		return "", false, nil
+	}
+	targetPath := normalizeWorkerWorkspaceRelativePath(checkpoint.TargetPath)
+	if targetPath == "" || !strings.EqualFold(strings.TrimSpace(filepath.Ext(targetPath)), ".html") {
+		return "", false, nil
+	}
+	var escalate bool
+	if err := q.QueryRow(ctx, `
+		WITH latest_turn AS (
+			SELECT ct.id
+			FROM chat_turn ct
+			WHERE ct.session_id = $1
+			  AND ct.status = 'completed'
+			  AND COALESCE(ct.stop_reason, '') = 'validation_loop_blocked'
+			ORDER BY ct.turn_number DESC,
+			         ct.retry_count DESC,
+			         COALESCE(ct.completed_at, ct.created_at) DESC,
+			         ct.id DESC
+			LIMIT 1
+		)
+		SELECT EXISTS (
+			SELECT 1
+			FROM latest_turn lt
+			JOIN chat_message sm
+			  ON sm.turn_id = lt.id
+			 AND sm.role = 'system'
+			WHERE sm.content LIKE $2
+			  AND (
+			        sm.content LIKE $3
+			     OR sm.content LIKE $4
+			     OR sm.content LIKE $5
+			  )
+		)
+	`, sessionID, "%`"+targetPath+"`%", "%generic direct-write stub%", "%assistant response body was empty%", "%cli.execute%without `command`%").Scan(&escalate); err != nil {
+		return "", false, fmt.Errorf("query recovered task execution direct-write escalation: %w", err)
+	}
+	return targetPath, escalate, nil
 }
 
 func buildRecoveredTaskExecutionKickoffMessage(taskRecord repo.ProjectTask, execution repo.FlowNodeExecution, node *repo.FlowNode) string {
@@ -5294,6 +5344,37 @@ func recoveredDirectWriteCheckpointKickoffInstruction(taskRecord repo.ProjectTas
 		return fmt.Sprintf("Recovery already narrowed this task to `%s`. Do not begin with file.list, file.read, planning-artifact rereads, or design-consistency discovery. Your next assistant message must begin immediately with `<!DOCTYPE html>` or the opening `<html` tag from the actual deliverable body for `%s`, not a sentence like 'Writing the template now.' Do not emit file.write until the full HTML body exists in the assistant response, and do not emit file.write with only `path`. Write `%s` directly as the full standalone HTML deliverable with file.write using both `path` and `content`, or give one concrete blocker sentence if you cannot produce the full body from the current task context.", targetPath, targetPath, targetPath)
 	}
 	return fmt.Sprintf("Recovery already narrowed this task to `%s`. Do not begin with file.list, file.read, or broad context-gathering. Write `%s` directly with file.write using both `path` and `content`, or give one concrete blocker sentence if the full body still cannot be produced from the current task context.", targetPath, targetPath)
+}
+
+func buildRecoveredTaskExecutionDirectWriteBodyEscalationPrompt(existingPrompt, targetPath string) string {
+	prompt := strings.TrimSpace(existingPrompt)
+	if prompt == "" {
+		prompt = fmt.Sprintf("Start work on task: write `%s` directly.", targetPath)
+	}
+	lines := []string{
+		prompt,
+		"",
+		"Recovery escalation:",
+		"Your prior retries returned only narration or blank file.write calls.",
+		"Do not explain what you will write.",
+		"Do not use cli.execute, python3, file.list, or file.read.",
+		fmt.Sprintf("Your next assistant message must begin immediately with `<!DOCTYPE html>` or `<html` from the actual body for `%s`.", targetPath),
+		fmt.Sprintf("Then send file.write with both `path` and `content` for `%s`, or give one short blocker sentence with no tool calls.", targetPath),
+	}
+	return strings.Join(lines, "\n")
+}
+
+func normalizeWorkerWorkspaceRelativePath(value string) string {
+	trimmed := strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	if trimmed == "" {
+		return ""
+	}
+	cleaned := filepath.ToSlash(filepath.Clean(trimmed))
+	cleaned = strings.TrimPrefix(cleaned, "./")
+	if cleaned == "." {
+		return ""
+	}
+	return cleaned
 }
 
 func workerMessageMetadataMap(metadata json.RawMessage) map[string]any {

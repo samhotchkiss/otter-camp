@@ -51593,6 +51593,93 @@ func TestHandleTaskFileWriteWithoutContentStopsOnBlankHTMLBodyFromCurrentRespons
 	}
 }
 
+func TestHandleTaskFileWriteWithoutContentBlocksEscalatedBlankHTMLBodyFromCurrentResponse(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "templates/layout-08-portfolio.html"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:         taskID,
+				ProjectID:  uuid.New(),
+				TaskNumber: 12676,
+				Title:      "Write templates/layout-08-portfolio.html",
+				WorkStatus: "in_progress",
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	message.Content = "Start work on task: Write templates/layout-08-portfolio.html"
+	message.Metadata = mustRawJSON(t, map[string]any{
+		"source":                              "task_queue_processor",
+		"recovery_direct_write_body_escalated": true,
+	})
+	fixture.messages.upsert(message)
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		currentAssistantContent: "",
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path": targetPath,
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWithoutContent(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWithoutContent: %v", err)
+	}
+	if !handled || !abort {
+		t.Fatalf("handled=%v abort=%v, want true true", handled, abort)
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 1 {
+		t.Fatalf("blocked calls = %d, want 1", len(blocker.calls))
+	}
+	if !strings.Contains(blocker.calls[0].reason, "requires direct human operator continuation") {
+		t.Fatalf("blocked reason = %q, want human-continuation marker", blocker.calls[0].reason)
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updated.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updated.WorkStatus)
+	}
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	last := messages[len(messages)-1]
+	if !strings.Contains(last.Content, "requires direct human operator continuation") {
+		t.Fatalf("last content = %q, want human-continuation halt message", last.Content)
+	}
+}
+
 func TestHandleTaskFileWriteWithoutContentAcceptsFileWriteAlias(t *testing.T) {
 	t.Parallel()
 

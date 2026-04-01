@@ -1758,6 +1758,18 @@ func directWriteKickoffRecoveryEscalationTarget(taskRecord repo.ProjectTask, lat
 	return targetPath, true
 }
 
+func (e *TurnEngine) currentTurnDirectWriteBodyEscalated(ctx context.Context, rt *turnRuntime) bool {
+	if e == nil || e.messages == nil || rt == nil || rt.initialMessageID == uuid.Nil {
+		return false
+	}
+	message, err := e.messages.GetByID(ctx, rt.initialMessageID)
+	if err != nil || !taskExecutionKickoffMessage(message) {
+		return false
+	}
+	escalated, _ := messageMetadataMap(message.Metadata)["recovery_direct_write_body_escalated"].(bool)
+	return escalated
+}
+
 func taskDirectWriteBodyEscalationMetadata(existing json.RawMessage) json.RawMessage {
 	payload := messageMetadataMap(existing)
 	payload["recovery_direct_write_body_escalated"] = true
@@ -19865,6 +19877,19 @@ func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *
 		assistantContent := e.latestAssistantFinalContentForCurrentTurn(ctx, rt)
 		if htmlDirectWriteStartRequired(targetPath) {
 			if assistantContent != "" && looksLikeGenericTaskRecoveryReply(assistantContent) {
+				if e.currentTurnDirectWriteBodyEscalated(ctx, rt) {
+					rt.stopReason = stopReasonValidationBlocked
+					if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskDirectWriteBodyEscalationBlockedSystemMessage(targetPath)); err != nil {
+						return true, false, err
+					}
+					if e.taskTransitions == nil {
+						return true, false, fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+					}
+					if _, err := e.taskTransitions.MarkBlocked(ctx, rt.session.ScopeID, buildTaskDirectWriteBodyEscalationBlockedReason(targetPath), tasksvc.Actor{Type: "system"}); err != nil {
+						return true, false, err
+					}
+					return true, true, nil
+				}
 				rt.stopReason = stopReasonValidationBlocked
 				if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskFileWriteMissingContentIntentStubStopMessage(targetPath)); err != nil {
 					return true, false, err
@@ -19872,6 +19897,19 @@ func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *
 				return true, true, nil
 			}
 			if assistantContent == "" {
+				if e.currentTurnDirectWriteBodyEscalated(ctx, rt) {
+					rt.stopReason = stopReasonValidationBlocked
+					if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskDirectWriteBodyEscalationBlockedSystemMessage(targetPath)); err != nil {
+						return true, false, err
+					}
+					if e.taskTransitions == nil {
+						return true, false, fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+					}
+					if _, err := e.taskTransitions.MarkBlocked(ctx, rt.session.ScopeID, buildTaskDirectWriteBodyEscalationBlockedReason(targetPath), tasksvc.Actor{Type: "system"}); err != nil {
+						return true, false, err
+					}
+					return true, true, nil
+				}
 				rt.stopReason = stopReasonValidationBlocked
 				if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskFileWriteMissingContentBlankBodyStopMessage(targetPath)); err != nil {
 					return true, false, err
@@ -20085,6 +20123,22 @@ func buildTaskFileWriteMissingContentBlankBodyStopMessage(targetPath string) str
 		path = "<target file>"
 	}
 	return fmt.Sprintf("[Task execution correction: file.write for `%s` was emitted without `content` and the assistant response body was empty. Ending the turn early so the next continuation can retry with the actual file body instead of another blank write attempt.]", path)
+}
+
+func buildTaskDirectWriteBodyEscalationBlockedReason(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "<target file>"
+	}
+	return fmt.Sprintf("recovery halted after escalated direct-write retries for `%s` kept emitting blank or narration-only file.write calls without content; requires direct human operator continuation", path)
+}
+
+func buildTaskDirectWriteBodyEscalationBlockedSystemMessage(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "<target file>"
+	}
+	return fmt.Sprintf("[Task execution halted: escalated direct-write recovery for `%s` still produced blank or narration-only file.write calls without content. This lane now requires direct human operator continuation instead of another automatic retry.]", path)
 }
 
 func htmlDirectWriteStartRequired(targetPath string) bool {

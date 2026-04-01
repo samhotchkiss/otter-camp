@@ -43425,6 +43425,193 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsCreatesMissingTaskQu
 	}
 }
 
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsEscalatesRecoveredHTMLDirectWriteKickoffAfterBlankWriteStop(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-execution-html-direct-write-escalation",
+		DisplayName: "Requeue Active Execution HTML Direct Write Escalation",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "HTML Direct Write Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You resume HTML direct-write task work after queue recovery.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-execution-html-direct-write-escalation-project",
+		DisplayName:    "Requeue Active Execution HTML Direct Write Escalation Project",
+		Description:    "Project for recovered HTML direct-write escalation repair",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "requeue-active-execution-html-direct-write-escalation-template",
+		DisplayName:    "Requeue Active Execution HTML Direct Write Escalation Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	targetPath := "templates/layout-08-portfolio.html"
+	description := "Create templates/layout-08-portfolio.html — a portfolio showcase layout template."
+	taskMetadata, err := json.Marshal(map[string]any{
+		"recovery_file_write_checkpoint": map[string]any{
+			"version":        1,
+			"target_path":    targetPath,
+			"failure_reason": "content_required",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal task metadata: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Write templates/layout-08-portfolio.html",
+		Description:     &description,
+		WorkStatus:      "in_progress",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+		Metadata:        taskMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active flow node execution: %v", err)
+	}
+	kickoff, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Start work on task: Write templates/layout-08-portfolio.html",
+		Status:    "failed",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"task_queue_processor","synthetic_user_message":true,"recovered_missing_kickoff":true,"flow_node_execution_id":"%s"}`, execution.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create kickoff: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	completedAt := time.Now()
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		TriggerMessageID: &kickoff.ID,
+		RetryCount:       4,
+		StopReason:       &stopReason,
+		CompletedAt:      &completedAt,
+	})
+	if err != nil {
+		t.Fatalf("create completed kickoff turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &turn.ID,
+		Role:      "system",
+		Content:   "[Task execution correction: file.write for `templates/layout-08-portfolio.html` was emitted without `content` and the assistant response body was empty. Ending the turn early so the next continuation can retry with the actual file body instead of another blank write attempt.]",
+		Status:    "final",
+	}); err != nil {
+		t.Fatalf("create system stop message: %v", err)
+	}
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1", requeued)
+	}
+
+	messages, err := repo.NewChatMessageRepo(pool).ListBySession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list session messages: %v", err)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("message count = %d, want 3", len(messages))
+	}
+	latest := messages[len(messages)-1]
+	if latest.Status != "pending" {
+		t.Fatalf("latest kickoff status = %q, want pending", latest.Status)
+	}
+	if !strings.Contains(latest.Content, "Recovery escalation:") {
+		t.Fatalf("latest content = %q, want recovery escalation section", latest.Content)
+	}
+	if !strings.Contains(latest.Content, "`<!DOCTYPE html>`") {
+		t.Fatalf("latest content = %q, want explicit HTML start requirement", latest.Content)
+	}
+
+	var metadata map[string]any
+	if err := json.Unmarshal(latest.Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal latest kickoff metadata: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["recovered_missing_kickoff"])); got != "true" {
+		t.Fatalf("recovered_missing_kickoff = %q, want true", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["recovery_direct_write_body_escalated"])); got != "true" {
+		t.Fatalf("recovery_direct_write_body_escalated = %q, want true", got)
+	}
+}
+
 func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsRefreshesConsumedPendingTaskQueueKickoff(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
