@@ -19785,12 +19785,21 @@ func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *
 	}
 	if !draftOK {
 		assistantContent := e.latestAssistantFinalContentForCurrentTurn(ctx, rt)
-		if htmlDirectWriteStartRequired(targetPath) && assistantContent != "" && looksLikeGenericTaskRecoveryReply(assistantContent) {
-			rt.stopReason = stopReasonValidationBlocked
-			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskFileWriteMissingContentIntentStubStopMessage(targetPath)); err != nil {
-				return true, false, err
+		if htmlDirectWriteStartRequired(targetPath) {
+			if assistantContent != "" && looksLikeGenericTaskRecoveryReply(assistantContent) {
+				rt.stopReason = stopReasonValidationBlocked
+				if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskFileWriteMissingContentIntentStubStopMessage(targetPath)); err != nil {
+					return true, false, err
+				}
+				return true, true, nil
 			}
-			return true, true, nil
+			if assistantContent == "" {
+				rt.stopReason = stopReasonValidationBlocked
+				if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskFileWriteMissingContentBlankBodyStopMessage(targetPath)); err != nil {
+					return true, false, err
+				}
+				return true, true, nil
+			}
 		}
 		output := map[string]any{}
 		if targetPath != "" {
@@ -19990,6 +19999,14 @@ func buildTaskFileWriteMissingContentIntentStubStopMessage(targetPath string) st
 		path = "<target file>"
 	}
 	return fmt.Sprintf("[Task execution correction: file.write for `%s` was emitted without `content` after a generic direct-write stub. Ending the turn early so the next continuation can retry with the actual file body instead of another 'I'll write it now' message.]", path)
+}
+
+func buildTaskFileWriteMissingContentBlankBodyStopMessage(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "<target file>"
+	}
+	return fmt.Sprintf("[Task execution correction: file.write for `%s` was emitted without `content` and the assistant response body was empty. Ending the turn early so the next continuation can retry with the actual file body instead of another blank write attempt.]", path)
 }
 
 func htmlDirectWriteStartRequired(targetPath string) bool {

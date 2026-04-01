@@ -51365,6 +51365,54 @@ func TestHandleTaskFileWriteWithoutContentStopsOnGenericHTMLIntentStubFromCurren
 	}
 }
 
+func TestHandleTaskFileWriteWithoutContentStopsOnBlankHTMLBodyFromCurrentResponse(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "templates/layout-08-portfolio.html"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		currentAssistantContent: "",
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path": targetPath,
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWithoutContent(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWithoutContent: %v", err)
+	}
+	if !handled || !abort {
+		t.Fatalf("handled=%v abort=%v, want true true", handled, abort)
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	last := messages[len(messages)-1]
+	if !strings.Contains(last.Content, "assistant response body was empty") {
+		t.Fatalf("last content = %q, want blank-body stop message", last.Content)
+	}
+}
+
 func TestHandleTaskFileWriteWithoutContentAcceptsFileWriteAlias(t *testing.T) {
 	t.Parallel()
 
