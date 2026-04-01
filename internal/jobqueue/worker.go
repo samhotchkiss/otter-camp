@@ -3330,6 +3330,7 @@ func (w *Worker) ensureProjectContinuationMessageDecisionWithOptions(ctx context
 	var latestConsumedStructuredResumeMessageID uuid.UUID
 	var latestConsumedStructuredResumeContent string
 	var latestConsumedStructuredResumeRepoVersion string
+	var latestSessionDirectChildRefs []string
 	var sameCompletedTaskHistoryMessageIDs []uuid.UUID
 	if (source == "project_execution_continuation" || source == "project_continuation_resume") && expectedCompletedTaskID != "" {
 		err := lockConn.QueryRow(ctx, `
@@ -3458,24 +3459,29 @@ func (w *Worker) ensureProjectContinuationMessageDecisionWithOptions(ctx context
 		}
 
 		rediscoveryOnlyRetry := false
-		if !latestExecutableContractRetry && latestConsumedProjectContinuationMessageID != uuid.Nil {
-			directChildStop, childStopErr := w.projectContinuationTurnEndedWithRediscoveryOnlyStop(ctx, latestConsumedProjectContinuationMessageID)
-			if childStopErr != nil {
-				return uuid.Nil, false, fmt.Errorf("check latest consumed direct-child inspection continuation: %w", childStopErr)
-			}
-			if directChildStop {
-				directChildRefs, childRefsErr := w.projectContinuationTurnDirectChildTaskRefsForWorker(ctx, latestConsumedProjectContinuationMessageID)
+		if !latestExecutableContractRetry {
+			for _, referenceMessageID := range retryReferenceMessageIDs {
+				directChildStop, childStopErr := w.projectContinuationTurnEndedWithRediscoveryOnlyStop(ctx, referenceMessageID)
+				if childStopErr != nil {
+					return uuid.Nil, false, fmt.Errorf("check direct-child inspection continuation: %w", childStopErr)
+				}
+				if !directChildStop {
+					continue
+				}
+				directChildRefs, childRefsErr := w.projectContinuationTurnDirectChildTaskRefsForWorker(ctx, referenceMessageID)
 				if childRefsErr != nil {
-					return uuid.Nil, false, fmt.Errorf("load latest consumed direct child refs: %w", childRefsErr)
+					return uuid.Nil, false, fmt.Errorf("load direct child refs: %w", childRefsErr)
 				}
-				if len(directChildRefs) > 0 && projectContinuationHasDirectChildActionableFocusForWorker(snapshot) {
-					rediscoveryOnlyRetry = true
-					content = buildProjectExecutionContinuationDirectChildActionRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, directChildRefs)
-					expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
-					metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
-					latestConsumedMatchingMessageID = uuid.Nil
-					latestConsumedMatchingRepoVersion = ""
+				if len(directChildRefs) == 0 || !projectContinuationHasDirectChildActionableFocusForWorker(snapshot) {
+					continue
 				}
+				rediscoveryOnlyRetry = true
+				content = buildProjectExecutionContinuationDirectChildActionRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, directChildRefs)
+				expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
+				metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+				latestConsumedMatchingMessageID = uuid.Nil
+				latestConsumedMatchingRepoVersion = ""
+				break
 			}
 		}
 
@@ -3843,6 +3849,21 @@ func (w *Worker) ensureProjectContinuationMessageDecisionWithOptions(ctx context
 			latestConsumedMatchingMessageID = uuid.Nil
 			latestConsumedMatchingRepoVersion = ""
 		}
+		if !latestExecutableContractRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && !boundedSizeRetry && !rediscoveryOnlyRetry && !executableContractRetry && !replacementHandoffRetry {
+			directChildRefs, directChildErr := w.projectContinuationLatestSessionDirectChildRefsForWorker(ctx, sessionID, 32)
+			if directChildErr != nil {
+				return uuid.Nil, false, fmt.Errorf("find latest session direct-child continuation: %w", directChildErr)
+			}
+			latestSessionDirectChildRefs = append([]string(nil), directChildRefs...)
+			if len(directChildRefs) > 0 && projectContinuationHasDirectChildActionableFocusForWorker(snapshot) {
+				rediscoveryOnlyRetry = true
+				content = buildProjectExecutionContinuationDirectChildActionRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, directChildRefs)
+				expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
+				metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+				latestConsumedMatchingMessageID = uuid.Nil
+				latestConsumedMatchingRepoVersion = ""
+			}
+		}
 		if shouldReuseStructuredProjectContinuationResumeForWorker(
 			latestExecutableContractRetry,
 			closeoutReadyRetry,
@@ -3916,6 +3937,13 @@ func (w *Worker) ensureProjectContinuationMessageDecisionWithOptions(ctx context
 			sameRepoVersion := sameProjectContinuationRepoVersion(currentRepoVersion, existingRepoVersionText)
 			structuredResume := projectContinuationResumeMessageHasStructuredContextForWorker(existingContent)
 			sameSnapshot := !structuredResume || projectContinuationResumePromptMatchesSnapshotForWorker(existingContent, snapshot)
+			if sameSnapshot &&
+				structuredResume &&
+				len(latestSessionDirectChildRefs) > 0 &&
+				projectContinuationHasDirectChildActionableFocusForWorker(snapshot) &&
+				!strings.Contains(existingContent, "already inspected the focused parent's direct child lanes") {
+				sameSnapshot = false
+			}
 			if !existingMessageConsumed && sameRepoVersion && sameSnapshot {
 				return existingMessageID, false, nil
 			}
@@ -4576,6 +4604,59 @@ func (w *Worker) projectContinuationLatestSessionBoundedSizeReferenceForWorker(c
 		return uuid.Nil, "", err
 	}
 	return uuid.Nil, "", nil
+}
+
+func (w *Worker) projectContinuationLatestSessionDirectChildRefsForWorker(ctx context.Context, sessionID uuid.UUID, limit int) ([]string, error) {
+	if w == nil || w.pool == nil || sessionID == uuid.Nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 16
+	}
+	rows, err := w.pool.Query(ctx, `
+		SELECT cm.id
+		FROM chat_message cm
+		WHERE cm.session_id = $1
+		  AND cm.role = 'user'
+		  AND COALESCE(cm.metadata->>'source', '') IN ('project_execution_continuation', 'project_continuation_resume')
+		  AND EXISTS (
+		        SELECT 1
+		        FROM chat_turn ct
+		        WHERE ct.trigger_message_id = cm.id
+		          AND ct.status IN ('completed', 'failed', 'cancelled')
+		  )
+		ORDER BY cm.created_at DESC, cm.id DESC
+		LIMIT $2
+	`, sessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var referenceMessageID uuid.UUID
+		if err := rows.Scan(&referenceMessageID); err != nil {
+			return nil, err
+		}
+		matched, err := w.projectContinuationTurnEndedWithRediscoveryOnlyStop(ctx, referenceMessageID)
+		if err != nil {
+			return nil, err
+		}
+		if !matched {
+			continue
+		}
+		refs, err := w.projectContinuationTurnDirectChildTaskRefsForWorker(ctx, referenceMessageID)
+		if err != nil {
+			return nil, err
+		}
+		if len(refs) > 0 {
+			return refs, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 func (w *Worker) projectContinuationTurnBoundedSizeSuggestedChildTitles(ctx context.Context, referenceMessageID uuid.UUID) ([]string, error) {

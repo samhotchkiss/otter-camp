@@ -864,8 +864,14 @@ func TestBuildProjectExecutionContinuationDirectChildActionRetryPromptForWorkerU
 	if !strings.Contains(prompt, "Do not inspect child lanes again for task_id=fe14406e-c2ed-4471-923e-ec8225f7b2e0 from the project lane.") {
 		t.Fatalf("prompt = %q, want no-repeat child inspection guidance", prompt)
 	}
-	if !strings.Contains(prompt, "Your next assistant action must be one narrow task.update on one named direct child task above") {
-		t.Fatalf("prompt = %q, want direct child action requirement", prompt)
+	if !strings.Contains(prompt, "Those named direct child lanes are already active or otherwise non-draft") {
+		t.Fatalf("prompt = %q, want active-child wait guidance", prompt)
+	}
+	if !strings.Contains(prompt, "no tool call is allowed in that turn") {
+		t.Fatalf("prompt = %q, want no-tool blocker guidance", prompt)
+	}
+	if strings.Contains(prompt, "Your next assistant action must be one narrow task.update on one named direct child task above") {
+		t.Fatalf("prompt = %q, did not want task.update guidance when every named child lane is non-draft", prompt)
 	}
 	if strings.Contains(prompt, "task 12609") {
 		t.Fatalf("prompt = %q, did not want unrelated task refs", prompt)

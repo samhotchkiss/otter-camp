@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 	"github.com/samhotchkiss/otter-camp/internal/workspace"
@@ -34821,6 +34822,543 @@ func TestBuildProjectExecutionContinuationDirectChildActionRetryPromptForWorkerW
 	}
 	if strings.Contains(prompt, "must be one narrow task.update on one named direct child task above") {
 		t.Fatalf("prompt = %q, should not instruct PM to task.update active child lanes", prompt)
+	}
+}
+
+func TestJobWorkerEnsureProjectContinuationMessageDecisionPrefersOlderDirectChildStopOverNewerBoundedRetry(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "prefer-older-direct-child-stop",
+		DisplayName: "Prefer Older Direct Child Stop",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "PM Retry Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Continue the project.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "prefer-older-direct-child-stop",
+		DisplayName:    "Prefer Older Direct Child Stop",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "layout-template",
+		DisplayName:    "Layout Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	doneTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      12675,
+		Title:           "Verify layout-10 deliverable exists",
+		WorkStatus:      "done",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &agent.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	parentDescription := "Write templates/layout-10-conversational.html — replacement for blocked OC-24"
+	parentTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     12679,
+		Title:          "Deliver templates/layout-10-conversational.html — conversational layout template for Sam.blog",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "none",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childDescription := "Write templates/layout-10-conversational.html CTA section only"
+	childMetadata := taskdecomp.ApplyChildMetadata(nil, parentTask.ID, 1)
+	childMetadata = taskdecomp.ApplyChildSourceDescription(childMetadata, parentDescription)
+	childTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      12682,
+		Title:           "SamBot CTA section — conversational CTA block",
+		Description:     &childDescription,
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &agent.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		Metadata:        childMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create child task: %v", err)
+	}
+	parentWithChildren := parentTask
+	parentWithChildren.Metadata = taskdecomp.ApplyMetadata(parentTask.Metadata, taskdecomp.Plan{
+		PrimaryDeliverable: parentDescription,
+		Deliverables:       []string{parentDescription},
+	}, parentDescription, []uuid.UUID{childTask.ID})
+	if _, err := repo.NewProjectTaskRepo(pool).Update(ctx, parentWithChildren); err != nil {
+		t.Fatalf("update parent metadata: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	remainingDrafts, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	fingerprint := projectExecutionContinuationFingerprintForWorker(doneTask.ID, remainingDrafts, snapshot)
+	metadata, err := json.Marshal(map[string]any{
+		"source":                 "project_execution_continuation",
+		"auto_continue":          true,
+		"synthetic_user_message": true,
+		"completed_task_id":      doneTask.ID.String(),
+		projectContinuationSnapshotFingerprintKey: fingerprint,
+	})
+	if err != nil {
+		t.Fatalf("marshal continuation metadata: %v", err)
+	}
+
+	directChildMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "failed",
+		Metadata:  metadata,
+	})
+	if err != nil {
+		t.Fatalf("create direct-child continuation message: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	directChildTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StopReason:       &stopReason,
+		TriggerMessageID: &directChildMessage.ID,
+	})
+	if err != nil {
+		t.Fatalf("create direct-child continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &directChildTurn.ID,
+		Role:      "assistant",
+		Content:   "Inspecting direct child lanes.",
+		Status:    "final",
+	}); err != nil {
+		t.Fatalf("create direct-child assistant: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &directChildTurn.ID,
+		Role:      "tool_result",
+		Content: fmt.Sprintf(`{"output":{"tasks":[{"id":"%s","task_number":%d,"title":"%s","work_status":"draft"}],"meta":{"cursor":""}},"tool_name":"task.list"}`,
+			childTask.ID.String(), childTask.TaskNumber, childTask.Title),
+		Status: "final",
+	}); err != nil {
+		t.Fatalf("create direct-child tool result: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &directChildTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation inspected the focused parent's direct child lanes. Ending this turn now so the next continuation can act directly on those named child tasks instead of drifting back into PM-side rediscovery or authoring.]",
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create direct-child stop message: %v", err)
+	}
+
+	newerBoundedMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "failed",
+		Metadata:  metadata,
+	})
+	if err != nil {
+		t.Fatalf("create newer bounded continuation message: %v", err)
+	}
+	newerBoundedTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       2,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StopReason:       &stopReason,
+		TriggerMessageID: &newerBoundedMessage.ID,
+	})
+	if err != nil {
+		t.Fatalf("create newer bounded continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &newerBoundedTurn.ID,
+		Role:      "system",
+		Content:   fmt.Sprintf("[Project continuation found remaining draft task %d (%s) but could not auto-queue it because it violates the bounded size policy: task exceeds bounded size policy (estimated 95 minutes > 60 minute limit): split the work into smaller reviewable tasks before queueing]", parentTask.TaskNumber, parentTask.Title),
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create newer bounded stop message: %v", err)
+	}
+
+	messageID, suppressed, err := worker.ensureProjectContinuationMessageDecision(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ensureProjectContinuationMessageDecision: %v", err)
+	}
+	if suppressed {
+		t.Fatal("suppressed = true, want a fresh direct-child action retry prompt")
+	}
+	if messageID == uuid.Nil {
+		t.Fatal("messageID = nil, want fresh continuation")
+	}
+
+	var prompt string
+	if err := pool.QueryRow(ctx, `SELECT content FROM chat_message WHERE id = $1`, messageID).Scan(&prompt); err != nil {
+		t.Fatalf("query fresh continuation prompt: %v", err)
+	}
+	if !strings.Contains(prompt, "already inspected the focused parent's direct child lanes") {
+		t.Fatalf("prompt = %q, want direct-child retry framing", prompt)
+	}
+	if !strings.Contains(prompt, fmt.Sprintf("task %d (%s)", childTask.TaskNumber, childTask.Title)) {
+		t.Fatalf("prompt = %q, want named child task in direct-child retry", prompt)
+	}
+	if strings.Contains(prompt, "still too broad to queue as-is") {
+		t.Fatalf("prompt = %q, did not want newer generic bounded-size retry to win", prompt)
+	}
+}
+
+func TestJobWorkerEnsureProjectContinuationMessageDecisionDoesNotReuseStaleStructuredResumeWhenSessionHasDirectChildStop(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "resume-yields-to-direct-child-stop",
+		DisplayName: "Resume Yields To Direct Child Stop",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "PM Resume Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Continue the project.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "resume-yields-to-direct-child-stop",
+		DisplayName:    "Resume Yields To Direct Child Stop",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "layout-template",
+		DisplayName:    "Layout Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	doneTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      12675,
+		Title:           "Verify layout-10 deliverable exists",
+		WorkStatus:      "done",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &agent.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	otherDoneTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      12690,
+		Title:           "Some newer unrelated completion",
+		WorkStatus:      "done",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &agent.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create other done task: %v", err)
+	}
+	parentDescription := "Write templates/layout-10-conversational.html — replacement for blocked OC-24"
+	parentTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     12679,
+		Title:          "Deliver templates/layout-10-conversational.html — conversational layout template for Sam.blog",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "none",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childDescription := "Write templates/layout-10-conversational.html CTA section only"
+	childMetadata := taskdecomp.ApplyChildMetadata(nil, parentTask.ID, 1)
+	childMetadata = taskdecomp.ApplyChildSourceDescription(childMetadata, parentDescription)
+	childTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      12682,
+		Title:           "SamBot CTA section — conversational CTA block",
+		Description:     &childDescription,
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &agent.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		Metadata:        childMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create child task: %v", err)
+	}
+	parentWithChildren := parentTask
+	parentWithChildren.Metadata = taskdecomp.ApplyMetadata(parentTask.Metadata, taskdecomp.Plan{
+		PrimaryDeliverable: parentDescription,
+		Deliverables:       []string{parentDescription},
+	}, parentDescription, []uuid.UUID{childTask.ID})
+	if _, err := repo.NewProjectTaskRepo(pool).Update(ctx, parentWithChildren); err != nil {
+		t.Fatalf("update parent metadata: %v", err)
+	}
+
+	snapshot, err := worker.projectExecutionContinuationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	remainingDrafts, err := worker.countActionableProjectDraftTasks(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("countActionableProjectDraftTasks: %v", err)
+	}
+	directFingerprint := projectExecutionContinuationFingerprintForWorker(doneTask.ID, remainingDrafts, snapshot)
+	directMetadata, err := json.Marshal(map[string]any{
+		"source":                 "project_execution_continuation",
+		"auto_continue":          true,
+		"synthetic_user_message": true,
+		"completed_task_id":      doneTask.ID.String(),
+		projectContinuationSnapshotFingerprintKey: directFingerprint,
+	})
+	if err != nil {
+		t.Fatalf("marshal direct metadata: %v", err)
+	}
+	directChildMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "failed",
+		Metadata:  directMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create direct-child continuation message: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	directChildTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StopReason:       &stopReason,
+		TriggerMessageID: &directChildMessage.ID,
+	})
+	if err != nil {
+		t.Fatalf("create direct-child continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &directChildTurn.ID,
+		Role:      "tool_result",
+		Content: fmt.Sprintf(`{"output":{"tasks":[{"id":"%s","task_number":%d,"title":"%s","work_status":"draft"}],"meta":{"cursor":""}},"tool_name":"task.list"}`,
+			childTask.ID.String(), childTask.TaskNumber, childTask.Title),
+		Status: "final",
+	}); err != nil {
+		t.Fatalf("create direct-child tool result: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &directChildTurn.ID,
+		Role:      "system",
+		Content:   "[Project continuation inspected the focused parent's direct child lanes. Ending this turn now so the next continuation can act directly on those named child tasks instead of drifting back into PM-side rediscovery or authoring.]",
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create direct-child stop message: %v", err)
+	}
+
+	resumeFingerprint := projectExecutionContinuationPromptFingerprintForWorkerContent(otherDoneTask.ID, "Continue the active project execution now from the continuation summary above.")
+	resumeMetadata, err := json.Marshal(map[string]any{
+		"source":                 "project_continuation_resume",
+		"auto_continue":          true,
+		"synthetic_user_message": true,
+		"completed_task_id":      otherDoneTask.ID.String(),
+		projectContinuationSnapshotFingerprintKey: resumeFingerprint,
+	})
+	if err != nil {
+		t.Fatalf("marshal resume metadata: %v", err)
+	}
+	staleResumeMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now from the continuation summary above. Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 12679 (Deliver templates/layout-10-conversational.html — conversational layout template for Sam.blog) id=6e887aa1-3123-40ce-81fe-8abce494df13 work_status=draft.",
+		Status:    "failed",
+		Metadata:  resumeMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create stale resume message: %v", err)
+	}
+	staleResumeTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       2,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "failed",
+		TriggerMessageID: &staleResumeMessage.ID,
+	})
+	if err != nil {
+		t.Fatalf("create stale resume turn: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &staleResumeTurn.ID,
+		Role:      "assistant",
+		Content:   "I will repair task 12679 directly.",
+		Status:    "final",
+	}); err != nil {
+		t.Fatalf("create stale resume assistant: %v", err)
+	}
+	pendingResumeMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now from the continuation summary above. Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 12679 (Deliver templates/layout-10-conversational.html — conversational layout template for Sam.blog) id=6e887aa1-3123-40ce-81fe-8abce494df13 work_status=draft.",
+		Status:    "pending",
+		Metadata:  resumeMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create pending stale resume message: %v", err)
+	}
+
+	messageID, suppressed, err := worker.ensureProjectContinuationMessageDecision(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ensureProjectContinuationMessageDecision: %v", err)
+	}
+	if suppressed {
+		t.Fatal("suppressed = true, want fresh continuation")
+	}
+	if messageID == uuid.Nil {
+		t.Fatal("messageID = nil, want fresh continuation")
+	}
+	if messageID == pendingResumeMessage.ID {
+		t.Fatal("expected stale pending structured resume to be replaced by fresh direct-child continuation")
+	}
+
+	var source, prompt string
+	if err := pool.QueryRow(ctx, `SELECT COALESCE(metadata->>'source', ''), content FROM chat_message WHERE id = $1`, messageID).Scan(&source, &prompt); err != nil {
+		t.Fatalf("query fresh continuation prompt: %v", err)
+	}
+	if !strings.Contains(prompt, "already inspected the focused parent's direct child lanes") {
+		t.Fatalf("prompt = %q, want direct-child retry framing", prompt)
+	}
+	if !strings.Contains(prompt, fmt.Sprintf("task %d (%s)", childTask.TaskNumber, childTask.Title)) {
+		t.Fatalf("prompt = %q, want named child task from latest session direct-child stop", prompt)
+	}
+	if strings.Contains(prompt, "Preferred existing same-deliverable malformed child draft to repair before any new replacement work: task 12679") {
+		t.Fatalf("prompt = %q, did not want stale structured resume reused", prompt)
+	}
+	if source != "project_continuation_resume" && source != "project_execution_continuation" {
+		t.Fatalf("fresh continuation source = %q, want project continuation source", source)
 	}
 }
 
