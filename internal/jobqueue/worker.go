@@ -9743,6 +9743,14 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		FROM model_invocation mi
 		LEFT JOIN chat_turn ct ON ct.id = mi.turn_id
 		WHERE mi.status = 'in_flight'
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_message cm
+		    WHERE cm.turn_id = mi.turn_id
+		      AND cm.role = 'assistant'
+		      AND cm.status IN ('pending', 'streaming')
+		      AND cm.updated_at >= $8
+		  )
 		  AND (
 		    (
 		      mi.created_at < CASE
@@ -9853,6 +9861,15 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		          AND cs.mode = 'async'
 		          AND cs.current_turn_id = ct.id
 		          AND mi.created_at < $5
+		          AND NOT (
+		                cs.scope_type = 'project_task'
+		            AND EXISTS (
+		                  SELECT 1
+		                  FROM flow_node_execution e
+		                  WHERE e.session_id = cs.id
+		                    AND e.status = 'active'
+		              )
+		          )
 		      )
 		    )
 		    OR (
@@ -9888,7 +9905,7 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		      )
 		    )
 		  )
-	`, w.clock.Now().UTC().Add(-30*time.Minute), w.clock.Now().UTC().Add(-15*time.Second), w.clock.Now().UTC().Add(-staleContinuationThresholdForScope("project_task")), w.clock.Now().UTC().Add(-staleContinuationThreshold), startedBefore, w.clock.Now().UTC().Add(-slowProjectAsyncModelThreshold), w.clock.Now().UTC().Add(-overtakenLocalProjectThreshold))
+	`, w.clock.Now().UTC().Add(-30*time.Minute), w.clock.Now().UTC().Add(-15*time.Second), w.clock.Now().UTC().Add(-staleContinuationThresholdForScope("project_task")), w.clock.Now().UTC().Add(-staleContinuationThreshold), startedBefore, w.clock.Now().UTC().Add(-slowProjectAsyncModelThreshold), w.clock.Now().UTC().Add(-overtakenLocalProjectThreshold), w.clock.Now().UTC().Add(-postModelOrphanTurnThreshold))
 	if err != nil {
 		return 0, fmt.Errorf("list stale model invocations: %w", err)
 	}
@@ -11670,6 +11687,14 @@ func (w *Worker) RecoverStaleInProgressProjectTaskTurnsWithoutOwnership(ctx cont
 		            (cm.role = 'assistant' AND cm.status = 'final')
 		         OR (cm.role = 'tool_result' AND cm.status = 'final')
 		          )
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_message cm
+		    WHERE cm.turn_id = ct.id
+		      AND cm.role = 'assistant'
+		      AND cm.status IN ('pending', 'streaming')
+		      AND cm.updated_at >= $1
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1
