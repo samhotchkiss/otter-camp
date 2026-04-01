@@ -52,6 +52,7 @@ const (
 	projectBootstrapStaleThreshold = 2 * time.Minute
 	defaultCleanupInterval         = 24 * time.Hour
 	postModelOrphanTurnThreshold   = 30 * time.Second
+	staleStreamingProjectTaskTurnThreshold = 2 * time.Minute
 	claimedAgentTurnHeartbeatGrace = 30 * time.Second
 	slowProjectAsyncModelThreshold = 20 * time.Minute
 	overtakenLocalProjectThreshold = 8 * time.Minute
@@ -9830,6 +9831,33 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		        WHERE ct.id = mi.turn_id
 		          AND ct.status = 'in_progress'
 		          AND cs.status = 'active'
+		          AND cs.scope_type = 'project_task'
+		          AND cs.current_turn_id = ct.id
+		          AND mi.created_at < $9
+		          AND EXISTS (
+		                SELECT 1
+		                FROM flow_node_execution e
+		                WHERE e.session_id = cs.id
+		                  AND e.status = 'active'
+		              )
+		          AND EXISTS (
+		                SELECT 1
+		                FROM chat_message cm
+		                WHERE cm.turn_id = ct.id
+		                  AND cm.role = 'assistant'
+		                  AND cm.status = 'streaming'
+		                  AND cm.created_at < $9
+		              )
+		      )
+		    )
+		    OR (
+		      EXISTS (
+		        SELECT 1
+		        FROM chat_turn ct
+		        JOIN chat_session cs ON cs.id = ct.session_id
+		        WHERE ct.id = mi.turn_id
+		          AND ct.status = 'in_progress'
+		          AND cs.status = 'active'
 		          AND cs.current_turn_id = ct.id
 		          AND (
 		            (
@@ -9930,7 +9958,7 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		      )
 		    )
 		  )
-	`, w.clock.Now().UTC().Add(-30*time.Minute), w.clock.Now().UTC().Add(-15*time.Second), w.clock.Now().UTC().Add(-staleContinuationThresholdForScope("project_task")), w.clock.Now().UTC().Add(-staleContinuationThreshold), startedBefore, w.clock.Now().UTC().Add(-slowProjectAsyncModelThreshold), w.clock.Now().UTC().Add(-overtakenLocalProjectThreshold), w.clock.Now().UTC().Add(-postModelOrphanTurnThreshold))
+	`, w.clock.Now().UTC().Add(-30*time.Minute), w.clock.Now().UTC().Add(-15*time.Second), w.clock.Now().UTC().Add(-staleContinuationThresholdForScope("project_task")), w.clock.Now().UTC().Add(-staleContinuationThreshold), startedBefore, w.clock.Now().UTC().Add(-slowProjectAsyncModelThreshold), w.clock.Now().UTC().Add(-overtakenLocalProjectThreshold), w.clock.Now().UTC().Add(-postModelOrphanTurnThreshold), w.clock.Now().UTC().Add(-staleStreamingProjectTaskTurnThreshold))
 	if err != nil {
 		return 0, fmt.Errorf("list stale model invocations: %w", err)
 	}
