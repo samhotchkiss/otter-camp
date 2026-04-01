@@ -19782,6 +19782,14 @@ func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *
 		draft, draftOK = e.taskContinuationDraftContent(ctx, rt, targetPath)
 	}
 	if !draftOK {
+		assistantContent := e.latestAssistantFinalContentForCurrentTurn(ctx, rt)
+		if htmlDirectWriteStartRequired(targetPath) && assistantContent != "" && looksLikeGenericTaskRecoveryReply(assistantContent) {
+			rt.stopReason = stopReasonValidationBlocked
+			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskFileWriteMissingContentIntentStubStopMessage(targetPath)); err != nil {
+				return true, false, err
+			}
+			return true, true, nil
+		}
 		output := map[string]any{}
 		if targetPath != "" {
 			output["deliverable_path"] = targetPath
@@ -19972,6 +19980,14 @@ func buildTaskCLIExecuteWithoutCommandRetryMessage(targetPath string) string {
 		startHint = "Your next assistant message should begin immediately with `<!DOCTYPE html>` or the opening `<html` tag from the actual deliverable body, not narration about using cli_execute or python3."
 	}
 	return fmt.Sprintf("[Task execution correction: cli.execute for `%s` was emitted without `command`. Do not retry cli.execute shell wrappers for `%s` until the full file body exists. Draft the concrete deliverable body in the assistant response first, then use file.write with both `path` and `content` populated. %s]", path, path, startHint)
+}
+
+func buildTaskFileWriteMissingContentIntentStubStopMessage(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "<target file>"
+	}
+	return fmt.Sprintf("[Task execution correction: file.write for `%s` was emitted without `content` after a generic direct-write stub. Ending the turn early so the next continuation can retry with the actual file body instead of another 'I'll write it now' message.]", path)
 }
 
 func htmlDirectWriteStartRequired(targetPath string) bool {
@@ -20171,6 +20187,21 @@ func (e *TurnEngine) handleTaskCLIExecuteWithoutCommand(ctx context.Context, rt 
 		"path", targetPath,
 	)
 	return false, false, nil
+}
+
+func (e *TurnEngine) latestAssistantFinalContentForCurrentTurn(ctx context.Context, rt *turnRuntime) string {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return ""
+	}
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return ""
+	}
+	assistant := latestAssistantFinalForTurn(messages, rt.turn.ID)
+	if assistant == nil {
+		return ""
+	}
+	return strings.TrimSpace(assistant.Content)
 }
 
 func (e *TurnEngine) handleTaskRejectedFileWriteContent(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
