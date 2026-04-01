@@ -656,6 +656,19 @@ type turnRuntime struct {
 	boundedChildPreparations                int
 }
 
+type reviewSessionEvidenceState struct {
+	targetReadSeen       bool
+	rootListed           bool
+	byteSize             int
+	headTruncated        bool
+	tailReadSeen         bool
+	gapReadSeen          bool
+	siblingReads         int
+	rejectEvidenceCode   string
+	rejectEvidencePath   string
+	placeholderTargetSeen bool
+}
+
 type projectIdentity struct {
 	id   uuid.UUID
 	slug string
@@ -10959,6 +10972,9 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	} else if handled {
 		return nil
 	}
+	if err := e.hydrateTaskReviewSessionEvidence(ctx, runtime); err != nil {
+		return err
+	}
 	cancelCtx, stopCancelWatch := e.watchTurnCancellation(ctx, runtime)
 	defer stopCancelWatch()
 
@@ -15706,6 +15722,137 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 	}
 	lines = append(lines, projectBootstrapResumePhaseGuidance(state))
 	return strings.Join(lines, "\n")
+}
+
+func (e *TurnEngine) hydrateTaskReviewSessionEvidence(ctx context.Context, rt *turnRuntime) error {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || !taskReviewPromptActive(rt) {
+		return nil
+	}
+	targetPath := taskReviewPreferredDeliverableTarget(rt)
+	rootPath := taskReviewPreferredDeliverableRoot(rt)
+	state, err := e.taskReviewSessionEvidence(ctx, rt.session.ID, targetPath, rootPath)
+	if err != nil {
+		return err
+	}
+	if targetPath != "" && state.targetReadSeen {
+		rt.reviewPreferredDeliverablePath = targetPath
+	}
+	if state.rootListed {
+		rt.reviewPreferredDeliverableRootListed = true
+	}
+	if state.byteSize > rt.reviewPreferredDeliverableByteSize {
+		rt.reviewPreferredDeliverableByteSize = state.byteSize
+	}
+	if state.headTruncated {
+		rt.reviewPreferredDeliverableHeadTruncated = true
+	}
+	if state.tailReadSeen {
+		rt.reviewPreferredDeliverableTailReadSeen = true
+	}
+	if state.gapReadSeen {
+		rt.reviewPreferredDeliverableGapReadSeen = true
+	}
+	if state.siblingReads > rt.reviewCheckpointOutputSiblingReads {
+		rt.reviewCheckpointOutputSiblingReads = state.siblingReads
+	}
+	if state.rejectEvidenceCode != "" {
+		rt.reviewRejectEvidenceCode = state.rejectEvidenceCode
+	}
+	if state.rejectEvidencePath != "" {
+		rt.reviewRejectEvidencePath = state.rejectEvidencePath
+	}
+	if state.placeholderTargetSeen {
+		rt.placeholderTargetSeen = true
+	}
+	return nil
+}
+
+func (e *TurnEngine) taskReviewSessionEvidence(ctx context.Context, sessionID uuid.UUID, targetPath, rootPath string) (reviewSessionEvidenceState, error) {
+	var state reviewSessionEvidenceState
+	if e == nil || e.messages == nil || sessionID == uuid.Nil {
+		return state, nil
+	}
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	rootPath = normalizeWorkspaceRelativePath(rootPath)
+	if targetPath == "" && rootPath == "" {
+		return state, nil
+	}
+	messages, err := e.messages.ListBySession(ctx, sessionID)
+	if err != nil {
+		return state, err
+	}
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "file.list":
+			if rootPath == "" {
+				continue
+			}
+			path := normalizeWorkspaceRelativePath(anyString(output["path"]))
+			if sameWorkspaceRelativePath(path, rootPath) && strings.TrimSpace(errText) == "" {
+				if _, ok := output["entries"]; ok {
+					state.rootListed = true
+				}
+			}
+		case "file.read":
+			path := normalizeWorkspaceRelativePath(anyString(output["path"]))
+			if path == "" {
+				continue
+			}
+			errorCode := normalizeValidationFailureCode(anyString(output["error"]))
+			if targetPath != "" && sameWorkspaceRelativePath(path, targetPath) {
+				if errorCode == "placeholder_deliverable" || errorCode == "not_found" || errorCode == "mismatched_deliverable_context" {
+					state.rejectEvidenceCode = errorCode
+					state.rejectEvidencePath = targetPath
+					if errorCode == "placeholder_deliverable" {
+						state.placeholderTargetSeen = true
+					}
+					continue
+				}
+				if strings.TrimSpace(errText) != "" || strings.TrimSpace(anyString(output["error"])) != "" {
+					continue
+				}
+				state.targetReadSeen = true
+				if size := intValue(output["byte_size"]); size > state.byteSize {
+					state.byteSize = size
+				}
+				offsetBytes := intValue(output["offset_bytes"])
+				if offsetBytes < 0 {
+					offsetBytes = 0
+				}
+				readBytes := intValue(output["bytes_read"])
+				if readBytes <= 0 {
+					readBytes = len([]byte(anyString(output["content"])))
+				}
+				truncated, _ := boolValue(output["truncated"])
+				if offsetBytes == 0 && truncated && readBytes > 0 {
+					state.headTruncated = true
+				}
+				if offsetBytes > 0 && readBytes > 0 {
+					tailOffset := 0
+					if state.byteSize > taskReviewPreferredDeliverableReadMaxBytes {
+						tailOffset = state.byteSize - taskReviewPreferredDeliverableReadMaxBytes
+					}
+					if tailOffset > 0 && offsetBytes < tailOffset {
+						state.gapReadSeen = true
+					} else {
+						state.tailReadSeen = true
+					}
+				}
+				continue
+			}
+			if rootPath != "" && workspacePathWithinRoot(path, rootPath) && intValue(output["byte_size"]) > 0 {
+				state.siblingReads++
+			}
+		}
+	}
+	return state, nil
 }
 
 func projectBootstrapResumeUsesCompactRoster(state projectBootstrapState) bool {
@@ -33145,6 +33292,9 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 			lines = append(lines, fmt.Sprintf("If `%s` may be large, start with `file.read` using `path=%s` and `max_bytes=%d` instead of an unconstrained full-file read. Use narrower follow-up inspection only if that bounded read is insufficient.", targetPath, targetPath, taskReviewPreferredDeliverableReadMaxBytes))
 			lines = append(lines, fmt.Sprintf("If that first bounded read is truncated and you need the tail, use a follow-up `file.read` on `%s` with `offset_bytes` near `byte_size-%d` instead of rereading from byte 0.", targetPath, taskReviewPreferredDeliverableReadMaxBytes))
 			lines = append(lines, fmt.Sprintf("If reading `%s` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.", targetPath))
+			if state, err := e.taskReviewSessionEvidence(ctx, session.ID, targetPath, rootPath); err == nil && state.targetReadSeen && state.headTruncated && state.tailReadSeen && state.gapReadSeen {
+				lines = append(lines, fmt.Sprintf("This review session already has bounded head, tail, and gap evidence for `%s`. Do not reread `%s` from byte 0 again in this turn. Use the evidence already gathered across the session and call `flow.review_decision` now unless one direct sibling output under `%s` is still strictly necessary.", targetPath, targetPath, rootPath))
+			}
 			if rootPath != "" && len(checkpointOutputs) > 1 {
 				lines = append(lines, fmt.Sprintf("The checkpoint already identifies the task-owned outputs under `%s`: %s. Treat that output set as authoritative for this batch; after inspecting `%s`, read any additional evidence directly from those named outputs and do not call `file.list` on `%s` or reread dependency artifacts outside `%s` just to rediscover which files belong to the batch.", rootPath, summarizeReviewPromptOutputPaths(checkpointOutputs, reviewPromptCheckpointOutputSummaryLimit(checkpointOutputs)), targetPath, rootPath, rootPath))
 				lines = append(lines, fmt.Sprintf("For additional checkpoint outputs under `%s`, prefer bounded `file.read` calls with `max_bytes=%d` unless you already know you need a smaller slice.", rootPath, taskReviewCheckpointOutputReadMaxBytes))

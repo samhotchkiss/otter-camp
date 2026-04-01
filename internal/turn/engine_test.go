@@ -58258,6 +58258,83 @@ func TestBuildTaskReviewActionPromptIncludesPreferredDeliverableTargetFromSaveAs
 	}
 }
 
+func TestBuildTaskReviewActionPromptCarriesBoundedPreferredTargetEvidenceAcrossTurns(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Rewrite planning/sambot-prompts/test-conversations-technical.md with 6 technical SamBot conversations."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  12524,
+				Title:       "Rewrite planning/sambot-prompts/test-conversations-technical.md",
+				Description: &description,
+				WorkStatus:  "review",
+			},
+		},
+	}
+	targetPath := "planning/sambot-prompts/test-conversations-technical.md"
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":         targetPath,
+				"byte_size":    20027,
+				"bytes_read":   8192,
+				"offset_bytes": 0,
+				"truncated":    true,
+				"content":      "head",
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":         targetPath,
+				"byte_size":    20027,
+				"bytes_read":   8192,
+				"offset_bytes": 11835,
+				"content":      "tail",
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":         targetPath,
+				"byte_size":    20027,
+				"bytes_read":   3643,
+				"offset_bytes": 8192,
+				"content":      "gap",
+			},
+		})),
+	})
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "already has bounded head, tail, and gap evidence") {
+		t.Fatalf("prompt = %q, want bounded preferred-target evidence carry-forward", prompt)
+	}
+	if !strings.Contains(prompt, "Do not reread `planning/sambot-prompts/test-conversations-technical.md` from byte 0 again") {
+		t.Fatalf("prompt = %q, want explicit no-reread guidance", prompt)
+	}
+}
+
 func TestBuildTaskReviewActionPromptIncludesPreferredDeliverableRoot(t *testing.T) {
 	t.Parallel()
 
