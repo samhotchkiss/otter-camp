@@ -43750,6 +43750,7 @@ func looksLikeGenericTaskRecoveryReply(content string) bool {
 		"i will write the complete",
 		"i'll write the full",
 		"i will write the full",
+		"writing the portfolio template now",
 		"writing the portfolio template directly now",
 		"writing the deliverable now",
 		"writing the full portfolio template now",
