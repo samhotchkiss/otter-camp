@@ -2741,6 +2741,123 @@ func TestSupervisor_UnpausedLegacyImpossibleLiveProjectGetsPaused(t *testing.T) 
 	}
 }
 
+func TestSupervisor_ClearedImpossibleLiveProjectPauseGetsResumed(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+	projectRecord := seedRunProject(t, ctx, pool, org.ID)
+	worker := seedSupervisorAgent(t, ctx, pool, org.ID, "Recovered Impossible Worker")
+	template, startNode := seedSupervisorFlowTemplateNode(t, ctx, pool, org.ID, projectRecord.ID, nil, nil)
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       projectRecord.ID,
+		Title:           "Recovered in-progress task",
+		WorkStatus:      "in_progress",
+		FlowTemplateID:  &template.ID,
+		CurrentFlowNodeID: &startNode.ID,
+		AssignedAgentID: &worker.ID,
+		CreatedByType:   "system",
+		Metadata:        json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	taskSession, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create task session: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	executionRecord, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		FlowNodeID:  startNode.ID,
+		TaskID:      taskRecord.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &taskSession.ID,
+	})
+	if err != nil {
+		t.Fatalf("create execution: %v", err)
+	}
+
+	now := time.Now().UTC()
+	settings, err := projectfailure.Apply(projectRecord.Settings, projectfailure.State{
+		Action:          "pause",
+		Source:          "execution_runtime",
+		FailureCategory: "execution_runtime",
+		FailureClass:    "impossible_live_task_state",
+		FailureReason:   "supervisor detected impossible live task state: task remained in_progress without a runtime owner or active flow execution",
+		RecordedAt:      &now,
+	})
+	if err != nil {
+		t.Fatalf("projectfailure.Apply: %v", err)
+	}
+	settings, err = projectpause.ApplyPause(settings, "supervisor detected impossible live task state: task remained in_progress without a runtime owner or active flow execution", projectfailure.State{
+		Action:          "pause",
+		Source:          "execution_runtime",
+		FailureCategory: "execution_runtime",
+		FailureClass:    "impossible_live_task_state",
+		FailureReason:   "supervisor detected impossible live task state: task remained in_progress without a runtime owner or active flow execution",
+		RecordedAt:      &now,
+	}.JSON(), now, "system", uuid.Nil)
+	if err != nil {
+		t.Fatalf("projectpause.ApplyPause: %v", err)
+	}
+	projectRecord.Settings = settings
+	if _, err := repo.NewProjectRepo(pool).Update(ctx, projectRecord); err != nil {
+		t.Fatalf("update paused project: %v", err)
+	}
+
+	bus := eventbus.New(pool, newDiscardLogger(), eventbus.Config{})
+	runService, err := NewRunService(RunServiceOptions{
+		Pool:     pool,
+		EventBus: bus,
+		Policy:   allowRunCreationPolicy{},
+		Logger:   newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewRunService: %v", err)
+	}
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		Pool:       pool,
+		RunService: runService,
+		EventBus:   bus,
+		Logger:     newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+
+	if err := supervisor.detectClearedImpossibleLiveProjectPauses(ctx); err != nil {
+		t.Fatalf("detectClearedImpossibleLiveProjectPauses: %v", err)
+	}
+
+	updatedProject, err := repo.NewProjectRepo(pool).GetByID(ctx, projectRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID project: %v", err)
+	}
+	if pauseState := projectpause.Parse(updatedProject.Settings); pauseState.IsPaused {
+		t.Fatalf("project pause state = %+v, want resumed", pauseState)
+	}
+
+	storedExecution, err := executionRepo.GetByID(ctx, executionRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID execution: %v", err)
+	}
+	if storedExecution.Status != "active" {
+		t.Fatalf("execution status = %q, want active", storedExecution.Status)
+	}
+}
+
 func TestSupervisor_ResumableBlockedTaskGetsAutoResumed(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -3827,7 +3944,14 @@ func hasSupervisorRecoveryKickoff(messages []repo.ChatMessage, runID, executionI
 		if err := json.Unmarshal(message.Metadata, &metadata); err != nil {
 			continue
 		}
-		if strings.TrimSpace(valueAsString(metadata["source"])) != "supervisor" {
+		source := strings.TrimSpace(valueAsString(metadata["source"]))
+		if source != "supervisor" && source != "task_queue_processor" {
+			continue
+		}
+		if source == "supervisor" && strings.TrimSpace(message.Content) != "supervisor recovery: resume task" {
+			continue
+		}
+		if source == "task_queue_processor" && strings.TrimSpace(valueAsString(metadata["recovery_source"])) != "supervisor" {
 			continue
 		}
 		if strings.TrimSpace(valueAsString(metadata["run_id"])) != runID.String() {

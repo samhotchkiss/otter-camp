@@ -72,6 +72,7 @@ type supervisorTaskService interface {
 
 type supervisorProjectService interface {
 	Pause(ctx context.Context, orgID, projectID uuid.UUID, req projectsvc.PauseProjectRequest) (*projectsvc.Project, error)
+	Resume(ctx context.Context, orgID, projectID uuid.UUID, resumedByType string, resumedByID uuid.UUID) (*projectsvc.Project, error)
 }
 
 type SupervisorOptions struct {
@@ -279,6 +280,9 @@ func (s *Supervisor) tick(ctx context.Context) error {
 		return err
 	}
 	if err := s.detectUnpausedImpossibleLiveProjects(ctx); err != nil {
+		return err
+	}
+	if err := s.detectClearedImpossibleLiveProjectPauses(ctx); err != nil {
 		return err
 	}
 	if err := s.detectExpiredBrowserHandoffs(ctx); err != nil {
@@ -530,6 +534,64 @@ func (s *Supervisor) detectUnpausedImpossibleLiveProjects(ctx context.Context) e
 		}
 		if err := s.pauseProjectForImpossibleLiveTask(ctx, organizationID, projectID, impossibleLiveTaskReason); err != nil {
 			return err
+		}
+	}
+	return rows.Err()
+}
+
+func (s *Supervisor) detectClearedImpossibleLiveProjectPauses(ctx context.Context) error {
+	if s.pool == nil || s.projectService == nil {
+		return nil
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT p.organization_id, p.id
+		FROM project p
+		WHERE p.status = 'active'
+		  AND COALESCE((p.settings->'pause'->>'is_paused')::boolean, false) = true
+		  AND (
+		        COALESCE(p.settings->'failure'->>'failure_class', '') = 'impossible_live_task_state'
+		     OR COALESCE(p.settings->'pause'->>'reason', '') ILIKE '%impossible live task state%'
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM project_task t
+		    LEFT JOIN runtime_state rs
+		      ON rs.scope_type = 'task'
+		     AND rs.scope_id = t.id
+		     AND rs.active_run_id IS NOT NULL
+		    LEFT JOIN flow_node_execution e
+		      ON e.task_id = t.id
+		     AND e.status = 'active'
+		    WHERE t.project_id = p.id
+		      AND (
+		            (
+		              t.work_status = 'in_progress'
+		              AND rs.id IS NULL
+		              AND e.id IS NULL
+		            )
+		         OR (
+		              t.work_status = 'blocked'
+		              AND t.flow_template_id IS NOT NULL
+		              AND t.current_flow_node_id IS NULL
+		              AND rs.id IS NULL
+		              AND e.id IS NULL
+		            )
+		          )
+		  )
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var organizationID, projectID uuid.UUID
+		if scanErr := rows.Scan(&organizationID, &projectID); scanErr != nil {
+			return scanErr
+		}
+		if _, resumeErr := s.projectService.Resume(ctx, organizationID, projectID, "system", uuid.Nil); resumeErr != nil {
+			return resumeErr
 		}
 	}
 	return rows.Err()
@@ -972,19 +1034,35 @@ func (s *Supervisor) recoverRun(ctx context.Context, runRecord Run, reason strin
 			}
 		}
 		flowNodeExecutionID := strings.TrimSpace(valueAsString(runtimeMetadata["flow_node_execution_id"]))
+		messageContent := "supervisor recovery: resume task"
 		msgMeta, _ := json.Marshal(map[string]any{
 			"source":                 "supervisor",
 			"run_id":                 created.ID.String(),
 			"reason":                 strings.TrimSpace(reason),
 			"flow_node_execution_id": flowNodeExecutionID,
 		})
+		if strings.EqualFold(strings.TrimSpace(reason), strandedExecutionRecoveryReason) && runRecord.TaskID != nil && *runRecord.TaskID != uuid.Nil {
+			if executionID, parseErr := uuid.Parse(flowNodeExecutionID); parseErr == nil {
+				kickoffContent, kickoffMetadata, kickoffErr := s.buildStrandedExecutionKickoff(ctx, strandedExecutionCandidate{
+					ExecutionID: executionID,
+					TaskID:      *runRecord.TaskID,
+					SessionID:   sessionID,
+				}, created.ID)
+				if kickoffErr != nil {
+					s.logger.Warn("supervisor: failed to build stranded execution kickoff", "session_id", sessionID, "execution_id", executionID, "error", kickoffErr)
+				} else if strings.TrimSpace(kickoffContent) != "" && len(kickoffMetadata) > 0 {
+					messageContent = kickoffContent
+					msgMeta = kickoffMetadata
+				}
+			}
+		}
 		if hasKickoff, kickoffErr := s.sessionHasSupervisorRecoveryKickoff(ctx, sessionID, flowNodeExecutionID); kickoffErr != nil {
 			s.logger.Warn("supervisor: failed to inspect recovery kickoff message", "session_id", sessionID, "error", kickoffErr)
 		} else if !hasKickoff {
 			if _, msgErr := s.chatService.AppendMessage(ctx, chat.AppendMessageInput{
 				SessionID: sessionID,
 				Role:      "user",
-				Content:   "supervisor recovery: resume task",
+				Content:   messageContent,
 				Metadata:  msgMeta,
 			}); msgErr != nil {
 				s.logger.Warn("supervisor: failed to append recovery kickoff message", "session_id", sessionID, "error", msgErr)
@@ -1021,9 +1099,6 @@ func (s *Supervisor) sessionHasSupervisorRecoveryKickoff(ctx context.Context, se
 		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
 			continue
 		}
-		if strings.TrimSpace(message.Content) != "supervisor recovery: resume task" {
-			continue
-		}
 		if len(message.Metadata) == 0 || !json.Valid(message.Metadata) {
 			continue
 		}
@@ -1031,7 +1106,14 @@ func (s *Supervisor) sessionHasSupervisorRecoveryKickoff(ctx context.Context, se
 		if err := json.Unmarshal(message.Metadata, &metadata); err != nil {
 			continue
 		}
-		if strings.TrimSpace(valueAsString(metadata["source"])) != "supervisor" {
+		source := strings.TrimSpace(valueAsString(metadata["source"]))
+		if source != "supervisor" && source != "task_queue_processor" {
+			continue
+		}
+		if source == "supervisor" && strings.TrimSpace(message.Content) != "supervisor recovery: resume task" {
+			continue
+		}
+		if source == "task_queue_processor" && strings.TrimSpace(valueAsString(metadata["recovery_source"])) != "supervisor" {
 			continue
 		}
 		if flowNodeExecutionID != "" && strings.TrimSpace(valueAsString(metadata["flow_node_execution_id"])) != flowNodeExecutionID {
