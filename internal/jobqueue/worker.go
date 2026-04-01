@@ -3275,7 +3275,9 @@ func (w *Worker) ensureProjectContinuationMessageDecisionWithOptions(ctx context
 			if !projectContinuationSnapshotHasRemainingWorkForWorker(remainingDrafts, snapshot) {
 				return uuid.Nil, false, nil
 			}
-			allowSuccessfulHandoffSuppression = projectContinuationSnapshotWaitsOnActiveChildWorkForWorker(remainingDrafts, snapshot)
+			allowSuccessfulHandoffSuppression =
+				projectContinuationSnapshotWaitsOnActiveChildWorkForWorker(remainingDrafts, snapshot) ||
+					projectContinuationSnapshotWaitsOnActiveTaskWorkForWorker(remainingDrafts, snapshot)
 			expectedCompletedTaskID = completedTaskID.String()
 			expectedSnapshotFingerprint = projectExecutionContinuationFingerprintForWorker(completedTaskID, remainingDrafts, snapshot)
 			metadataMap["completed_task_id"] = expectedCompletedTaskID
@@ -5979,6 +5981,48 @@ func projectContinuationDraftTaskOutcomeSatisfiedForWorker(task repo.ProjectTask
 	return ok && state.OutcomeAssessment != nil && state.OutcomeAssessment.Satisfied
 }
 
+func projectContinuationSatisfiedDeliverablePathsForWorker(
+	projectTasks []repo.ProjectTask,
+	taskHintsByTask map[uuid.UUID]projectContinuationTaskHintsForWorker,
+) map[string]struct{} {
+	var satisfied map[string]struct{}
+	for _, task := range projectTasks {
+		status := strings.ToLower(strings.TrimSpace(task.WorkStatus))
+		if status != "done" && !projectContinuationDraftTaskOutcomeSatisfiedForWorker(task) {
+			continue
+		}
+		hints := taskHintsByTask[task.ID]
+		path := normalizeWorkspaceRelativePathForWorker(hints.DeliverablePath)
+		if path == "" {
+			continue
+		}
+		if satisfied == nil {
+			satisfied = make(map[string]struct{})
+		}
+		satisfied[path] = struct{}{}
+	}
+	return satisfied
+}
+
+func projectContinuationBlockedTaskIsSupersededSameDeliverableResidueForWorker(
+	task repo.ProjectTask,
+	hints projectContinuationTaskHintsForWorker,
+	satisfiedDeliverablePaths map[string]struct{},
+) bool {
+	if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
+		return false
+	}
+	if len(satisfiedDeliverablePaths) == 0 {
+		return false
+	}
+	path := normalizeWorkspaceRelativePathForWorker(hints.DeliverablePath)
+	if path == "" {
+		return false
+	}
+	_, superseded := satisfiedDeliverablePaths[path]
+	return superseded
+}
+
 func projectContinuationVerificationCloseoutChildProvidesParentClosureProofForWorker(
 	childTask repo.ProjectTask,
 	parentTask repo.ProjectTask,
@@ -6066,7 +6110,32 @@ func projectContinuationSnapshotWaitsOnActiveChildWorkForWorker(remainingDraftTa
 	return strings.TrimSpace(snapshot.ChildActiveDraftLine) != ""
 }
 
+func projectContinuationSnapshotWaitsOnActiveTaskWorkForWorker(remainingDraftTasks int, snapshot projectExecutionContinuationSnapshotForWorker) bool {
+	if remainingDraftTasks != 0 {
+		return false
+	}
+	if snapshot.HasActionableBlocked {
+		return false
+	}
+	if strings.TrimSpace(snapshot.DraftTaskLine) != "" ||
+		strings.TrimSpace(snapshot.ReplacementDraftLine) != "" ||
+		strings.TrimSpace(snapshot.ChildActiveDraftLine) != "" ||
+		strings.TrimSpace(snapshot.FocusTaskLine) != "" {
+		return false
+	}
+	activeLine := strings.ToLower(strings.TrimSpace(snapshot.ActiveTaskLine))
+	if activeLine == "" {
+		return false
+	}
+	return strings.Contains(activeLine, "work_status=in_progress") ||
+		strings.Contains(activeLine, "work_status=review") ||
+		strings.Contains(activeLine, "work_status=queued")
+}
+
 func projectContinuationSnapshotHasRemainingWorkForWorker(remainingDraftTasks int, snapshot projectExecutionContinuationSnapshotForWorker) bool {
+	if projectContinuationSnapshotWaitsOnActiveTaskWorkForWorker(remainingDraftTasks, snapshot) {
+		return false
+	}
 	if remainingDraftTasks > 0 {
 		return true
 	}
@@ -6101,6 +6170,7 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 		return snapshot, err
 	}
 	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDsForWorker(projectTasks)
+	satisfiedDeliverablePaths := projectContinuationSatisfiedDeliverablePathsForWorker(projectTasks, taskHintsByTask)
 	activeTasks := make([]string, 0, 4)
 	completedTasks := make([]string, 0, 4)
 	leafActiveTasks := make([]string, 0, 4)
@@ -6128,6 +6198,9 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 				len(childActiveDraftTasks) < 4 {
 				childActiveDraftTasks = append(childActiveDraftTasks, projectExecutionContinuationTaskRefForWorker(task, activity, hints))
 			}
+			continue
+		}
+		if projectContinuationBlockedTaskIsSupersededSameDeliverableResidueForWorker(task, hints, satisfiedDeliverablePaths) {
 			continue
 		}
 		if projectContinuationBlockedTaskIsSatisfiedTerminalResidueForWorker(task, activity, hints) {

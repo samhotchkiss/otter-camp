@@ -681,6 +681,90 @@ func TestProjectContinuationResumePromptMatchesSnapshotForWorkerRejectsBroadBoun
 	}
 }
 
+func TestProjectContinuationSnapshotWaitsOnActiveTaskWorkForWorker(t *testing.T) {
+	t.Parallel()
+
+	snapshot := projectExecutionContinuationSnapshotForWorker{
+		ActiveTaskLine: strings.Join([]string{
+			"Already-active non-terminal tasks in the tree:",
+			`task 12672 (Write technical SamBot test conversations 4-6 — completing the remaining 3 of 6) id=aaa work_status=in_progress deliverable_path=planning/sambot-prompts/test-conversations-technical.md`,
+			`; task 12668 (Write technical SamBot test conversations — fresh replacement 1-3) id=bbb work_status=blocked resume_policy=terminal_keep_blocked`,
+		}, " "),
+		LeafActiveTaskLine: "Active leaf tasks already have no child tasks to inspect: task 12672 leaf_task_id=aaa; task 12668 leaf_task_id=bbb",
+	}
+
+	if !projectContinuationSnapshotWaitsOnActiveTaskWorkForWorker(0, snapshot) {
+		t.Fatal("expected PM to wait when only active task work plus blocked residue remains")
+	}
+	if projectContinuationSnapshotHasRemainingWorkForWorker(0, snapshot) {
+		t.Fatal("expected no remaining PM work when only active task work plus blocked residue remains")
+	}
+}
+
+func TestProjectContinuationSnapshotWaitsOnActiveTaskWorkForWorkerRequiresNoActionableDrafts(t *testing.T) {
+	t.Parallel()
+
+	snapshot := projectExecutionContinuationSnapshotForWorker{
+		ActiveTaskLine: `Already-active non-terminal tasks in the tree: task 12672 id=aaa work_status=in_progress`,
+		DraftTaskLine:  `Actionable draft tasks already in the tree: task 12673 id=bbb work_status=draft`,
+	}
+
+	if projectContinuationSnapshotWaitsOnActiveTaskWorkForWorker(0, snapshot) {
+		t.Fatal("did not expect PM wait when actionable drafts still exist")
+	}
+	if !projectContinuationSnapshotHasRemainingWorkForWorker(1, snapshot) {
+		t.Fatal("expected remaining PM work when actionable drafts still exist")
+	}
+}
+
+func TestProjectContinuationBlockedTaskIsSupersededSameDeliverableResidueForWorker(t *testing.T) {
+	t.Parallel()
+
+	satisfied := map[string]struct{}{
+		"planning/sambot-prompts/test-conversations-technical.md": {},
+	}
+	task := repo.ProjectTask{WorkStatus: "blocked"}
+	hints := projectContinuationTaskHintsForWorker{
+		DeliverablePath: "planning/sambot-prompts/test-conversations-technical.md",
+	}
+
+	if !projectContinuationBlockedTaskIsSupersededSameDeliverableResidueForWorker(task, hints, satisfied) {
+		t.Fatal("expected blocked same-deliverable task to be treated as superseded residue once a satisfied lane exists")
+	}
+}
+
+func TestProjectContinuationSatisfiedDeliverablePathsForWorkerUsesDoneAndOutcomeSatisfiedTasks(t *testing.T) {
+	t.Parallel()
+
+	metadata, err := json.Marshal(map[string]any{
+		"parent_orchestration": map[string]any{
+			"outcome_assessment": map[string]any{"satisfied": true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	doneTask := repo.ProjectTask{ID: uuid.New(), WorkStatus: "done"}
+	satisfiedTask := repo.ProjectTask{
+		ID:         uuid.New(),
+		WorkStatus: "blocked",
+		Metadata:   metadata,
+	}
+	hints := map[uuid.UUID]projectContinuationTaskHintsForWorker{
+		doneTask.ID:      {DeliverablePath: "planning/sambot-prompts/test-conversations-technical.md"},
+		satisfiedTask.ID: {DeliverablePath: "planning/sambot-personality-tone.md"},
+	}
+
+	paths := projectContinuationSatisfiedDeliverablePathsForWorker([]repo.ProjectTask{doneTask, satisfiedTask}, hints)
+	if _, ok := paths["planning/sambot-prompts/test-conversations-technical.md"]; !ok {
+		t.Fatal("expected done task deliverable path to count as satisfied")
+	}
+	if _, ok := paths["planning/sambot-personality-tone.md"]; !ok {
+		t.Fatal("expected outcome-satisfied task deliverable path to count as satisfied")
+	}
+}
+
 func TestProjectContinuationWorkspaceDeliverableEvidenceEligibleForWorkerRejectsSharedSectionChildren(t *testing.T) {
 	t.Parallel()
 

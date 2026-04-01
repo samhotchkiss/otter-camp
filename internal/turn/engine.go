@@ -35213,15 +35213,17 @@ func projectContinuationCloseoutReadyParentPromptActive(rt *turnRuntime) bool {
 
 func shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt *turnRuntime, calls []ToolCall, results []ToolResult) bool {
 	childDraftAdvanceActive := false
+	closeoutParentAdvanceActive := false
 	namedTaskIDs := map[uuid.UUID]struct{}{}
 	if rt != nil {
 		initial := strings.TrimSpace(rt.initialMessageText)
 		childDraftAdvanceActive = projectContinuationChildDraftAdvanceActive(initial)
+		closeoutParentAdvanceActive = projectContinuationCloseoutReadyParentPromptActive(rt)
 		if childDraftAdvanceActive {
 			namedTaskIDs = projectContinuationPromptNamedTaskIDs(initial)
 		}
 	}
-	if !projectContinuationReplacementChildHandoffActive(rt) && !childDraftAdvanceActive {
+	if !projectContinuationReplacementChildHandoffActive(rt) && !childDraftAdvanceActive && !closeoutParentAdvanceActive {
 		return false
 	}
 	focusTaskID := uuid.Nil
@@ -35244,6 +35246,9 @@ func shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt *turnRuntime, c
 		if childDraftAdvanceActive && projectExecutionChildDraftCleanupSucceeded(call, results[idx], focusTaskID, namedTaskIDs) {
 			return true
 		}
+		if closeoutParentAdvanceActive && projectExecutionFocusedCloseoutParentAdvanceSucceeded(call, results[idx], focusTaskID) {
+			return true
+		}
 		if projectExecutionFocusedDraftChildCreateSucceeded(call, results[idx], focusTaskID) {
 			return true
 		}
@@ -35252,6 +35257,25 @@ func shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt *turnRuntime, c
 		}
 	}
 	return false
+}
+
+func projectExecutionFocusedCloseoutParentAdvanceSucceeded(call ToolCall, result ToolResult, focusTaskID uuid.UUID) bool {
+	if strings.TrimSpace(toolResultErrorCode(result)) != "" {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(call.Name), "task.update") {
+		return false
+	}
+	taskID, ok := parseUUIDAny(call.Arguments["task_id"])
+	if !ok || taskID == uuid.Nil || taskID != focusTaskID {
+		return false
+	}
+	switch projectExecutionResultWorkStatus(call.Arguments, result) {
+	case "queued", "in_progress", "review":
+		return true
+	default:
+		return false
+	}
 }
 
 func shouldStopAfterSuccessfulTaskExecutionParentOrchestrationRepair(rt *turnRuntime, calls []ToolCall, results []ToolResult) bool {

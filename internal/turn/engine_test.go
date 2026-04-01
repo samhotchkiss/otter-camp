@@ -19834,6 +19834,46 @@ func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationForFocusPrerequ
 	}
 }
 
+func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationForCloseoutReadyParentAdvance(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Continue the active project execution now.",
+			`Current focus parent: task 12526 (Write 6 technical test conversations for SamBot) id=` + focusTaskID.String() + ` work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md completed_closeout_child_tasks=2 outcome_satisfied=true.`,
+			"Do not split it again or create another replacement child.",
+			"Advance that same parent into execution with work_status=queued so its own flow can finish.",
+		}, " "),
+	}
+
+	calls := []ToolCall{{
+		Name: "task.update",
+		Arguments: map[string]any{
+			"task_id":     focusTaskID.String(),
+			"work_status": "queued",
+		},
+	}}
+	results := []ToolResult{{
+		Name: "task.update",
+		Output: map[string]any{
+			"task": map[string]any{
+				"id":          focusTaskID.String(),
+				"work_status": "queued",
+			},
+		},
+	}}
+
+	if !shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
+		t.Fatal("expected successful closeout-ready parent advance to stop the PM turn")
+	}
+}
+
 func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationStopsForFocusedDraftChildCreate(t *testing.T) {
 	t.Parallel()
 
