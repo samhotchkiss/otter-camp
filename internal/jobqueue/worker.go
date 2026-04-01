@@ -9928,6 +9928,35 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		        SELECT 1
 		        FROM chat_turn ct
 		        JOIN chat_session cs ON cs.id = ct.session_id
+		        JOIN chat_message trigger ON trigger.id = ct.trigger_message_id
+		        WHERE ct.id = mi.turn_id
+		          AND ct.status = 'in_progress'
+		          AND cs.status = 'active'
+		          AND cs.scope_type = 'project_task'
+		          AND cs.current_turn_id = ct.id
+		          AND mi.created_at < $8
+		          AND COALESCE(trigger.metadata->>'recovery_direct_write_body_escalated', '') = 'true'
+		          AND EXISTS (
+		                SELECT 1
+		                FROM flow_node_execution e
+		                WHERE e.session_id = cs.id
+		                  AND e.status = 'active'
+		              )
+		          AND EXISTS (
+		                SELECT 1
+		                FROM chat_message cm
+		                WHERE cm.turn_id = ct.id
+		                  AND cm.role = 'assistant'
+		                  AND cm.status IN ('pending', 'streaming')
+		                  AND cm.created_at < $8
+		              )
+		      )
+		    )
+		    OR (
+		      EXISTS (
+		        SELECT 1
+		        FROM chat_turn ct
+		        JOIN chat_session cs ON cs.id = ct.session_id
 		        WHERE ct.id = mi.turn_id
 		          AND ct.status = 'in_progress'
 		          AND cs.status = 'active'
