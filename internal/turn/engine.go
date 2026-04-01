@@ -10954,6 +10954,11 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	} else if handled {
 		return nil
 	}
+	if handled, handleErr := e.handleDuplicateSameDeliverableTaskPreflight(ctx, runtime); handleErr != nil {
+		return handleErr
+	} else if handled {
+		return nil
+	}
 	cancelCtx, stopCancelWatch := e.watchTurnCancellation(ctx, runtime)
 	defer stopCancelWatch()
 
@@ -11837,6 +11842,59 @@ func (e *TurnEngine) handleMalformedProceduralChildTaskPreflight(ctx context.Con
 	return true, nil
 }
 
+func (e *TurnEngine) handleDuplicateSameDeliverableTaskPreflight(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if e == nil || e.tasks == nil || rt == nil || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
+
+	taskRecord, err := e.tasks.GetByID(ctx, rt.session.ScopeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return true, err
+	}
+	ownerTask, deliverablePath, duplicate, err := e.duplicateSameDeliverableHigherPrecedenceTaskForTaskLane(ctx, taskRecord)
+	if err != nil || !duplicate {
+		return duplicate, err
+	}
+
+	reason := buildDuplicateSameDeliverableTaskBlockedReason(taskRecord, ownerTask, deliverablePath)
+	systemMessage := buildDuplicateSameDeliverableTaskSystemMessage(taskRecord, ownerTask, deliverablePath)
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, systemMessage); err != nil {
+		return true, err
+	}
+	if e.taskTransitions == nil {
+		return true, fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
+		if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
+			var transitionErr tasksvc.ErrInvalidStatusTransition
+			if errors.As(err, &transitionErr) {
+				refreshed, refreshErr := e.tasks.GetByID(ctx, taskRecord.ID)
+				if refreshErr == nil {
+					nextStatus := strings.ToLower(strings.TrimSpace(refreshed.WorkStatus))
+					if nextStatus != "blocked" && nextStatus != "done" && nextStatus != "cancelled" {
+						return true, err
+					}
+				} else {
+					return true, err
+				}
+			} else {
+				return true, err
+			}
+		}
+	}
+	rt.stopReason = stopReasonValidationBlocked
+	if err := e.completeTurn(ctx, rt); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
 func (e *TurnEngine) malformedProceduralParentTaskForChild(ctx context.Context, taskRecord repo.ProjectTask) (repo.ProjectTask, bool, error) {
 	if !projectContinuationTaskLooksProceduralInstructionArtifact(taskRecord) {
 		return repo.ProjectTask{}, false, nil
@@ -11857,6 +11915,79 @@ func (e *TurnEngine) malformedProceduralParentTaskForChild(ctx context.Context, 
 		return repo.ProjectTask{}, false, nil
 	}
 	return parentTask, true, nil
+}
+
+func projectTaskDuplicateDeliverablePreflightRank(status string) int {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "review":
+		return 3
+	case "in_progress":
+		return 2
+	case "queued":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func (e *TurnEngine) duplicateSameDeliverableHigherPrecedenceTaskForTaskLane(ctx context.Context, taskRecord repo.ProjectTask) (repo.ProjectTask, string, bool, error) {
+	if e == nil || e.tasks == nil || taskRecord.ProjectID == uuid.Nil {
+		return repo.ProjectTask{}, "", false, nil
+	}
+	currentRank := projectTaskDuplicateDeliverablePreflightRank(taskRecord.WorkStatus)
+	if currentRank == 0 {
+		return repo.ProjectTask{}, "", false, nil
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return repo.ProjectTask{}, "", false, err
+	}
+	taskHintsByTask, err := e.projectContinuationTaskHintsByTask(ctx, projectTasks)
+	if err != nil {
+		return repo.ProjectTask{}, "", false, err
+	}
+	currentHints := taskHintsByTask[taskRecord.ID]
+	deliverablePath := normalizeWorkspaceRelativePath(currentHints.DeliverablePath)
+	if !projectContinuationTaskHasDeliverableIdentity(currentHints.DeliverablePath, currentHints.DeliverableRoot) {
+		return repo.ProjectTask{}, "", false, nil
+	}
+	malformedChildTaskIDs := projectContinuationMalformedChildTaskIDs(projectTasks)
+	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(projectTasks))
+	for _, task := range projectTasks {
+		tasksByID[task.ID] = task
+	}
+	var best repo.ProjectTask
+	bestRank := 0
+	for _, otherTask := range projectTasks {
+		if otherTask.ID == uuid.Nil || otherTask.ID == taskRecord.ID {
+			continue
+		}
+		if _, malformed := malformedChildTaskIDs[otherTask.ID]; malformed {
+			continue
+		}
+		otherRank := projectTaskDuplicateDeliverablePreflightRank(otherTask.WorkStatus)
+		if otherRank <= currentRank {
+			continue
+		}
+		otherHints := taskHintsByTask[otherTask.ID]
+		if !projectContinuationTaskHintsShareDeliverableIdentity(currentHints, otherHints) {
+			continue
+		}
+		if projectContinuationSharedDocSectionTasksConflict(taskRecord, currentHints, otherTask, otherHints, tasksByID) {
+			continue
+		}
+		if best.ID == uuid.Nil || otherRank > bestRank || (otherRank == bestRank && otherTask.TaskNumber > best.TaskNumber) {
+			best = otherTask
+			bestRank = otherRank
+			if deliverablePath == "" {
+				deliverablePath = normalizeWorkspaceRelativePath(otherHints.DeliverablePath)
+			}
+		}
+	}
+	if best.ID == uuid.Nil {
+		return repo.ProjectTask{}, "", false, nil
+	}
+	return best, deliverablePath, true, nil
 }
 
 func buildMalformedNoDecomposeChildTaskBlockedReason(taskRecord, parentTask repo.ProjectTask) string {
@@ -11897,6 +12028,27 @@ func buildMalformedProceduralChildTaskSystemMessage(taskRecord, parentTask repo.
 		lines = append(lines, fmt.Sprintf("Resume the real bounded work from the parent task and target `%s` there, or create a fresh bounded replacement child task instead of reopening this procedural lane.]", targetPath))
 	} else {
 		lines = append(lines, "Resume the real bounded work from the parent task, or create a fresh bounded replacement child task instead of reopening this procedural lane.]")
+	}
+	return strings.Join(lines, " ")
+}
+
+func buildDuplicateSameDeliverableTaskBlockedReason(taskRecord, ownerTask repo.ProjectTask, deliverablePath string) string {
+	reason := fmt.Sprintf("%s duplicates the same deliverable already owned by higher-precedence task lane %s; let the higher-precedence lane settle before reopening this task", buildTaskLabel(taskRecord), buildTaskLabel(ownerTask))
+	if deliverablePath = strings.TrimSpace(deliverablePath); deliverablePath != "" {
+		reason += fmt.Sprintf(" (deliverable: %s)", deliverablePath)
+	}
+	return reason
+}
+
+func buildDuplicateSameDeliverableTaskSystemMessage(taskRecord, ownerTask repo.ProjectTask, deliverablePath string) string {
+	lines := []string{
+		fmt.Sprintf("[Task lane halted: %s duplicates deliverable work already owned by %s.", buildTaskLabel(taskRecord), buildTaskLabel(ownerTask)),
+		fmt.Sprintf("The higher-precedence same-deliverable lane is already %s, so this lower-precedence task session should not continue mutating or reviewing the same artifact in parallel.", strings.ToLower(strings.TrimSpace(ownerTask.WorkStatus))),
+	}
+	if deliverablePath = strings.TrimSpace(deliverablePath); deliverablePath != "" {
+		lines = append(lines, fmt.Sprintf("Leave `%s` to %s for now, and only reopen this task if that higher-precedence lane settles without satisfying the deliverable.]", deliverablePath, buildTaskLabel(ownerTask)))
+	} else {
+		lines = append(lines, fmt.Sprintf("Leave the shared deliverable to %s for now, and only reopen this task if that higher-precedence lane settles without satisfying the deliverable.]", buildTaskLabel(ownerTask)))
 	}
 	return strings.Join(lines, " ")
 }

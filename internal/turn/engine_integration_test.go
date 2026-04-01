@@ -12065,6 +12065,93 @@ func TestTurnEngineIntegrationMalformedDuplicateSharedFileChildKickoffPreflightB
 	}
 }
 
+func TestTurnEngineIntegrationDuplicateSameDeliverableLowerPrecedenceTaskPreflightBlocksBeforeModelCall(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	flowTemplate := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+
+	inProgressDescription := "Repair planning/sambot-prompts/test-conversations-technical.md by rewriting the six technical conversations after rejected proof."
+	inProgressTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Repair planning/sambot-prompts/test-conversations-technical.md — fix rejected proof (6 technical conversations)",
+		Description:     &inProgressDescription,
+		WorkStatus:      "in_progress",
+		FlowTemplateID:  &flowTemplate.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+		AssignedAgentID: &fixture.agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create in-progress task: %v", err)
+	}
+
+	reviewDescription := "Rewrite planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations (replaces rejected OC-12038)."
+	reviewTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Rewrite planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations (replaces rejected OC-12038)",
+		Description:     &reviewDescription,
+		WorkStatus:      "review",
+		FlowTemplateID:  &flowTemplate.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+		AssignedAgentID: &fixture.agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create review task: %v", err)
+	}
+
+	taskSession, _ := mustCreateTaskSession(t, ctx, fixture, inProgressTask, "operator reopened older same-deliverable lane while newer review lane was already active")
+	authorType := "human_user"
+	kickoffMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    buildTaskQueueKickoffMessageForTest(inProgressTask),
+		Metadata: mustJSON(t, map[string]any{
+			"source": "task_queue_processor",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage kickoff: %v", err)
+	}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		return ModelResponse{Content: "should never reach model"}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, taskSession.ID, kickoffMessage.ID, &fixture.agent.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage duplicate same-deliverable lower-precedence kickoff: %v", err)
+	}
+	if modelCalls != 0 {
+		t.Fatalf("model calls = %d, want 0 because duplicate same-deliverable lower-precedence kickoff must halt in preflight", modelCalls)
+	}
+
+	refreshedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, inProgressTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID refreshed task: %v", err)
+	}
+	if refreshedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", refreshedTask.WorkStatus)
+	}
+
+	blockedReasons, err := repo.NewProjectTaskEventRepo(fixture.pool).LatestBlockedReasonsByTask(ctx, []uuid.UUID{inProgressTask.ID})
+	if err != nil {
+		t.Fatalf("LatestBlockedReasonsByTask: %v", err)
+	}
+	blockedReason := blockedReasons[inProgressTask.ID]
+	if !strings.Contains(blockedReason, buildTaskLabel(reviewTask)) || !strings.Contains(blockedReason, "higher-precedence task lane") {
+		t.Fatalf("blocked reason = %q, want higher-precedence same-deliverable explanation", blockedReason)
+	}
+}
+
 func TestTurnEngineIntegrationMalformedConflictingDeliverableChildKickoffPreflightBlocksBeforeModelCall(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
