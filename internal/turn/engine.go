@@ -11930,6 +11930,16 @@ func projectTaskDuplicateDeliverablePreflightRank(status string) int {
 	}
 }
 
+func projectTaskDuplicateDeliverableShouldYieldToPeer(currentTask, otherTask repo.ProjectTask, currentRank, otherRank int) bool {
+	if otherRank > currentRank {
+		return true
+	}
+	if otherRank != currentRank || currentRank != projectTaskDuplicateDeliverablePreflightRank("review") {
+		return false
+	}
+	return otherTask.TaskNumber > currentTask.TaskNumber
+}
+
 func (e *TurnEngine) duplicateSameDeliverableHigherPrecedenceTaskForTaskLane(ctx context.Context, taskRecord repo.ProjectTask) (repo.ProjectTask, string, bool, error) {
 	if e == nil || e.tasks == nil || taskRecord.ProjectID == uuid.Nil {
 		return repo.ProjectTask{}, "", false, nil
@@ -11966,7 +11976,7 @@ func (e *TurnEngine) duplicateSameDeliverableHigherPrecedenceTaskForTaskLane(ctx
 			continue
 		}
 		otherRank := projectTaskDuplicateDeliverablePreflightRank(otherTask.WorkStatus)
-		if otherRank <= currentRank {
+		if !projectTaskDuplicateDeliverableShouldYieldToPeer(taskRecord, otherTask, currentRank, otherRank) {
 			continue
 		}
 		otherHints := taskHintsByTask[otherTask.ID]
