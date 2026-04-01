@@ -35894,6 +35894,24 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsContentStrippedCLIExecuteFallba
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsCommandStrippedCLIExecuteNarration(t *testing.T) {
+	t.Parallel()
+
+	content := "The `command` parameter is also being stripped. Let me try a different approach — writing via a heredoc:"
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected command-stripped heredoc narration to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsPythonCLIExecuteWriteNarration(t *testing.T) {
+	t.Parallel()
+
+	content := "I'll write the complete portfolio HTML file using python3 via cli_execute, as the task instructions direct. Let me build and write it in one pass:"
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected python cli_execute write narration to be treated as generic recovery output")
+	}
+}
+
 func TestIsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts(t *testing.T) {
 	t.Parallel()
 
