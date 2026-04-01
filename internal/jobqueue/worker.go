@@ -9845,7 +9845,7 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		                FROM chat_message cm
 		                WHERE cm.turn_id = ct.id
 		                  AND cm.role = 'assistant'
-		                  AND cm.status = 'streaming'
+		                  AND cm.status IN ('pending', 'streaming')
 		                  AND cm.created_at < $9
 		              )
 		      )
