@@ -12002,7 +12002,8 @@ func (w *Worker) RecoverStaleInProgressProjectTaskTurnsWithoutOwnership(ctx cont
 				err = nil
 			}
 			if strings.EqualFold(strings.TrimSpace(messageSource), "task_recovery_resume") ||
-				strings.EqualFold(strings.TrimSpace(messageSource), "supervisor") {
+				strings.EqualFold(strings.TrimSpace(messageSource), "supervisor") ||
+				strings.EqualFold(strings.TrimSpace(messageSource), "task_queue_processor") {
 				executionID, parseErr := uuid.Parse(strings.TrimSpace(executionText))
 				if parseErr == nil && executionID != uuid.Nil {
 					terminalBlocked, terminalErr := latestRecoveryResumeTurnShowsTerminalBlockedStopWithQuerier(ctx, tx, item.sessionID, executionID)
@@ -12024,6 +12025,14 @@ func (w *Worker) RecoverStaleInProgressProjectTaskTurnsWithoutOwnership(ctx cont
 							     OR (
 							          COALESCE(metadata->>'source', '') = 'supervisor'
 							      AND content = 'supervisor recovery: resume task'
+							        )
+							     OR (
+							          COALESCE(metadata->>'source', '') = 'task_queue_processor'
+							      AND (
+							           COALESCE(metadata->>'recovery_source', '') = 'supervisor'
+							        OR COALESCE(metadata->>'recovered_missing_kickoff', '') = 'true'
+							        OR COALESCE(metadata->>'synthetic_user_message', '') = 'true'
+							          )
 							        )
 							      )
 							  AND COALESCE(metadata->>'flow_node_execution_id', '') = $3::text
