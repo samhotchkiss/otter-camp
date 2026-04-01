@@ -645,6 +645,7 @@ type turnRuntime struct {
 	recoveryBlockReason                     string
 	recoveryQueuedTurn                      bool
 	recoveryTargetPath                      string
+	currentAssistantContent                 string
 	recoveryDirectWriteOnly                 bool
 	recoverySourceFetchReady                bool
 	placeholderTargetSeen                   bool
@@ -13526,6 +13527,7 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 		}
 
 		response.ToolCalls = normalizeModelToolCalls(response.ToolCalls)
+		rt.currentAssistantContent = strings.TrimSpace(response.Content)
 		if synthesizedToolCalls, synthesized, synthErr := e.maybeSynthesizeRecoveryFileWriteToolCalls(ctx, rt, response.Content, response.ToolCalls); synthErr != nil {
 			return synthErr
 		} else if synthesized {
@@ -20190,6 +20192,9 @@ func (e *TurnEngine) handleTaskCLIExecuteWithoutCommand(ctx context.Context, rt 
 }
 
 func (e *TurnEngine) latestAssistantFinalContentForCurrentTurn(ctx context.Context, rt *turnRuntime) string {
+	if rt != nil && strings.TrimSpace(rt.currentAssistantContent) != "" {
+		return strings.TrimSpace(rt.currentAssistantContent)
+	}
 	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
 		return ""
 	}
