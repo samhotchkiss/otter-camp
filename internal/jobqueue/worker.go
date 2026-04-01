@@ -5291,7 +5291,7 @@ func recoveredDirectWriteCheckpointKickoffInstruction(taskRecord repo.ProjectTas
 		return ""
 	}
 	if strings.EqualFold(strings.TrimSpace(filepath.Ext(targetPath)), ".html") {
-		return fmt.Sprintf("Recovery already narrowed this task to `%s`. Do not begin with file.list, file.read, planning-artifact rereads, or design-consistency discovery. Write `%s` directly as the full standalone HTML deliverable with file.write using both `path` and `content`, or give one concrete blocker sentence if you cannot produce the full body from the current task context.", targetPath, targetPath)
+		return fmt.Sprintf("Recovery already narrowed this task to `%s`. Do not begin with file.list, file.read, planning-artifact rereads, or design-consistency discovery. Your next assistant message must begin immediately with `<!DOCTYPE html>` or the opening `<html` tag from the actual deliverable body for `%s`, not a sentence like 'Writing the template now.' Do not emit file.write until the full HTML body exists in the assistant response, and do not emit file.write with only `path`. Write `%s` directly as the full standalone HTML deliverable with file.write using both `path` and `content`, or give one concrete blocker sentence if you cannot produce the full body from the current task context.", targetPath, targetPath, targetPath)
 	}
 	return fmt.Sprintf("Recovery already narrowed this task to `%s`. Do not begin with file.list, file.read, or broad context-gathering. Write `%s` directly with file.write using both `path` and `content`, or give one concrete blocker sentence if the full body still cannot be produced from the current task context.", targetPath, targetPath)
 }

@@ -1217,6 +1217,12 @@ func TestBuildRecoveredTaskQueueKickoffMessageIncludesDirectWriteCheckpointInstr
 	if !strings.Contains(message, "Do not begin with file.list, file.read, planning-artifact rereads, or design-consistency discovery.") {
 		t.Fatalf("message = %q, want anti-discovery instruction", message)
 	}
+	if !strings.Contains(message, "must begin immediately with `<!DOCTYPE html>` or the opening `<html` tag") {
+		t.Fatalf("message = %q, want body-start requirement", message)
+	}
+	if !strings.Contains(message, "do not emit file.write with only `path`") {
+		t.Fatalf("message = %q, want path-only write ban", message)
+	}
 	if !strings.Contains(message, "file.write using both `path` and `content`") {
 		t.Fatalf("message = %q, want direct file.write instruction", message)
 	}
