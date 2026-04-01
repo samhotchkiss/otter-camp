@@ -11674,6 +11674,16 @@ func TestShouldBlockTaskExecutionReadOnlyVerificationWriteTool(t *testing.T) {
 	if blocked {
 		t.Fatal("did not expect file.read to be blocked for read-only verification task")
 	}
+
+	blocked, reason = fixture.engine.shouldBlockTaskExecutionReadOnlyVerificationWriteTool(context.Background(), rt, "cli.execute", map[string]any{
+		"command": "python3 - <<'PY'\nfrom pathlib import Path\nPath('planning/sambot-tech-architecture.md').write_text('rewritten')\nPY",
+	})
+	if !blocked {
+		t.Fatal("expected read-only verification cli.execute write to be blocked")
+	}
+	if !strings.Contains(reason, "cli.execute shell wrappers") {
+		t.Fatalf("reason = %q, want cli.execute guidance", reason)
+	}
 }
 
 func TestShouldBlockTaskExecutionReadOnlyVerificationWriteToolAllowsSeparateResultsOutput(t *testing.T) {
@@ -11714,6 +11724,13 @@ func TestShouldBlockTaskExecutionReadOnlyVerificationWriteToolAllowsSeparateResu
 	})
 	if blocked {
 		t.Fatal("did not expect verification results output write to be blocked")
+	}
+
+	blocked, _ = fixture.engine.shouldBlockTaskExecutionReadOnlyVerificationWriteTool(context.Background(), rt, "cli.execute", map[string]any{
+		"command": "cat > results/sambot-personality-spec-verification.md <<'EOF'\nPASS\nEOF",
+	})
+	if blocked {
+		t.Fatal("did not expect verification results output cli.execute write to be blocked")
 	}
 }
 

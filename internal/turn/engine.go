@@ -32381,6 +32381,22 @@ func shellFileBuildTargetFromCLIExecuteArguments(arguments map[string]any) (stri
 	return shellFileBuildTargetFromCLICommand(command)
 }
 
+func cliExecuteMutatesWorkspacePath(arguments map[string]any, targetPath string) bool {
+	if len(arguments) == 0 {
+		return false
+	}
+	normalizedTargetPath := normalizeWorkspaceRelativePath(targetPath)
+	if normalizedTargetPath == "" {
+		return false
+	}
+	normalized := toolargs.Normalize("cli.execute", cloneMap(arguments))
+	command := strings.ToLower(strings.TrimSpace(anyString(normalized["command"])))
+	if command == "" {
+		return false
+	}
+	return looksLikeShellFileBuildCommand(command, normalizedTargetPath)
+}
+
 func shellFileBuildTargetFromCLICommand(command string) (string, bool) {
 	lower := strings.ToLower(strings.TrimSpace(command))
 	if lower == "" {
@@ -37254,12 +37270,12 @@ func buildTaskExecutionReadOnlyVerificationWriteGuardError(sourcePath, outputPat
 	sourcePath = normalizeWorkspaceRelativePath(sourcePath)
 	outputPath = normalizeWorkspaceRelativePath(outputPath)
 	if sourcePath == "" {
-		return "this is a read-only verification task. Do not rewrite the deliverable from the work lane; inspect the named artifacts and summarize the verification findings without mutating the file."
+		return "this is a read-only verification task. Do not rewrite the deliverable from the work lane with file.write, file.edit, or cli.execute shell wrappers; inspect the named artifacts and summarize the verification findings without mutating the file."
 	}
 	if outputPath != "" && !sameWorkspaceRelativePath(outputPath, sourcePath) {
-		return fmt.Sprintf("this is a verification task for `%s` with output `%s`. Do not use file.write or file.edit to rewrite `%s` from the work lane. Read `%s` and the explicitly named acceptance-criteria/reference artifacts, then write the verification findings only to `%s`.", sourcePath, outputPath, sourcePath, sourcePath, outputPath)
+		return fmt.Sprintf("this is a verification task for `%s` with output `%s`. Do not use file.write, file.edit, or cli.execute shell wrappers to rewrite `%s` from the work lane. Read `%s` and the explicitly named acceptance-criteria/reference artifacts, then write the verification findings only to `%s`.", sourcePath, outputPath, sourcePath, sourcePath, outputPath)
 	}
-	return fmt.Sprintf("this is a read-only verification task for `%s`. Do not use file.write or file.edit to rewrite `%s` from the work lane. Read `%s` and the explicitly named acceptance-criteria/reference artifacts, keep the deliverable unchanged, and summarize the verification findings instead of mutating the file.", sourcePath, sourcePath, sourcePath)
+	return fmt.Sprintf("this is a read-only verification task for `%s`. Do not use file.write, file.edit, or cli.execute shell wrappers to rewrite `%s` from the work lane. Read `%s` and the explicitly named acceptance-criteria/reference artifacts, keep the deliverable unchanged, and summarize the verification findings instead of mutating the file.", sourcePath, sourcePath, sourcePath)
 }
 
 func (e *TurnEngine) shouldBlockTaskExecutionReadOnlyVerificationWriteTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
@@ -37270,8 +37286,10 @@ func (e *TurnEngine) shouldBlockTaskExecutionReadOnlyVerificationWriteTool(ctx c
 		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
 		return false, ""
 	}
-	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
+	switch normalizedToolName {
 	case "file.write", "file_write", "file.edit", "file_edit":
+	case "cli.execute", "cli_execute":
 	default:
 		return false, ""
 	}
@@ -37290,7 +37308,19 @@ func (e *TurnEngine) shouldBlockTaskExecutionReadOnlyVerificationWriteTool(ctx c
 	if sourcePath == "" {
 		return false, ""
 	}
-	path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+	path := ""
+	switch normalizedToolName {
+	case "cli.execute", "cli_execute":
+		if isReadOnlyDiscoveryCLIExecuteCall(arguments) {
+			return false, ""
+		}
+		if !cliExecuteMutatesWorkspacePath(arguments, sourcePath) {
+			return false, ""
+		}
+		path = sourcePath
+	default:
+		path = normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+	}
 	if path == "" || !sameWorkspaceRelativePath(path, sourcePath) {
 		return false, ""
 	}
