@@ -35957,6 +35957,15 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsWritingDirectlyNowStub(t *testi
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsWritingFullTemplateNowStub(t *testing.T) {
+	t.Parallel()
+
+	content := "Writing the full portfolio template now."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected present-progress full-template stub to be treated as generic recovery output")
+	}
+}
+
 func TestIsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts(t *testing.T) {
 	t.Parallel()
 
