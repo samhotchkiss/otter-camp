@@ -187,8 +187,12 @@ var projectContinuationWorkspacePathPattern = regexp.MustCompile(`\b(?:content|t
 var projectContinuationParentCompletionTaskLabelPattern = regexp.MustCompile(`(?i)\bOC-\d+\b`)
 var projectContinuationBoundedSizeStopTaskPattern = regexp.MustCompile(`remaining draft task\s+([0-9]+)\b`)
 var projectContinuationPromptAssignedAgentIDPattern = regexp.MustCompile(`assigned_agent_id=([^\s;]+)`)
+var projectContinuationPromptProofStatePattern = regexp.MustCompile(`proof_state=([a-z_]+)`)
 var promptFlowNodeExecutionPattern = regexp.MustCompile(`(?i)flow node execution:\s*([0-9a-fA-F-]{36})`)
 var workspacePathInBackticksPattern = regexp.MustCompile("`([^`]+)`")
+var reviewCLIHeadReadPattern = regexp.MustCompile(`(?i)^\s*head\s+-c\s+([0-9]+)\s+(.+?)\s*$`)
+var reviewCLITailReadPattern = regexp.MustCompile(`(?i)^\s*tail\s+-c\s+([0-9]+)\s+(.+?)\s*$`)
+var reviewCLITestFilePattern = regexp.MustCompile(`(?i)^\s*test\s+-f\s+(.+?)(?:\s*(?:&&|\|\|).*)?$`)
 var readOnlyVerificationTargetPattern = regexp.MustCompile("(?i)^\\s*(?:verify|review)\\s+([^\\s,;]+)")
 var acceptanceCriteriaListItemPattern = regexp.MustCompile(`^\d+[.)]\s+(.+)$`)
 var explicitDeliverablePathPatterns = []*regexp.Regexp{
@@ -3485,6 +3489,18 @@ func explicitReviewDecisionFromText(content string) (string, bool) {
 		if strings.Contains(text, signal) {
 			return "reject", true
 		}
+	}
+	if strings.Contains(text, "review assessment") &&
+		(containsAny(text,
+			"missing entirely",
+			"**fail",
+			"fail.",
+			"fail:",
+			"none meet the",
+			"required topic is missing",
+			"required topics are missing",
+		) || strings.Contains(text, "❌")) {
+		return "reject", true
 	}
 	approveSignals := []string{
 		"review decision: approve",
@@ -9802,6 +9818,25 @@ func buildProjectExecutionContinuationPrompt(completedTask repo.ProjectTask, rem
 			"If no fresh draft or replacement task is named below, your next assistant message must be one concrete blocker sentence naming the blocked deliverable or human/operator dependency.",
 		)
 	}
+	if projectContinuationSnapshotOnlyHasActionableTerminalBlockedLeafDeliverables(snapshot) {
+		paths := projectContinuationSnapshotTerminalBlockedDeliverablePaths(snapshot)
+		lines = append(lines,
+			"All currently actionable remaining work is already represented by terminally blocked leaf deliverables below.",
+			"Do not call file.read, file.list, task.get, task.list, session.list, session.history, git.status, or git.log before acting on those blocked deliverables.",
+			"Do not reread the blocked deliverable files from disk first just to rediscover what replacement work is needed.",
+		)
+		if len(paths) > 1 {
+			lines = append(lines,
+				fmt.Sprintf("There are %d distinct blocked deliverables already named in this prompt: %s.", len(paths), strings.Join(paths, ", ")),
+				"Start with the first distinct blocked deliverable and create or queue one smallest bounded replacement or closeout task for it now. Leave the remaining blocked deliverables for the next continuation once that first handoff is persisted.",
+			)
+		} else if len(paths) == 1 {
+			lines = append(lines,
+				fmt.Sprintf("The blocked deliverable already named in this prompt is `%s`.", paths[0]),
+				"Your next assistant action must create or queue the smallest bounded replacement or closeout task for that deliverable now.",
+			)
+		}
+	}
 	lines = appendProjectExecutionSnapshotGuidance(lines, snapshot)
 	if completedBatchRange != "" && projectExecutionSnapshotContainsBatchRange(snapshot, completedBatchRange) {
 		lines = append(lines,
@@ -9850,6 +9885,58 @@ func projectContinuationSnapshotOnlyHasNonActionableBlockedWork(snapshot project
 		}
 	}
 	return blockedCount > 0
+}
+
+func projectContinuationSnapshotTerminalBlockedDeliverablePaths(snapshot projectExecutionContinuationSnapshot) []string {
+	activeLine := strings.TrimSpace(snapshot.ActiveTaskLine)
+	if activeLine == "" {
+		return nil
+	}
+	matches := projectContinuationPromptTerminalBlockedDeliverablePathPattern.FindAllStringSubmatch(activeLine, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(matches))
+	paths := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		normalized := normalizeWorkspaceRelativePath(match[1])
+		if normalized == "" {
+			continue
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		paths = append(paths, normalized)
+	}
+	return paths
+}
+
+func projectContinuationSnapshotOnlyHasActionableTerminalBlockedLeafDeliverables(snapshot projectExecutionContinuationSnapshot) bool {
+	if !snapshot.HasActionableBlocked {
+		return false
+	}
+	if strings.TrimSpace(snapshot.ActiveTaskLine) == "" || strings.TrimSpace(snapshot.LeafActiveTaskLine) == "" {
+		return false
+	}
+	if strings.TrimSpace(snapshot.DraftTaskLine) != "" ||
+		strings.TrimSpace(snapshot.ReplacementDraftLine) != "" ||
+		strings.TrimSpace(snapshot.RepairDraftLine) != "" ||
+		strings.TrimSpace(snapshot.ChildActiveDraftLine) != "" ||
+		strings.TrimSpace(snapshot.FocusTaskLine) != "" {
+		return false
+	}
+	activeLine := strings.ToLower(strings.TrimSpace(snapshot.ActiveTaskLine))
+	if strings.Contains(activeLine, "work_status=in_progress") ||
+		strings.Contains(activeLine, "work_status=review") ||
+		strings.Contains(activeLine, "work_status=queued") ||
+		strings.Contains(activeLine, "work_status=draft") {
+		return false
+	}
+	return len(projectContinuationSnapshotTerminalBlockedDeliverablePaths(snapshot)) > 0
 }
 
 func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress projectBootstrapProgress) string {
@@ -12963,6 +13050,11 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			response.ToolCalls = synthesizedToolCalls
 		}
 		if synthesizedToolCalls, synthesized, synthErr := e.maybeSynthesizeTaskReviewDecisionToolCalls(ctx, rt, response.Content, response.ToolCalls); synthErr != nil {
+			return synthErr
+		} else if synthesized {
+			response.ToolCalls = synthesizedToolCalls
+		}
+		if synthesizedToolCalls, synthesized, synthErr := e.maybeSynthesizeTaskExecutionFlowAdvanceToolCalls(ctx, rt, response.Content, response.ToolCalls); synthErr != nil {
 			return synthErr
 		} else if synthesized {
 			response.ToolCalls = synthesizedToolCalls
@@ -18612,7 +18704,7 @@ func (e *TurnEngine) rewriteRecoveryCLIExecuteWithoutCommandToFileWrite(ctx cont
 		"turn_id", rt.turn.ID,
 		"path", targetPath,
 	)
-	return false, nil
+	return true, nil
 }
 
 func isRecoveryCLIExecuteWithoutCommand(call ToolCall) bool {
@@ -18992,8 +19084,26 @@ func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *
 		return false, false, nil
 	}
 
-	draft, ok := e.taskContinuationDraftContent(ctx, rt, targetPath)
-	if !ok {
+	draft := ""
+	draftOK := false
+	if currentTurnDraft, found := e.currentTurnSuccessfulFileReadDraftContent(ctx, rt, targetPath); found {
+		if reason := recoveryFileWriteDraftRejectReason(currentTurnDraft, targetPath); reason == "" && looksLikeRecoveryFileDraft(currentTurnDraft) {
+			draft = currentTurnDraft
+			draftOK = true
+		}
+	}
+	if !draftOK {
+		if workspaceDraft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath); found {
+			if reason := recoveryFileWriteDraftRejectReason(workspaceDraft, targetPath); reason == "" && looksLikeRecoveryFileDraft(workspaceDraft) {
+				draft = workspaceDraft
+				draftOK = true
+			}
+		}
+	}
+	if !draftOK {
+		draft, draftOK = e.taskContinuationDraftContent(ctx, rt, targetPath)
+	}
+	if !draftOK {
 		if rt.taskFileFixes >= taskFileWriteRepairBudget {
 			return false, false, nil
 		}
@@ -19015,6 +19125,39 @@ func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *
 		"path", targetPath,
 	)
 	return false, false, nil
+}
+
+func (e *TurnEngine) currentTurnSuccessfulFileReadDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return "", false
+	}
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return "", false
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if message.TurnID == nil || *message.TurnID != rt.turn.ID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || strings.TrimSpace(errText) != "" || !strings.EqualFold(strings.TrimSpace(toolName), "file.read") {
+			continue
+		}
+		readPath := normalizeWorkspaceRelativePath(anyString(output["path"]))
+		if readPath == "" || !sameWorkspaceRelativePath(readPath, targetPath) {
+			continue
+		}
+		content := strings.TrimSpace(anyString(output["content"]))
+		if content == "" {
+			continue
+		}
+		return content, true
+	}
+	return "", false
 }
 
 func (e *TurnEngine) handleTaskFileWriteWrongPath(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
@@ -19101,6 +19244,9 @@ func buildTaskFileWriteRetryMessage(targetPath string) string {
 	path := strings.TrimSpace(targetPath)
 	if path == "" {
 		path = "<target file>"
+	}
+	if looksLikePromptConversationCorpusTarget(path) {
+		return fmt.Sprintf("[Task execution correction: file.write for `%s` was emitted without `content`. Rewrite the entire deliverable file body now in the assistant response, then resend file.write with both `path` and `content`. Do not analyze the existing file again. Do not restate the requirements, gaps, or checklist. Do not begin with sentences like 'The file already exists', 'I can see', 'Let me check', 'I need to rewrite', or 'I will write'. The first non-whitespace character of your next assistant message must be the first character of the replacement deliverable body itself. Start immediately with the actual conversation file content.]", path)
 	}
 	return fmt.Sprintf("[Task execution correction: file.write for `%s` was emitted without `content`. Before retrying file mutation tools, draft the full file body in the assistant response or resend `file.write` with both `path` and `content` populated. The first non-whitespace character of your next assistant message must be the first character of the deliverable itself, not a sentence like 'I will write' or 'Let me provide'.]", path)
 }
@@ -19245,7 +19391,23 @@ func (e *TurnEngine) handleTaskCLIExecuteWithoutCommand(ctx context.Context, rt 
 	draft := ""
 	draftOK := false
 	if ok && targetPath != "" {
-		draft, draftOK = e.taskContinuationHighConfidenceDraftContent(ctx, rt, targetPath)
+		if currentTurnDraft, found := e.currentTurnSuccessfulFileReadDraftContent(ctx, rt, targetPath); found {
+			if reason := recoveryFileWriteDraftRejectReason(currentTurnDraft, targetPath); reason == "" && looksLikeRecoveryFileDraft(currentTurnDraft) {
+				draft = currentTurnDraft
+				draftOK = true
+			}
+		}
+		if !draftOK {
+			if workspaceDraft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath); found {
+				if reason := recoveryFileWriteDraftRejectReason(workspaceDraft, targetPath); reason == "" && looksLikeRecoveryFileDraft(workspaceDraft) {
+					draft = workspaceDraft
+					draftOK = true
+				}
+			}
+		}
+		if !draftOK {
+			draft, draftOK = e.taskContinuationHighConfidenceDraftContent(ctx, rt, targetPath)
+		}
 	}
 	if !draftOK || strings.TrimSpace(draft) == "" {
 		output := map[string]any{}
@@ -20277,6 +20439,71 @@ func (e *TurnEngine) maybeSynthesizeTaskReviewDecisionToolCalls(ctx context.Cont
 		"session_id", rt.session.ID,
 		"turn_id", rt.turn.ID,
 		"decision", decision,
+		"flow_node_execution_id", executionID.String(),
+	)
+	return []ModelToolCall{synthesized}, true, nil
+}
+
+func explicitFlowAdvanceIntentFromText(content string) bool {
+	text := strings.ToLower(normalizeInstructionText(content))
+	if strings.TrimSpace(text) == "" {
+		return false
+	}
+	return containsAny(text,
+		"time to advance the flow",
+		"advance the flow now",
+		"call flow.advance",
+		"i should advance the flow",
+		"ready to advance the flow",
+		"parent can finish through its own flow",
+		"can finish through its own flow",
+	)
+}
+
+func (e *TurnEngine) maybeSynthesizeTaskExecutionFlowAdvanceToolCalls(ctx context.Context, rt *turnRuntime, assistantContent string, toolCalls []ModelToolCall) ([]ModelToolCall, bool, error) {
+	if e == nil || rt == nil || rt.turn == nil || rt.session == nil || rt.recoveryTurn {
+		return toolCalls, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") ||
+		taskReviewPromptActive(rt) {
+		return toolCalls, false, nil
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil || e.tasks == nil {
+		return toolCalls, false, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return toolCalls, false, nil
+	}
+	if !projectContinuationTaskHasRecordedParentCompletionEvidence(taskRecord) {
+		return toolCalls, false, nil
+	}
+	for _, call := range toolCalls {
+		if strings.EqualFold(strings.TrimSpace(call.Name), "flow.advance") || strings.EqualFold(strings.TrimSpace(call.Name), "flow_advance") {
+			return toolCalls, false, nil
+		}
+	}
+	executionID := flowNodeExecutionIDFromSessionMetadata(rt.session)
+	if executionID == nil || *executionID == uuid.Nil {
+		return toolCalls, false, nil
+	}
+	if !explicitFlowAdvanceIntentFromText(assistantContent) {
+		return toolCalls, false, nil
+	}
+	synthesized := ModelToolCall{
+		ID:   fmt.Sprintf("task-execution-flow-advance-%s", uuid.NewString()),
+		Name: "flow.advance",
+		Tier: "tier2",
+		Arguments: map[string]any{
+			"flow_node_execution_id": executionID.String(),
+		},
+	}
+	e.logger.Info("task execution: synthesized flow.advance from closeout-ready parent assistant reply",
+		"session_id", rt.session.ID,
+		"turn_id", rt.turn.ID,
+		"task_id", taskRecord.ID,
 		"flow_node_execution_id", executionID.String(),
 	)
 	return []ModelToolCall{synthesized}, true, nil
@@ -21509,9 +21736,24 @@ func inferredTaskExecutionLogTargetPath(taskRecord repo.ProjectTask) (string, bo
 	if taskRecord.TaskNumber <= 0 {
 		return "", false
 	}
+	if targetPath := strings.TrimSpace(explicitDeliverablePath(taskRecord)); looksLikePromptConversationCorpusTarget(targetPath) {
+		return "", false
+	}
 	text := strings.ToLower(strings.TrimSpace(taskRecord.Title))
 	if taskRecord.Description != nil {
 		text += " " + strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	if containsAny(text,
+		"test conversation",
+		"test conversations",
+		"conversation scenario",
+		"conversation scenarios",
+		"multi-turn conversation",
+		"multi-turn conversations",
+		"user and sambot",
+		"expected behavior notes",
+	) {
+		return "", false
 	}
 	if !taskLooksLikeScenarioExecution(text) {
 		return "", false
@@ -21862,6 +22104,7 @@ type recoveryResumeState struct {
 	targetPath                    string
 	inheritedSharedPath           string
 	sharedSectionTarget           string
+	flowNodeExecutionID           uuid.UUID
 	targetDraft                   string
 	targetDraftRejectedReason     string
 	artifactPath                  string
@@ -21883,6 +22126,7 @@ type recoveryResumeState struct {
 	reviewDecisionEvidenceRefs    []string
 	requiredChildVerificationRefs []string
 	parentOrchestrationRepairRule string
+	closeoutReadyParentAdvance    bool
 	taskAcceptanceCriteria        []string
 	inferredSummaryDraft          bool
 }
@@ -22235,6 +22479,10 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 			}
 		}
 	}
+	if haveTaskRecord {
+		state.flowNodeExecutionID = parseFlowNodeExecutionIDFromMetadata(rt.session.Metadata)
+		state.closeoutReadyParentAdvance = recoveryResumeShouldAdvanceCloseoutReadyParent(taskRecord, state)
+	}
 	if strings.TrimSpace(state.targetPath) == "" &&
 		strings.TrimSpace(state.targetDraft) == "" &&
 		strings.TrimSpace(state.targetDraftRejectedReason) == "" &&
@@ -22249,6 +22497,22 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 		return recoveryResumeState{}, false
 	}
 	return state, true
+}
+
+func recoveryResumeShouldAdvanceCloseoutReadyParent(taskRecord repo.ProjectTask, state recoveryResumeState) bool {
+	if !taskMetadataMarksOrchestrationOnlyTurn(taskRecord.Metadata) {
+		return false
+	}
+	if !projectContinuationTaskHasRecordedParentCompletionEvidence(taskRecord) {
+		return false
+	}
+	if normalizeWorkspaceRelativePath(strings.TrimSpace(state.targetPath)) == "" {
+		return false
+	}
+	if strings.TrimSpace(state.targetDraft) == "" || strings.TrimSpace(state.targetDraftRejectedReason) != "" {
+		return false
+	}
+	return strings.TrimSpace(recoveryFileWriteDraftRejectReason(state.targetDraft, state.targetPath)) == ""
 }
 
 func (e *TurnEngine) recoveryResumeInheritedSharedDeliverablePath(taskRecord repo.ProjectTask, checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) string {
@@ -22774,6 +23038,14 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 		(strings.TrimSpace(state.artifactDraft) != "" || strings.TrimSpace(state.summaryDraft) != "") {
 		lines = append(lines, "If the target file is only a stub but the recovery artifact is fuller, merge the fuller artifact content into the target before retrying the final write.")
 	}
+	if state.closeoutReadyParentAdvance {
+		lines = append(lines, "Closeout-ready parent evidence is already recorded on the current orchestration-only task.")
+		if state.flowNodeExecutionID != uuid.Nil {
+			lines = append(lines, fmt.Sprintf("Next action override: do not rewrite `%s` again. Call flow.advance with flow_node_execution_id %s so the parent flow can finish.", strings.TrimSpace(state.targetPath), state.flowNodeExecutionID.String()))
+		} else {
+			lines = append(lines, fmt.Sprintf("Next action override: do not rewrite `%s` again. Call flow.advance with the active flow_node_execution_id so the parent flow can finish.", strings.TrimSpace(state.targetPath)))
+		}
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -22846,6 +23118,30 @@ func shouldOmitRecoverySummaryDraftFromPrompt(state recoveryResumeState) bool {
 }
 
 func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
+	if state.closeoutReadyParentAdvance {
+		target := strings.TrimSpace(state.targetPath)
+		if target == "" {
+			target = "the target deliverable"
+		}
+		lines := []string{
+			"Continue the active task recovery now.",
+			"Do not answer with generic chat, acknowledgements, or a question to the user.",
+			"Do not reread child tasks, workspace listings, or recovery artifacts first.",
+			fmt.Sprintf("The orchestration-only parent already has recorded parent_orchestration closeout evidence and `%s` is already substantive on disk.", target),
+			fmt.Sprintf("Do not call file.write, file.edit, cli.execute, or task.update for `%s` on this recovery turn.", target),
+		}
+		if state.flowNodeExecutionID != uuid.Nil {
+			lines = append(lines, fmt.Sprintf("Your next assistant action must be flow.advance with flow_node_execution_id %s.", state.flowNodeExecutionID.String()))
+		} else {
+			lines = append(lines, "Your next assistant action must be flow.advance with the active flow_node_execution_id.")
+		}
+		lines = append(lines,
+			"Do not preface the tool call with explanation, readiness text, or a summary.",
+			"If flow.advance truly cannot run, report one concrete blocker sentence instead of attempting another file mutation.",
+		)
+		return strings.Join(lines, " ")
+	}
+
 	hasDurableDraft := strings.TrimSpace(state.artifactDraft) != "" ||
 		strings.TrimSpace(state.summaryDraft) != "" ||
 		(!state.preferCheckpointContext && strings.TrimSpace(state.targetDraft) != "")
@@ -25875,7 +26171,27 @@ func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turn
 	if draft, ok := e.latestTaskHistoricalSubstantiveDraftContent(ctx, rt, targetPath); ok {
 		return draft, "", true
 	}
+	if draft, rejectReason, ok := e.recoveryWorkspaceTargetDraftContent(ctx, rt, targetPath); ok {
+		return draft, rejectReason, true
+	}
 	return e.recoveryPersistedDraftContent(ctx, rt, targetPath)
+}
+
+func (e *TurnEngine) recoveryWorkspaceTargetDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, string, bool) {
+	if e == nil || rt == nil {
+		return "", "", false
+	}
+	draft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath)
+	if !found || strings.TrimSpace(draft) == "" {
+		return "", "", false
+	}
+	if rejectReason := strings.TrimSpace(recoveryFileWriteDraftRejectReason(draft, targetPath)); rejectReason != "" {
+		return draft, rejectReason, false
+	}
+	if !looksLikeRecoveryFileDraft(draft) {
+		return "", "", false
+	}
+	return draft, "", true
 }
 
 func (e *TurnEngine) recoveryPersistedDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, string, bool) {
@@ -27020,6 +27336,66 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		return fmt.Sprintf("assistant draft for %s restated task status and work plan instead of the file body", path)
 	}
 	if containsAny(lower,
+		"the file already exists with substantial content",
+		"the file already exists with substantive content",
+	) && containsAny(lower,
+		"current state:",
+		"task requires",
+		"missing:",
+		"has 4 conversation scenarios",
+		"has 4 conversation blocks",
+	) {
+		return fmt.Sprintf("assistant draft for %s analyzed the current file gaps instead of writing the missing file body", path)
+	}
+	if looksLikePromptConversationCorpusTarget(path) &&
+		containsAny(lower,
+			"the file already exists",
+			"existing file has",
+			"the existing file has content but doesn't meet spec",
+			"the existing file has content but does not meet spec",
+			"the existing file has content but doesn't fully meet spec",
+			"the existing file has content but does not fully meet spec",
+			"current file has",
+			"the file exists and has solid content",
+			"the file exists and has substantive content",
+			"doesn't fully meet the task requirements",
+			"does not fully meet the task requirements",
+			"doesn't meet the task requirements",
+			"does not meet the task requirements",
+			"the file exists with",
+			"needs expansion to meet requirements",
+			"is missing several requirements",
+			"what's there:",
+			"whats there:",
+			"what's missing against requirements",
+			"whats missing against requirements",
+			"using the python3 fallback",
+			"using python3 fallback",
+			"using the python fallback",
+			"using `cli_execute`",
+			"using cli_execute",
+			"using `cli.execute`",
+			"using cli.execute",
+			"with python3, as the task instructions specify for fallback",
+			"with python3 as the task instructions specify for fallback",
+			"i'll write the complete deliverable file now using",
+			"i will write the complete deliverable file now using",
+			"i'll write the complete deliverable using",
+			"i will write the complete deliverable using",
+			"let me first check what reference materials exist",
+			"i need to expand it with:",
+			"task requires",
+			"missing:",
+			"current state:",
+			"need 5+ total",
+			"need at least 5",
+			"more level-2 scenarios",
+			"missing topics:",
+		) &&
+		!containsAny(lower, "user:", "sambot:", "assistant:", "sam:") {
+		return fmt.Sprintf("assistant draft for %s analyzed the current conversation-file gaps instead of writing the missing dialogue content", path)
+	}
+	if containsAny(lower,
 		"i'm ready to help you synthesize the validation findings for oc-13",
 		"before i proceed, i need to clarify one thing:",
 		"what's the current state of the target file?",
@@ -27615,6 +27991,32 @@ func looksLikeReviewerAssessmentInDeliverable(targetPath, content string) bool {
 func looksLikeStrongDeliverableReviewerSummaryPlaceholder(lower string) bool {
 	if lower == "" {
 		return false
+	}
+	if containsAny(lower,
+		"contains a self-review/assessment note rather than the actual",
+		"contains a self-review assessment note rather than the actual",
+		"contains a self-referential assessment note rather than the actual",
+		"the file content is a self-referential assessment note",
+		"the file at the deliverable path is a placeholder",
+		"contains only a planning note/scratchpad",
+		"self-narration about what the author *intended* to write",
+		"self-narration about what the author intended to write",
+		"does not contain the deliverable specified in the task description",
+		"required by the task",
+	) && containsAny(lower,
+		"this is a `mismatched_deliverable_context`",
+		"this is a mismatched_deliverable_context",
+		"this is a `placeholder_deliverable`",
+		"this is a placeholder_deliverable",
+		"this is a clear `placeholder_deliverable` situation",
+		"this is a clear placeholder_deliverable situation",
+		"this clearly fails the task requirements",
+		"the work node wrote planning notes to the deliverable path",
+		"rejecting immediately per review protocol",
+		"rejecting per review protocol",
+		"rejecting.",
+	) {
+		return true
 	}
 	if strings.Contains(lower, "mismatched_deliverable_context") && containsAny(lower,
 		"self-referential placeholder",
@@ -28565,6 +28967,10 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		return true
 	}
 	hasWriteIntent := containsAny(lower,
+		"writing the complete deliverable file now",
+		"writing the complete file now",
+		"writing the full deliverable now",
+		"writing the file now via",
 		"let me write",
 		"let me draft",
 		"let me create",
@@ -34975,6 +35381,30 @@ func buildTaskExecutionCurrentTaskRediscoveryGuardError(toolName, targetPath str
 	}
 }
 
+func buildTaskExecutionCloseoutReadyParentAdvanceGuardError(toolName, targetPath string, executionID uuid.UUID) string {
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	if targetPath == "" {
+		targetPath = "the current deliverable"
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "task.get", "task_get":
+		if executionID != uuid.Nil {
+			return fmt.Sprintf("this closeout-ready parent already has recorded child_output_verifications, integration_check.status=passed, and outcome_assessment.satisfied=true for `%s`. Do not reread task.get for this same task now; call flow.advance with flow_node_execution_id %s instead.", targetPath, executionID.String())
+		}
+		return fmt.Sprintf("this closeout-ready parent already has recorded child_output_verifications, integration_check.status=passed, and outcome_assessment.satisfied=true for `%s`. Do not reread task.get for this same task now; call flow.advance with the active flow_node_execution_id instead.", targetPath)
+	case "flow.get_execution", "flow_get_execution":
+		if executionID != uuid.Nil {
+			return fmt.Sprintf("this closeout-ready parent already has recorded child_output_verifications, integration_check.status=passed, and outcome_assessment.satisfied=true for `%s`. Do not probe flow.get_execution for that same execution again; call flow.advance with flow_node_execution_id %s instead.", targetPath, executionID.String())
+		}
+		return fmt.Sprintf("this closeout-ready parent already has recorded child_output_verifications, integration_check.status=passed, and outcome_assessment.satisfied=true for `%s`. Do not probe flow.get_execution for that same execution again; call flow.advance with the active flow_node_execution_id instead.", targetPath)
+	default:
+		if executionID != uuid.Nil {
+			return fmt.Sprintf("this closeout-ready parent already has recorded completion evidence for `%s`. Do not rediscover its current task state first; call flow.advance with flow_node_execution_id %s instead.", targetPath, executionID.String())
+		}
+		return fmt.Sprintf("this closeout-ready parent already has recorded completion evidence for `%s`. Do not rediscover its current task state first; call flow.advance with the active flow_node_execution_id instead.", targetPath)
+	}
+}
+
 func (e *TurnEngine) shouldBlockTaskExecutionCurrentTaskRediscoveryTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
 	if e == nil || e.tasks == nil || rt == nil || rt.session == nil || rt.toolCallsUsed != 0 || rt.recoveryTurn {
 		return false, ""
@@ -34991,11 +35421,38 @@ func (e *TurnEngine) shouldBlockTaskExecutionCurrentTaskRediscoveryTool(ctx cont
 	if err != nil {
 		return false, ""
 	}
-	if taskLooksLikeOrchestrationOnlyParent(taskRecord) ||
-		strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+	if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
 		return false, ""
 	}
 	targetPath := normalizeWorkspaceRelativePath(e.taskExplicitDeliverablePath(ctx, taskRecord))
+	promptExecutionID := promptFlowNodeExecutionID(rt.initialMessageText)
+	if taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+		if !projectContinuationTaskHasRecordedParentCompletionEvidence(taskRecord) {
+			return false, ""
+		}
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "task.get", "task_get":
+			requestedTaskID, ok := parseUUIDAny(arguments["task_id"])
+			if !ok || requestedTaskID != *currentTaskID {
+				return false, ""
+			}
+			return true, buildTaskExecutionCloseoutReadyParentAdvanceGuardError(toolName, targetPath, promptExecutionID)
+		case "flow.get_execution", "flow_get_execution":
+			requestedExecutionID, ok := parseUUIDAny(arguments["execution_id"])
+			if !ok || requestedExecutionID == uuid.Nil {
+				requestedExecutionID, ok = parseUUIDAny(arguments["flow_node_execution_id"])
+				if !ok || requestedExecutionID == uuid.Nil {
+					return false, ""
+				}
+			}
+			if promptExecutionID != uuid.Nil && requestedExecutionID == promptExecutionID {
+				return true, buildTaskExecutionCloseoutReadyParentAdvanceGuardError(toolName, targetPath, promptExecutionID)
+			}
+			return false, ""
+		default:
+			return false, ""
+		}
+	}
 	if targetPath == "" {
 		return false, ""
 	}
@@ -35014,7 +35471,7 @@ func (e *TurnEngine) shouldBlockTaskExecutionCurrentTaskRediscoveryTool(ctx cont
 				return false, ""
 			}
 		}
-		if promptExecutionID := promptFlowNodeExecutionID(rt.initialMessageText); promptExecutionID != uuid.Nil && requestedExecutionID == promptExecutionID {
+		if promptExecutionID != uuid.Nil && requestedExecutionID == promptExecutionID {
 			return true, buildTaskExecutionCurrentTaskRediscoveryGuardError(toolName, targetPath)
 		}
 	}
@@ -36367,7 +36824,7 @@ func (e *TurnEngine) maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(ctx
 	if targetPath == "" {
 		return toolCalls, false, nil
 	}
-	tailOffset, hasTailOffset, err := e.taskReviewPreferredDeliverableTailReadOffset(ctx, rt, targetPath)
+	tailOffset, tailMaxBytes, hasTailOffset, err := e.taskReviewPreferredDeliverableTailReadOffset(ctx, rt, targetPath)
 	if err != nil {
 		return nil, false, err
 	}
@@ -36375,28 +36832,33 @@ func (e *TurnEngine) maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(ctx
 	rewritten := false
 	out := make([]ModelToolCall, 0, len(toolCalls))
 	for _, call := range toolCalls {
+		callCopy := call
+		changedCall := false
 		switch strings.ToLower(strings.TrimSpace(call.Name)) {
 		case "file.read", "file_read":
+		case "cli.execute", "cli_execute":
+			rewrittenArgs, ok := taskReviewCLIExecuteReadAsFileReadArguments(call.Arguments)
+			if !ok {
+				out = append(out, call)
+				continue
+			}
+			callCopy.Name = "file.read"
+			callCopy.Arguments = rewrittenArgs
+			changedCall = true
 		default:
 			out = append(out, call)
 			continue
 		}
 
-		path := normalizeWorkspaceRelativePath(stringValue(call.Arguments["path"]))
+		path := normalizeWorkspaceRelativePath(stringValue(callCopy.Arguments["path"]))
 		if path == "" {
 			out = append(out, call)
 			continue
 		}
 		if siblingMaxBytes, ok := taskReviewCheckpointOutputSiblingReadMaxBytesForBatch(rt, toolCalls, path, targetPath); ok {
-			callCopy := call
-			changedCall := false
-			explicitMaxBytes := intValue(call.Arguments["max_bytes"])
+			explicitMaxBytes := intValue(callCopy.Arguments["max_bytes"])
 			if explicitMaxBytes <= 0 || explicitMaxBytes > siblingMaxBytes {
-				if callCopy.Arguments == nil {
-					callCopy.Arguments = map[string]any{}
-				} else {
-					callCopy.Arguments = cloneMap(call.Arguments)
-				}
+				callCopy.Arguments = cloneMap(callCopy.Arguments)
 				callCopy.Arguments["max_bytes"] = siblingMaxBytes
 				changedCall = true
 			}
@@ -36414,31 +36876,22 @@ func (e *TurnEngine) maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(ctx
 			continue
 		}
 
-		callCopy := call
-		changedCall := false
-		explicitOffsetBytes := intValue(call.Arguments["offset_bytes"])
+		explicitOffsetBytes := intValue(callCopy.Arguments["offset_bytes"])
 		if hasTailOffset && explicitOffsetBytes <= 0 {
-			if callCopy.Arguments == nil {
-				callCopy.Arguments = map[string]any{}
-			} else {
-				callCopy.Arguments = cloneMap(call.Arguments)
-			}
+			callCopy.Arguments = cloneMap(callCopy.Arguments)
 			callCopy.Arguments["offset_bytes"] = tailOffset
+			callCopy.Arguments["max_bytes"] = tailMaxBytes
 			changedCall = true
 		}
 
-		explicitMaxBytes := intValue(call.Arguments["max_bytes"])
+		explicitMaxBytes := intValue(callCopy.Arguments["max_bytes"])
 		targetMaxBytes := taskReviewPreferredDeliverableReadMaxBytes
 		if !hasTailOffset {
 			if _, gapMaxBytes, ok := taskReviewPreferredDeliverableGapReadSpec(rt); ok {
 				targetMaxBytes = gapMaxBytes
 				if explicitOffsetBytes <= 0 {
 					if !changedCall {
-						if callCopy.Arguments == nil {
-							callCopy.Arguments = map[string]any{}
-						} else {
-							callCopy.Arguments = cloneMap(call.Arguments)
-						}
+						callCopy.Arguments = cloneMap(callCopy.Arguments)
 					}
 					callCopy.Arguments["offset_bytes"] = taskReviewPreferredDeliverableReadMaxBytes
 					changedCall = true
@@ -36447,11 +36900,7 @@ func (e *TurnEngine) maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(ctx
 		}
 		if explicitMaxBytes <= 0 || explicitMaxBytes > targetMaxBytes {
 			if !changedCall {
-				if callCopy.Arguments == nil {
-					callCopy.Arguments = map[string]any{}
-				} else {
-					callCopy.Arguments = cloneMap(call.Arguments)
-				}
+				callCopy.Arguments = cloneMap(callCopy.Arguments)
 			}
 			callCopy.Arguments["max_bytes"] = targetMaxBytes
 			changedCall = true
@@ -36472,9 +36921,56 @@ func (e *TurnEngine) maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(ctx
 	return out, true, nil
 }
 
-func (e *TurnEngine) taskReviewPreferredDeliverableTailReadOffset(ctx context.Context, rt *turnRuntime, targetPath string) (int, bool, error) {
+func taskReviewCLIExecuteReadAsFileReadArguments(arguments map[string]any) (map[string]any, bool) {
+	if len(arguments) == 0 {
+		return nil, false
+	}
+	normalized := toolargs.Normalize("cli.execute", cloneMap(arguments))
+	command := strings.TrimSpace(anyString(normalized["command"]))
+	if command == "" {
+		return nil, false
+	}
+	path, maxBytes, ok := taskReviewCLIReadbackSpec(command)
+	if !ok || path == "" || maxBytes <= 0 {
+		return nil, false
+	}
+	return map[string]any{
+		"path":      path,
+		"max_bytes": maxBytes,
+	}, true
+}
+
+func taskReviewCLIReadbackSpec(command string) (string, int, bool) {
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" {
+		return "", 0, false
+	}
+	if match := reviewCLIHeadReadPattern.FindStringSubmatch(trimmed); len(match) == 3 {
+		path := normalizeWorkspaceRelativePath(strings.Trim(match[2], "\"'"))
+		maxBytes := intValue(match[1])
+		if path != "" && maxBytes > 0 {
+			return path, maxBytes, true
+		}
+	}
+	if match := reviewCLITailReadPattern.FindStringSubmatch(trimmed); len(match) == 3 {
+		path := normalizeWorkspaceRelativePath(strings.Trim(match[2], "\"'"))
+		maxBytes := intValue(match[1])
+		if path != "" && maxBytes > 0 {
+			return path, maxBytes, true
+		}
+	}
+	if match := reviewCLITestFilePattern.FindStringSubmatch(trimmed); len(match) == 2 {
+		path := normalizeWorkspaceRelativePath(strings.Trim(match[1], "\"'"))
+		if path != "" {
+			return path, 1, true
+		}
+	}
+	return "", 0, false
+}
+
+func (e *TurnEngine) taskReviewPreferredDeliverableTailReadOffset(ctx context.Context, rt *turnRuntime, targetPath string) (int, int, bool, error) {
 	if rt == nil || rt.session == nil || rt.session.ID == uuid.Nil {
-		return 0, false, nil
+		return 0, 0, false, nil
 	}
 
 	headReadTruncated := false
@@ -36485,19 +36981,18 @@ func (e *TurnEngine) taskReviewPreferredDeliverableTailReadOffset(ctx context.Co
 		tailReadSeen = rt.reviewPreferredDeliverableTailReadSeen
 		byteSize = rt.reviewPreferredDeliverableByteSize
 	}
-	if (e == nil || e.messages == nil) && headReadTruncated && !tailReadSeen && byteSize > taskReviewPreferredDeliverableReadMaxBytes {
-		tailOffset := byteSize - taskReviewPreferredDeliverableReadMaxBytes
-		if tailOffset > 0 {
-			return tailOffset, true, nil
+	if (e == nil || e.messages == nil) && headReadTruncated && !tailReadSeen {
+		if tailOffset, tailMaxBytes, ok := taskReviewPreferredDeliverableTailReadSpec(byteSize); ok {
+			return tailOffset, tailMaxBytes, true, nil
 		}
 	}
 	if e == nil || e.messages == nil {
-		return 0, false, nil
+		return 0, 0, false, nil
 	}
 
 	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 
 	for _, message := range messages {
@@ -36532,13 +37027,12 @@ func (e *TurnEngine) taskReviewPreferredDeliverableTailReadOffset(ctx context.Co
 		}
 	}
 	if !headReadTruncated || tailReadSeen || byteSize <= taskReviewPreferredDeliverableReadMaxBytes {
-		return 0, false, nil
+		return 0, 0, false, nil
 	}
-	tailOffset := byteSize - taskReviewPreferredDeliverableReadMaxBytes
-	if tailOffset <= 0 {
-		return 0, false, nil
+	if tailOffset, tailMaxBytes, ok := taskReviewPreferredDeliverableTailReadSpec(byteSize); ok {
+		return tailOffset, tailMaxBytes, true, nil
 	}
-	return tailOffset, true, nil
+	return 0, 0, false, nil
 }
 
 func recordTaskReviewPreferredDeliverableReadResult(rt *turnRuntime, result ToolResult) {
@@ -36684,6 +37178,13 @@ func rewriteTaskReviewPreferredDeliverableReadDispatchCall(rt *turnRuntime, tool
 	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "file.read", "file_read":
+	case "cli.execute", "cli_execute":
+		rewrittenArgs, ok := taskReviewCLIExecuteReadAsFileReadArguments(arguments)
+		if !ok {
+			return toolName, arguments
+		}
+		toolName = "file.read"
+		arguments = rewrittenArgs
 	default:
 		return toolName, arguments
 	}
@@ -36706,16 +37207,16 @@ func rewriteTaskReviewPreferredDeliverableReadDispatchCall(rt *turnRuntime, tool
 	}
 	explicitOffsetBytes := intValue(arguments["offset_bytes"])
 	explicitMaxBytes := intValue(arguments["max_bytes"])
-	if tailOffset, ok := taskReviewPreferredDeliverableTailOffsetForRewrite(rt); ok {
-		if explicitOffsetBytes > 0 && explicitMaxBytes > 0 && explicitMaxBytes <= taskReviewPreferredDeliverableReadMaxBytes {
+	if tailOffset, tailMaxBytes, ok := taskReviewPreferredDeliverableTailOffsetForRewrite(rt); ok {
+		if explicitOffsetBytes > 0 && explicitMaxBytes > 0 && explicitMaxBytes <= tailMaxBytes {
 			return toolName, arguments
 		}
 		rewritten := cloneMap(arguments)
 		if explicitOffsetBytes <= 0 {
 			rewritten["offset_bytes"] = tailOffset
 		}
-		if explicitMaxBytes <= 0 || explicitMaxBytes > taskReviewPreferredDeliverableReadMaxBytes {
-			rewritten["max_bytes"] = taskReviewPreferredDeliverableReadMaxBytes
+		if explicitMaxBytes <= 0 || explicitMaxBytes > tailMaxBytes {
+			rewritten["max_bytes"] = tailMaxBytes
 		}
 		return "file.read", rewritten
 	}
@@ -36735,15 +37236,28 @@ func rewriteTaskReviewPreferredDeliverableReadDispatchCall(rt *turnRuntime, tool
 	return toolName, arguments
 }
 
-func taskReviewPreferredDeliverableTailOffsetForRewrite(rt *turnRuntime) (int, bool) {
+func taskReviewPreferredDeliverableTailOffsetForRewrite(rt *turnRuntime) (int, int, bool) {
 	if rt == nil || !rt.reviewPreferredDeliverableHeadTruncated || rt.reviewPreferredDeliverableTailReadSeen || rt.reviewPreferredDeliverableByteSize <= taskReviewPreferredDeliverableReadMaxBytes {
-		return 0, false
+		return 0, 0, false
 	}
-	tailOffset := rt.reviewPreferredDeliverableByteSize - taskReviewPreferredDeliverableReadMaxBytes
-	if tailOffset <= 0 {
-		return 0, false
+	return taskReviewPreferredDeliverableTailReadSpec(rt.reviewPreferredDeliverableByteSize)
+}
+
+func taskReviewPreferredDeliverableTailReadSpec(byteSize int) (int, int, bool) {
+	if byteSize <= taskReviewPreferredDeliverableReadMaxBytes {
+		return 0, 0, false
 	}
-	return tailOffset, true
+	unreadRemainder := byteSize - taskReviewPreferredDeliverableReadMaxBytes
+	tailOffset := byteSize - taskReviewPreferredDeliverableReadMaxBytes
+	tailMaxBytes := taskReviewPreferredDeliverableReadMaxBytes
+	if unreadRemainder > 0 && unreadRemainder < tailMaxBytes {
+		tailOffset = taskReviewPreferredDeliverableReadMaxBytes
+		tailMaxBytes = unreadRemainder
+	}
+	if tailOffset < 0 || tailMaxBytes <= 0 {
+		return 0, 0, false
+	}
+	return tailOffset, tailMaxBytes, true
 }
 
 func taskReviewPreferredDeliverableGapReadSpec(rt *turnRuntime) (int, int, bool) {
@@ -38621,6 +39135,11 @@ func buildProjectContinuationFocusedDraftQueueRequiredGuardError(focusTask repo.
 	return fmt.Sprintf("project continuation already proved that closeout-ready parent %s cannot jump straight from draft to done from the project lane. Do not set work_status=done on %s here; use one narrow task.update with work_status=queued instead, and include any missing child_output_verifications, integration_check.status=passed, and outcome_assessment.satisfied=true in that same update when needed so the parent_orchestration metadata is recorded.", label, label)
 }
 
+func buildProjectContinuationFocusedDraftRejectedProofGuardError(focusTask repo.ProjectTask) string {
+	label := projectBootstrapTaskLabel(focusTask)
+	return fmt.Sprintf("project continuation already has focused parent %s with proof_state=rejected. Do not set work_status=queued on %s as a closeout-ready parent from the project lane now. Create or queue the smallest bounded replacement or repair work that addresses the rejected review findings instead of re-queuing the disproven parent.", label, label)
+}
+
 func projectContinuationParentCompletionEvidenceIncluded(arguments map[string]any) bool {
 	if len(arguments) == 0 {
 		return false
@@ -38698,6 +39217,31 @@ func projectContinuationPromptCurrentFocusParentTaskID(initialMessage string) uu
 		return uuid.Nil
 	}
 	return focusTaskID
+}
+
+func projectContinuationPromptCurrentFocusParentLine(initialMessage string) string {
+	const marker = "Current focus parent:"
+	idx := strings.Index(initialMessage, marker)
+	if idx < 0 {
+		return ""
+	}
+	line := strings.TrimSpace(initialMessage[idx:])
+	if newlineIdx := strings.Index(line, "\n"); newlineIdx >= 0 {
+		line = strings.TrimSpace(line[:newlineIdx])
+	}
+	return line
+}
+
+func projectContinuationPromptCurrentFocusProofState(initialMessage string) string {
+	line := projectContinuationPromptCurrentFocusParentLine(initialMessage)
+	if line == "" {
+		return ""
+	}
+	match := projectContinuationPromptProofStatePattern.FindStringSubmatch(line)
+	if len(match) != 2 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(match[1]))
 }
 
 func projectContinuationPromptFocusedTaskWithActivity(initialMessage string, projectTasks []repo.ProjectTask) (repo.ProjectTask, bool) {
@@ -38780,6 +39324,14 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 	if focusTaskID == uuid.Nil {
 		return false, ""
 	}
+	initial := strings.TrimSpace(rt.initialMessageText)
+	if nextStatus == "queued" &&
+		targetTaskID == focusTaskID &&
+		projectContinuationPromptCurrentFocusProofState(initial) == "rejected" {
+		if focusTask, err := e.tasks.GetByID(ctx, focusTaskID); err == nil {
+			return true, buildProjectContinuationFocusedDraftRejectedProofGuardError(focusTask)
+		}
+	}
 	if nextStatus == "queued" &&
 		targetTaskID == focusTaskID &&
 		projectContinuationCloseoutReadyParentPromptActive(rt) {
@@ -38791,7 +39343,6 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftMutationTool(ctx 
 			return false, ""
 		}
 	}
-	initial := strings.TrimSpace(rt.initialMessageText)
 	actionableDraftTaskID := projectContinuationPromptFocusTaskID(initial)
 	repairTaskID := projectContinuationPromptRepairDraftTaskID(initial)
 	if projectContinuationFocusedPrerequisiteRepairActive(initial) &&
@@ -41508,6 +42059,10 @@ func looksLikeGenericTaskRecoveryReply(content string) bool {
 		"every single turn has called `file_write`",
 		"every single turn has called file_write",
 		"no `file_write` calls at all",
+		"the recovery system is intercepting file reads",
+		"let me use the python3 fallback approach",
+		"since file_write has been failing in prior attempts",
+		"since file_write has been problematic in this project",
 		"let me quickly read the personality spec and prompts",
 		"i need to gather context from the sambot personality spec and prompts",
 		"let me check what already exists at the target file",
@@ -41725,44 +42280,69 @@ func substantiveExecutionDeliverableReadCompleted(taskRecord repo.ProjectTask, r
 }
 
 func explicitDeliverablePath(taskRecord repo.ProjectTask) string {
+	bestCandidate := ""
+	bestScore := -1
+	considerCandidate := func(rawCandidate string) {
+		rawCandidate = strings.TrimSpace(rawCandidate)
+		if rawCandidate == "" {
+			return
+		}
+		candidate := normalizeExplicitDeliverablePathCandidate(rawCandidate)
+		if !looksLikeExplicitDeliverablePath(candidate, rawCandidate) {
+			return
+		}
+		score := explicitDeliverablePathCandidateScore(candidate, rawCandidate)
+		if score > bestScore {
+			bestCandidate = candidate
+			bestScore = score
+		}
+	}
 	for _, description := range taskContractDescriptionCandidates(taskRecord) {
 		for _, pattern := range explicitDeliverablePathPatterns {
 			matches := pattern.FindStringSubmatch(description)
 			if len(matches) < 2 {
 				continue
 			}
-			rawCandidate := strings.TrimSpace(matches[1])
-			candidate := normalizeExplicitDeliverablePathCandidate(rawCandidate)
-			if !looksLikeExplicitDeliverablePath(candidate, rawCandidate) {
-				continue
-			}
-			return candidate
+			considerCandidate(matches[1])
 		}
 	}
 	for _, description := range taskContractDescriptionCandidates(taskRecord) {
 		if match := leadingVerbDeliverablePathPattern.FindStringSubmatch(description); len(match) >= 2 {
-			rawCandidate := strings.TrimSpace(match[1])
-			candidate := normalizeExplicitDeliverablePathCandidate(rawCandidate)
-			if looksLikeExplicitDeliverablePath(candidate, rawCandidate) {
-				return candidate
-			}
+			considerCandidate(match[1])
 		}
 		if match := leadingExplicitDeliverablePathPattern.FindStringSubmatch(description); len(match) >= 2 {
-			rawCandidate := strings.TrimSpace(match[1])
-			candidate := normalizeExplicitDeliverablePathCandidate(rawCandidate)
-			if looksLikeExplicitDeliverablePath(candidate, rawCandidate) {
-				return candidate
-			}
+			considerCandidate(match[1])
 		}
 		if match := parenthesizedDeliverableOptionPathPattern.FindStringSubmatch(description); len(match) >= 2 {
-			rawCandidate := strings.TrimSpace(match[1])
-			candidate := normalizeExplicitDeliverablePathCandidate(rawCandidate)
-			if looksLikeExplicitDeliverablePath(candidate, rawCandidate) {
-				return candidate
-			}
+			considerCandidate(match[1])
 		}
 	}
-	return ""
+	return bestCandidate
+}
+
+func explicitDeliverablePathCandidateScore(normalized, raw string) int {
+	score := 0
+	normalized = normalizeWorkspaceRelativePath(normalized)
+	raw = strings.TrimSpace(raw)
+	if normalized == "" || raw == "" {
+		return score
+	}
+	if strings.Contains(normalized, "/") {
+		score += 10
+	}
+	if strings.HasPrefix(strings.ToLower(normalized), "planning/") ||
+		strings.HasPrefix(strings.ToLower(normalized), "content/") ||
+		strings.HasPrefix(strings.ToLower(normalized), "templates/") ||
+		strings.HasPrefix(strings.ToLower(normalized), "results/") {
+		score += 10
+	}
+	if strings.Contains(filepath.Base(normalized), ".") {
+		score += 2
+	}
+	if strings.Contains(raw, "`") || strings.ContainsAny(raw, "\"'") {
+		score++
+	}
+	return score
 }
 
 func taskContractDescriptionCandidates(taskRecord repo.ProjectTask) []string {

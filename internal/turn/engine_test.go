@@ -5288,6 +5288,54 @@ func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsUsesTailOffsetAf
 	}
 }
 
+func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsUsesUnreadRemainderForShortTail(t *testing.T) {
+	engine := &TurnEngine{messages: newFakeMessageRepo()}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        uuid.New(),
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `content/technonymous-index.json`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `content/technonymous-index.json` is missing.\n" +
+			"If `content/technonymous-index.json` may be large, start with `file.read` using `path=content/technonymous-index.json` and `max_bytes=8192` instead of an unconstrained full-file read.\n" +
+			"If that first bounded read is truncated and you need the tail, use a follow-up `file.read` on `content/technonymous-index.json` with `offset_bytes` near `byte_size-8192` instead of rereading from byte 0.\n" +
+			"Use flow.review_decision when the review is complete.\n",
+	}
+	recordTaskReviewPreferredDeliverableReadResult(rt, ToolResult{
+		Name: "file.read",
+		Output: map[string]any{
+			"path":         "content/technonymous-index.json",
+			"content":      strings.Repeat("x", taskReviewPreferredDeliverableReadMaxBytes),
+			"byte_size":    13903,
+			"bytes_read":   taskReviewPreferredDeliverableReadMaxBytes,
+			"offset_bytes": 0,
+			"truncated":    true,
+		},
+	})
+	toolCalls := []ModelToolCall{{
+		ID:   "read-target",
+		Name: "file.read",
+		Arguments: map[string]any{
+			"path": "content/technonymous-index.json",
+		},
+	}}
+
+	rewritten, changed, err := engine.maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(context.Background(), rt, toolCalls)
+	if err != nil {
+		t.Fatalf("maybeRewriteTaskReviewPreferredDeliverableReadToolCalls: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	if got := intValue(rewritten[0].Arguments["offset_bytes"]); got != 8192 {
+		t.Fatalf("offset_bytes = %d, want 8192", got)
+	}
+	if got := intValue(rewritten[0].Arguments["max_bytes"]); got != 5711 {
+		t.Fatalf("max_bytes = %d, want 5711", got)
+	}
+}
+
 func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsDoesNotReuseTailAfterCurrentTurnTailRead(t *testing.T) {
 	engine := &TurnEngine{messages: newFakeMessageRepo()}
 	rt := &turnRuntime{
@@ -5369,6 +5417,79 @@ func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsUsesGapSampleAft
 	}
 }
 
+func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsRewritesCLIHeadRead(t *testing.T) {
+	engine := &TurnEngine{}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `planning/sambot-example-conversations.md`.\n" +
+			"If `planning/sambot-example-conversations.md` may be large, start with `file.read` using `path=planning/sambot-example-conversations.md` and `max_bytes=8192` instead of an unconstrained full-file read.\n" +
+			"Use flow.review_decision with the active flow_node_execution_id to approve or reject this review step.\n",
+	}
+	toolCalls := []ModelToolCall{{
+		ID:   "read-target",
+		Name: "cli.execute",
+		Arguments: map[string]any{
+			"command": "head -c 8192 planning/sambot-example-conversations.md",
+		},
+	}}
+
+	rewritten, changed, err := engine.maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(context.Background(), rt, toolCalls)
+	if err != nil {
+		t.Fatalf("maybeRewriteTaskReviewPreferredDeliverableReadToolCalls: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	if rewritten[0].Name != "file.read" {
+		t.Fatalf("name = %q, want file.read", rewritten[0].Name)
+	}
+	if got := normalizeWorkspaceRelativePath(stringValue(rewritten[0].Arguments["path"])); got != "planning/sambot-example-conversations.md" {
+		t.Fatalf("path = %q, want planning/sambot-example-conversations.md", got)
+	}
+	if got := intValue(rewritten[0].Arguments["max_bytes"]); got != taskReviewPreferredDeliverableReadMaxBytes {
+		t.Fatalf("max_bytes = %d, want %d", got, taskReviewPreferredDeliverableReadMaxBytes)
+	}
+}
+
+func TestMaybeRewriteTaskReviewPreferredDeliverableReadToolCallsRewritesCLITestFileToBoundedRead(t *testing.T) {
+	engine := &TurnEngine{}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `planning/sambot-example-conversations.md`.\n" +
+			"If `planning/sambot-example-conversations.md` may be large, start with `file.read` using `path=planning/sambot-example-conversations.md` and `max_bytes=8192` instead of an unconstrained full-file read.\n" +
+			"Use flow.review_decision with the active flow_node_execution_id to approve or reject this review step.\n",
+	}
+	toolCalls := []ModelToolCall{{
+		ID:   "exists-target",
+		Name: "cli.execute",
+		Arguments: map[string]any{
+			"command": "test -f planning/sambot-example-conversations.md && echo EXISTS || echo MISSING",
+		},
+	}}
+
+	rewritten, changed, err := engine.maybeRewriteTaskReviewPreferredDeliverableReadToolCalls(context.Background(), rt, toolCalls)
+	if err != nil {
+		t.Fatalf("maybeRewriteTaskReviewPreferredDeliverableReadToolCalls: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	if rewritten[0].Name != "file.read" {
+		t.Fatalf("name = %q, want file.read", rewritten[0].Name)
+	}
+	if got := intValue(rewritten[0].Arguments["max_bytes"]); got != 1 {
+		t.Fatalf("max_bytes = %d, want 1", got)
+	}
+}
+
 func TestRewriteTaskReviewPreferredDeliverableReadDispatchCallUsesCurrentTurnTailOffset(t *testing.T) {
 	rt := &turnRuntime{
 		session: &chat.ChatSession{
@@ -5395,6 +5516,95 @@ func TestRewriteTaskReviewPreferredDeliverableReadDispatchCallUsesCurrentTurnTai
 	}
 	if got := intValue(arguments["offset_bytes"]); got != 14818 {
 		t.Fatalf("offset_bytes = %d, want 14818", got)
+	}
+	if got := intValue(arguments["max_bytes"]); got != taskReviewPreferredDeliverableReadMaxBytes {
+		t.Fatalf("max_bytes = %d, want %d", got, taskReviewPreferredDeliverableReadMaxBytes)
+	}
+}
+
+func TestRewriteTaskReviewPreferredDeliverableReadDispatchCallUsesUnreadRemainderForShortTail(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        uuid.New(),
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `content/technonymous-index.json`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `content/technonymous-index.json` is missing.\n" +
+			"If that first bounded read is truncated and you need the tail, use a follow-up `file.read` on `content/technonymous-index.json` with `offset_bytes` near `byte_size-8192` instead of rereading from byte 0.\n" +
+			"Use flow.review_decision when the review is complete.\n",
+		reviewPreferredDeliverablePath:          "content/technonymous-index.json",
+		reviewPreferredDeliverableByteSize:      13903,
+		reviewPreferredDeliverableHeadTruncated: true,
+	}
+
+	name, arguments := rewriteTaskReviewPreferredDeliverableReadDispatchCall(rt, "file_read", map[string]any{
+		"path":      "content/technonymous-index.json",
+		"encoding":  "utf8",
+		"max_bytes": taskReviewPreferredDeliverableReadMaxBytes,
+	})
+	if name != "file.read" {
+		t.Fatalf("name = %q, want file.read", name)
+	}
+	if got := intValue(arguments["offset_bytes"]); got != 8192 {
+		t.Fatalf("offset_bytes = %d, want 8192", got)
+	}
+	if got := intValue(arguments["max_bytes"]); got != 5711 {
+		t.Fatalf("max_bytes = %d, want 5711", got)
+	}
+}
+
+func TestRewriteTaskReviewPreferredDeliverableReadDispatchCallRewritesCLIHeadRead(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        uuid.New(),
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `planning/sambot-example-conversations.md`.\n" +
+			"If `planning/sambot-example-conversations.md` may be large, start with `file.read` using `path=planning/sambot-example-conversations.md` and `max_bytes=8192` instead of an unconstrained full-file read.\n" +
+			"Use flow.review_decision when the review is complete.\n",
+	}
+
+	name, arguments := rewriteTaskReviewPreferredDeliverableReadDispatchCall(rt, "cli.execute", map[string]any{
+		"command": "head -c 8192 planning/sambot-example-conversations.md",
+	})
+	if name != "file.read" {
+		t.Fatalf("name = %q, want file.read", name)
+	}
+	if got := normalizeWorkspaceRelativePath(stringValue(arguments["path"])); got != "planning/sambot-example-conversations.md" {
+		t.Fatalf("path = %q, want planning/sambot-example-conversations.md", got)
+	}
+	if got := intValue(arguments["max_bytes"]); got != taskReviewPreferredDeliverableReadMaxBytes {
+		t.Fatalf("max_bytes = %d, want %d", got, taskReviewPreferredDeliverableReadMaxBytes)
+	}
+}
+
+func TestRewriteTaskReviewPreferredDeliverableReadDispatchCallRewritesCLITailRead(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        uuid.New(),
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		initialMessageText: "Review only.\n" +
+			"Start with the preferred deliverable target `planning/sambot-example-conversations.md`.\n" +
+			"If that first bounded read is truncated and you need the tail, use a follow-up `file.read` on `planning/sambot-example-conversations.md` with `offset_bytes` near `byte_size-8192` instead of rereading from byte 0.\n" +
+			"Use flow.review_decision when the review is complete.\n",
+		reviewPreferredDeliverablePath:          "planning/sambot-example-conversations.md",
+		reviewPreferredDeliverableByteSize:      20123,
+		reviewPreferredDeliverableHeadTruncated: true,
+	}
+
+	name, arguments := rewriteTaskReviewPreferredDeliverableReadDispatchCall(rt, "cli.execute", map[string]any{
+		"command": "tail -c 8192 planning/sambot-example-conversations.md",
+	})
+	if name != "file.read" {
+		t.Fatalf("name = %q, want file.read", name)
+	}
+	if got := intValue(arguments["offset_bytes"]); got != 11931 {
+		t.Fatalf("offset_bytes = %d, want 11931", got)
 	}
 	if got := intValue(arguments["max_bytes"]); got != taskReviewPreferredDeliverableReadMaxBytes {
 		t.Fatalf("max_bytes = %d, want %d", got, taskReviewPreferredDeliverableReadMaxBytes)
@@ -10729,6 +10939,78 @@ func TestShouldBlockTaskExecutionCurrentTaskRediscoveryTool(t *testing.T) {
 	})
 	if blocked {
 		t.Fatal("did not expect unrelated task.get to be blocked by current-task rediscovery guard")
+	}
+}
+
+func TestShouldBlockTaskExecutionCurrentTaskRediscoveryToolForCloseoutReadyOrchestrationParent(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+	childTaskID := uuid.New()
+	description := "Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				TaskNumber:     12038,
+				Title:          "Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations",
+				Description:    &description,
+				WorkStatus:     "draft",
+				Metadata: mustJSONRaw(map[string]any{
+					"decomposition": map[string]any{
+						"orchestration_only": true,
+					},
+					"parent_orchestration": map[string]any{
+						"child_verifications": []map[string]any{
+							{
+								"task_id": childTaskID.String(),
+								"summary": "OC-12053 already wrote the six technical conversations.",
+							},
+						},
+						"integration_check": map[string]any{
+							"status": "passed",
+						},
+						"outcome_assessment": map[string]any{
+							"satisfied": true,
+						},
+					},
+				}),
+			},
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: "Start work on task: Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations\n\n" +
+			"Task description: Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations\n\n" +
+			"Flow node execution: " + executionID.String(),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockTaskExecutionCurrentTaskRediscoveryTool(context.Background(), rt, "task.get", map[string]any{
+		"task_id": taskID.String(),
+	})
+	if !blocked {
+		t.Fatal("expected task.get for closeout-ready orchestration parent to be blocked")
+	}
+	if !strings.Contains(reason, "call flow.advance") {
+		t.Fatalf("reason = %q, want flow.advance guidance", reason)
+	}
+
+	blocked, reason = fixture.engine.shouldBlockTaskExecutionCurrentTaskRediscoveryTool(context.Background(), rt, "flow.get_execution", map[string]any{
+		"execution_id": executionID.String(),
+	})
+	if !blocked {
+		t.Fatal("expected flow.get_execution for closeout-ready orchestration parent to be blocked")
+	}
+	if !strings.Contains(reason, executionID.String()) {
+		t.Fatalf("reason = %q, want flow node execution id", reason)
 	}
 }
 
@@ -30794,6 +31076,86 @@ func TestShouldBlockProjectContinuationFocusedDraftMutationAllowsRecordedCloseou
 	}
 }
 
+func TestShouldBlockProjectContinuationFocusedDraftMutationRejectsRejectedProofParentQueue(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	focusTaskID := uuid.New()
+	childTaskID := uuid.New()
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	focusMetadata := mustJSONRaw(map[string]any{
+		"parent_orchestration": map[string]any{
+			"child_verifications": []map[string]any{
+				{
+					"task_id": childTaskID.String(),
+					"summary": "Child verification already recorded.",
+				},
+			},
+			"integration_check": map[string]any{
+				"status":  "passed",
+				"summary": "planning/sambot-prompts/test-conversations-technical.md exists.",
+			},
+			"outcome_assessment": map[string]any{
+				"satisfied": true,
+				"summary":   "The parent believes the deliverable is complete.",
+			},
+		},
+	})
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			focusTaskID: {
+				ID:         focusTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 12038,
+				Title:      "Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations",
+				WorkStatus: "draft",
+				Metadata:   focusMetadata,
+			},
+		},
+		listByProjectFn: func(_ context.Context, _ uuid.UUID, _ ...string) ([]repo.ProjectTask, error) {
+			t.Fatal("ListByProject should not be called for rejected-proof parent queue")
+			return nil, nil
+		},
+	}
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: buildProjectContinuationActionPrompt("Active project request: recover the rejected technical conversations parent", projectExecutionContinuationSnapshot{
+			ProjectLine:   "Active project id: " + projectID.String(),
+			FocusTaskLine: "Current focus parent: task 12038 (Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations) id=" + focusTaskID.String() + " title=\"Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations\" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md proof_state=rejected outcome_satisfied=true child_tasks=1 blocked_child_tasks=1 replaceable_blocked_child_tasks=1",
+		}),
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftMutationTool(context.Background(), rt, "task.update", map[string]any{
+		"task_id":     focusTaskID.String(),
+		"work_status": "queued",
+		"child_output_verifications": []any{
+			map[string]any{
+				"task_id":  childTaskID.String(),
+				"summary":  "Child verification already recorded.",
+				"verified": true,
+			},
+		},
+		"integration_check": map[string]any{
+			"status": "passed",
+		},
+		"outcome_assessment": map[string]any{
+			"satisfied": true,
+		},
+	})
+	if !blocked {
+		t.Fatal("expected rejected-proof closeout-ready parent queue update to be blocked")
+	}
+	if !strings.Contains(reason, "proof_state=rejected") {
+		t.Fatalf("reason = %q, want rejected-proof guidance", reason)
+	}
+	if !strings.Contains(reason, "smallest bounded replacement or repair work") {
+		t.Fatalf("reason = %q, want replacement guidance", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationFocusedDraftMutationRequiresParentCompletionEvidenceForQueuedParent(t *testing.T) {
 	t.Parallel()
 
@@ -31652,6 +32014,36 @@ func TestBuildProjectExecutionContinuationPromptIncludesBlockedOnlyStopGuidance(
 	}
 	if !strings.Contains(prompt, "do not read that blocked deliverable from disk first just to decide what to do") {
 		t.Fatalf("prompt = %q, want blocked-deliverable no-reread guidance", prompt)
+	}
+}
+
+func TestBuildProjectExecutionContinuationPromptIncludesActionableTerminalBlockedLeafReplacementGuidance(t *testing.T) {
+	task := repo.ProjectTask{TaskNumber: 12039, Title: "Verify planning/sambot-tech-architecture.md satisfies PRD acceptance criteria"}
+
+	prompt := buildProjectExecutionContinuationPrompt(task, 0, projectExecutionContinuationSnapshot{
+		ProjectLine: "Active project id: 123",
+		ActiveTaskLine: strings.Join([]string{
+			"Already-active non-terminal tasks in the tree:",
+			`task 12054 (Write SamBot personality spec) id=aaa title="Write SamBot personality spec" work_status=blocked deliverable_path=planning/sambot-personality-spec.md resume_policy=terminal_keep_blocked blocker="flow rejection max visits exceeded"`,
+			`; task 12052 (Write technical conversations) id=bbb title="Write technical conversations" work_status=blocked deliverable_path=planning/sambot-prompts/test-conversations-technical.md resume_policy=terminal_keep_blocked blocker="flow rejection max visits exceeded"`,
+			`; task 6651 (Older technical conversations lane) id=ccc title="Older technical conversations lane" work_status=blocked deliverable_path=planning/sambot-prompts/test-conversations-technical.md resume_policy=terminal_keep_blocked blocker="flow rejection max visits exceeded"`,
+			`; task 281 (Verify architecture) id=ddd title="Verify architecture" work_status=blocked deliverable_path=planning/sambot-tech-architecture.md resume_policy=terminal_keep_blocked blocker="flow rejection max visits exceeded"`,
+		}, " "),
+		LeafActiveTaskLine: "Active leaf tasks already have no child tasks to inspect: task 12054 (Write SamBot personality spec) leaf_task_id=aaa; task 12052 (Write technical conversations) leaf_task_id=bbb; task 6651 (Older technical conversations lane) leaf_task_id=ccc; task 281 (Verify architecture) leaf_task_id=ddd",
+		HasActionableBlocked: true,
+	})
+
+	if !strings.Contains(prompt, "All currently actionable remaining work is already represented by terminally blocked leaf deliverables below.") {
+		t.Fatalf("prompt = %q, want actionable blocked leaf guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not call file.read, file.list, task.get, task.list") {
+		t.Fatalf("prompt = %q, want no-rediscovery guidance", prompt)
+	}
+	if !strings.Contains(prompt, "There are 3 distinct blocked deliverables already named in this prompt") {
+		t.Fatalf("prompt = %q, want deduped deliverable count guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Start with the first distinct blocked deliverable and create or queue one smallest bounded replacement or closeout task for it now.") {
+		t.Fatalf("prompt = %q, want direct replacement/create guidance", prompt)
 	}
 }
 
@@ -33536,6 +33928,28 @@ func TestBuildRecoveryResumeActionPromptUsesPriorReviewRepairHint(t *testing.T) 
 	}
 }
 
+func TestBuildRecoveryResumeActionPromptForCloseoutReadyParentAdvanceUsesFlowAdvance(t *testing.T) {
+	t.Parallel()
+
+	executionID := uuid.New()
+	prompt := buildRecoveryResumeActionPrompt(recoveryResumeState{
+		targetPath:                 "planning/sambot-example-conversations.md",
+		targetDraft:                "# SamBot Example Conversations\n\nSubstantive deliverable body.\n",
+		closeoutReadyParentAdvance: true,
+		flowNodeExecutionID:        executionID,
+	})
+
+	if !strings.Contains(prompt, "flow.advance with flow_node_execution_id "+executionID.String()) {
+		t.Fatalf("prompt = %q, want flow.advance instruction", prompt)
+	}
+	if strings.Contains(prompt, "concrete file body") {
+		t.Fatalf("prompt = %q, should not ask for another file body", prompt)
+	}
+	if !strings.Contains(prompt, "Do not call file.write, file.edit, cli.execute, or task.update") {
+		t.Fatalf("prompt = %q, want mutation guard", prompt)
+	}
+}
+
 func TestLooksLikeRecoveryIntentNarrationPlaceholderDetectsNowIllWritePreface(t *testing.T) {
 	t.Parallel()
 
@@ -33562,6 +33976,97 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsSnapshotNarrationReply(t *testi
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReasonRejectsExistingFileGapAnalysis(t *testing.T) {
+	t.Parallel()
+
+	draft := strings.TrimSpace(`
+The file already exists with substantial content. Let me review what's there against the task requirements:
+
+**Current state:**
+- Has 4 conversation scenarios
+- Task requires at least 5 technical scenarios
+`)
+
+	reason := recoveryFileWriteDraftRejectReason(draft, "planning/sambot-prompts/test-conversations-technical.md")
+	if !strings.Contains(reason, "analyzed the current file gaps instead of writing the missing file body") {
+		t.Fatalf("reason = %q, want gap-analysis rejection", reason)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsPromptConversationGapAnalysis(t *testing.T) {
+	t.Parallel()
+
+	draft := strings.TrimSpace(`
+Good — the existing file has 4 conversations (2A, 2B at Level 2; 3A, 3B at Level 3). I need to expand to meet all requirements:
+- Need at least 5 Level-2 scenarios
+- Missing: Technical leadership and engineering management
+`)
+
+	reason := recoveryFileWriteDraftRejectReason(draft, "planning/sambot-prompts/test-conversations-technical.md")
+	if !strings.Contains(reason, "analyzed the current conversation-file gaps instead of writing the missing dialogue content") {
+		t.Fatalf("reason = %q, want prompt-conversation gap-analysis rejection", reason)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsPromptConversationExpansionPlanVariant(t *testing.T) {
+	t.Parallel()
+
+	draft := strings.TrimSpace(`
+Good — the file exists with 4 conversations but is missing several requirements. I need to expand it with:
+- More Level-2 scenarios (need 5+ total, covering all 5 topic areas)
+- Missing topics: Technical leadership/engineering management, Photography workflows/digital asset management
+`)
+
+	reason := recoveryFileWriteDraftRejectReason(draft, "planning/sambot-prompts/test-conversations-technical.md")
+	if !strings.Contains(reason, "analyzed the current conversation-file gaps instead of writing the missing dialogue content") {
+		t.Fatalf("reason = %q, want prompt-conversation expansion-plan rejection", reason)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsPromptConversationRequirementsGapAnalysis(t *testing.T) {
+	t.Parallel()
+
+	draft := strings.TrimSpace(`
+Good — the file exists and has solid content, but it doesn't fully meet the task requirements. Let me evaluate against the spec:
+
+**What's there:** 4 conversations (2A, 2B, 3A, 3B), split across Levels 2 and 3.
+**What's missing against requirements:**
+1. Need at least 5 Level-2 technical scenarios.
+2. Missing coverage for consulting/hiring and technical leadership.
+`)
+
+	reason := recoveryFileWriteDraftRejectReason(draft, "planning/sambot-prompts/test-conversations-technical.md")
+	if !strings.Contains(reason, "analyzed the current conversation-file gaps instead of writing the missing dialogue content") {
+		t.Fatalf("reason = %q, want prompt-conversation gap-analysis rejection", reason)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsPromptConversationFallbackNarration(t *testing.T) {
+	t.Parallel()
+
+	draft := strings.TrimSpace(`
+Understood. The existing file has content but doesn't meet spec. I'll write the complete deliverable using the python3 fallback as instructed.
+`)
+
+	reason := recoveryFileWriteDraftRejectReason(draft, "planning/sambot-prompts/test-conversations-technical.md")
+	if !strings.Contains(reason, "analyzed the current conversation-file gaps instead of writing the missing dialogue content") {
+		t.Fatalf("reason = %q, want prompt-conversation fallback rejection", reason)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsPromptConversationCLIExecuteFallbackNarration(t *testing.T) {
+	t.Parallel()
+
+	draft := strings.TrimSpace(`
+I'll write the complete deliverable file now using cli_execute with python3, as the task instructions specify for fallback.
+`)
+
+	reason := recoveryFileWriteDraftRejectReason(draft, "planning/sambot-prompts/test-conversations-technical.md")
+	if !strings.Contains(reason, "analyzed the current conversation-file gaps instead of writing the missing dialogue content") {
+		t.Fatalf("reason = %q, want prompt-conversation cli_execute fallback rejection", reason)
+	}
+}
+
 func TestLooksLikeGenericTaskRecoveryReplyDetectsStartingWorkStub(t *testing.T) {
 	t.Parallel()
 
@@ -33577,6 +34082,33 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsInterceptedFileWriteNarration(t
 	content := "I can see from the conversation history that every single turn has called `file_write` which gets intercepted and replaced with a planning template. I am going to break this cycle RIGHT NOW by using only `file_read` and `cli_execute`. No `file_write` calls at all."
 	if !looksLikeGenericTaskRecoveryReply(content) {
 		t.Fatal("expected intercepted-file_write narration to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsInterceptedFileReadFallbackNarration(t *testing.T) {
+	t.Parallel()
+
+	content := "The recovery system is intercepting file reads. Based on the task description and context, I have everything I need. Let me use the python3 fallback approach since file_write has been problematic in this project."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected intercepted-file-read fallback narration to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeRecoveryIntentNarrationPlaceholderDetectsCompleteDeliverableFileStub(t *testing.T) {
+	t.Parallel()
+
+	content := "I'll write the complete deliverable file now with all 4 paired conversation examples (8 total conversations)."
+	if !looksLikeRecoveryIntentNarrationPlaceholder(content) {
+		t.Fatal("expected complete-deliverable-file stub to be rejected as intent narration")
+	}
+}
+
+func TestLooksLikeRecoveryIntentNarrationPlaceholderDetectsFileWriteNarrationStub(t *testing.T) {
+	t.Parallel()
+
+	content := "Writing the complete deliverable file now via `file_write`."
+	if !looksLikeRecoveryIntentNarrationPlaceholder(content) {
+		t.Fatal("expected file_write narration stub to be rejected as intent narration")
 	}
 }
 
@@ -37451,6 +37983,105 @@ Verify malformed, incomplete, and edge-case speaker inputs fail cleanly without 
 	}
 }
 
+func TestMaybeSynthesizeRecoveryFileWriteToolCallsOverridesPromptConversationReadOnlyRecoveryReads(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	dataDir := t.TempDir()
+	projectSlug := "sam-blog-rebuild-restart-12"
+	orgSlug := "default"
+	targetPath := "planning/sambot-prompts/test-conversations-technical.md"
+	targetDraft := strings.TrimSpace(`
+# SamBot Adaptive Complexity - Test Conversations
+
+## Conversation 2A: Research Assistant
+User: Help me research API options for our integration layer.
+SamBot: I can compare the available API surfaces, document tradeoffs, and propose a decision matrix.
+`)
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		ProjectID:      projectID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     12052,
+		Title:          "Write level-2 SamBot test conversations (technical)",
+		WorkStatus:     "in_progress",
+		Metadata: mustRawJSON(t, map[string]any{
+			"planning": map[string]any{
+				"mode": taskplan.ModeExecutionFirst,
+			},
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":        1,
+				"blocker_class":  "durable_recovery_checkpoint",
+				"target_path":    targetPath,
+				"failure_reason": "cli.execute for planning/sambot-prompts/test-conversations-technical.md was retried without command after one bounded correction; persist the full file body before retrying the final workspace mutation",
+			},
+		}),
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	targetAbs := filepath.Join(dataDir, "workspaces", projectSlug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(targetDraft+"\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeRecoveryFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"Writing the complete deliverable file now via `file_write`.",
+		[]ModelToolCall{
+			{ID: "read-1", Name: "file_read", Tier: "tier2", Arguments: map[string]any{"path": "planning/sambot-prompts"}},
+			{ID: "read-2", Name: "file_read", Tier: "tier2", Arguments: map[string]any{"path": "planning/sambot-feature-spec.md", "max_bytes": 8000}},
+		},
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeRecoveryFileWriteToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
+		t.Fatalf("toolCalls = %+v, want synthesized file.write", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["path"]); got != targetPath {
+		t.Fatalf("path = %q, want %q", got, targetPath)
+	}
+	if got := stringValue(toolCalls[0].Arguments["content"]); got != targetDraft {
+		t.Fatalf("content = %q, want persisted target draft", got)
+	}
+}
+
 func TestMaybeSynthesizeRecoveryFileWriteToolCallsOverridesInvalidMutationWithPersistedDraft(t *testing.T) {
 	t.Parallel()
 
@@ -38370,6 +39001,57 @@ func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsRootPromptConversati
 	}
 }
 
+func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsTechnicalPromptConversationCorpusTask(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "## Deliverable\n\nWrite the file `planning/sambot-prompts/test-conversations-technical.md` containing level-2 technical test conversations for SamBot.\n\n### Requirements\n- At least 5 technical test conversation scenarios\n- Each conversation should have 4-8 exchange turns\n- Include expected behavior notes for each scenario"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     12052,
+		Title:          "Write level-2 SamBot test conversations (technical) — replacement for blocked OC-6651",
+		WorkStatus:     "in_progress",
+		Description:    &description,
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskExecutionFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"Let me gather context about Sam's voice and existing SamBot materials before writing the deliverable.",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskExecutionFileWriteToolCalls: %v", err)
+	}
+	if synthesized {
+		t.Fatalf("synthesized = true, want false for technical prompt conversation corpus task; toolCalls=%+v", toolCalls)
+	}
+	if toolCalls != nil {
+		t.Fatalf("toolCalls = %+v, want nil", toolCalls)
+	}
+}
+
 func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsOverridesBadImprovisedWrite(t *testing.T) {
 	t.Parallel()
 
@@ -39283,6 +39965,65 @@ func TestMaybeSynthesizeTaskReviewDecisionToolCallsInfersRejectFromMissingRequir
 	}
 }
 
+func TestMaybeSynthesizeTaskReviewDecisionToolCallsInfersRejectFromStructuredReviewAssessmentFailures(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		TaskNumber: 12038,
+		Title:      "Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations",
+		WorkStatus: "review",
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	content := "## Review Assessment\n\n### Structure Check\n1. **Multi-agent orchestration deep dive** -> Delivered as two introductory conversations instead of one deep dive.\n2. **AI safety & alignment** -> **Missing entirely.**\n3. **Platform architecture at scale** -> **Missing entirely.**\n\n### Verdict\nSeveral required topics are missing entirely and the current file fails the stated structure requirements."
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskReviewDecisionToolCalls(
+		context.Background(),
+		rt,
+		content,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskReviewDecisionToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "flow.review_decision" {
+		t.Fatalf("toolCalls = %+v, want one flow.review_decision", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["decision"]); got != "reject" {
+		t.Fatalf("decision = %q, want reject", got)
+	}
+	if got := stringValue(toolCalls[0].Arguments["flow_node_execution_id"]); got != executionID.String() {
+		t.Fatalf("flow_node_execution_id = %q, want %s", got, executionID)
+	}
+}
+
 func TestMaybeSynthesizeTaskReviewDecisionToolCallsRejectsVerificationReportDeliverableMismatch(t *testing.T) {
 	t.Parallel()
 
@@ -39341,6 +40082,97 @@ func TestMaybeSynthesizeTaskReviewDecisionToolCallsRejectsVerificationReportDeli
 	}
 	if got := stringValue(toolCalls[0].Arguments["decision"]); got != "reject" {
 		t.Fatalf("decision = %q, want reject", got)
+	}
+	if got := stringValue(toolCalls[0].Arguments["flow_node_execution_id"]); got != executionID.String() {
+		t.Fatalf("flow_node_execution_id = %q, want %s", got, executionID)
+	}
+}
+
+func TestMaybeSynthesizeTaskExecutionFlowAdvanceToolCallsForCloseoutReadyParent(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+	childTaskID := uuid.New()
+	description := "Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:          taskID,
+		TaskNumber:  12038,
+		Title:       "Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations",
+		Description: &description,
+		WorkStatus:  "draft",
+		Metadata: mustJSONRaw(map[string]any{
+			"decomposition": map[string]any{
+				"orchestration_only": true,
+			},
+			"parent_orchestration": map[string]any{
+				"child_verifications": []map[string]any{
+					{
+						"task_id": childTaskID.String(),
+						"summary": "Child verification already recorded.",
+					},
+				},
+				"integration_check": map[string]any{
+					"status": "passed",
+				},
+				"outcome_assessment": map[string]any{
+					"satisfied": true,
+				},
+			},
+		}),
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	taskRecord, err := fixture.engine.tasks.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if !projectContinuationTaskHasRecordedParentCompletionEvidence(taskRecord) {
+		t.Fatal("expected recorded parent completion evidence")
+	}
+	if got := flowNodeExecutionIDFromSessionMetadata(rt.session); got == nil || *got != executionID {
+		t.Fatalf("flowNodeExecutionIDFromSessionMetadata() = %v, want %s", got, executionID)
+	}
+	if !explicitFlowAdvanceIntentFromText("Good. The deliverable file exists, the child verification is already recorded, and the parent can finish through its own flow. Time to advance the flow.") {
+		t.Fatal("expected explicit flow advance intent to match")
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskExecutionFlowAdvanceToolCalls(
+		context.Background(),
+		rt,
+		"Good. The deliverable file exists, the child verification is already recorded, and the parent can finish through its own flow. Time to advance the flow.",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskExecutionFlowAdvanceToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "flow.advance" {
+		t.Fatalf("toolCalls = %+v, want one flow.advance", toolCalls)
 	}
 	if got := stringValue(toolCalls[0].Arguments["flow_node_execution_id"]); got != executionID.String() {
 		t.Fatalf("flow_node_execution_id = %q, want %s", got, executionID)
@@ -48904,6 +49736,113 @@ func TestHandleTaskCLIExecuteWithoutCommandRewritesToFileWriteFromDraft(t *testi
 	}
 }
 
+func TestHandleTaskCLIExecuteWithoutCommandPrefersWorkspaceTargetDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.dataDir = t.TempDir()
+
+	projectID := uuid.New()
+	taskID := uuid.New()
+	priorTurnID := uuid.New()
+	turnID := uuid.New()
+	projectSlug := "sam-blog-rebuild-restart-12"
+	targetPath := "planning/sambot-prompts/test-conversations-technical.md"
+	workspaceDraft := "# Technical Test Conversations\n\n## Level 2\n- Concrete substantive draft body.\n"
+
+	projectRepo := &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:   projectID,
+				Slug: projectSlug,
+			},
+		},
+	}
+	fixture.engine.projects = projectRepo
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:         taskID,
+				ProjectID:  projectID,
+				TaskNumber: 12052,
+				Title:      "Write technical prompt conversations",
+				WorkStatus: "in_progress",
+				Description: stringPtr(
+					"Write `" + targetPath + "` with level-2 and level-3 test conversations.",
+				),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	projectRoot, err := workspace.ProjectRoot(fixture.engine.dataDir, projectSlug)
+	if err != nil {
+		t.Fatalf("ProjectRoot: %v", err)
+	}
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll project root: %v", err)
+	}
+	initializeTurnTestGitRepo(t, projectRoot)
+	if err := os.WriteFile(filepath.Join(projectRoot, ".gitignore"), []byte(""), 0o644); err != nil {
+		t.Fatalf("WriteFile .gitignore: %v", err)
+	}
+	taskRoot, err := fixture.engine.taskWorkspaceRoot(context.Background(), taskRepo.items[taskID])
+	if err != nil {
+		t.Fatalf("taskWorkspaceRoot: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(taskRoot, filepath.Dir(targetPath)), 0o755); err != nil {
+		t.Fatalf("MkdirAll target dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(taskRoot, filepath.FromSlash(targetPath)), []byte(workspaceDraft), 0o644); err != nil {
+		t.Fatalf("WriteFile target draft: %v", err)
+	}
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "I'll write the complete deliverable using the python3 fallback as instructed.",
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "cli-1",
+		Name: "cli.execute",
+		Arguments: map[string]any{
+			"command": "",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskCLIExecuteWithoutCommand(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskCLIExecuteWithoutCommand: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if call.Name != "file.write" {
+		t.Fatalf("call.Name = %q, want file.write", call.Name)
+	}
+	if got := stringValue(call.Arguments["path"]); got != targetPath {
+		t.Fatalf("path = %q, want %q", got, targetPath)
+	}
+	if got := stringValue(call.Arguments["content"]); !strings.Contains(got, "Concrete substantive draft body.") {
+		t.Fatalf("content = %q, want workspace substantive draft", got)
+	}
+}
+
 func TestHandleTaskCLIExecuteWithoutCommandAppendsCorrectionWithoutHighConfidenceDraft(t *testing.T) {
 	t.Parallel()
 
@@ -48977,6 +49916,172 @@ func TestHandleTaskCLIExecuteWithoutCommandAppendsCorrectionWithoutHighConfidenc
 	}
 	if !strings.Contains(last.Content, "cli.execute was emitted without `command`") {
 		t.Fatalf("last content = %q, want empty cli.execute correction", last.Content)
+	}
+}
+
+func TestHandleTaskFileWriteWithoutContentPrefersWorkspaceTargetDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.dataDir = t.TempDir()
+
+	projectID := uuid.New()
+	taskID := uuid.New()
+	turnID := uuid.New()
+	projectSlug := "sam-blog-rebuild-restart-12"
+	targetPath := "planning/sambot-prompts/test-conversations-technical.md"
+	workspaceDraft := "# Technical Test Conversations\n\n## Level 2\n- Concrete substantive draft body.\n"
+
+	projectRepo := &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:   projectID,
+				Slug: projectSlug,
+			},
+		},
+	}
+	fixture.engine.projects = projectRepo
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:         taskID,
+				ProjectID:  projectID,
+				TaskNumber: 12052,
+				Title:      "Write technical prompt conversations",
+				WorkStatus: "in_progress",
+				Description: stringPtr(
+					"Write `" + targetPath + "` with level-2 and level-3 test conversations.",
+				),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	projectRoot, err := workspace.ProjectRoot(fixture.engine.dataDir, projectSlug)
+	if err != nil {
+		t.Fatalf("ProjectRoot: %v", err)
+	}
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll project root: %v", err)
+	}
+	initializeTurnTestGitRepo(t, projectRoot)
+	taskRoot, err := fixture.engine.taskWorkspaceRoot(context.Background(), taskRepo.items[taskID])
+	if err != nil {
+		t.Fatalf("taskWorkspaceRoot: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(taskRoot, filepath.Dir(targetPath)), 0o755); err != nil {
+		t.Fatalf("MkdirAll target dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(taskRoot, filepath.FromSlash(targetPath)), []byte(workspaceDraft), 0o644); err != nil {
+		t.Fatalf("WriteFile target draft: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path": targetPath,
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWithoutContent(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWithoutContent: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["content"]); !strings.Contains(got, "Concrete substantive draft body.") {
+		t.Fatalf("content = %q, want workspace substantive draft", got)
+	}
+	if got, ok := call.Arguments["create_dirs"].(bool); !ok || !got {
+		t.Fatalf("create_dirs = %v, want true", call.Arguments["create_dirs"])
+	}
+}
+
+func TestHandleTaskFileWriteWithoutContentPrefersCurrentTurnFileReadDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "planning/sambot-prompts/test-conversations-technical.md"
+	currentTurnDraft := "# Technical Test Conversations\n\n## Level 2\n- Current turn substantive file.read body.\n"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":       targetPath,
+				"content":    currentTurnDraft,
+				"bytes_read": len(currentTurnDraft),
+				"byte_size":  len(currentTurnDraft),
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "write-2",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path": targetPath,
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWithoutContent(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWithoutContent: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["content"]); !strings.Contains(got, "Current turn substantive file.read body.") {
+		t.Fatalf("content = %q, want current-turn file.read draft", got)
+	}
+}
+
+func TestBuildTaskFileWriteRetryMessagePromptConversationHardensAgainstGapAnalysis(t *testing.T) {
+	t.Parallel()
+
+	got := buildTaskFileWriteRetryMessage("planning/sambot-prompts/test-conversations-technical.md")
+	if !strings.Contains(got, "Rewrite the entire deliverable file body now") {
+		t.Fatalf("message = %q, want rewrite-now guidance", got)
+	}
+	if !strings.Contains(got, "Do not analyze the existing file again.") {
+		t.Fatalf("message = %q, want no-analysis guidance", got)
+	}
+	if !strings.Contains(got, "Do not restate the requirements, gaps, or checklist.") {
+		t.Fatalf("message = %q, want no-gap-analysis guidance", got)
+	}
+	if !strings.Contains(got, "Start immediately with the actual conversation file content.") {
+		t.Fatalf("message = %q, want direct-content guidance", got)
 	}
 }
 
@@ -49841,6 +50946,21 @@ func TestSessionTaskDeliverablePathInheritsParentExplicitDeliverableForVerificat
 
 	if got := fixture.engine.sessionTaskDeliverablePath(context.Background(), fixture.session.ID, childTask); got != "planning/sambot-example-conversations.md" {
 		t.Fatalf("sessionTaskDeliverablePath(...) = %q, want %q", got, "planning/sambot-example-conversations.md")
+	}
+}
+
+func TestExplicitDeliverablePathPrefersFullWorkspacePathOverBareBasename(t *testing.T) {
+	t.Parallel()
+
+	description := "Confirm planning/sambot-tech-architecture.md (already on disk) satisfies the SamBot acceptance criteria from planning/prd-spec/oc-246-acceptance-criteria.md. Write a short pass/fail summary."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  12040,
+		Title:       "Verify sambot-tech-architecture.md against PRD criteria",
+		Description: &description,
+	}
+
+	if got := explicitDeliverablePath(taskRecord); got != "planning/sambot-tech-architecture.md" {
+		t.Fatalf("explicitDeliverablePath(...) = %q, want %q", got, "planning/sambot-tech-architecture.md")
 	}
 }
 
@@ -51863,6 +52983,46 @@ func TestRecoveryFileWriteDraftRejectReasonRejectsPlanningDeliverableReviewAsses
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReasonRejectsPlanningDeliverableMismatchedReviewMemo(t *testing.T) {
+	t.Parallel()
+
+	content := "The file at `planning/sambot-example-conversations.md` contains a self-review/assessment note rather than the actual paired SamBot example conversations required by the task. This is a `mismatched_deliverable_context` — the file does not contain the deliverable specified in the task description. Rejecting immediately per review protocol."
+	got := recoveryFileWriteDraftRejectReason(content, "planning/sambot-example-conversations.md")
+	if !strings.Contains(got, "reviewer assessment or rejection commentary") {
+		t.Fatalf("reason = %q, want reviewer-assessment rejection", got)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsPlanningDeliverableSelfReferentialAssessmentMemo(t *testing.T) {
+	t.Parallel()
+
+	content := "The file content is a self-referential assessment note rather than the actual paired SamBot example conversations required by the task. This is a clear case of `mismatched_deliverable_context` — the 290-byte file contains no conversation examples, no topic pairs, no SamBot dialogue, and no intro section. It is not the deliverable.\n\nRejecting per review protocol."
+	got := recoveryFileWriteDraftRejectReason(content, "planning/sambot-example-conversations.md")
+	if !strings.Contains(got, "reviewer assessment or rejection commentary") {
+		t.Fatalf("reason = %q, want reviewer-assessment rejection", got)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsPromptConversationPlaceholderDeliverableMemo(t *testing.T) {
+	t.Parallel()
+
+	content := "The file at the deliverable path is a placeholder — it contains only a planning note/scratchpad (444 bytes of self-narration about intent) rather than any actual test conversation content. This is a clear `placeholder_deliverable` situation.\n\nPer the task requirements, this file must contain:\n- At least 5 technical test conversation scenarios\n- 4–8 exchange turns per scenario\n- Coverage of five specific technical domains\n\nThe file contains **none** of these. Zero conversations, zero exchanges, zero domain coverage.\n\nRejecting."
+	got := recoveryFileWriteDraftRejectReason(content, "planning/sambot-prompts/test-conversations-technical.md")
+	if !strings.Contains(got, "reviewer assessment or rejection commentary") {
+		t.Fatalf("reason = %q, want reviewer-assessment rejection", got)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsPromptConversationPlaceholderDeliverableReviewMemo(t *testing.T) {
+	t.Parallel()
+
+	content := "The file contains only a planning note/scratchpad — not the actual deliverable. This is 444 bytes of self-narration about what the author *intended* to write, not the test conversations themselves.\n\nThis clearly fails the task requirements:\n1. **No test conversation scenarios present** — The file contains zero conversation scenarios.\n\nThis is a `placeholder_deliverable` — the work node wrote planning notes to the deliverable path rather than producing the actual content."
+	got := recoveryFileWriteDraftRejectReason(content, "planning/sambot-prompts/test-conversations-technical.md")
+	if !strings.Contains(got, "reviewer assessment or rejection commentary") {
+		t.Fatalf("reason = %q, want reviewer-assessment rejection", got)
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReasonRejectsRecoveryCommentaryConfessionPlaceholder(t *testing.T) {
 	t.Parallel()
 
@@ -53710,6 +54870,101 @@ func TestLoadRecoveryResumeStateCarriesForwardParentOrchestrationFailureReason(t
 	}
 }
 
+func TestLoadRecoveryResumeStateMarksCloseoutReadyParentAdvanceWhenProofRecorded(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	executionID := uuid.New()
+	targetPath := "planning/sambot-example-conversations.md"
+	targetDraft := "# SamBot Example Conversations\n\nConcrete paired examples.\n"
+	projectSlug := "closeout-ready-recovery"
+	orgSlug := "test-org"
+	description := "Write planning/sambot-example-conversations.md with paired casual and expert examples."
+	dataDir := t.TempDir()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.engine.dataDir = dataDir
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				ProjectID:      projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				TaskNumber:     12048,
+				Title:          "Write planning/sambot-example-conversations.md",
+				Description:    &description,
+				WorkStatus:     "in_progress",
+				Metadata: mustRawJSON(t, map[string]any{
+					"decomposition": map[string]any{
+						"orchestration_only": true,
+					},
+					"parent_orchestration": map[string]any{
+						"child_verifications": []map[string]any{
+							{"task_id": uuid.New().String(), "summary": "verified deliverable"},
+						},
+						"integration_check": map[string]any{
+							"status": "passed",
+						},
+						"outcome_assessment": map[string]any{
+							"satisfied": true,
+						},
+					},
+					"recovery_file_write_checkpoint": map[string]any{
+						"version":        1,
+						"target_path":    targetPath,
+						"failure_reason": "file.write content appears to be task narration about planning to write the deliverable, not the deliverable body itself. Write the concrete file contents directly.",
+					},
+				}),
+			},
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+
+	targetAbs := filepath.Join(dataDir, "workspaces", projectSlug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(targetDraft), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	state, ok := fixture.engine.loadRecoveryResumeState(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery resume state")
+	}
+	if !state.closeoutReadyParentAdvance {
+		t.Fatal("closeoutReadyParentAdvance = false, want true")
+	}
+	if state.flowNodeExecutionID != executionID {
+		t.Fatalf("flowNodeExecutionID = %s, want %s", state.flowNodeExecutionID, executionID)
+	}
+	message := buildRecoveryResumeStateMessage(state)
+	if !strings.Contains(message, "Call flow.advance with flow_node_execution_id "+executionID.String()) {
+		t.Fatalf("message = %q, want flow.advance override", message)
+	}
+}
+
 func TestLoadRecoveryResumeStateRejectsContentMigrationTaskScaffoldSummaryDraft(t *testing.T) {
 	t.Parallel()
 
@@ -55275,8 +56530,8 @@ func TestRewriteRecoveryCLIExecuteWithoutCommandToFileWriteUsesPriorTurnDraft(t 
 	if err != nil {
 		t.Fatalf("rewriteRecoveryCLIExecuteWithoutCommandToFileWrite: %v", err)
 	}
-	if rewritten {
-		t.Fatal("expected rewrite helper to continue with mutated call")
+	if !rewritten {
+		t.Fatal("expected rewrite helper to report rewritten call")
 	}
 	if call.Name != "file.write" {
 		t.Fatalf("call.Name = %q, want file.write", call.Name)
@@ -55286,6 +56541,103 @@ func TestRewriteRecoveryCLIExecuteWithoutCommandToFileWriteUsesPriorTurnDraft(t 
 	}
 	if got := stringValue(call.Arguments["content"]); !strings.Contains(got, "## Migration Approach") {
 		t.Fatalf("content = %q, want prior substantive draft", got)
+	}
+	if got, ok := call.Arguments["create_dirs"].(bool); !ok || !got {
+		t.Fatalf("create_dirs = %v, want true", call.Arguments["create_dirs"])
+	}
+}
+
+func TestRewriteRecoveryCLIExecuteWithoutCommandToFileWriteUsesWorkspaceTargetDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	currentTurnID := uuid.New()
+	targetPath := "planning/sambot-prompts/test-conversations-technical.md"
+	projectSlug := "sam-blog-rebuild-restart-12"
+	orgSlug := "test-org"
+	dataDir := t.TempDir()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	checkpointMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(nil, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    targetPath,
+		FailureReason: "cli.execute for planning/sambot-prompts/test-conversations-technical.md was retried without command after one bounded correction; persist the full file body before retrying the final workspace mutation",
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				ProjectID:       projectID,
+				OrganizationID:  fixture.session.OrganizationID,
+				WorkStatus:      "in_progress",
+				AssignedAgentID: &assignedAgentID,
+				Metadata:        checkpointMetadata,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	workspaceRoot := filepath.Join(dataDir, "workspaces", projectSlug)
+	targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	targetDraft := strings.TrimSpace(`# Level 2 Technical Test Conversations
+
+## Scenario 1: Research Assistant
+User: Help me research API options for our integration layer.
+SamBot: I can compare the available API surfaces, document the tradeoffs, and propose a decision matrix.
+`)
+	if err := os.WriteFile(targetAbs, []byte(targetDraft), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	rt := &turnRuntime{
+		recoveryTurn: true,
+		session:      fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        currentTurnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:        "cli-2",
+		Name:      "cli.execute",
+		Arguments: map[string]any{},
+	}
+
+	rewritten, err := fixture.engine.rewriteRecoveryCLIExecuteWithoutCommandToFileWrite(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("rewriteRecoveryCLIExecuteWithoutCommandToFileWrite: %v", err)
+	}
+	if !rewritten {
+		t.Fatal("expected rewrite helper to report rewritten call")
+	}
+	if call.Name != "file.write" {
+		t.Fatalf("call.Name = %q, want file.write", call.Name)
+	}
+	if got := stringValue(call.Arguments["path"]); got != targetPath {
+		t.Fatalf("path = %q, want %q", got, targetPath)
+	}
+	if got := stringValue(call.Arguments["content"]); !strings.Contains(got, "## Scenario 1: Research Assistant") {
+		t.Fatalf("content = %q, want workspace target draft", got)
 	}
 	if got, ok := call.Arguments["create_dirs"].(bool); !ok || !got {
 		t.Fatalf("create_dirs = %v, want true", call.Arguments["create_dirs"])
