@@ -35912,6 +35912,24 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsPythonCLIExecuteWriteNarration(
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsDirectWriteIntentStub(t *testing.T) {
+	t.Parallel()
+
+	content := "I'll write the complete portfolio template now."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected direct-write intent stub to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsGoingDirectlyToWritingStub(t *testing.T) {
+	t.Parallel()
+
+	content := "Going directly to writing the deliverable."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected direct-write narration stub to be treated as generic recovery output")
+	}
+}
+
 func TestIsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts(t *testing.T) {
 	t.Parallel()
 
