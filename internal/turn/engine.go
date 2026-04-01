@@ -25069,6 +25069,45 @@ func projectContinuationDraftHasOpenRejectedProofForSameDeliverable(
 	return false
 }
 
+func projectContinuationActiveSameDeliverableOpenTask(
+	projectTasks []repo.ProjectTask,
+	focusTask repo.ProjectTask,
+	focusHints projectContinuationTaskHints,
+	taskHintsByTask map[uuid.UUID]projectContinuationTaskHints,
+	malformedChildTaskIDs map[uuid.UUID]struct{},
+) (repo.ProjectTask, bool) {
+	if focusTask.ID == uuid.Nil || !projectContinuationTaskHasDeliverableIdentity(focusHints.DeliverablePath, focusHints.DeliverableRoot) {
+		return repo.ProjectTask{}, false
+	}
+	tasksByID := make(map[uuid.UUID]repo.ProjectTask, len(projectTasks))
+	for _, task := range projectTasks {
+		tasksByID[task.ID] = task
+	}
+	for _, openTask := range projectTasks {
+		if openTask.ID == uuid.Nil || openTask.ID == focusTask.ID {
+			continue
+		}
+		if _, malformed := malformedChildTaskIDs[openTask.ID]; malformed {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(openTask.WorkStatus))
+		switch status {
+		case "queued", "in_progress", "review":
+		default:
+			continue
+		}
+		openHints := taskHintsByTask[openTask.ID]
+		if !projectContinuationTaskHintsShareDeliverableIdentity(focusHints, openHints) {
+			continue
+		}
+		if projectContinuationSharedDocSectionTasksConflict(focusTask, focusHints, openTask, openHints, tasksByID) {
+			continue
+		}
+		return openTask, true
+	}
+	return repo.ProjectTask{}, false
+}
+
 func projectContinuationSharedDocSectionTasksConflict(
 	draftTask repo.ProjectTask,
 	draftHints projectContinuationTaskHints,
@@ -39087,6 +39126,16 @@ func buildProjectContinuationFocusedDraftRejectedProofTaskCreateGuardError(focus
 	return fmt.Sprintf("project continuation already has focused draft task %s with proof_state=rejected. Do not create another broad same-deliverable child beneath %s from the project lane. Create, queue, or advance only the smallest bounded repair, replacement, or verification work that addresses the rejected findings, or use the already-listed same-deliverable draft if one exists.", label, label)
 }
 
+func buildProjectContinuationFocusedDraftActiveSameDeliverableTaskCreateGuardError(focusTask, activeTask repo.ProjectTask) string {
+	focusLabel := projectBootstrapTaskLabel(focusTask)
+	activeLabel := projectBootstrapTaskLabel(activeTask)
+	status := strings.ToLower(strings.TrimSpace(activeTask.WorkStatus))
+	if status == "" {
+		status = "active"
+	}
+	return fmt.Sprintf("project continuation already has same-deliverable task lane %s in work_status=%s for this rejected-proof repair path. Do not create another replacement child beneath %s from the project lane; leave %s running and let that lane finish or settle first.", activeLabel, status, focusLabel, activeLabel)
+}
+
 func buildProjectContinuationFocusedDraftExistingChildGuardError(focusTask repo.ProjectTask, draftChildren []repo.ProjectTask) string {
 	label := projectBootstrapTaskLabel(focusTask)
 	if len(draftChildren) == 0 {
@@ -39684,6 +39733,11 @@ func (e *TurnEngine) shouldBlockProjectContinuationFocusedDraftTaskCreateTool(ct
 	}
 	focusActivity := childActivity[focusTask.ID]
 	focusHints := taskHintsByTask[focusTask.ID]
+	if rejectedProofActive {
+		if activeTask, ok := projectContinuationActiveSameDeliverableOpenTask(projectTasks, focusTask, focusHints, taskHintsByTask, malformedChildTaskIDs); ok {
+			return true, buildProjectContinuationFocusedDraftActiveSameDeliverableTaskCreateGuardError(focusTask, activeTask)
+		}
+	}
 	if rejectedProofActive && focusTask.ID == parentTaskID {
 		return false, ""
 	}

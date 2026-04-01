@@ -31650,6 +31650,58 @@ func TestShouldBlockProjectContinuationFocusedDraftTaskCreateAllowsRejectedProof
 	}
 }
 
+func TestShouldBlockProjectContinuationFocusedDraftTaskCreateForActiveSameDeliverableRejectedProofRepair(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	focusTaskID := uuid.New()
+	activeTaskID := uuid.New()
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fakeTaskRepo")
+	}
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		focusTaskID: {
+			ID:         focusTaskID,
+			ProjectID:  projectID,
+			TaskNumber: 12038,
+			Title:      "Write planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations",
+			WorkStatus: "draft",
+		},
+		activeTaskID: {
+			ID:         activeTaskID,
+			ProjectID:  projectID,
+			TaskNumber: 12056,
+			Title:      "Repair planning/sambot-prompts/test-conversations-technical.md — fix rejected proof (6 technical conversations)",
+			WorkStatus: "in_progress",
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		initialMessageText: "Continue the active project execution now. Current focus parent: task 12038 (Write planning/sambot-prompts/test-conversations-technical.md) id=" + focusTaskID.String() +
+			" work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md proof_state=rejected workspace_deliverable_present=true completed_closeout_child_tasks=1. " +
+			"Do not issue task.update with work_status=queued on task 12038 from the project lane. " +
+			"Your next assistant action must create, queue, or advance the smallest bounded repair, replacement, or verification work that addresses the rejected findings.",
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFocusedDraftTaskCreateTool(context.Background(), rt, "task.create", map[string]any{
+		"parent_task_id": focusTaskID.String(),
+		"title":          "Rewrite planning/sambot-prompts/test-conversations-technical.md — 6 technical test conversations (replaces rejected OC-12038)",
+	})
+	if !blocked {
+		t.Fatal("expected same-deliverable active repair task to block duplicate rejected-proof task.create")
+	}
+	if !strings.Contains(reason, "task 12056") || !strings.Contains(reason, "work_status=in_progress") {
+		t.Fatalf("reason = %q, want active same-deliverable task guidance", reason)
+	}
+}
+
 func TestProjectContinuationFocusedCloseoutMetadataRepairCanSkipProjectScan(t *testing.T) {
 	t.Parallel()
 
@@ -32146,7 +32198,7 @@ func TestBuildProjectExecutionContinuationPromptIncludesActionableTerminalBlocke
 			`; task 6651 (Older technical conversations lane) id=ccc title="Older technical conversations lane" work_status=blocked deliverable_path=planning/sambot-prompts/test-conversations-technical.md resume_policy=terminal_keep_blocked blocker="flow rejection max visits exceeded"`,
 			`; task 281 (Verify architecture) id=ddd title="Verify architecture" work_status=blocked deliverable_path=planning/sambot-tech-architecture.md resume_policy=terminal_keep_blocked blocker="flow rejection max visits exceeded"`,
 		}, " "),
-		LeafActiveTaskLine: "Active leaf tasks already have no child tasks to inspect: task 12054 (Write SamBot personality spec) leaf_task_id=aaa; task 12052 (Write technical conversations) leaf_task_id=bbb; task 6651 (Older technical conversations lane) leaf_task_id=ccc; task 281 (Verify architecture) leaf_task_id=ddd",
+		LeafActiveTaskLine:   "Active leaf tasks already have no child tasks to inspect: task 12054 (Write SamBot personality spec) leaf_task_id=aaa; task 12052 (Write technical conversations) leaf_task_id=bbb; task 6651 (Older technical conversations lane) leaf_task_id=ccc; task 281 (Verify architecture) leaf_task_id=ddd",
 		HasActionableBlocked: true,
 	})
 
