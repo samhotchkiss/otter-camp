@@ -5430,10 +5430,29 @@ func recoveredTaskSourceDescriptionLooksStructured(sourceDescription string) boo
 }
 
 func recoveredTaskKickoffDescription(taskRecord repo.ProjectTask) string {
+	if instruction := recoveredDirectWriteCheckpointKickoffInstruction(taskRecord); instruction != "" {
+		return sanitizeRecoveredDirectWriteKickoffDescription(taskRecord)
+	}
 	if recoveredTaskShouldUseSourceDescription(taskRecord) {
 		return recoveredTaskSourceDescription(taskRecord)
 	}
 	return strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+}
+
+func sanitizeRecoveredDirectWriteKickoffDescription(taskRecord repo.ProjectTask) string {
+	description := strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+	if recoveredTaskShouldUseSourceDescription(taskRecord) {
+		description = recoveredTaskSourceDescription(taskRecord)
+	}
+	if description == "" {
+		return ""
+	}
+	lower := strings.ToLower(description)
+	marker := "\n\nimportant: if file_write fails or is intercepted, use cli_execute with python3:"
+	if idx := strings.Index(lower, marker); idx >= 0 {
+		return strings.TrimSpace(description[:idx])
+	}
+	return description
 }
 
 func (w *Worker) countActionableProjectDraftTasks(ctx context.Context, projectID uuid.UUID) (int, error) {

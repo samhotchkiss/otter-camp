@@ -1183,7 +1183,14 @@ func TestProjectContinuationChildTaskActivityForWorkerIgnoresStaleVerificationCl
 }
 
 func TestBuildRecoveredTaskQueueKickoffMessageIncludesDirectWriteCheckpointInstruction(t *testing.T) {
-	description := "Create templates/layout-08-portfolio.html — a portfolio showcase layout template."
+	description := strings.Join([]string{
+		"Create templates/layout-08-portfolio.html — a portfolio showcase layout template.",
+		"",
+		"IMPORTANT: If file_write fails or is intercepted, use cli_execute with python3:",
+		"```",
+		"python3 -c \"print('fallback')\"",
+		"```",
+	}, "\n")
 	metadata, err := json.Marshal(map[string]any{
 		"agent_turn_validation_guard": map[string]any{
 			"failure_code": "recovery_target_focus_required",
@@ -1212,5 +1219,8 @@ func TestBuildRecoveredTaskQueueKickoffMessageIncludesDirectWriteCheckpointInstr
 	}
 	if !strings.Contains(message, "file.write using both `path` and `content`") {
 		t.Fatalf("message = %q, want direct file.write instruction", message)
+	}
+	if strings.Contains(message, "If file_write fails or is intercepted") || strings.Contains(message, "cli_execute with python3") {
+		t.Fatalf("message = %q, want fallback scaffold stripped from recovered kickoff", message)
 	}
 }
