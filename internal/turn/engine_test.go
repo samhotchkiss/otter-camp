@@ -35948,6 +35948,15 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsFullTemplateLeadInStub(t *testi
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsWritingDirectlyNowStub(t *testing.T) {
+	t.Parallel()
+
+	content := "Writing the portfolio template directly now."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected present-progress direct-write stub to be treated as generic recovery output")
+	}
+}
+
 func TestIsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts(t *testing.T) {
 	t.Parallel()
 
