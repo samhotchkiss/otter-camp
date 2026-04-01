@@ -19634,6 +19634,36 @@ func TestProjectExecutionBlockedMutationStopMessageOnNamedFocusRediscoveryDuring
 	}
 }
 
+func TestProjectExecutionBlockedMutationStopMessageOnNamedBlockedDeliverableDuringFocusedDraftReadGuard(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageText: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 12670 (Write technical SamBot test conversations 1-3 — replacement for terminal OC-12668) id=9a894b6b-81aa-4b7f-a1da-c880debfff97 work_status=draft deliverable_path=planning/sambot-prompts/test-conversations-technical.md malformed_child_tasks=1.",
+			"Because that focus parent only has malformed or stale child artifact lanes, do not queue the parent again from the project lane. Create the smallest fresh replacement child task under it now instead.",
+			"Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.",
+			"Your next assistant action must create or queue the smallest fresh replacement child task beneath that focus parent now. If child inspection is strictly required first, use only task.list(parent_task_id=...).",
+		}, " "),
+	}
+
+	message := projectExecutionBlockedMutationStopMessage(rt, []ToolResult{{
+		Name:  "file.read",
+		Error: "project continuation already named terminally blocked task-owned deliverable `planning/sambot-prompts/test-conversations-technical.md` in the continuation prompt. Do not reread that blocked deliverable from the project lane; keep the blocked lane blocked and create the smallest replacement, closeout, or parent-update action instead.",
+	}})
+
+	if !strings.Contains(message, "focused replacement-parent handoff") {
+		t.Fatalf("message = %q, want focused replacement handoff summary", message)
+	}
+	if !strings.Contains(message, "task.list(parent_task_id=...)") {
+		t.Fatalf("message = %q, want narrow parent-scoped task.list guidance", message)
+	}
+}
+
 func TestProjectExecutionBlockedMutationStopMessageOnFocusedPrerequisiteRepairGuard(t *testing.T) {
 	t.Parallel()
 
@@ -19962,6 +19992,47 @@ func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationForChildDraftAd
 
 	if !shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
 		t.Fatal("expected named child-draft queue handoff to stop the PM turn")
+	}
+}
+
+func TestShouldStopAfterSuccessfulProjectExecutionHandoffMutationForChildDraftCleanup(t *testing.T) {
+	t.Parallel()
+
+	focusTaskID := uuid.New()
+	childTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+		initialMessageSource: projectExecutionContinuationSource,
+		initialMessageText: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Active project id: " + uuid.NewString(),
+			`Current focus parent: task 12656 (Write 6 technical SamBot test conversations) id=` + focusTaskID.String() + ` title="Write 6 technical SamBot test conversations" work_status=in_progress deliverable_path=planning/sambot-prompts/test-conversations-technical.md.`,
+			`Draft parent tasks already have child work: task 12669 (Write technical SamBot test conversations — fresh replacement 4-6) id=` + childTaskID.String() + ` work_status=draft; task 12668 (Write technical SamBot test conversations — fresh replacement 1-3) id=` + uuid.NewString() + ` work_status=draft.`,
+			"Do not queue, re-decompose, or broadly rediscover those parent draft tasks again from the project lane while those child tasks already exist.",
+			`Named direct child lanes from the last inspection: task 12669 (Write technical SamBot test conversations — fresh replacement 4-6) id=` + childTaskID.String() + ` work_status=draft; task 12668 (Write technical SamBot test conversations — fresh replacement 1-3) id=` + uuid.NewString() + ` work_status=draft.`,
+			"Your next assistant action must be one narrow task.update on one named direct child task above, or one concrete blocker sentence if none of those named child lanes are project-lane actionable.",
+		}, " "),
+	}
+
+	calls := []ToolCall{{
+		Name:      "task.update",
+		Arguments: map[string]any{"task_id": childTaskID.String(), "work_status": "cancelled"},
+	}}
+	results := []ToolResult{{
+		Name: "task.update",
+		Output: map[string]any{
+			"task": map[string]any{
+				"id":          childTaskID.String(),
+				"work_status": "cancelled",
+			},
+		},
+	}}
+
+	if !shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt, calls, results) {
+		t.Fatal("expected named child cleanup to stop the PM turn")
 	}
 }
 
@@ -54330,6 +54401,36 @@ func TestRecoveryFileWriteDraftRejectReasonRejectsPromptConversationPlaceholderD
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReasonRejectsPromptConversationMismatchedDeliverableContextReviewMemo(t *testing.T) {
+	t.Parallel()
+
+	content := "This file does **not** contain any test conversations. It contains what appears to be an agent's internal reasoning/recovery checkpoint text — not the deliverable content (6 multi-turn technical test conversations covering AI orchestration, ethics/technology, and consulting topics).\n\nThis is a clear case of **mismatched deliverable context**. The file exists but its content is an agent's internal monologue about task management operations, not the required test conversations.\n\nRejecting this review.\n"
+	got := recoveryFileWriteDraftRejectReason(content, "planning/sambot-prompts/test-conversations-technical.md")
+	if !strings.Contains(got, "reviewer assessment or rejection commentary") {
+		t.Fatalf("reason = %q, want reviewer-assessment rejection", got)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsPromptConversationRecoveryCheckpointNarrationMemo(t *testing.T) {
+	t.Parallel()
+
+	content := "The file contains only 2 lines of recovery checkpoint text — not actual test conversations. This is the recovery system intercepting file writes from a previous attempt. The file needs to be overwritten with proper content: three distinct technical test conversations (numbered 4, 5, and 6) with multi-turn exchanges about SamBot's AI/orchestration domain expertise.\n\nLet me also check the level-3 file for reference on the expected format.\n"
+	got := recoveryFileWriteDraftRejectReason(content, "planning/sambot-prompts/test-conversations-technical.md")
+	if !strings.Contains(got, "repeated recovery-retry narration") {
+		t.Fatalf("reason = %q, want recovery narration rejection", got)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsRecoveryCheckpointTaskUpdateMemo(t *testing.T) {
+	t.Parallel()
+
+	content := "The recovery checkpoint says: \"Issue one narrow task.update on the current task with child_output_verifications for the concrete completed child or superseding outputs that satisfy the deliverable, set integration_check.status=passed, and set outcome_assessment.satisfied=true. Keep the task in_progress, then call flow.advance.\"\n\nThe child tasks are listed as OC-12663 and OC-12664, both marked \"(verified)\" in the context. I don't have their UUIDs directly, but I can reference them by constructing the child_output_verifications with the parent task ID as the superseding output reference since the target file already exists with substantive content. Let me issue the exact task_update the checkpoint demands, then flow_advance.\n"
+	got := recoveryFileWriteDraftRejectReason(content, "planning/sambot-prompts/test-conversations-technical.md")
+	if !strings.Contains(got, "repeated recovery-retry narration") {
+		t.Fatalf("reason = %q, want recovery narration rejection", got)
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReasonRejectsRecoveryCommentaryConfessionPlaceholder(t *testing.T) {
 	t.Parallel()
 
@@ -54786,6 +54887,17 @@ func TestRecoveryFileWriteDraftRejectReasonRejectsVerificationRetryNarrationPlac
 	reason := recoveryFileWriteDraftRejectReason(content, "planning/sambot-tech-architecture.md")
 	if !strings.Contains(reason, "recovery-retry narration") {
 		t.Fatalf("reason = %q, want recovery-retry narration rejection", reason)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsConcreteBlockerSentencePlaceholder(t *testing.T) {
+	t.Parallel()
+
+	content := "Concrete blocker: The operator instructions on the previous turn explicitly prohibit calling `file_write`, `file_edit`, or `cli_execute` for `planning/sambot-prompts/test-conversations-technical.md` on this recovery turn, so I cannot mutate the target file."
+
+	reason := recoveryFileWriteDraftRejectReason(content, "planning/sambot-prompts/test-conversations-technical.md")
+	if !strings.Contains(reason, "concrete blocker sentence") {
+		t.Fatalf("reason = %q, want concrete-blocker rejection", reason)
 	}
 }
 
@@ -56349,6 +56461,107 @@ Read the first 12 entries (indices 0-11) from content/technonymous-index.json. F
 	}
 	if !strings.Contains(state.summaryDraftRejectedReason, "source-backed content-migration task scaffold") {
 		t.Fatalf("summaryDraftRejectedReason = %q, want source-backed scaffold rejection", state.summaryDraftRejectedReason)
+	}
+}
+
+func TestLoadRecoveryResumeStateDoesNotAdvanceCloseoutReadyParentWithOpenDirectChildDrafts(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	childTaskID := uuid.New()
+	projectSlug := "closeout-ready-parent-open-child-drafts"
+	orgSlug := "acme"
+	executionID := uuid.New()
+	targetPath := "planning/sambot-prompts/test-conversations-technical.md"
+	targetDraft := "# SamBot Technical Test Conversations\n\nSubstantive file body already exists.\n"
+	description := "Write 6 technical SamBot test conversations."
+	childDescription := "Write technical SamBot test conversations — planning/sambot-prompts/test-conversations-technical.md 1-3"
+
+	fixture.engine.dataDir = t.TempDir()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			TaskNumber:     12662,
+			Title:          "Write 6 technical SamBot test conversations — planning/sambot-prompts/test-conversations-technical.md",
+			Description:    &description,
+			WorkStatus:     "in_progress",
+			Metadata: mustMarshalJSON(t, map[string]any{
+				"decomposition": map[string]any{
+					"orchestration_only": true,
+				},
+				"parent_orchestration": map[string]any{
+					"child_verifications": []map[string]any{{
+						"task_id": childTaskID.String(),
+						"summary": "verified earlier attempt",
+					}},
+					"integration_check": map[string]any{
+						"status": "passed",
+					},
+					"outcome_assessment": map[string]any{
+						"satisfied": true,
+					},
+				},
+				"recovery_file_write_checkpoint": map[string]any{
+					"version":        1,
+					"target_path":    targetPath,
+					"failure_reason": "file.write content appears to be task narration about planning to write the deliverable, not the deliverable body itself. Write the concrete file contents directly.",
+				},
+			}),
+		},
+		childTaskID: {
+			ID:             childTaskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			TaskNumber:     12663,
+			Title:          "Write technical SamBot test conversations — planning/sambot-prompts/test-conversations-technical.md 1-3",
+			Description:    &childDescription,
+			WorkStatus:     "draft",
+			Metadata: mustMarshalJSON(t, map[string]any{
+				"decomposition_parent_task_id": taskID.String(),
+			}),
+		},
+	}}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+
+	targetAbs := filepath.Join(fixture.engine.dataDir, "workspaces", projectSlug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(targetDraft), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+	rt.session.Metadata = mustMarshalJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+
+	state, ok := fixture.engine.loadRecoveryResumeState(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery resume state")
+	}
+	if state.closeoutReadyParentAdvance {
+		t.Fatal("closeoutReadyParentAdvance = true, want false while direct child drafts still exist")
 	}
 }
 
@@ -59002,6 +59215,143 @@ Verdict: PASS
 	}
 	if !strings.Contains(failureReason, executionID.String()) {
 		t.Fatalf("failureReason = %q, want execution id", failureReason)
+	}
+}
+
+func TestTaskExecutionParentOrchestrationRepairIncludedRequiresQueuedForInProgress(t *testing.T) {
+	t.Parallel()
+
+	currentTaskID := uuid.New()
+	args := map[string]any{
+		"task_id": currentTaskID.String(),
+		"child_output_verifications": []any{
+			map[string]any{"task_id": uuid.NewString(), "summary": "done child"},
+		},
+		"integration_check":  map[string]any{"status": "passed"},
+		"outcome_assessment": map[string]any{"satisfied": true},
+	}
+
+	if taskExecutionParentOrchestrationRepairIncluded(args, currentTaskID, "in_progress") {
+		t.Fatal("expected in-progress repair without queued status to be rejected")
+	}
+
+	args["work_status"] = "queued"
+	if !taskExecutionParentOrchestrationRepairIncluded(args, currentTaskID, "in_progress") {
+		t.Fatal("expected in-progress repair with queued status to be accepted")
+	}
+}
+
+func TestShouldStopAfterSuccessfulTaskExecutionParentOrchestrationRepair(t *testing.T) {
+	t.Parallel()
+
+	taskID := uuid.New()
+	rt := &turnRuntime{
+		recoveryTurn: true,
+		session: &repo.ChatSession{
+			ScopeType: "project_task",
+			ScopeID:   taskID,
+			Mode:      "async",
+		},
+	}
+
+	calls := []ToolCall{{
+		Name: "task.update",
+		Arguments: map[string]any{
+			"task_id":     taskID.String(),
+			"work_status": "queued",
+			"child_output_verifications": []any{
+				map[string]any{"task_id": uuid.NewString(), "summary": "done child"},
+			},
+			"integration_check":  map[string]any{"status": "passed"},
+			"outcome_assessment": map[string]any{"satisfied": true},
+		},
+	}}
+	results := []ToolResult{{Name: "task.update", Output: map[string]any{"task": map[string]any{"id": taskID.String(), "work_status": "queued"}}}}
+
+	if !shouldStopAfterSuccessfulTaskExecutionParentOrchestrationRepair(rt, calls, results) {
+		t.Fatal("expected stop after successful queued parent-orchestration repair")
+	}
+}
+
+func TestHandleOrchestrationParentOpenChildTaskPreflightBlocksParentTurn(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	parentTaskID := uuid.New()
+	childTaskID := uuid.New()
+	projectID := uuid.New()
+	parentDescription := "Write planning/sambot-prompts/test-conversations-technical.md containing the complete technical conversation pack."
+	childDescription := "Write technical conversations 1-3 for planning/sambot-prompts/test-conversations-technical.md."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = parentTaskID
+	fixture.session.Mode = "async"
+	fixture.engine.tasks = &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{
+		parentTaskID: {
+			ID:          parentTaskID,
+			ProjectID:   projectID,
+			TaskNumber:  12662,
+			Title:       "Write 6 technical SamBot test conversations",
+			Description: &parentDescription,
+			WorkStatus:  "in_progress",
+			Metadata:    mustRawJSON(t, map[string]any{"decomposition": map[string]any{"orchestration_only": true}}),
+		},
+		childTaskID: {
+			ID:          childTaskID,
+			ProjectID:   projectID,
+			TaskNumber:  12663,
+			Title:       "Write technical conversations 1-3",
+			Description: &childDescription,
+			WorkStatus:  "draft",
+			Metadata:    mustRawJSON(t, map[string]any{"decomposition_parent_task_id": parentTaskID.String()}),
+		},
+	}}
+
+	turn, err := fixture.chat.CreateTurn(context.Background(), fixture.session.ID, fixture.chat.participants[0].ParticipantID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := fixture.chat.StartTurn(context.Background(), turn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+	turn.Status = "in_progress"
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn:    turn,
+	}
+
+	handled, err := fixture.engine.handleOrchestrationParentOpenChildTaskPreflight(context.Background(), rt)
+	if err != nil {
+		t.Fatalf("handleOrchestrationParentOpenChildTaskPreflight: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected parent preflight to halt when direct child drafts are still open")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	storedTurn, err := fixture.chat.GetTurn(context.Background(), turn.ID)
+	if err != nil {
+		t.Fatalf("GetTurn: %v", err)
+	}
+	if storedTurn.Status != "completed" {
+		t.Fatalf("turn status = %q, want completed", storedTurn.Status)
+	}
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	found := false
+	for _, message := range messages {
+		if message.TurnID != nil && *message.TurnID == turn.ID &&
+			strings.EqualFold(strings.TrimSpace(message.Role), "system") &&
+			strings.Contains(message.Content, "still has open direct child task lanes") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("missing open-child parent preflight system message")
 	}
 }
 

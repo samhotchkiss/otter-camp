@@ -125,6 +125,7 @@ const (
 	duplicateWrittenFileReadbackChurnCode         = "duplicate_written_file_readback_churn"
 	duplicateReadOnlyDiscoveryRoundChurnCode      = "duplicate_read_only_discovery_round_churn"
 	validationLoopSuppressionReason               = "validation_loop_blocked"
+	taskRecoveryResumeSuppressedErrorMessage      = "suppressed repeated identical task recovery resume after terminal blocked recovery stop"
 	recoveryCLIRepairBudget                       = 1
 	recoveryFileWriteRepairBudget                 = 1
 	taskFileWriteRepairBudget                     = 1
@@ -10841,6 +10842,74 @@ func (e *TurnEngine) startInboundMessageTurn(ctx context.Context, turn repo.Chat
 	return startedTurn, true, nil
 }
 
+func (e *TurnEngine) suppressTerminalBlockedRecoveryResumeDispatch(ctx context.Context, sessionID uuid.UUID, message repo.ChatMessage) (bool, error) {
+	if e == nil || e.pool == nil || sessionID == uuid.Nil || message.ID == uuid.Nil {
+		return false, nil
+	}
+	if !isRecoveryResumeMessage(message) {
+		return false, nil
+	}
+	executionID := parseFlowNodeExecutionIDFromMetadata(message.Metadata)
+	if executionID == uuid.Nil {
+		return false, nil
+	}
+
+	var blocked bool
+	if err := e.pool.QueryRow(ctx, `
+		WITH latest_turn AS (
+			SELECT ct.id
+			FROM chat_turn ct
+			JOIN chat_message cm
+			  ON cm.id = ct.trigger_message_id
+			WHERE ct.session_id = $1
+			  AND ct.status = 'completed'
+			  AND COALESCE(ct.stop_reason, '') = 'validation_loop_blocked'
+			  AND cm.session_id = $1
+			  AND cm.role = 'user'
+			  AND (
+			        COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
+			     OR (
+			          COALESCE(cm.metadata->>'source', '') = 'supervisor'
+			      AND cm.content = 'supervisor recovery: resume task'
+			        )
+			      )
+			  AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = $2::text
+			ORDER BY ct.turn_number DESC,
+			         ct.retry_count DESC,
+			         COALESCE(ct.completed_at, ct.created_at) DESC,
+			         ct.id DESC
+			LIMIT 1
+		)
+		SELECT EXISTS (
+			SELECT 1
+			FROM latest_turn lt
+			JOIN chat_message sm
+			  ON sm.turn_id = lt.id
+			 AND sm.role = 'system'
+			WHERE sm.content LIKE $3
+			   OR sm.content LIKE $4
+			   OR sm.content LIKE $5
+			   OR sm.content LIKE $6
+			   OR sm.content LIKE $7
+		)
+	`, sessionID, executionID,
+		"[Recovery shared-deliverable guard:%",
+		"[Task sibling-responsibility guard blocked a discovery-only child lane from mutating the shared deliverable.%",
+		"[Task shared-deliverable guard blocked a decomposed child lane from replacing the inherited parent file with file.write.%",
+		"[Recovery direct-write-only mode blocked read-only discovery%",
+		"%still has open direct child task lanes%",
+	).Scan(&blocked); err != nil {
+		return false, err
+	}
+	if !blocked {
+		return false, nil
+	}
+	if _, err := e.messages.UpdateStatus(ctx, message.ID, "failed", taskRecoveryResumeSuppressedErrorMessage); err != nil && !errors.Is(err, repo.ErrNotFound) {
+		return false, err
+	}
+	return true, nil
+}
+
 func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID uuid.UUID, routedAgentID *uuid.UUID, retryCount int, currentJobID *uuid.UUID) error {
 	if sessionID == uuid.Nil || messageID == uuid.Nil {
 		return fmt.Errorf("session_id and message_id are required")
@@ -10905,6 +10974,11 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	}
 	if cancelled {
 		e.logger.Info("skipping agent turn after logical message cancellation", "session_id", sessionID, "message_id", messageID)
+		return nil
+	}
+	if suppressed, err := e.suppressTerminalBlockedRecoveryResumeDispatch(ctx, sessionID, message); err != nil {
+		return err
+	} else if suppressed {
 		return nil
 	}
 
@@ -11060,6 +11134,11 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		return nil
 	}
 	if handled, handleErr := e.handleDuplicateSameDeliverableTaskPreflight(ctx, runtime); handleErr != nil {
+		return handleErr
+	} else if handled {
+		return nil
+	}
+	if handled, handleErr := e.handleOrchestrationParentOpenChildTaskPreflight(ctx, runtime); handleErr != nil {
 		return handleErr
 	} else if handled {
 		return nil
@@ -12042,6 +12121,56 @@ func (e *TurnEngine) handleDuplicateSameDeliverableTaskPreflight(ctx context.Con
 	return true, nil
 }
 
+func (e *TurnEngine) handleOrchestrationParentOpenChildTaskPreflight(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if e == nil || e.tasks == nil || rt == nil || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
+
+	taskRecord, err := e.tasks.GetByID(ctx, rt.session.ScopeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return true, err
+	}
+	if !taskMetadataMarksOrchestrationOnlyTurn(taskRecord.Metadata) || taskRecord.ProjectID == uuid.Nil || taskRecord.ID == uuid.Nil {
+		return false, nil
+	}
+
+	projectTasks, err := e.tasks.ListByProject(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return true, err
+	}
+	openChildren := make([]repo.ProjectTask, 0)
+	for _, candidate := range projectTasks {
+		if taskdecomp.ParseParentTaskID(candidate.Metadata) != taskRecord.ID {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(candidate.WorkStatus)) {
+		case "done", "cancelled", "blocked":
+			continue
+		default:
+			openChildren = append(openChildren, candidate)
+		}
+	}
+	if len(openChildren) == 0 {
+		return false, nil
+	}
+
+	systemMessage := buildOrchestrationParentOpenChildTaskSystemMessage(taskRecord, openChildren)
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, systemMessage); err != nil {
+		return true, err
+	}
+	rt.stopReason = stopReasonValidationBlocked
+	if err := e.completeTurn(ctx, rt); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
 func (e *TurnEngine) malformedProceduralParentTaskForChild(ctx context.Context, taskRecord repo.ProjectTask) (repo.ProjectTask, bool, error) {
 	if !projectContinuationTaskLooksProceduralInstructionArtifact(taskRecord) {
 		return repo.ProjectTask{}, false, nil
@@ -12207,6 +12336,25 @@ func buildDuplicateSameDeliverableTaskSystemMessage(taskRecord, ownerTask repo.P
 	} else {
 		lines = append(lines, fmt.Sprintf("Leave the shared deliverable to %s for now, and only reopen this task if that higher-precedence lane settles without satisfying the deliverable.]", buildTaskLabel(ownerTask)))
 	}
+	return strings.Join(lines, " ")
+}
+
+func buildOrchestrationParentOpenChildTaskSystemMessage(taskRecord repo.ProjectTask, childTasks []repo.ProjectTask) string {
+	lines := []string{
+		fmt.Sprintf("[Task lane halted: %s still has open direct child task lanes.", buildTaskLabel(taskRecord)),
+		"This orchestration parent should not continue its own recovery/execution turn while child draft or in-flight lanes for the same deliverable are still open.",
+	}
+	if len(childTasks) != 0 {
+		childLabels := make([]string, 0, min(3, len(childTasks)))
+		for _, child := range childTasks {
+			childLabels = append(childLabels, buildTaskLabel(child))
+			if len(childLabels) == 3 {
+				break
+			}
+		}
+		lines = append(lines, fmt.Sprintf("Open direct child lanes: %s.", strings.Join(childLabels, ", ")))
+	}
+	lines = append(lines, "Let the direct child lanes queue or finish first, then reopen the parent only after a child settles done or the child set changes.]")
 	return strings.Join(lines, " ")
 }
 
@@ -18061,6 +18209,10 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Project continuation successfully handed off the focused replacement child work. Ending this turn now so the new task lane can run instead of spending more PM tools re-checking the same handoff.]")
 			return true, nil
 		}
+		if shouldStopAfterSuccessfulTaskExecutionParentOrchestrationRepair(rt, runCalls, results) {
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Task recovery successfully recorded the required parent_orchestration evidence on the current task with work_status=queued. Ending this turn now so the runtime can resume that parent flow cleanly instead of spending another tool hop on premature flow.advance.]")
+			return true, nil
+		}
 		if shouldStopAfterPreparingBoundedProjectChildSplit(rt, runCalls, results) {
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Project continuation successfully prepared the bounded child split. Ending this turn now so the next continuation can assign and queue those fresh child lanes directly instead of stretching one PM turn across multiple setup phases.]")
 			return true, nil
@@ -22999,7 +23151,7 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 	}
 	if haveTaskRecord {
 		state.flowNodeExecutionID = parseFlowNodeExecutionIDFromMetadata(rt.session.Metadata)
-		state.closeoutReadyParentAdvance = recoveryResumeShouldAdvanceCloseoutReadyParent(taskRecord, state)
+		state.closeoutReadyParentAdvance = e.recoveryResumeShouldAdvanceCloseoutReadyParent(ctx, taskRecord, state)
 	}
 	if strings.TrimSpace(state.targetPath) == "" &&
 		strings.TrimSpace(state.targetDraft) == "" &&
@@ -23017,7 +23169,22 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 	return state, true
 }
 
-func recoveryResumeShouldAdvanceCloseoutReadyParent(taskRecord repo.ProjectTask, state recoveryResumeState) bool {
+func (e *TurnEngine) recoveryResumeShouldAdvanceCloseoutReadyParent(ctx context.Context, taskRecord repo.ProjectTask, state recoveryResumeState) bool {
+	childTasks := []repo.ProjectTask(nil)
+	if e != nil && e.tasks != nil && taskRecord.ProjectID != uuid.Nil && taskRecord.ID != uuid.Nil {
+		if projectTasks, err := e.tasks.ListByProject(ctx, taskRecord.ProjectID); err == nil {
+			for _, candidate := range projectTasks {
+				if taskdecomp.ParseParentTaskID(candidate.Metadata) != taskRecord.ID {
+					continue
+				}
+				childTasks = append(childTasks, candidate)
+			}
+		}
+	}
+	return recoveryResumeShouldAdvanceCloseoutReadyParentWithChildren(taskRecord, state, childTasks)
+}
+
+func recoveryResumeShouldAdvanceCloseoutReadyParentWithChildren(taskRecord repo.ProjectTask, state recoveryResumeState, childTasks []repo.ProjectTask) bool {
 	if !taskMetadataMarksOrchestrationOnlyTurn(taskRecord.Metadata) {
 		return false
 	}
@@ -23029,6 +23196,13 @@ func recoveryResumeShouldAdvanceCloseoutReadyParent(taskRecord repo.ProjectTask,
 	}
 	if strings.TrimSpace(state.targetDraft) == "" || strings.TrimSpace(state.targetDraftRejectedReason) != "" {
 		return false
+	}
+	if status := taskorchestration.Evaluate(taskRecord, childTasks); status.IsParent {
+		for _, missing := range status.Missing {
+			if strings.Contains(strings.ToLower(strings.TrimSpace(missing)), "all child tasks must complete before the parent can finish integration") {
+				return false
+			}
+		}
 	}
 	return strings.TrimSpace(recoveryFileWriteDraftRejectReason(state.targetDraft, state.targetPath)) == ""
 }
@@ -27646,6 +27820,9 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	if looksLikeGenericTaskRecoveryReply(trimmed) || looksLikeRecoveryQuestionEcho(trimmed) {
 		return fmt.Sprintf("assistant draft for %s repeated a generic recovery reply instead of the file body", path)
 	}
+	if len(trimmed) < 600 && (strings.HasPrefix(lower, "concrete blocker:") || strings.HasPrefix(lower, "blocker:")) {
+		return fmt.Sprintf("assistant draft for %s repeated a concrete blocker sentence instead of the file body", path)
+	}
 	if containsAny(lower,
 		"task execution is already underway.",
 		"reuse the existing workspace files, task state, prior tool results",
@@ -28553,6 +28730,22 @@ func looksLikeStrongDeliverableReviewerSummaryPlaceholder(lower string) bool {
 		return false
 	}
 	if containsAny(lower,
+		"this file does **not** contain any test conversations",
+		"this file does not contain any test conversations",
+		"contains what appears to be an agent's internal reasoning/recovery checkpoint text",
+		"contains what appears to be an agent's internal reasoning/recovery checkpoint",
+		"internal monologue about task management operations",
+		"this is a clear case of **mismatched deliverable context**",
+		"this is a clear case of mismatched deliverable context",
+	) && containsAny(lower,
+		"not the deliverable content",
+		"not the actual deliverable",
+		"rejecting this review",
+		"rejecting.",
+	) {
+		return true
+	}
+	if containsAny(lower,
 		"contains a self-review/assessment note rather than the actual",
 		"contains a self-review assessment note rather than the actual",
 		"contains a self-referential assessment note rather than the actual",
@@ -28692,6 +28885,19 @@ func looksLikeRecoveryRetryNarrationPlaceholder(content string) bool {
 	}
 	lower := strings.ToLower(trimmed)
 	if containsAny(lower,
+		"contains only 2 lines of recovery checkpoint text",
+		"contains only two lines of recovery checkpoint text",
+		"the file needs to be overwritten with proper content",
+		"recovery system intercepting file writes from a previous attempt",
+	) && containsAny(lower,
+		"let me also check the level-3 file",
+		"let me also check the level 3 file",
+		"for reference on the expected format",
+		"not actual test conversations",
+	) {
+		return true
+	}
+	if containsAny(lower,
 		"there's already a solid start",
 		"there is already a solid start",
 	) && containsAny(lower,
@@ -28814,6 +29020,20 @@ func looksLikeRecoveryRetryNarrationPlaceholder(content string) bool {
 		"target file is truncated at",
 		"need to see how much of the file already exists on disk",
 		"complete it or write fresh",
+	) {
+		return true
+	}
+	if containsAny(lower,
+		"the recovery checkpoint says:",
+		"checkpoint demands",
+		"exact task_update the checkpoint demands",
+	) && containsAny(lower,
+		"issue one narrow task.update on the current task",
+		"child_output_verifications",
+		"set integration_check.status=passed",
+		"set outcome_assessment.satisfied=true",
+		"keep the task in_progress, then call flow.advance",
+		"flow_advance",
 	) {
 		return true
 	}
@@ -34928,12 +35148,54 @@ func shouldStopAfterSuccessfulProjectExecutionHandoffMutation(rt *turnRuntime, c
 		if childDraftAdvanceActive && projectExecutionChildDraftAdvanceSucceeded(call, results[idx], focusTaskID, namedTaskIDs) {
 			return true
 		}
+		if childDraftAdvanceActive && projectExecutionChildDraftCleanupSucceeded(call, results[idx], focusTaskID, namedTaskIDs) {
+			return true
+		}
 		if projectExecutionFocusedDraftChildCreateSucceeded(call, results[idx], focusTaskID) {
 			return true
 		}
 		if projectExecutionHandoffMutationSucceeded(call, results[idx]) {
 			return true
 		}
+	}
+	return false
+}
+
+func shouldStopAfterSuccessfulTaskExecutionParentOrchestrationRepair(rt *turnRuntime, calls []ToolCall, results []ToolResult) bool {
+	if rt == nil || rt.session == nil || !rt.recoveryTurn {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	currentTaskID := resolveTaskID(rt.session)
+	if currentTaskID == nil || *currentTaskID == uuid.Nil {
+		return false
+	}
+	for idx, call := range calls {
+		if idx >= len(results) {
+			break
+		}
+		if strings.TrimSpace(toolResultErrorCode(results[idx])) != "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(call.Name)) {
+		case "task.update", "task_update":
+		default:
+			continue
+		}
+		taskID, ok := parseUUIDAny(call.Arguments["task_id"])
+		if !ok || taskID != *currentTaskID {
+			continue
+		}
+		if !projectContinuationParentCompletionEvidenceIncluded(call.Arguments) {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(stringValue(call.Arguments["work_status"])), "queued") {
+			continue
+		}
+		return true
 	}
 	return false
 }
@@ -34959,6 +35221,31 @@ func projectExecutionChildDraftAdvanceSucceeded(call ToolCall, result ToolResult
 	}
 	_, named := namedTaskIDs[taskID]
 	return named
+}
+
+func projectExecutionChildDraftCleanupSucceeded(call ToolCall, result ToolResult, focusTaskID uuid.UUID, namedTaskIDs map[uuid.UUID]struct{}) bool {
+	if strings.TrimSpace(toolResultErrorCode(result)) != "" {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(call.Name), "task.update") {
+		return false
+	}
+	taskID, ok := parseUUIDAny(call.Arguments["task_id"])
+	if !ok || taskID == uuid.Nil || taskID == focusTaskID {
+		return false
+	}
+	if len(namedTaskIDs) == 0 {
+		return false
+	}
+	if _, named := namedTaskIDs[taskID]; !named {
+		return false
+	}
+	switch projectExecutionResultWorkStatus(call.Arguments, result) {
+	case "blocked", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func shouldStopAfterPreparingBoundedProjectChildSplit(rt *turnRuntime, calls []ToolCall, results []ToolResult) bool {
@@ -35327,6 +35614,10 @@ func projectExecutionResultNamedField(arguments map[string]any, result ToolResul
 
 func projectExecutionBlockedMutationStopMessage(rt *turnRuntime, results []ToolResult) string {
 	replacementHandoffActive := projectContinuationReplacementChildHandoffActive(rt)
+	focusedDraftReadGuardActive := false
+	if rt != nil {
+		focusedDraftReadGuardActive = projectContinuationFocusedDraftReadGuardActive(strings.TrimSpace(rt.initialMessageText))
+	}
 	for _, result := range results {
 		errText := strings.ToLower(strings.TrimSpace(toolResultErrorCode(result)))
 		if rt != nil && rt.session != nil &&
@@ -35335,7 +35626,7 @@ func projectExecutionBlockedMutationStopMessage(rt *turnRuntime, results []ToolR
 			strings.Contains(errText, "parent task requires child verification and passed integration before completion") {
 			return "[Task execution found that this closeout-ready parent still needs parent_orchestration evidence before flow.advance can finish. Do not inspect blocked child lanes or reread broad workspace context now. Issue one narrow task.update on the current task with child_output_verifications for the concrete completed child or superseding outputs that satisfy the deliverable, set integration_check.status=passed, set outcome_assessment.satisfied=true, and set work_status=queued.]"
 		}
-		if replacementHandoffActive &&
+		if (replacementHandoffActive || focusedDraftReadGuardActive) &&
 			(strings.Contains(errText, "project continuation already named task id=") ||
 				strings.Contains(errText, "project continuation already named terminally blocked task-owned deliverable")) {
 			return "[Project continuation already has a focused replacement-parent handoff. Do not reread sibling artifacts from the project lane; create the fresh replacement child now or use only task.list(parent_task_id=...) if child-lane verification is still required.]"
@@ -36352,7 +36643,7 @@ func taskExecutionParentOrchestrationRepairRuleForStatus(workStatus string) stri
 	case "draft", "blocked":
 		return "Issue one narrow task.update on the current task with child_output_verifications for the concrete completed child or superseding outputs that satisfy the deliverable, set integration_check.status=passed, set outcome_assessment.satisfied=true, and set work_status=queued."
 	case "in_progress":
-		return "Issue one narrow task.update on the current task with child_output_verifications for the concrete completed child or superseding outputs that satisfy the deliverable, set integration_check.status=passed, and set outcome_assessment.satisfied=true. Keep the task in_progress (omit work_status or leave it as in_progress), then call flow.advance."
+		return "Issue one narrow task.update on the current task with child_output_verifications for the concrete completed child or superseding outputs that satisfy the deliverable, set integration_check.status=passed, set outcome_assessment.satisfied=true, and set work_status=queued."
 	default:
 		return "Issue one narrow task.update on the current task with child_output_verifications for the concrete completed child or superseding outputs that satisfy the deliverable, set integration_check.status=passed, set outcome_assessment.satisfied=true, and preserve the current active work_status."
 	}
@@ -36374,7 +36665,7 @@ func taskExecutionParentOrchestrationRepairIncluded(arguments map[string]any, cu
 	case "draft", "blocked":
 		return desiredStatus == "queued"
 	case "in_progress":
-		return desiredStatus == "" || desiredStatus == "in_progress"
+		return desiredStatus == "queued"
 	default:
 		return desiredStatus == "" || desiredStatus == strings.ToLower(strings.TrimSpace(currentTaskStatus))
 	}

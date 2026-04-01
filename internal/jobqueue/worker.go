@@ -83,6 +83,7 @@ const (
 	taskSiblingResponsibilityGuardPrefix      = "[Task sibling-responsibility guard blocked a discovery-only child lane from mutating the shared deliverable."
 	taskInheritedSharedDeliverableGuardPrefix = "[Task shared-deliverable guard blocked a decomposed child lane from replacing the inherited parent file with file.write."
 	taskRecoveryDirectWriteOnlyGuardPrefix    = "[Recovery direct-write-only mode blocked read-only discovery"
+	taskOpenChildLanesGuardLike               = "%still has open direct child task lanes%"
 )
 
 var taskQueueSinglePassCLIWritePathPattern = regexp.MustCompile("(?is)(?:single\\s+file|write\\s+a\\s+single\\s+complete[^`\\n]*?at)\\s*:?\\s*`([^`]+)`")
@@ -216,7 +217,8 @@ func (w *Worker) maxExecutionSessionRecoveryBatch() int {
 	if w == nil || w.batchSize <= 1 {
 		return 1
 	}
-	return max(1, min(2, w.batchSize/4))
+	recoveryBatch := max(2, w.batchSize/4)
+	return min(4, recoveryBatch)
 }
 
 type JobWorker interface {
@@ -520,6 +522,13 @@ func (w *Worker) Start(ctx context.Context) error {
 		}
 	} else if requeued > 0 {
 		w.logger.Info("job queue: requeued pending turns without jobs on startup", "count", requeued)
+	}
+	if repaired, err := w.CloseOrchestrationParentAsyncSessionsWaitingOnOpenChildLanes(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup orchestration parent open-child cleanup failed", "error", err)
+		}
+	} else if repaired > 0 {
+		w.logger.Info("job queue: closed orchestration parent async sessions waiting on open child lanes on startup", "count", repaired)
 	}
 	if requeued, err := w.RequeueActiveExecutionSessionsWithoutTurns(runCtx); err != nil {
 		if runCtx.Err() == nil {
@@ -995,7 +1004,13 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		    SELECT 1
 		    FROM chat_message cm
 		    WHERE cm.id = (jq.payload->>'message_id')::uuid
-		      AND COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
+		      AND (
+		            COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
+		         OR (
+		              COALESCE(cm.metadata->>'source', '') = 'supervisor'
+		          AND cm.content = 'supervisor recovery: resume task'
+		            )
+		          )
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1
@@ -1069,7 +1084,13 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		        AND COALESCE(ct.stop_reason, '') = 'validation_loop_blocked'
 		        AND cm.session_id = (jq.payload->>'session_id')::uuid
 		        AND cm.role = 'user'
-		        AND COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
+		        AND (
+		              COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
+		           OR (
+		                COALESCE(cm.metadata->>'source', '') = 'supervisor'
+		            AND cm.content = 'supervisor recovery: resume task'
+		              )
+		            )
 		      ORDER BY ct.turn_number DESC,
 		               ct.retry_count DESC,
 		               COALESCE(ct.completed_at, ct.created_at) DESC,
@@ -1085,8 +1106,9 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		       OR sm.content LIKE $2
 		       OR sm.content LIKE $3
 		       OR sm.content LIKE $4
+		       OR sm.content LIKE $5
 		  )
-	`, recoverySharedDeliverableGuardPrefix+"%", taskSiblingResponsibilityGuardPrefix+"%", taskInheritedSharedDeliverableGuardPrefix+"%", taskRecoveryDirectWriteOnlyGuardPrefix+"%")
+	`, recoverySharedDeliverableGuardPrefix+"%", taskSiblingResponsibilityGuardPrefix+"%", taskInheritedSharedDeliverableGuardPrefix+"%", taskRecoveryDirectWriteOnlyGuardPrefix+"%", taskOpenChildLanesGuardLike)
 	if err != nil {
 		return 0, fmt.Errorf("purge stale agent_turn jobs (terminal blocked recovery resumes): %w", err)
 	}
@@ -1539,10 +1561,16 @@ func (w *Worker) RequeueStrandedUserMessageTurns(ctx context.Context) (int64, er
 
 func (w *Worker) RequeuePendingTurnsWithoutJobs(ctx context.Context) (int64, error) {
 	rows, err := w.pool.Query(ctx, `
-		SELECT DISTINCT cs.id, CASE
-			WHEN COALESCE(live_turn.status, '') = 'pending' THEN live_turn.trigger_message_id
-			ELSE ct.trigger_message_id
-		END
+		SELECT DISTINCT cs.id,
+		       CASE
+		           WHEN COALESCE(live_turn.status, '') = 'pending' THEN live_turn.trigger_message_id
+		           ELSE ct.trigger_message_id
+		       END,
+		       CASE
+		           WHEN COALESCE(live_turn.status, '') = 'pending' THEN live_turn.id
+		           ELSE ct.id
+		       END,
+		       COALESCE(trigger_message.status, '')
 		FROM chat_session cs
 		LEFT JOIN LATERAL (
 			SELECT e.metadata
@@ -1570,6 +1598,11 @@ func (w *Worker) RequeuePendingTurnsWithoutJobs(ctx context.Context) (int64, err
 		   AND p.id = pt.project_id
 		  )
 		LEFT JOIN chat_turn ct ON ct.id = cs.current_turn_id
+		LEFT JOIN chat_message trigger_message
+		  ON trigger_message.id = CASE
+		       WHEN COALESCE(live_turn.status, '') = 'pending' THEN live_turn.trigger_message_id
+		       ELSE ct.trigger_message_id
+		     END
 		WHERE cs.mode = 'async'
 		  AND cs.status = 'active'
 		  AND CASE
@@ -1609,8 +1642,32 @@ func (w *Worker) RequeuePendingTurnsWithoutJobs(ctx context.Context) (int64, err
 	for rows.Next() {
 		var sessionID uuid.UUID
 		var messageID uuid.UUID
-		if err := rows.Scan(&sessionID, &messageID); err != nil {
+		var turnID uuid.UUID
+		var messageStatus string
+		if err := rows.Scan(&sessionID, &messageID, &turnID, &messageStatus); err != nil {
 			return repaired, fmt.Errorf("scan pending turn without job: %w", err)
+		}
+		if turnID != uuid.Nil && !strings.EqualFold(strings.TrimSpace(messageStatus), "pending") {
+			if _, err := w.pool.Exec(ctx, `
+				UPDATE chat_turn
+				SET status = 'failed',
+				    error_message = 'trigger message already settled; clearing orphaned pending turn',
+				    completed_at = now()
+				WHERE id = $1
+				  AND status = 'pending'
+			`, turnID); err != nil {
+				return repaired, fmt.Errorf("fail orphaned pending turn for session %s: %w", sessionID, err)
+			}
+			if _, err := w.pool.Exec(ctx, `
+				UPDATE chat_session
+				SET current_turn_id = NULL
+				WHERE id = $1
+				  AND current_turn_id = $2
+			`, sessionID, turnID); err != nil {
+				return repaired, fmt.Errorf("clear orphaned pending current turn for session %s: %w", sessionID, err)
+			}
+			repaired++
+			continue
 		}
 		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
 			SessionID:  sessionID,
@@ -2044,7 +2101,31 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		if err := rows.Scan(&sessionID, &executionID, &messageID, &messageSource, &messageConsumed, &retryCount, &latestTurnError, &latestTurnCompletedAt); err != nil {
 			return repaired, fmt.Errorf("scan active execution session without turn: %w", err)
 		}
-		if strings.EqualFold(strings.TrimSpace(messageSource), "task_recovery_resume") {
+		waitingOnOpenChildLanes, waitingErr := w.activeExecutionWaitingOnOpenChildLanes(ctx, executionID)
+		if waitingErr != nil {
+			return repaired, fmt.Errorf("check active execution open child lanes for session %s: %w", sessionID, waitingErr)
+		}
+		if waitingOnOpenChildLanes {
+			continue
+		}
+		recoveryResumeLike := strings.EqualFold(strings.TrimSpace(messageSource), "task_recovery_resume")
+		if !recoveryResumeLike && strings.EqualFold(strings.TrimSpace(messageSource), "task_queue_processor") {
+			recoveryLike, recoveryLikeErr := w.messageUsesSupervisorExecutionRecoveryKickoff(ctx, messageID)
+			if recoveryLikeErr != nil {
+				return repaired, fmt.Errorf("inspect active execution kickoff message for session %s: %w", sessionID, recoveryLikeErr)
+			}
+			recoveryResumeLike = recoveryLike
+		}
+		if messageConsumed && strings.EqualFold(strings.TrimSpace(messageSource), "task_queue_processor") && !recoveryResumeLike {
+			terminalStop, terminalErr := w.latestRecoveryResumeTurnShowsTerminalBlockedStop(ctx, sessionID, executionID)
+			if terminalErr != nil {
+				return repaired, fmt.Errorf("check terminal blocked task execution kickoff for session %s: %w", sessionID, terminalErr)
+			}
+			if terminalStop {
+				continue
+			}
+		}
+		if recoveryResumeLike {
 			suppressed, suppressErr := w.suppressPendingTerminalRecoveryResumeMessage(ctx, sessionID, executionID, messageID)
 			if suppressErr != nil {
 				return repaired, fmt.Errorf("suppress active recovery resume for session %s: %w", sessionID, suppressErr)
@@ -2055,7 +2136,7 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			}
 		}
 		rearmExecutionKickoffAfterRecovery := false
-		if messageConsumed && strings.EqualFold(strings.TrimSpace(messageSource), "task_recovery_resume") {
+		if messageConsumed && recoveryResumeLike {
 			successfulRecoveryMutation, recoveryErr := w.recoveryResumeMessageCompletedWithDurableArtifactMutation(ctx, sessionID, messageID)
 			if recoveryErr != nil {
 				return repaired, fmt.Errorf("check completed recovery resume for session %s: %w", sessionID, recoveryErr)
@@ -2163,7 +2244,248 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 	if err := rows.Err(); err != nil {
 		return repaired, fmt.Errorf("iterate active execution sessions without turns: %w", err)
 	}
+	fallbackRequeued, err := w.requeuePendingTaskQueueKickoffMessagesWithoutJobs(ctx, limit)
+	if err != nil {
+		return repaired, err
+	}
+	repaired += fallbackRequeued
+	waitingFallbackRequeued, err := w.requeueWaitingTaskExecutionsWithoutJobs(ctx, limit)
+	if err != nil {
+		return repaired, err
+	}
+	repaired += waitingFallbackRequeued
 	return repaired, nil
+}
+
+func (w *Worker) requeuePendingTaskQueueKickoffMessagesWithoutJobs(ctx context.Context, limit int) (int64, error) {
+	if w == nil || w.pool == nil {
+		return 0, nil
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+
+	rows, err := w.pool.Query(ctx, `
+		SELECT cs.id,
+		       e.id,
+		       cm.id
+		FROM chat_session cs
+		JOIN flow_node_execution e
+		  ON e.session_id = cs.id
+		 AND e.status = 'active'
+		JOIN project_task pt
+		  ON pt.id = cs.scope_id
+		JOIN project p
+		  ON p.id = pt.project_id
+		JOIN chat_message cm
+		  ON cm.session_id = cs.id
+		 AND cm.role = 'user'
+		 AND cm.status = 'pending'
+		 AND COALESCE(cm.metadata->'agent_turn_dispatch'->>'cancelled_at', '') = ''
+		 AND COALESCE(cm.metadata->>'source', '') = 'task_queue_processor'
+		 AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
+		WHERE cs.scope_type = 'project_task'
+		  AND cs.mode = 'async'
+		  AND cs.status = 'active'
+		  AND COALESCE(p.settings->'pause'->>'is_paused', 'false') <> 'true'
+		  AND cs.current_turn_id IS NULL
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    WHERE ct.session_id = cs.id
+		      AND ct.status IN ('pending', 'in_progress')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn consumed
+		    WHERE consumed.session_id = cs.id
+		      AND consumed.trigger_message_id = cm.id
+		      AND consumed.status IN ('completed', 'failed', 'cancelled')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = $1
+		      AND jq.status IN ('pending', 'claimed')
+		      AND (jq.payload->>'session_id')::uuid = cs.id
+		      AND COALESCE(jq.payload->>'flow_node_execution_id', '') = e.id::text
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM project_task blocked_task
+		    WHERE blocked_task.id = cs.scope_id
+		      AND blocked_task.work_status = 'blocked'
+		      AND COALESCE(blocked_task.metadata->'agent_turn_validation_guard'->>'blocked', '') = 'true'
+		  )
+		ORDER BY e.started_at ASC, cm.created_at ASC, cs.id ASC
+		LIMIT $2
+	`, agentTurnJobType, limit)
+	if err != nil {
+		return 0, fmt.Errorf("list pending task queue kickoff messages without jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var repaired int64
+	for rows.Next() {
+		var sessionID uuid.UUID
+		var executionID uuid.UUID
+		var messageID uuid.UUID
+		if err := rows.Scan(&sessionID, &executionID, &messageID); err != nil {
+			return repaired, fmt.Errorf("scan pending task queue kickoff without job: %w", err)
+		}
+		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
+			SessionID:           sessionID,
+			MessageID:           messageID,
+			RetryCount:          0,
+			FlowNodeExecutionID: &executionID,
+		}, nil); err != nil {
+			return repaired, fmt.Errorf("enqueue pending task queue kickoff without job for session %s: %w", sessionID, err)
+		}
+		repaired++
+	}
+	if err := rows.Err(); err != nil {
+		return repaired, fmt.Errorf("iterate pending task queue kickoffs without jobs: %w", err)
+	}
+	return repaired, nil
+}
+
+func (w *Worker) requeueWaitingTaskExecutionsWithoutJobs(ctx context.Context, limit int) (int64, error) {
+	if w == nil || w.pool == nil {
+		return 0, nil
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+
+	rows, err := w.pool.Query(ctx, `
+		SELECT cs.id, e.id
+		FROM chat_session cs
+		JOIN flow_node_execution e
+		  ON e.session_id = cs.id
+		 AND e.status = 'active'
+		JOIN project_task pt
+		  ON pt.id = cs.scope_id
+		JOIN project p
+		  ON p.id = pt.project_id
+		WHERE cs.scope_type = 'project_task'
+		  AND cs.mode = 'async'
+		  AND cs.status = 'active'
+		  AND COALESCE(p.settings->'pause'->>'is_paused', 'false') <> 'true'
+		  AND cs.current_turn_id IS NULL
+		  AND COALESCE(e.runtime_substate, '') = 'waiting_for_turn'
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    WHERE ct.session_id = cs.id
+		      AND ct.status IN ('pending', 'in_progress')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = $1
+		      AND jq.status IN ('pending', 'claimed')
+		      AND (jq.payload->>'session_id')::uuid = cs.id
+		      AND COALESCE(jq.payload->>'flow_node_execution_id', '') = e.id::text
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM project_task blocked_task
+		    WHERE blocked_task.id = cs.scope_id
+		      AND blocked_task.work_status = 'blocked'
+		      AND COALESCE(blocked_task.metadata->'agent_turn_validation_guard'->>'blocked', '') = 'true'
+		  )
+		ORDER BY e.started_at ASC, cs.id ASC
+		LIMIT $2
+	`, agentTurnJobType, limit)
+	if err != nil {
+		return 0, fmt.Errorf("list waiting task executions without jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var repaired int64
+	for rows.Next() {
+		var sessionID uuid.UUID
+		var executionID uuid.UUID
+		if err := rows.Scan(&sessionID, &executionID); err != nil {
+			return repaired, fmt.Errorf("scan waiting task execution without job: %w", err)
+		}
+		waitingOnOpenChildLanes, waitingErr := w.activeExecutionWaitingOnOpenChildLanes(ctx, executionID)
+		if waitingErr != nil {
+			return repaired, fmt.Errorf("check waiting task execution open child lanes for session %s: %w", sessionID, waitingErr)
+		}
+		if waitingOnOpenChildLanes {
+			continue
+		}
+		messageID, ensureErr := w.ensureTaskExecutionKickoffMessage(ctx, sessionID, executionID)
+		if ensureErr != nil {
+			return repaired, fmt.Errorf("ensure waiting task execution kickoff message for session %s: %w", sessionID, ensureErr)
+		}
+		if messageID == uuid.Nil {
+			continue
+		}
+		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
+			SessionID:           sessionID,
+			MessageID:           messageID,
+			RetryCount:          0,
+			FlowNodeExecutionID: &executionID,
+		}, nil); err != nil {
+			return repaired, fmt.Errorf("enqueue waiting task execution without job for session %s: %w", sessionID, err)
+		}
+		repaired++
+	}
+	if err := rows.Err(); err != nil {
+		return repaired, fmt.Errorf("iterate waiting task executions without jobs: %w", err)
+	}
+	return repaired, nil
+}
+
+func (w *Worker) messageUsesSupervisorExecutionRecoveryKickoff(ctx context.Context, messageID uuid.UUID) (bool, error) {
+	if w == nil || w.pool == nil || messageID == uuid.Nil {
+		return false, nil
+	}
+
+	var recoveryLike bool
+	if err := w.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM chat_message
+			WHERE id = $1
+			  AND COALESCE(metadata->>'source', '') = 'task_queue_processor'
+			  AND COALESCE(metadata->>'recovery_source', '') = 'supervisor'
+		)
+	`, messageID).Scan(&recoveryLike); err != nil {
+		return false, err
+	}
+	return recoveryLike, nil
+}
+
+func (w *Worker) activeExecutionWaitingOnOpenChildLanes(ctx context.Context, executionID uuid.UUID) (bool, error) {
+	if w == nil || w.pool == nil || executionID == uuid.Nil {
+		return false, nil
+	}
+
+	var waiting bool
+	if err := w.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM flow_node_execution e
+			JOIN project_task pt
+			  ON pt.id = e.task_id
+			WHERE e.id = $1
+			  AND e.status = 'active'
+			  AND COALESCE(pt.metadata->'decomposition'->>'orchestration_only', 'false') = 'true'
+			  AND EXISTS (
+			    SELECT 1
+			    FROM project_task child
+			    WHERE child.project_id = pt.project_id
+			      AND COALESCE(child.metadata->>'decomposition_parent_task_id', '') = pt.id::text
+			      AND child.work_status NOT IN ('done', 'cancelled', 'blocked')
+			  )
+		)
+	`, executionID).Scan(&waiting); err != nil {
+		return false, err
+	}
+	return waiting, nil
 }
 
 func (w *Worker) RequeueTerminalRecoveryResumeSessionsWithoutLiveExecution(ctx context.Context) (int64, error) {
@@ -2383,7 +2705,17 @@ func (w *Worker) suppressPendingTerminalRecoveryResumeMessage(ctx context.Contex
 		  AND session_id = $2
 		  AND role = 'user'
 		  AND status = 'pending'
-		  AND COALESCE(metadata->>'source', '') = 'task_recovery_resume'
+		  AND (
+		        COALESCE(metadata->>'source', '') = 'task_recovery_resume'
+		     OR (
+		          COALESCE(metadata->>'source', '') = 'supervisor'
+		      AND content = 'supervisor recovery: resume task'
+		        )
+		     OR (
+		          COALESCE(metadata->>'source', '') = 'task_queue_processor'
+		      AND COALESCE(metadata->>'recovery_source', '') = 'supervisor'
+		        )
+		      )
 		  AND COALESCE(metadata->>'flow_node_execution_id', '') = $3::text
 	`, messageID, sessionID, executionID, taskRecoveryResumeSuppressedErrorMessage)
 	if err != nil {
@@ -2392,13 +2724,13 @@ func (w *Worker) suppressPendingTerminalRecoveryResumeMessage(ctx context.Contex
 	return tag.RowsAffected() > 0, nil
 }
 
-func (w *Worker) latestRecoveryResumeTurnShowsTerminalBlockedStop(ctx context.Context, sessionID, executionID uuid.UUID) (bool, error) {
-	if w == nil || w.pool == nil || sessionID == uuid.Nil || executionID == uuid.Nil {
+func latestRecoveryResumeTurnShowsTerminalBlockedStopWithQuerier(ctx context.Context, q queryExecutor, sessionID, executionID uuid.UUID) (bool, error) {
+	if q == nil || sessionID == uuid.Nil || executionID == uuid.Nil {
 		return false, nil
 	}
 
 	var blocked bool
-	if err := w.pool.QueryRow(ctx, `
+	if err := q.QueryRow(ctx, `
 		WITH latest_turn AS (
 			SELECT ct.id
 			FROM chat_turn ct
@@ -2409,7 +2741,21 @@ func (w *Worker) latestRecoveryResumeTurnShowsTerminalBlockedStop(ctx context.Co
 			  AND COALESCE(ct.stop_reason, '') = 'validation_loop_blocked'
 			  AND cm.session_id = $1
 			  AND cm.role = 'user'
-			  AND COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
+			  AND (
+			        COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
+			     OR (
+			          COALESCE(cm.metadata->>'source', '') = 'supervisor'
+			      AND cm.content = 'supervisor recovery: resume task'
+			        )
+			     OR (
+			          COALESCE(cm.metadata->>'source', '') = 'task_queue_processor'
+			      AND (
+			           COALESCE(cm.metadata->>'recovery_source', '') = 'supervisor'
+			        OR COALESCE(cm.metadata->>'recovered_missing_kickoff', '') = 'true'
+			        OR COALESCE(cm.metadata->>'synthetic_user_message', '') = 'true'
+			          )
+			        )
+			      )
 			  AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = $2::text
 			ORDER BY ct.turn_number DESC,
 			         ct.retry_count DESC,
@@ -2427,16 +2773,25 @@ func (w *Worker) latestRecoveryResumeTurnShowsTerminalBlockedStop(ctx context.Co
 			   OR sm.content LIKE $4
 			   OR sm.content LIKE $5
 			   OR sm.content LIKE $6
+			   OR sm.content LIKE $7
 		)
 	`, sessionID, executionID,
 		recoverySharedDeliverableGuardPrefix+"%",
 		taskSiblingResponsibilityGuardPrefix+"%",
 		taskInheritedSharedDeliverableGuardPrefix+"%",
 		taskRecoveryDirectWriteOnlyGuardPrefix+"%",
+		taskOpenChildLanesGuardLike,
 	).Scan(&blocked); err != nil {
 		return false, err
 	}
 	return blocked, nil
+}
+
+func (w *Worker) latestRecoveryResumeTurnShowsTerminalBlockedStop(ctx context.Context, sessionID, executionID uuid.UUID) (bool, error) {
+	if w == nil || w.pool == nil || sessionID == uuid.Nil || executionID == uuid.Nil {
+		return false, nil
+	}
+	return latestRecoveryResumeTurnShowsTerminalBlockedStopWithQuerier(ctx, w.pool, sessionID, executionID)
 }
 
 func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (int64, error) {
@@ -2685,6 +3040,16 @@ func (w *Worker) RequeueActiveProjectSessionsMissingContinuation(ctx context.Con
 		    FROM project_task pt
 		    WHERE pt.project_id = cs.scope_id
 		      AND lower(trim(pt.work_status)) IN ('queued', 'in_progress', 'review')
+		      AND NOT (
+		            COALESCE(pt.metadata->'decomposition'->>'orchestration_only', 'false') = 'true'
+		        AND EXISTS (
+		              SELECT 1
+		              FROM project_task child
+		              WHERE child.project_id = pt.project_id
+		                AND COALESCE(child.metadata->>'decomposition_parent_task_id', '') = pt.id::text
+		                AND lower(trim(child.work_status)) NOT IN ('done', 'cancelled', 'blocked')
+		            )
+		          )
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1
@@ -2694,6 +3059,16 @@ func (w *Worker) RequeueActiveProjectSessionsMissingContinuation(ctx context.Con
 		    WHERE pt.project_id = cs.scope_id
 		      AND lower(trim(pt.work_status)) NOT IN ('done', 'cancelled', 'blocked')
 		      AND e.status = 'active'
+		      AND NOT (
+		            COALESCE(pt.metadata->'decomposition'->>'orchestration_only', 'false') = 'true'
+		        AND EXISTS (
+		              SELECT 1
+		              FROM project_task child
+		              WHERE child.project_id = pt.project_id
+		                AND COALESCE(child.metadata->>'decomposition_parent_task_id', '') = pt.id::text
+		                AND lower(trim(child.work_status)) NOT IN ('done', 'cancelled', 'blocked')
+		            )
+		          )
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1
@@ -2705,6 +3080,16 @@ func (w *Worker) RequeueActiveProjectSessionsMissingContinuation(ctx context.Con
 		      AND task_session.status = 'active'
 		      AND pt.project_id = cs.scope_id
 		      AND lower(trim(pt.work_status)) NOT IN ('done', 'cancelled', 'blocked')
+		      AND NOT (
+		            COALESCE(pt.metadata->'decomposition'->>'orchestration_only', 'false') = 'true'
+		        AND EXISTS (
+		              SELECT 1
+		              FROM project_task child
+		              WHERE child.project_id = pt.project_id
+		                AND COALESCE(child.metadata->>'decomposition_parent_task_id', '') = pt.id::text
+		                AND lower(trim(child.work_status)) NOT IN ('done', 'cancelled', 'blocked')
+		            )
+		          )
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1
@@ -3071,9 +3456,30 @@ func (w *Worker) ensureProjectContinuationMessageDecisionWithOptions(ctx context
 		}
 
 		rediscoveryOnlyRetry := false
+		if !latestExecutableContractRetry && latestConsumedProjectContinuationMessageID != uuid.Nil {
+			directChildStop, childStopErr := w.projectContinuationTurnEndedWithRediscoveryOnlyStop(ctx, latestConsumedProjectContinuationMessageID)
+			if childStopErr != nil {
+				return uuid.Nil, false, fmt.Errorf("check latest consumed direct-child inspection continuation: %w", childStopErr)
+			}
+			if directChildStop {
+				directChildRefs, childRefsErr := w.projectContinuationTurnDirectChildTaskRefsForWorker(ctx, latestConsumedProjectContinuationMessageID)
+				if childRefsErr != nil {
+					return uuid.Nil, false, fmt.Errorf("load latest consumed direct child refs: %w", childRefsErr)
+				}
+				if len(directChildRefs) > 0 && projectContinuationHasDirectChildActionableFocusForWorker(snapshot) {
+					rediscoveryOnlyRetry = true
+					content = buildProjectExecutionContinuationDirectChildActionRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, directChildRefs)
+					expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
+					metadataMap[projectContinuationSnapshotFingerprintKey] = expectedSnapshotFingerprint
+					latestConsumedMatchingMessageID = uuid.Nil
+					latestConsumedMatchingRepoVersion = ""
+				}
+			}
+		}
+
 		boundedSizeRetry := false
 		boundedSizeReferenceMessageID := uuid.Nil
-		if !latestExecutableContractRetry && latestConsumedProjectContinuationMessageID != uuid.Nil {
+		if !latestExecutableContractRetry && !rediscoveryOnlyRetry && latestConsumedProjectContinuationMessageID != uuid.Nil {
 			var boundedErr error
 			boundedSizeRetry, boundedErr = w.projectContinuationTurnEndedWithBoundedSizeStop(ctx, latestConsumedProjectContinuationMessageID)
 			if boundedErr != nil {
@@ -3112,7 +3518,7 @@ func (w *Worker) ensureProjectContinuationMessageDecisionWithOptions(ctx context
 					if childRefsErr != nil {
 						return uuid.Nil, false, fmt.Errorf("load latest consumed direct child refs: %w", childRefsErr)
 					}
-					if len(directChildRefs) > 0 && strings.TrimSpace(snapshot.FocusTaskLine) != "" {
+					if len(directChildRefs) > 0 && projectContinuationHasDirectChildActionableFocusForWorker(snapshot) {
 						rediscoveryOnlyRetry = true
 						content = buildProjectExecutionContinuationDirectChildActionRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, directChildRefs)
 						expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
@@ -3127,7 +3533,7 @@ func (w *Worker) ensureProjectContinuationMessageDecisionWithOptions(ctx context
 		focusedCloseoutReadyRetry := false
 		focusedCloseoutReadyReferenceMessageID := uuid.Nil
 		for _, referenceMessageID := range retryReferenceMessageIDs {
-			if latestExecutableContractRetry || boundedSizeRetry {
+			if latestExecutableContractRetry || boundedSizeRetry || rediscoveryOnlyRetry {
 				break
 			}
 			var retryErr error
@@ -3143,7 +3549,7 @@ func (w *Worker) ensureProjectContinuationMessageDecisionWithOptions(ctx context
 
 		closeoutReadyQueueRetry := false
 		closeoutReadyQueueReferenceMessageID := uuid.Nil
-		if !latestExecutableContractRetry && !boundedSizeRetry && !focusedCloseoutReadyRetry {
+		if !latestExecutableContractRetry && !boundedSizeRetry && !focusedCloseoutReadyRetry && !rediscoveryOnlyRetry {
 			for _, referenceMessageID := range retryReferenceMessageIDs {
 				var retryErr error
 				closeoutReadyQueueRetry, retryErr = w.projectContinuationTurnEndedWithCloseoutReadyQueueRequiredStop(ctx, referenceMessageID)
@@ -3159,7 +3565,7 @@ func (w *Worker) ensureProjectContinuationMessageDecisionWithOptions(ctx context
 
 		closeoutReadyRetry := false
 		closeoutReadyReferenceMessageID := uuid.Nil
-		if !latestExecutableContractRetry && !boundedSizeRetry && !focusedCloseoutReadyRetry && !closeoutReadyQueueRetry {
+		if !latestExecutableContractRetry && !boundedSizeRetry && !focusedCloseoutReadyRetry && !closeoutReadyQueueRetry && !rediscoveryOnlyRetry {
 			for _, referenceMessageID := range retryReferenceMessageIDs {
 				var retryErr error
 				closeoutReadyRetry, retryErr = w.projectContinuationTurnEndedWithCloseoutReadyParentStop(ctx, referenceMessageID)
@@ -3262,7 +3668,7 @@ func (w *Worker) ensureProjectContinuationMessageDecisionWithOptions(ctx context
 				latestConsumedMatchingRepoVersion = ""
 			}
 		}
-		if !latestExecutableContractRetry && !boundedSizeRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry {
+		if !latestExecutableContractRetry && !boundedSizeRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && !rediscoveryOnlyRetry {
 			for _, referenceMessageID := range retryReferenceMessageIDs {
 				isBoundedSizeStop, boundedErr := w.projectContinuationTurnEndedWithBoundedSizeStop(ctx, referenceMessageID)
 				if boundedErr != nil {
@@ -3297,7 +3703,7 @@ func (w *Worker) ensureProjectContinuationMessageDecisionWithOptions(ctx context
 				break
 			}
 		}
-		if !latestExecutableContractRetry && !boundedSizeRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && latestConsumedSameCompletedTaskMessageID != uuid.Nil {
+		if !latestExecutableContractRetry && !boundedSizeRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && !rediscoveryOnlyRetry && latestConsumedSameCompletedTaskMessageID != uuid.Nil {
 			isBoundedSizeStop, boundedErr := w.projectContinuationTurnEndedWithBoundedSizeStop(ctx, latestConsumedSameCompletedTaskMessageID)
 			if boundedErr != nil {
 				return uuid.Nil, false, fmt.Errorf("check latest same-completed-task bounded-size continuation: %w", boundedErr)
@@ -3327,7 +3733,7 @@ func (w *Worker) ensureProjectContinuationMessageDecisionWithOptions(ctx context
 				latestConsumedMatchingRepoVersion = ""
 			}
 		}
-		if !latestExecutableContractRetry && !boundedSizeRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry {
+		if !latestExecutableContractRetry && !boundedSizeRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && !rediscoveryOnlyRetry {
 			fallbackReferenceMessageID, fallbackFocusLabel, fallbackErr := w.projectContinuationLatestSessionBoundedSizeReferenceForWorker(ctx, sessionID, snapshot, 24)
 			if fallbackErr != nil {
 				return uuid.Nil, false, fmt.Errorf("find latest session bounded-size continuation: %w", fallbackErr)
@@ -3351,7 +3757,7 @@ func (w *Worker) ensureProjectContinuationMessageDecisionWithOptions(ctx context
 				latestConsumedMatchingRepoVersion = ""
 			}
 		}
-		if !latestExecutableContractRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && !boundedSizeRetry {
+		if !latestExecutableContractRetry && !closeoutReadyRetry && !closeoutReadyQueueRetry && !focusedCloseoutReadyRetry && !boundedSizeRetry && !rediscoveryOnlyRetry {
 			for _, referenceMessageID := range retryReferenceMessageIDs {
 				isRediscoveryOnlyStop, rediscoveryErr := w.projectContinuationTurnEndedWithRediscoveryOnlyStop(ctx, referenceMessageID)
 				if rediscoveryErr != nil {
@@ -3364,7 +3770,7 @@ func (w *Worker) ensureProjectContinuationMessageDecisionWithOptions(ctx context
 				if childRefsErr != nil {
 					return uuid.Nil, false, fmt.Errorf("load direct child refs for rediscovery retry: %w", childRefsErr)
 				}
-				if len(directChildRefs) > 0 && strings.TrimSpace(snapshot.FocusTaskLine) != "" {
+				if len(directChildRefs) > 0 && projectContinuationHasDirectChildActionableFocusForWorker(snapshot) {
 					rediscoveryOnlyRetry = true
 					content = buildProjectExecutionContinuationDirectChildActionRetryPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts, snapshot, directChildRefs)
 					expectedSnapshotFingerprint = projectExecutionContinuationPromptFingerprintForWorkerContent(completedTaskID, content)
@@ -4534,6 +4940,23 @@ func (w *Worker) ensureTaskExecutionKickoffMessage(ctx context.Context, sessionI
 		      AND ct.trigger_message_id = chat_message.id
 		      AND ct.status IN ('completed', 'failed', 'cancelled')
 		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_message newer
+		    JOIN chat_turn newer_turn
+		      ON newer_turn.session_id = newer.session_id
+		     AND newer_turn.trigger_message_id = newer.id
+		     AND newer_turn.status IN ('completed', 'failed', 'cancelled')
+		    WHERE newer.session_id = chat_message.session_id
+		      AND newer.role = 'user'
+		      AND COALESCE(newer.metadata->'agent_turn_dispatch'->>'cancelled_at', '') = ''
+		      AND COALESCE(newer.metadata->>'source', '') = 'task_queue_processor'
+		      AND COALESCE(newer.metadata->>'flow_node_execution_id', '') = $2
+		      AND (
+		            newer.created_at > chat_message.created_at
+		         OR (newer.created_at = chat_message.created_at AND newer.id <> chat_message.id)
+		          )
+		  )
 		ORDER BY created_at DESC, id DESC
 		LIMIT 1
 	`, sessionID, executionID.String()).Scan(&existingMessageID)
@@ -5139,6 +5562,22 @@ func projectContinuationDraftTaskHasExistingChildWorkForWorker(activity projectC
 	return activity.childTaskCount > activity.blockedChildTaskCount
 }
 
+func projectContinuationBlockedTaskIsSatisfiedTerminalResidueForWorker(task repo.ProjectTask, activity projectContinuationChildActivityForWorker, hints projectContinuationTaskHintsForWorker) bool {
+	if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "blocked") {
+		return false
+	}
+	if activity.activeChildTaskCount != 0 {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(hints.ResumePolicy), "terminal_keep_blocked") {
+		return false
+	}
+	if activity.childTaskCount > 0 && activity.childTaskCount != activity.blockedChildTaskCount {
+		return false
+	}
+	return activity.completedCloseoutChildTaskCount > 0 || projectContinuationDraftTaskOutcomeSatisfiedForWorker(task)
+}
+
 func projectContinuationSupersededDraftTaskIDsForWorker(
 	projectTasks []repo.ProjectTask,
 	taskHintsByTask map[uuid.UUID]projectContinuationTaskHintsForWorker,
@@ -5689,6 +6128,9 @@ func (w *Worker) projectExecutionContinuationSnapshot(ctx context.Context, proje
 				len(childActiveDraftTasks) < 4 {
 				childActiveDraftTasks = append(childActiveDraftTasks, projectExecutionContinuationTaskRefForWorker(task, activity, hints))
 			}
+			continue
+		}
+		if projectContinuationBlockedTaskIsSatisfiedTerminalResidueForWorker(task, activity, hints) {
 			continue
 		}
 		taskRef := projectExecutionContinuationTaskRefForWorker(task, activity, hints)
@@ -7674,9 +8116,23 @@ func projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot projectExec
 	if line == "" {
 		return false
 	}
-	return strings.Contains(line, "workspace_deliverable_present=true") ||
-		strings.Contains(line, "completed_closeout_child_tasks=") ||
+	hasCompletedEvidence := strings.Contains(line, "completed_closeout_child_tasks=") ||
 		strings.Contains(line, "outcome_satisfied=true")
+	if !hasCompletedEvidence &&
+		(strings.Contains(line, "malformed_child_tasks=") || strings.Contains(line, "replaceable_blocked_child_tasks=")) {
+		return false
+	}
+	return strings.Contains(line, "workspace_deliverable_present=true") ||
+		hasCompletedEvidence
+}
+
+func projectContinuationFocusHasChildResidueForWorker(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return false
+	}
+	return strings.Contains(line, "malformed_child_tasks=") ||
+		strings.Contains(line, "replaceable_blocked_child_tasks=")
 }
 
 func projectContinuationPromptExplicitlyProvesCloseoutReadyForWorker(content string) bool {
@@ -8297,6 +8753,19 @@ func buildProjectExecutionContinuationPromptForWorker(completedTaskNumber int, c
 	return strings.Join(lines, " ")
 }
 
+func projectContinuationHasDirectChildActionableFocusForWorker(snapshot projectExecutionContinuationSnapshotForWorker) bool {
+	if _, focusRef, _ := projectContinuationFocusRefFromLineForWorker(snapshot.FocusTaskLine); focusRef != "" {
+		return true
+	}
+	if _, focusRef, _ := projectContinuationFirstTaskRefFromLineForWorker(snapshot.ReplacementDraftLine); focusRef != "" {
+		return true
+	}
+	if _, focusRef, _ := projectContinuationFirstTaskRefFromLineForWorker(snapshot.DraftTaskLine); focusRef != "" {
+		return true
+	}
+	return false
+}
+
 func buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNumber int, completedTaskTitle string, remainingDraftTasks int, snapshot projectExecutionContinuationSnapshotForWorker) string {
 	lines := []string{
 		"Continue the active project execution now.",
@@ -8419,8 +8888,51 @@ func buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(compl
 		}
 		return strings.Join(lines, " ")
 	}
+	if strings.Contains(laneSource, "workspace_deliverable_present=true") &&
+		projectContinuationFocusHasChildResidueForWorker(laneSource) &&
+		!strings.Contains(laneSource, "completed_closeout_child_tasks=") &&
+		!strings.Contains(laneSource, "outcome_satisfied=true") {
+		laneReason := "terminally blocked or malformed child lanes"
+		switch {
+		case strings.Contains(laneSource, "malformed_child_tasks=") && !strings.Contains(laneSource, "replaceable_blocked_child_tasks="):
+			laneReason = "malformed or stale child artifact lanes"
+		case strings.Contains(laneSource, "replaceable_blocked_child_tasks=") && !strings.Contains(laneSource, "malformed_child_tasks="):
+			laneReason = "terminally blocked child lanes"
+		case strings.Contains(laneSource, "malformed_child_tasks="):
+			laneReason = "blocked or malformed child lanes"
+		}
+		lines = append(lines,
+			"Your last continuation turn was blocked after broad rediscovery even though the next bounded work was already named.",
+			fmt.Sprintf("Current focus parent: %s.", focusRef),
+			"The exact focus task id is already named in that current-focus line.",
+			"Do not call project.get or task.get just to recover the task details first, and do not narrate that you need to fetch them before acting.",
+			fmt.Sprintf("That draft parent still has %s.", laneReason),
+		)
+		if repairLine := strings.TrimSpace(snapshot.RepairDraftLine); repairLine != "" {
+			lines = append(lines,
+				repairLine,
+				"Do not create another replacement child while that preferred same-deliverable draft still exists.",
+				"Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.",
+				fmt.Sprintf("Do not queue parent task %s again from the project lane.", focusLabel),
+				"Do not inspect or mention other draft parents until this handoff is advanced.",
+				"Your next assistant action must repair and queue the preferred existing same-deliverable child draft named above with one narrow task.update, or block/consolidate the weaker duplicate siblings if that preferred child is no longer usable.",
+			)
+			return strings.Join(lines, " ")
+		}
+		lines = append(lines,
+			"Do not call task.list without parent_task_id, task.get, file.list, or file.read before acting.",
+			fmt.Sprintf("Do not queue parent task %s again from the project lane.", focusLabel),
+			"Do not inspect or mention other draft parents until this handoff is advanced.",
+			fmt.Sprintf("Your next assistant action must create the smallest fresh replacement child task beneath %s now, or queue an existing direct child draft there if one already fits unchanged.", focusLabel),
+		)
+		if focusTaskID != "" {
+			lines = append(lines, fmt.Sprintf("If you must inspect child lanes first, use only task.list(parent_task_id=%s).", focusTaskID))
+		}
+		return strings.Join(lines, " ")
+	}
 	if strings.Contains(laneSource, "workspace_deliverable_present=true") {
-		if projectContinuationCompletedTaskLooksLikeVerification(completedTaskTitle) {
+		if projectContinuationCompletedTaskLooksLikeVerification(completedTaskTitle) &&
+			!projectContinuationFocusHasChildResidueForWorker(laneSource) {
 			lines = append(lines,
 				"Your latest completed child already performed verification/closeout work for this deliverable.",
 				fmt.Sprintf("Current focus parent: %s.", focusRef),
@@ -8695,19 +9207,33 @@ func buildProjectExecutionContinuationDirectChildActionRetryPromptForWorker(comp
 		fmt.Sprintf("Current focus parent: %s.", focusRef),
 		"Those direct child task lanes are already named below.",
 		"Do not call task.list, task.get, file.list, or file.read now.",
+		"If already-active same-deliverable task lanes are still listed elsewhere in this prompt, leave those active lanes alone from the project session in this turn. Do not inspect their deliverable, do not try to close them, and do not task.update them here.",
 		fmt.Sprintf("Do not inspect or mention other draft parents until %s is advanced.", focusLabel),
 	)
 	if len(childTaskRefs) > 0 {
 		lines = append(lines, "Named direct child lanes from the last inspection: "+strings.Join(childTaskRefs, "; ")+".")
 	}
+	hasDraftChild := false
+	for _, ref := range childTaskRefs {
+		if strings.Contains(strings.ToLower(strings.TrimSpace(ref)), "work_status=draft") {
+			hasDraftChild = true
+			break
+		}
+	}
 	if focusTaskID != "" {
+		lines = append(lines, fmt.Sprintf("Do not inspect child lanes again for task_id=%s from the project lane.", focusTaskID))
+	} else {
+		lines = append(lines, "Do not inspect child lanes again from the project lane.")
+	}
+	if hasDraftChild {
 		lines = append(lines,
-			fmt.Sprintf("Do not inspect child lanes again for task_id=%s from the project lane.", focusTaskID),
 			"Your next assistant action must be one narrow task.update on one named direct child task above, or one concrete blocker sentence if none of those named child lanes are project-lane actionable.",
 		)
 	} else {
 		lines = append(lines,
-			"Your next assistant action must be one narrow task.update on one named direct child task above, or one concrete blocker sentence if none of those named child lanes are project-lane actionable.",
+			"Those named direct child lanes are already active or otherwise non-draft. Leave them alone from the project lane in this turn.",
+			"Do not issue task.update on those child lanes here.",
+			"Your next assistant response must be one concrete blocker sentence explaining that the project lane is waiting on the named child lane(s), and no tool call is allowed in that turn.",
 		)
 	}
 	return strings.Join(lines, " ")
@@ -8754,6 +9280,12 @@ func buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(complete
 	if line := projectContinuationSnapshotLineForRefForWorker(snapshot, focusRef, focusTaskID); line != "" {
 		laneSource = line
 	}
+	if strings.Contains(laneSource, "workspace_deliverable_present=true") &&
+		projectContinuationFocusHasChildResidueForWorker(laneSource) &&
+		!strings.Contains(laneSource, "completed_closeout_child_tasks=") &&
+		!strings.Contains(laneSource, "outcome_satisfied=true") {
+		return buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNumber, completedTaskTitle, remainingDraftTasks, snapshot)
+	}
 	if strings.Contains(laneSource, "proof_state=rejected") || strings.Contains(focusRef, "proof_state=rejected") {
 		hasNamedRepairDraft := false
 		lines = append(lines,
@@ -8781,13 +9313,6 @@ func buildProjectExecutionContinuationParentAdvanceRetryPromptForWorker(complete
 			lines = append(lines, fmt.Sprintf("If same-deliverable draft tasks are not already named above, use only task.list(parent_task_id=%s) once first.", focusTaskID))
 		}
 		return strings.Join(lines, " ")
-	}
-	if strings.Contains(laneSource, "workspace_deliverable_present=true") &&
-		!projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusRef) &&
-		!strings.Contains(laneSource, "completed_closeout_child_tasks=") &&
-		(strings.Contains(laneSource, "malformed_child_tasks=") || strings.Contains(laneSource, "replaceable_blocked_child_tasks=")) &&
-		!projectContinuationCompletedTaskLooksLikeVerification(completedTaskTitle) {
-		return buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNumber, completedTaskTitle, remainingDraftTasks, snapshot)
 	}
 	lines = append(lines,
 		"Your last continuation turn confirmed this focused parent is already closeout-ready for the same deliverable.",
@@ -8933,6 +9458,12 @@ func buildProjectExecutionContinuationParentQueueRetryPromptForWorker(completedT
 	if line := projectContinuationSnapshotLineForRefForWorker(snapshot, focusRef, focusTaskID); line != "" {
 		laneSource = line
 	}
+	if strings.Contains(laneSource, "workspace_deliverable_present=true") &&
+		projectContinuationFocusHasChildResidueForWorker(laneSource) &&
+		!strings.Contains(laneSource, "completed_closeout_child_tasks=") &&
+		!strings.Contains(laneSource, "outcome_satisfied=true") {
+		return buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNumber, completedTaskTitle, remainingDraftTasks, snapshot)
+	}
 	if strings.Contains(laneSource, "proof_state=rejected") || strings.Contains(focusRef, "proof_state=rejected") {
 		hasNamedRepairDraft := false
 		lines = append(lines,
@@ -8960,13 +9491,6 @@ func buildProjectExecutionContinuationParentQueueRetryPromptForWorker(completedT
 			lines = append(lines, fmt.Sprintf("If same-deliverable draft tasks are not already named above, use only task.list(parent_task_id=%s) once first.", focusTaskID))
 		}
 		return strings.Join(lines, " ")
-	}
-	if strings.Contains(laneSource, "workspace_deliverable_present=true") &&
-		!projectContinuationSnapshotStillCloseoutReadyForWorker(snapshot, focusRef) &&
-		!strings.Contains(laneSource, "completed_closeout_child_tasks=") &&
-		(strings.Contains(laneSource, "malformed_child_tasks=") || strings.Contains(laneSource, "replaceable_blocked_child_tasks=")) &&
-		!projectContinuationCompletedTaskLooksLikeVerification(completedTaskTitle) {
-		return buildProjectExecutionContinuationReplacementChildRetryPromptForWorker(completedTaskNumber, completedTaskTitle, remainingDraftTasks, snapshot)
 	}
 	lines = append(lines,
 		"Your last continuation turn confirmed this focused parent is already closeout-ready, but the project lane cannot jump it directly from draft to done.",
@@ -9316,30 +9840,53 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 			`, *item.sessionID, *item.turnID); err != nil {
 				return repaired, fmt.Errorf("clear current turn for stale model invocation session %s: %w", *item.sessionID, err)
 			}
-			if item.messageID != nil && *item.messageID != uuid.Nil {
-				scopeType := ""
-				if item.scopeType != nil {
-					scopeType = *item.scopeType
+			scopeType := ""
+			if item.scopeType != nil {
+				scopeType = *item.scopeType
+			}
+			retryMessageID := uuid.Nil
+			if item.messageID != nil {
+				retryMessageID = *item.messageID
+			}
+			var retryExecutionID *uuid.UUID
+			if strings.EqualFold(strings.TrimSpace(scopeType), "project_task") {
+				executionID, execErr := w.lookupActiveFlowExecutionForSession(ctx, nil, *item.sessionID)
+				if execErr != nil {
+					return repaired, fmt.Errorf("load active execution for recovered stale model invocation session %s: %w", *item.sessionID, execErr)
 				}
-				shouldRequeue, err := w.shouldRequeueRecoveredProjectTrigger(ctx, *item.sessionID, scopeType, *item.messageID)
-				if err != nil {
-					return repaired, fmt.Errorf("check recovered stale model invocation retry eligibility for session %s: %w", *item.sessionID, err)
-				}
-				if !shouldRequeue {
-					continue
-				}
-				hasQueued, err := w.sessionHasQueuedOrClaimedAgentTurn(ctx, *item.sessionID)
-				if err != nil {
-					return repaired, fmt.Errorf("check queued recovered stale model invocation retry for session %s: %w", *item.sessionID, err)
-				}
-				if !hasQueued {
-					if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
-						SessionID:  *item.sessionID,
-						MessageID:  *item.messageID,
-						RetryCount: item.retryCount,
-					}, nil); err != nil {
-						return repaired, fmt.Errorf("enqueue recovered stale model invocation retry for session %s: %w", *item.sessionID, err)
+				retryExecutionID = executionID
+				if executionID != nil && *executionID != uuid.Nil {
+					synthMessageID, synthErr := w.ensureTaskExecutionKickoffMessage(ctx, *item.sessionID, *executionID)
+					if synthErr != nil {
+						return repaired, fmt.Errorf("ensure task execution kickoff for recovered stale model invocation session %s: %w", *item.sessionID, synthErr)
 					}
+					if synthMessageID != uuid.Nil {
+						retryMessageID = synthMessageID
+					}
+				}
+			}
+			if retryMessageID == uuid.Nil {
+				continue
+			}
+			shouldRequeue, err := w.shouldRequeueRecoveredProjectTrigger(ctx, *item.sessionID, scopeType, retryMessageID)
+			if err != nil {
+				return repaired, fmt.Errorf("check recovered stale model invocation retry eligibility for session %s: %w", *item.sessionID, err)
+			}
+			if !shouldRequeue {
+				continue
+			}
+			hasQueued, err := w.sessionHasQueuedOrClaimedAgentTurn(ctx, *item.sessionID)
+			if err != nil {
+				return repaired, fmt.Errorf("check queued recovered stale model invocation retry for session %s: %w", *item.sessionID, err)
+			}
+			if !hasQueued {
+				if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
+					SessionID:           *item.sessionID,
+					MessageID:           retryMessageID,
+					RetryCount:          item.retryCount,
+					FlowNodeExecutionID: retryExecutionID,
+				}, nil); err != nil {
+					return repaired, fmt.Errorf("enqueue recovered stale model invocation retry for session %s: %w", *item.sessionID, err)
 				}
 			}
 		}
@@ -9588,12 +10135,14 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		    SELECT 1
 		    FROM chat_message cm
 		    WHERE cm.turn_id = COALESCE(live_turn.id, ct.id)
-		      AND cm.role = 'assistant'
-		      AND cm.status IN ('pending', 'streaming')
 		      AND cm.created_at >= CASE
 		            WHEN cs.scope_type = 'project' THEN $4::timestamptz
 		            ELSE $2::timestamptz
 		          END
+		      AND (
+		            (cm.role = 'assistant' AND cm.status IN ('streaming', 'final'))
+		         OR (cm.role = 'tool_result' AND cm.status = 'final')
+		          )
 		  )
 		  AND (
 		        (
@@ -9726,6 +10275,30 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		        )
 		     OR (
 		          cs.scope_type = 'project_task'
+		          AND COALESCE(live_turn.started_at, ct.started_at) < $1
+		          AND EXISTS (
+		            SELECT 1
+		            FROM model_invocation mi
+		            WHERE mi.turn_id = COALESCE(live_turn.id, ct.id)
+		              AND mi.status = 'in_flight'
+		          )
+		          AND NOT EXISTS (
+		            SELECT 1
+		            FROM chat_message cm
+		            WHERE cm.turn_id = COALESCE(live_turn.id, ct.id)
+		              AND cm.role = 'assistant'
+		              AND cm.status = 'streaming'
+		              AND cm.created_at >= $2
+		          )
+		          AND NOT EXISTS (
+		            SELECT 1
+		            FROM run r
+		            WHERE r.turn_id = COALESCE(live_turn.id, ct.id)
+		              AND r.status IN ('created', 'in_progress')
+		          )
+		        )
+		     OR (
+		          cs.scope_type = 'project_task'
 		          AND COALESCE(live_turn.started_at, ct.started_at) < $3
 		          AND NOT EXISTS (
 		            SELECT 1
@@ -9811,11 +10384,11 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		if undispatched, err := w.staleProjectTurnHasUndispatchedAssistantToolCalls(ctx, item.turnID); err != nil {
 			return repaired, fmt.Errorf("check stale triggered-turn undispatched tool calls for turn %s: %w", item.turnID, err)
 		} else if undispatched {
-			hasQueuedExactDispatch, queueErr := w.sessionHasQueuedOrClaimedAgentTurnDispatch(ctx, item.sessionID, item.messageID, item.retryCount)
+			hasClaimedExactDispatch, queueErr := w.sessionHasClaimedAgentTurnDispatch(ctx, item.sessionID, item.messageID, item.retryCount)
 			if queueErr != nil {
 				return repaired, fmt.Errorf("check stale triggered-turn exact queued dispatch for turn %s: %w", item.turnID, queueErr)
 			}
-			if hasQueuedExactDispatch {
+			if hasClaimedExactDispatch {
 				continue
 			}
 		}
@@ -10542,6 +11115,16 @@ func (w *Worker) RecoverStaleInProgressProjectTurnsWithoutOwnership(ctx context.
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1
+		    FROM chat_message cm
+		    WHERE cm.turn_id = ct.id
+		      AND cm.created_at >= $1
+		      AND (
+		            (cm.role = 'assistant' AND cm.status = 'final')
+		         OR (cm.role = 'tool_result' AND cm.status = 'final')
+		          )
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
 		    FROM job_queue jq
 		    WHERE jq.job_type = $2
 		      AND jq.status = 'claimed'
@@ -10588,11 +11171,11 @@ func (w *Worker) RecoverStaleInProgressProjectTurnsWithoutOwnership(ctx context.
 				undispatchedToolCalls = undispatched
 			}
 			if undispatchedToolCalls {
-				hasQueuedExactDispatch, queueErr := w.sessionHasQueuedOrClaimedAgentTurnDispatch(ctx, item.sessionID, *item.messageID, item.retryCount)
+				hasClaimedExactDispatch, queueErr := w.sessionHasClaimedAgentTurnDispatch(ctx, item.sessionID, *item.messageID, item.retryCount)
 				if queueErr != nil {
 					return recovered, fmt.Errorf("check stale project turn exact queued dispatch for session %s: %w", item.sessionID, queueErr)
 				}
-				if hasQueuedExactDispatch {
+				if hasClaimedExactDispatch {
 					continue
 				}
 			}
@@ -10772,14 +11355,36 @@ func (w *Worker) recoveredStaleProjectTurnContinuationState(ctx context.Context,
 			return "", false, err
 		}
 		if undispatched {
-			hasQueuedExactDispatch, queueErr := w.sessionHasQueuedOrClaimedAgentTurnDispatch(ctx, sessionID, messageID, retryCount)
+			hasClaimedExactDispatch, queueErr := w.sessionHasClaimedAgentTurnDispatch(ctx, sessionID, messageID, retryCount)
 			if queueErr != nil {
 				return "", false, queueErr
 			}
-			progressed = hasQueuedExactDispatch
+			progressed = hasClaimedExactDispatch
 		}
 	}
 	return source, progressed, nil
+}
+
+func (w *Worker) sessionHasClaimedAgentTurnDispatch(ctx context.Context, sessionID, messageID uuid.UUID, retryCount int) (bool, error) {
+	if sessionID == uuid.Nil || messageID == uuid.Nil {
+		return false, nil
+	}
+
+	var exists bool
+	if err := w.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM job_queue jq
+			WHERE jq.job_type = $1
+			  AND jq.status = 'claimed'
+			  AND (jq.payload->>'session_id')::uuid = $2
+			  AND (jq.payload->>'message_id')::uuid = $3
+			  AND COALESCE((jq.payload->>'retry_count')::int, 0) = $4
+		)
+	`, agentTurnJobType, sessionID, messageID, retryCount).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 func (w *Worker) sessionHasQueuedOrClaimedAgentTurnDispatch(ctx context.Context, sessionID, messageID uuid.UUID, retryCount int) (bool, error) {
@@ -10904,6 +11509,16 @@ func (w *Worker) RecoverStaleInProgressProjectTaskTurnsWithoutOwnership(ctx cont
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1
+		    FROM chat_message cm
+		    WHERE cm.turn_id = ct.id
+		      AND cm.created_at >= $1
+		      AND (
+		            (cm.role = 'assistant' AND cm.status = 'final')
+		         OR (cm.role = 'tool_result' AND cm.status = 'final')
+		          )
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
 		    FROM job_queue jq
 		    WHERE jq.job_type = $2
 		      AND jq.status = 'claimed'
@@ -11007,6 +11622,63 @@ func (w *Worker) RecoverStaleInProgressProjectTaskTurnsWithoutOwnership(ctx cont
 			`, agentTurnJobType, item.sessionID, item.messageID, item.retryCount, retireReason); execErr != nil {
 				err = fmt.Errorf("retire stale agent_turn dispatches for project_task turn %s: %w", item.turnID, execErr)
 				return
+			}
+
+			var (
+				messageSource string
+				executionText string
+			)
+			if err = tx.QueryRow(ctx, `
+				SELECT COALESCE(metadata->>'source', ''),
+				       COALESCE(metadata->>'flow_node_execution_id', '')
+				FROM chat_message
+				WHERE id = $1
+			`, item.messageID).Scan(&messageSource, &executionText); err != nil {
+				if !errors.Is(err, pgx.ErrNoRows) {
+					err = fmt.Errorf("load trigger message metadata for stale in-progress project_task turn %s: %w", item.turnID, err)
+					return
+				}
+				err = nil
+			}
+			if strings.EqualFold(strings.TrimSpace(messageSource), "task_recovery_resume") ||
+				strings.EqualFold(strings.TrimSpace(messageSource), "supervisor") {
+				executionID, parseErr := uuid.Parse(strings.TrimSpace(executionText))
+				if parseErr == nil && executionID != uuid.Nil {
+					terminalBlocked, terminalErr := latestRecoveryResumeTurnShowsTerminalBlockedStopWithQuerier(ctx, tx, item.sessionID, executionID)
+					if terminalErr != nil {
+						err = fmt.Errorf("check terminal blocked recovery resume for stale project_task turn %s: %w", item.turnID, terminalErr)
+						return
+					}
+					if terminalBlocked {
+						if _, execErr := tx.Exec(ctx, `
+							UPDATE chat_message
+							SET status = 'failed',
+							    error_message = $4
+							WHERE id = $1
+							  AND session_id = $2
+							  AND role = 'user'
+							  AND status = 'pending'
+							  AND (
+							        COALESCE(metadata->>'source', '') = 'task_recovery_resume'
+							     OR (
+							          COALESCE(metadata->>'source', '') = 'supervisor'
+							      AND content = 'supervisor recovery: resume task'
+							        )
+							      )
+							  AND COALESCE(metadata->>'flow_node_execution_id', '') = $3::text
+						`, item.messageID, item.sessionID, executionID, taskRecoveryResumeSuppressedErrorMessage); execErr != nil {
+							err = fmt.Errorf("suppress terminal blocked recovery resume for stale project_task turn %s: %w", item.turnID, execErr)
+							return
+						}
+						if commitErr := tx.Commit(ctx); commitErr != nil {
+							err = fmt.Errorf("commit stale in-progress project_task turn recovery tx: %w", commitErr)
+							return
+						}
+						committed = true
+						recovered++
+						return
+					}
+				}
 			}
 
 			if _, execErr := w.enqueueAgentTurnDispatch(ctx, tx, agentTurnKeyPayload{
@@ -11376,6 +12048,150 @@ func (w *Worker) CloseBlockedProjectTaskAsyncSessionsWithoutLiveExecution(ctx co
 	`, agentTurnJobType)
 	if err != nil {
 		return 0, fmt.Errorf("close blocked project_task async sessions without live execution: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
+func (w *Worker) CloseOrchestrationParentAsyncSessionsWaitingOnOpenChildLanes(ctx context.Context) (int64, error) {
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE flow_node_execution fne
+		SET status = 'abandoned',
+		    completed_at = COALESCE(fne.completed_at, now()),
+		    runtime_substate = NULL
+		FROM chat_session cs
+		JOIN project_task pt ON pt.id = cs.scope_id
+		WHERE fne.session_id = cs.id
+		  AND fne.status = 'active'
+		  AND cs.status = 'active'
+		  AND cs.mode = 'async'
+		  AND cs.scope_type = 'project_task'
+		  AND cs.current_turn_id IS NULL
+		  AND COALESCE(pt.work_status, '') IN ('draft', 'in_progress', 'review')
+		  AND COALESCE(pt.metadata->'decomposition'->>'orchestration_only', 'false') = 'true'
+		  AND EXISTS (
+		    SELECT 1
+		    FROM project_task child
+		    WHERE child.project_id = pt.project_id
+		      AND COALESCE(child.metadata->>'decomposition_parent_task_id', '') = pt.id::text
+		      AND child.work_status NOT IN ('done', 'cancelled', 'blocked')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct_live
+		    WHERE ct_live.session_id = cs.id
+		      AND ct_live.status IN ('pending', 'in_progress')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = $1
+		      AND jq.status IN ('pending', 'claimed')
+		      AND (jq.payload->>'session_id')::uuid = cs.id
+		  )
+	`, agentTurnJobType); err != nil {
+		return 0, fmt.Errorf("abandon orchestration parent active executions waiting on open child lanes: %w", err)
+	}
+
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE chat_message
+		SET status = 'failed',
+		    error_message = 'session_closed_open_child_lanes'
+		WHERE session_id IN (
+			SELECT cs.id
+			FROM chat_session cs
+			JOIN project_task pt ON pt.id = cs.scope_id
+			WHERE cs.status = 'active'
+			  AND cs.mode = 'async'
+			  AND cs.scope_type = 'project_task'
+			  AND cs.current_turn_id IS NULL
+			  AND COALESCE(pt.work_status, '') IN ('draft', 'in_progress', 'review')
+			  AND COALESCE(pt.metadata->'decomposition'->>'orchestration_only', 'false') = 'true'
+			  AND EXISTS (
+			    SELECT 1
+			    FROM project_task child
+			    WHERE child.project_id = pt.project_id
+			      AND COALESCE(child.metadata->>'decomposition_parent_task_id', '') = pt.id::text
+			      AND child.work_status NOT IN ('done', 'cancelled', 'blocked')
+			  )
+			  AND EXISTS (
+			    SELECT 1
+			    FROM flow_node_execution fne_terminal
+			    WHERE fne_terminal.session_id = cs.id
+			      AND fne_terminal.status = 'abandoned'
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM flow_node_execution fne_active
+			    WHERE fne_active.session_id = cs.id
+			      AND fne_active.status = 'active'
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM chat_turn ct
+			    WHERE ct.session_id = cs.id
+			      AND ct.status IN ('pending', 'in_progress')
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM job_queue jq
+			    WHERE jq.job_type = $1
+			      AND jq.status IN ('pending', 'claimed')
+			      AND (jq.payload->>'session_id')::uuid = cs.id
+			  )
+		)
+		  AND status IN ('pending', 'streaming')
+	`, agentTurnJobType); err != nil {
+		return 0, fmt.Errorf("fail orchestration parent pending messages waiting on open child lanes: %w", err)
+	}
+
+	ct, err := w.pool.Exec(ctx, `
+		UPDATE chat_session cs
+		SET status = 'closed',
+		    closed_at = now(),
+		    current_turn_id = NULL
+		FROM project_task pt
+		WHERE cs.status = 'active'
+		  AND cs.mode = 'async'
+		  AND cs.scope_type = 'project_task'
+		  AND cs.current_turn_id IS NULL
+		  AND pt.id = cs.scope_id
+		  AND COALESCE(pt.work_status, '') IN ('draft', 'in_progress', 'review')
+		  AND COALESCE(pt.metadata->'decomposition'->>'orchestration_only', 'false') = 'true'
+		  AND EXISTS (
+		    SELECT 1
+		    FROM project_task child
+		    WHERE child.project_id = pt.project_id
+		      AND COALESCE(child.metadata->>'decomposition_parent_task_id', '') = pt.id::text
+		      AND child.work_status NOT IN ('done', 'cancelled', 'blocked')
+		  )
+		  AND EXISTS (
+		    SELECT 1
+		    FROM flow_node_execution fne_terminal
+		    WHERE fne_terminal.session_id = cs.id
+		      AND fne_terminal.status = 'abandoned'
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM flow_node_execution fne_active
+		    WHERE fne_active.session_id = cs.id
+		      AND fne_active.status = 'active'
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    WHERE ct.session_id = cs.id
+		      AND ct.status IN ('pending', 'in_progress')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = $1
+		      AND jq.status IN ('pending', 'claimed')
+		      AND (jq.payload->>'session_id')::uuid = cs.id
+		  )
+	`, agentTurnJobType)
+	if err != nil {
+		return 0, fmt.Errorf("close orchestration parent async sessions waiting on open child lanes: %w", err)
 	}
 	return ct.RowsAffected(), nil
 }
@@ -12448,6 +13264,14 @@ func (w *Worker) launchPostAgentTurnRepairs(jobID uuid.UUID) {
 			w.logger.Info("job queue: closed blocked project_task async sessions after agent_turn completion", "job_id", jobID, "count", repaired)
 		}
 
+		if repaired, repairErr := w.CloseOrchestrationParentAsyncSessionsWaitingOnOpenChildLanes(repairCtx); repairErr != nil {
+			if repairCtx.Err() == nil {
+				w.logger.Warn("job queue: async orchestration parent open-child cleanup failed", "job_id", jobID, "error", repairErr)
+			}
+		} else if repaired > 0 {
+			w.logger.Info("job queue: closed orchestration parent async sessions after agent_turn completion", "job_id", jobID, "count", repaired)
+		}
+
 		if requeued, repairErr := w.RequeueActiveExecutionSessionsWithoutTurns(repairCtx); repairErr != nil {
 			if repairCtx.Err() == nil {
 				w.logger.Warn("job queue: async active execution session repair failed", "job_id", jobID, "error", repairErr)
@@ -12945,6 +13769,11 @@ func (w *Worker) runStaleClaimRecovery(ctx context.Context) {
 				w.logger.Error("blocked project_task non-live execution session cleanup failed", "error", err)
 			} else if repaired > 0 {
 				w.logger.Info("job queue: closed blocked project_task async sessions without live execution", "count", repaired)
+			}
+			if repaired, err := w.CloseOrchestrationParentAsyncSessionsWaitingOnOpenChildLanes(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("orchestration parent open-child cleanup failed", "error", err)
+			} else if repaired > 0 {
+				w.logger.Info("job queue: closed orchestration parent async sessions waiting on open child lanes", "count", repaired)
 			}
 			if requeued, err := w.RequeueActiveProjectSessionsWithoutTurns(ctx); err != nil && ctx.Err() == nil {
 				w.logger.Error("active project session repair failed", "error", err)
