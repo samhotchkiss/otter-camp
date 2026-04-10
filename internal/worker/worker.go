@@ -482,8 +482,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	if err != nil {
 		return fmt.Errorf("worker live model gateway setup: %w", err)
 	}
-	rollupWorker := gateway.NewRollupWorker(pool.Raw(), nil, logger)
-	rollupWorker.RegisterJobs(jqWorker)
+	registerRollupUpdateJobs(pool.Raw(), jqWorker, logger)
 
 	summarizer, err := chat.NewSummarizer(chat.SummarizerOptions{
 		Pool:     pool.Raw(),
@@ -703,6 +702,12 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	}
 
 	return nil
+}
+
+func registerRollupUpdateJobs(pool *pgxpool.Pool, registrar interface {
+	Register(jobType string, handler jobqueue.JobHandler)
+}, logger *slog.Logger) {
+	gateway.NewRollupWorker(pool, nil, logger).RegisterJobs(registrar)
 }
 
 type deterministicQueryEmbedder struct{}

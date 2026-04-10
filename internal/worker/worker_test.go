@@ -20,6 +20,27 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
 
+type testJobRegistrar struct {
+	handlers map[string]jobqueue.JobHandler
+}
+
+func (r *testJobRegistrar) Register(jobType string, handler jobqueue.JobHandler) {
+	if r.handlers == nil {
+		r.handlers = make(map[string]jobqueue.JobHandler)
+	}
+	r.handlers[jobType] = handler
+}
+
+func TestRegisterRollupUpdateJobsRegistersRollupUpdateHandler(t *testing.T) {
+	registrar := &testJobRegistrar{}
+
+	registerRollupUpdateJobs(nil, registrar, nil)
+
+	if _, ok := registrar.handlers["rollup_update"]; !ok {
+		t.Fatal("rollup_update handler was not registered")
+	}
+}
+
 func TestWorkerDBMaxConnsDefaultsAboveGlobalFloor(t *testing.T) {
 	t.Setenv("OTTERCAMP_WORKER_DB_MAX_CONNS", "")
 	t.Setenv("OTTERCAMP_DB_MAX_CONNS", "")
