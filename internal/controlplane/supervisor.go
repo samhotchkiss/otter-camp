@@ -1124,6 +1124,20 @@ func (s *Supervisor) sessionHasSupervisorRecoveryKickoff(ctx context.Context, se
 	return false, nil
 }
 
+func (s *Supervisor) buildStrandedExecutionKickoff(_ context.Context, candidate strandedExecutionCandidate, runID uuid.UUID) (string, json.RawMessage, error) {
+	metadata, err := json.Marshal(map[string]any{
+		"source":                 "supervisor",
+		"run_id":                 runID.String(),
+		"reason":                 strandedExecutionRecoveryReason,
+		"flow_node_execution_id": candidate.ExecutionID.String(),
+		"stranded_execution":     true,
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	return "supervisor recovery: resume task", metadata, nil
+}
+
 func (s *Supervisor) fileBlocker(ctx context.Context, runRecord Run, reason string) error {
 	if s.notifier == nil {
 		return nil

@@ -917,6 +917,9 @@ func (p *TaskQueueProcessor) ensureAssignedAgentRun(ctx context.Context, event e
 	if session == nil {
 		return fmt.Errorf("task %s missing async session", taskRecord.ID)
 	}
+	if _, err := p.chats.AddParticipant(ctx, session.ID, "agent", *taskRecord.AssignedAgentID, "responder"); err != nil && !errors.Is(err, chat.ErrAlreadyParticipant) {
+		return err
+	}
 	idempotencyKey := fmt.Sprintf("task-queued:agent-turn:%s:%s", taskRecord.ID, event.ID)
 	metadata, err := json.Marshal(map[string]any{
 		"source":               "task_queue_processor",
@@ -1376,7 +1379,9 @@ func (p *TaskQueueProcessor) appendWakeupKickoff(ctx context.Context, runRecord 
 		return nil
 	}
 	appendOnce := func() error {
-		if runRecord.PrincipalType == "agent" && runRecord.PrincipalID != uuid.Nil {
+		skipParticipantAdd := strings.EqualFold(strings.TrimSpace(executionWakeupSource(runRecord.Metadata)), "task_queue_processor") &&
+			strings.EqualFold(strings.TrimSpace(executionWakeupKind(runRecord.Metadata)), "assigned_task")
+		if !skipParticipantAdd && runRecord.PrincipalType == "agent" && runRecord.PrincipalID != uuid.Nil {
 			if _, err := p.chats.AddParticipant(ctx, sessionID, "agent", runRecord.PrincipalID, "responder"); err != nil && !errors.Is(err, chat.ErrAlreadyParticipant) {
 				return err
 			}
