@@ -51,6 +51,10 @@ type memoryRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.Memory, error)
 }
 
+type memorySourceRepository interface {
+	ListByMemory(ctx context.Context, memoryID uuid.UUID) ([]repo.MemorySource, error)
+}
+
 type memoryTaxonomyTagRepository interface {
 	ListByMemory(ctx context.Context, memoryID uuid.UUID) ([]repo.MemoryTaxonomyTag, error)
 }
@@ -104,6 +108,7 @@ type MemoryRouteOptions struct {
 	Tasks          memoryProjectTaskRepository
 	Agents         memoryAgentRepository
 	Memories       memoryRepository
+	Sources        memorySourceRepository
 	TaxonomyTags   memoryTaxonomyTagRepository
 	Mentions       memoryEntityMentionRepository
 	Entities       memoryEntityRepository
@@ -129,6 +134,7 @@ func NewMemoryRouteRegistrar(opts MemoryRouteOptions) *MemoryRouteRegistrar {
 		tasks:         opts.Tasks,
 		agents:        opts.Agents,
 		memories:      opts.Memories,
+		sources:       opts.Sources,
 		taxonomyTags:  opts.TaxonomyTags,
 		mentions:      opts.Mentions,
 		entities:      opts.Entities,
@@ -146,6 +152,9 @@ func NewMemoryRouteRegistrar(opts MemoryRouteOptions) *MemoryRouteRegistrar {
 	if opts.Pool != nil {
 		if h.memories == nil {
 			h.memories = repo.NewMemoryRepo(opts.Pool)
+		}
+		if h.sources == nil {
+			h.sources = repo.NewMemorySourceRepo(opts.Pool)
 		}
 		if h.taxonomyTags == nil {
 			h.taxonomyTags = repo.NewMemoryTaxonomyTagRepo(opts.Pool)
@@ -229,6 +238,7 @@ type memoryHandlers struct {
 	tasks         memoryProjectTaskRepository
 	agents        memoryAgentRepository
 	memories      memoryRepository
+	sources       memorySourceRepository
 	taxonomyTags  memoryTaxonomyTagRepository
 	mentions      memoryEntityMentionRepository
 	entities      memoryEntityRepository
@@ -323,12 +333,22 @@ type memorySupersessionRecord struct {
 	CreatedAt    time.Time  `json:"created_at"`
 }
 
+type memorySourceRecord struct {
+	ID         uuid.UUID  `json:"id"`
+	MemoryID   uuid.UUID  `json:"memory_id"`
+	SourceType string     `json:"source_type"`
+	SourceID   *uuid.UUID `json:"source_id"`
+	ImportID   *uuid.UUID `json:"import_id"`
+	SessionID  *uuid.UUID `json:"session_id"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
 type memoryItemDetailRecord struct {
 	memoryItemRecord
 	TaxonomyTags      []memoryTaxonomyTagRecord   `json:"taxonomy_tags"`
 	EntityMentions    []memoryEntityMentionRecord `json:"entity_mentions"`
 	SupersessionChain []memorySupersessionRecord  `json:"supersession_chain,omitempty"`
-	Sources           any                         `json:"sources"`
+	Sources           []memorySourceRecord        `json:"sources"`
 }
 
 type memoryEntityListRecord struct {
@@ -770,13 +790,25 @@ func (h memoryHandlers) getMemoryItem(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	sources := make([]memorySourceRecord, 0)
+	if h.sources != nil {
+		sourceRows, listErr := h.sources.ListByMemory(r.Context(), item.ID)
+		if listErr != nil {
+			responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to load memory sources")
+			return
+		}
+		sources = make([]memorySourceRecord, 0, len(sourceRows))
+		for _, source := range sourceRows {
+			sources = append(sources, toMemorySourceRecord(source))
+		}
+	}
+
 	response := memoryItemDetailRecord{
 		memoryItemRecord:  toMemoryItemRecord(item),
 		TaxonomyTags:      tags,
 		EntityMentions:    mentions,
 		SupersessionChain: supersessionChain,
-		// TODO: populate sources from memory_source table after task 075 (L4).
-		Sources: nil,
+		Sources:           sources,
 	}
 
 	responder.JSON(w, http.StatusOK, response)
@@ -2294,6 +2326,18 @@ func toMemoryItemRecord(item repo.Memory) memoryItemRecord {
 		ArchivedAt:        item.ArchivedAt,
 		CreatedAt:         item.CreatedAt,
 		UpdatedAt:         item.UpdatedAt,
+	}
+}
+
+func toMemorySourceRecord(item repo.MemorySource) memorySourceRecord {
+	return memorySourceRecord{
+		ID:         item.ID,
+		MemoryID:   item.MemoryID,
+		SourceType: item.SourceType,
+		SourceID:   item.SourceID,
+		ImportID:   item.ImportID,
+		SessionID:  item.SessionID,
+		CreatedAt:  item.CreatedAt,
 	}
 }
 

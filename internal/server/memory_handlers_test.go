@@ -155,6 +155,64 @@ func TestGetMemoryItemIncludesSupersessionChain(t *testing.T) {
 	}
 }
 
+func TestGetMemoryItemIncludesSources(t *testing.T) {
+	orgID := uuid.New()
+	memoryID := uuid.New()
+	sourceID := uuid.New()
+	importID := uuid.New()
+	sessionID := uuid.New()
+	createdAt := time.Now().UTC().Round(time.Second)
+	item := repo.Memory{ID: memoryID, OrganizationID: orgID, MemoryType: "semantic", Scope: "org", Status: "active", CreatedAt: createdAt, UpdatedAt: createdAt}
+
+	h := memoryHandlers{
+		memories:     fakeMemoryRepo{items: map[uuid.UUID]repo.Memory{memoryID: item}},
+		sources:      fakeMemorySourceRepo{items: []repo.MemorySource{{ID: uuid.New(), MemoryID: memoryID, SourceType: "chat_message", SourceID: &sourceID, ImportID: &importID, SessionID: &sessionID, CreatedAt: createdAt}}},
+		taxonomyTags: fakeMemoryTaxonomyTagRepo{},
+		mentions:     fakeMemoryEntityMentionRepo{},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/memory/items/"+memoryID.String(), nil)
+	req = withRouteParams(req, map[string]string{"id": memoryID.String()})
+	req = req.WithContext(middleware.WithPrincipal(req.Context(), middleware.Principal{
+		UserID:         uuid.New(),
+		OrganizationID: orgID,
+		Role:           "admin",
+	}))
+
+	rr := httptest.NewRecorder()
+	h.getMemoryItem(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var envelope map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	data, _ := envelope["data"].(map[string]any)
+	sources, _ := data["sources"].([]any)
+	if len(sources) != 1 {
+		t.Fatalf("sources len = %d, want 1 body=%s", len(sources), rr.Body.String())
+	}
+	record, _ := sources[0].(map[string]any)
+	if got := record["memory_id"]; got != memoryID.String() {
+		t.Fatalf("sources[0].memory_id = %v, want %s", got, memoryID)
+	}
+	if got := record["source_type"]; got != "chat_message" {
+		t.Fatalf("sources[0].source_type = %v, want chat_message", got)
+	}
+	if got := record["source_id"]; got != sourceID.String() {
+		t.Fatalf("sources[0].source_id = %v, want %s", got, sourceID)
+	}
+	if got := record["import_id"]; got != importID.String() {
+		t.Fatalf("sources[0].import_id = %v, want %s", got, importID)
+	}
+	if got := record["session_id"]; got != sessionID.String() {
+		t.Fatalf("sources[0].session_id = %v, want %s", got, sessionID)
+	}
+}
+
 type fakeMemoryRetriever struct{}
 
 func (fakeMemoryRetriever) Query(context.Context, memory.RetrievalRequest) (memory.RetrievalResult, error) {
@@ -171,6 +229,20 @@ func (f fakeMemoryRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Memory, e
 		return repo.Memory{}, repo.ErrNotFound
 	}
 	return item, nil
+}
+
+type fakeMemorySourceRepo struct {
+	items []repo.MemorySource
+}
+
+func (f fakeMemorySourceRepo) ListByMemory(_ context.Context, memoryID uuid.UUID) ([]repo.MemorySource, error) {
+	items := make([]repo.MemorySource, 0, len(f.items))
+	for _, item := range f.items {
+		if item.MemoryID == memoryID {
+			items = append(items, item)
+		}
+	}
+	return items, nil
 }
 
 type fakeMemoryTaxonomyTagRepo struct{}

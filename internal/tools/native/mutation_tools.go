@@ -1035,6 +1035,27 @@ func looksLikeStrongDeliverableReviewerSummaryPlaceholder(lower string) bool {
 	)
 }
 
+func looksLikeVerificationReportStubPlaceholder(lower string) bool {
+	if lower == "" {
+		return false
+	}
+	return containsAnySubstring(lower,
+		"verification summary confirming coverage",
+		"write a short verification summary confirming coverage",
+		"verification report stub",
+		"this verification report is a stub",
+		"placeholder verification report",
+		"todo: verify",
+		"todo verify",
+	) && containsAnySubstring(lower,
+		"coverage",
+		"verify",
+		"stub",
+		"placeholder",
+		"todo",
+	)
+}
+
 func looksLikeDeliverableReviewMetaPlaceholder(lower string) bool {
 	if lower == "" {
 		return false

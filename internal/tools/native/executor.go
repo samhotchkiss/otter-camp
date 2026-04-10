@@ -777,6 +777,42 @@ func (e *NativeToolExecutor) resolveInputPath(ctx context.Context, input map[str
 	return wd, scope, resolved, nil
 }
 
+func (e *NativeToolExecutor) enrichScopeFromInput(ctx context.Context, scope workspaceScope, input map[string]any) (workspaceScope, error) {
+	if input == nil {
+		return scope, nil
+	}
+	if sessionID, ok := readUUID(input, "session_id"); ok && sessionID != uuid.Nil && e.chatSessions != nil {
+		session, err := e.chatSessions.GetByID(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				return workspaceScope{}, fmt.Errorf("session %s not found", sessionID)
+			}
+			return workspaceScope{}, err
+		}
+		if session.OrganizationID != scope.organizationID {
+			return workspaceScope{}, fmt.Errorf("session organization mismatch")
+		}
+		scope.sessionID = &sessionID
+		scope.sessionScope = strings.TrimSpace(strings.ToLower(session.ScopeType))
+		scope.sessionMode = strings.TrimSpace(strings.ToLower(session.Mode))
+		switch scope.sessionScope {
+		case "project":
+			projectID := session.ScopeID
+			scope.projectID = &projectID
+		case "project_task":
+			taskID := session.ScopeID
+			scope.taskID = &taskID
+		}
+	}
+	if projectID, ok := readUUID(input, "project_id"); ok && projectID != uuid.Nil {
+		scope.projectID = &projectID
+	}
+	if taskID, ok := readUUID(input, "task_id"); ok && taskID != uuid.Nil {
+		scope.taskID = &taskID
+	}
+	return e.finalizeTaskScope(ctx, scope)
+}
+
 func (e *NativeToolExecutor) resolveExistingPath(wd SessionWorkDir, rawPath string) (string, error) {
 	resolved, err := wd.ResolvePath(rawPath)
 	if err != nil {
