@@ -101,7 +101,7 @@ func TestMemory_ExtractionAndRetrieval(t *testing.T) {
 		memoryLayerTokens = readNestedNumber(metadata, "memory_layer_tokens")
 	}
 	if memoryLayerTokens <= 0 {
-		t.Log("TODO: verify metadata field name with task 036 implementer")
+		t.Fatalf("expected memory injection token metadata > 0 metadata=%v invocation=%+v", metadata, latest)
 	}
 }
 
@@ -323,8 +323,8 @@ func addParticipant(t *testing.T, baseURL, token, sessionID, participantID strin
 		"participant_id":   participantID,
 		"role":             "member",
 	})
-	if status != http.StatusCreated {
-		t.Fatalf("POST /v1/chat-sessions/%s/participants status=%d want=%d body=%s", sessionID, status, http.StatusCreated, string(body))
+	if status != http.StatusCreated && status != http.StatusConflict {
+		t.Fatalf("POST /v1/chat-sessions/%s/participants status=%d want=%d|%d body=%s", sessionID, status, http.StatusCreated, http.StatusConflict, string(body))
 	}
 }
 

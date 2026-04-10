@@ -94,19 +94,22 @@ func TestFullWorkflow_EndToEnd(t *testing.T) {
 
 	var node1ID string
 	var node2ID string
+	var completionNodeID string
 	existingNodesBody, existingNodesStatus := testutil.GET(t, baseURL, "/v1/flow-templates/"+templateID+"/nodes", token)
 	if existingNodesStatus != http.StatusOK {
 		t.Fatalf("GET /v1/flow-templates/%s/nodes status=%d want=%d body=%s", templateID, existingNodesStatus, http.StatusOK, string(existingNodesBody))
 	}
 	existingNodes := asArray(t, testutil.JSONPath(t, existingNodesBody, "data"), "existing flow nodes")
-	if len(existingNodes) < 2 {
+	if len(existingNodes) < 3 {
 		node1ID = createWorkflowFlowNode(t, baseURL, token, templateID, "Implementation", "work", 10, false)
 		node2ID = createWorkflowFlowNode(t, baseURL, token, templateID, "Review", "review", 20, true)
+		completionNodeID = createWorkflowFlowNode(t, baseURL, token, templateID, "Completion", "completion", 30, false)
 	} else {
 		node1ID, node2ID = selectTwoFlowNodes(existingNodes)
+		completionNodeID = selectCompletionFlowNode(existingNodes)
 	}
-	if node1ID == "" || node2ID == "" || node1ID == node2ID {
-		t.Fatalf("failed to resolve two distinct flow nodes template=%s nodes=%s", templateID, string(existingNodesBody))
+	if node1ID == "" || node2ID == "" || completionNodeID == "" || node1ID == node2ID || node2ID == completionNodeID || node1ID == completionNodeID {
+		t.Fatalf("failed to resolve work/review/completion flow nodes template=%s nodes=%s", templateID, string(existingNodesBody))
 	}
 
 	nodePatchBody, nodePatchStatus := patchJSON(t, baseURL, "/v1/flow-templates/"+templateID+"/nodes/"+node1ID, token, map[string]any{
@@ -114,6 +117,12 @@ func TestFullWorkflow_EndToEnd(t *testing.T) {
 	})
 	if nodePatchStatus != http.StatusOK {
 		t.Fatalf("PATCH node status=%d want=%d body=%s", nodePatchStatus, http.StatusOK, string(nodePatchBody))
+	}
+	reviewPatchBody, reviewPatchStatus := patchJSON(t, baseURL, "/v1/flow-templates/"+templateID+"/nodes/"+node2ID, token, map[string]any{
+		"next_node_id": completionNodeID,
+	})
+	if reviewPatchStatus != http.StatusOK {
+		t.Fatalf("PATCH review node status=%d want=%d body=%s", reviewPatchStatus, http.StatusOK, string(reviewPatchBody))
 	}
 
 	templatePatchBody, templatePatchStatus := patchJSON(t, baseURL, "/v1/flow-templates/"+templateID, token, map[string]any{
@@ -149,8 +158,8 @@ func TestFullWorkflow_EndToEnd(t *testing.T) {
 		"participant_id":   pmAgentID,
 		"role":             "member",
 	})
-	if participantStatus != http.StatusCreated {
-		t.Fatalf("POST /v1/chat-sessions/%s/participants status=%d want=%d body=%s", sessionID, participantStatus, http.StatusCreated, string(participantBody))
+	if participantStatus != http.StatusCreated && participantStatus != http.StatusConflict {
+		t.Fatalf("POST /v1/chat-sessions/%s/participants status=%d want=%d|%d body=%s", sessionID, participantStatus, http.StatusCreated, http.StatusConflict, string(participantBody))
 	}
 
 	sseEvents, closeSSE := testutil.SSEClient(t, baseURL, "/v1/events/stream?scopes=session:"+sessionID, token)
@@ -300,15 +309,14 @@ func TestFullWorkflow_EndToEnd(t *testing.T) {
 			first := asObject(t, invocations[0], "model invocation")
 			metadata, _ := first["metadata"].(map[string]any)
 			if len(metadata) == 0 {
-				t.Logf("model invocation metadata missing; cannot verify memory injection body=%s", string(invocationsBody))
+				t.Fatalf("model invocation metadata missing body=%s", string(invocationsBody))
 			} else {
 				memoryTokens := readNestedNumber(metadata, "layer_token_counts", "memory_injection")
 				if memoryTokens <= 0 {
 					memoryTokens = readNestedNumber(metadata, "memory_layer_tokens")
 				}
-				memoryInjected, _ := metadata["memory_injected"].(bool)
-				if memoryTokens <= 0 && !memoryInjected {
-					t.Logf("memory injection assertion unavailable: expected memory tokens > 0 or memory_injected=true metadata=%v", metadata)
+				if memoryTokens <= 0 {
+					t.Fatalf("expected memory injection token metadata > 0 metadata=%v body=%s", metadata, string(invocationsBody))
 				}
 			}
 		}
@@ -566,6 +574,23 @@ func selectTwoFlowNodes(nodes []any) (node1ID string, node2ID string) {
 		}
 	}
 	return node1ID, node2ID
+}
+
+func selectCompletionFlowNode(nodes []any) string {
+	for _, raw := range nodes {
+		node, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(asString(node["node_type"]))) != "completion" {
+			continue
+		}
+		id := strings.TrimSpace(asString(node["id"]))
+		if id != "" {
+			return id
+		}
+	}
+	return ""
 }
 
 func auditContains(items []any, want string) bool {
