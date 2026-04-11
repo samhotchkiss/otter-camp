@@ -80,3 +80,6 @@ reports/oc-test-human-interventions.md
 data/agents/*/avatar.png
 data/agents/*/avatar-*.png
 /ottercamp
+
+.pollypm/
+.pollypm-state/

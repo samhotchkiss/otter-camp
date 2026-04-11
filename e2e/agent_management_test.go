@@ -305,6 +305,46 @@ func createAgentProject(t *testing.T, baseURL, token, name string) string {
 	return projectID
 }
 
+func clearProjectBootstrapTasks(t *testing.T, baseURL, token, projectID string) {
+	t.Helper()
+
+	body, status := testutil.GET(t, baseURL, "/v1/projects/"+projectID+"/tasks?limit=200", token)
+	if status != http.StatusOK {
+		t.Fatalf("GET /v1/projects/%s/tasks status=%d want=%d body=%s", projectID, status, http.StatusOK, string(body))
+	}
+
+	for _, raw := range asArray(t, testutil.JSONPath(t, body, "data"), "project tasks") {
+		task := asObject(t, raw, "project task")
+		taskID := strings.TrimSpace(asString(task["id"]))
+		if taskID == "" {
+			continue
+		}
+		testutil.CompleteTask(t, baseURL, token, taskID)
+	}
+}
+
+func createActiveStaffAgent(t *testing.T, baseURL, token, displayName, agentType, systemPrompt string) string {
+	t.Helper()
+
+	createBody, createStatus := testutil.POST(t, baseURL, "/v1/agents", token, map[string]any{
+		"display_name":  displayName,
+		"agent_class":   "staff",
+		"agent_type":    agentType,
+		"system_prompt": systemPrompt,
+	})
+	if createStatus != http.StatusCreated {
+		t.Fatalf("POST /v1/agents status=%d want=%d body=%s", createStatus, http.StatusCreated, string(createBody))
+	}
+	agentID := strings.TrimSpace(asString(testutil.JSONPath(t, createBody, "data", "id")))
+	if agentID == "" {
+		t.Fatalf("missing staff agent id body=%s", string(createBody))
+	}
+
+	activateAgent(t, baseURL, token, agentID)
+	testutil.WaitForAgentStatus(t, baseURL, token, agentID, "active", 10*time.Second)
+	return agentID
+}
+
 func parseAPITime(t *testing.T, raw string) time.Time {
 	t.Helper()
 	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {

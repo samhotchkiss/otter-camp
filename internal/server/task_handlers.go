@@ -2865,6 +2865,10 @@ func mapTaskError(err error) (int, string, string) {
 	if errors.As(err, &resumeErr) {
 		return http.StatusUnprocessableEntity, resumeErr.Code(), resumeErr.Error()
 	}
+	var createBlockedErr tasksvc.ErrCreateBlockedByProjectGate
+	if errors.As(err, &createBlockedErr) {
+		return http.StatusUnprocessableEntity, api.ErrCodeValidation, createBlockedErr.Error()
+	}
 
 	switch {
 	case errors.Is(err, repo.ErrNotFound):

@@ -49,21 +49,14 @@ func TestFullWorkflow_EndToEnd(t *testing.T) {
 		t.Fatalf("Frank lifecycle_status=%q want=active body=%s", got, string(frankBody))
 	}
 
-	pmBody, pmStatus := testutil.GET(t, baseURL, "/v1/agents?role=pm", token)
-	if pmStatus != http.StatusOK {
-		t.Fatalf("GET /v1/agents?role=pm status=%d want=%d body=%s", pmStatus, http.StatusOK, string(pmBody))
-	}
-	pmAgents := asArray(t, testutil.JSONPath(t, pmBody, "data"), "PM agents")
-	if len(pmAgents) < 1 {
-		t.Fatalf("expected PM agent body=%s", string(pmBody))
-	}
-	pmAgentID := strings.TrimSpace(asString(asObject(t, pmAgents[0], "PM agent")["id"]))
-	if pmAgentID == "" {
-		t.Fatalf("pm agent id missing body=%s", string(pmBody))
-	}
-	if got := strings.ToLower(strings.TrimSpace(asString(asObject(t, pmAgents[0], "PM agent")["lifecycle_status"]))); got != "active" {
-		t.Fatalf("PM lifecycle_status=%q want=active body=%s", got, string(pmBody))
-	}
+	pmAgentID := createActiveStaffAgent(
+		t,
+		baseURL,
+		token,
+		"Smoke Test PM",
+		"pm",
+		"You are a project manager coordinating end-to-end workflow tests.",
+	)
 
 	projectSlug := "smoke-test-" + strings.ToLower(strings.ReplaceAll(time.Now().UTC().Format("150405"), ":", ""))
 	projectBody, projectStatus := testutil.POST(t, baseURL, "/v1/projects", token, map[string]any{
@@ -78,6 +71,7 @@ func TestFullWorkflow_EndToEnd(t *testing.T) {
 	if projectID == "" {
 		t.Fatalf("project id missing body=%s", string(projectBody))
 	}
+	clearProjectBootstrapTasks(t, baseURL, token, projectID)
 
 	templateSlug := "basic-review-flow-" + strings.ToLower(strings.ReplaceAll(time.Now().UTC().Format("150405"), ":", ""))
 	templateBody, templateStatus := testutil.POST(t, baseURL, "/v1/projects/"+projectID+"/flow-templates", token, map[string]any{
@@ -264,6 +258,20 @@ func TestFullWorkflow_EndToEnd(t *testing.T) {
 	}
 	if got := strings.TrimSpace(asString(testutil.JSONPath(t, actBody, "data", "status"))); got != "resolved" {
 		t.Fatalf("inbox status=%q want=resolved body=%s", got, string(actBody))
+	}
+
+	taskAfterReviewBody, taskAfterReviewStatus := testutil.GET(t, baseURL, "/v1/tasks/"+taskID, token)
+	if taskAfterReviewStatus != http.StatusOK {
+		t.Fatalf("GET /v1/tasks/%s after review status=%d want=%d body=%s", taskID, taskAfterReviewStatus, http.StatusOK, string(taskAfterReviewBody))
+	}
+	if got := strings.TrimSpace(asString(testutil.JSONPath(t, taskAfterReviewBody, "data", "current_flow_node_id"))); got == completionNodeID {
+		finalAdvanceBody, finalAdvanceStatus := testutil.POST(t, baseURL, "/v1/tasks/"+taskID+"/advance-flow", token, map[string]any{
+			"decision":   "complete",
+			"commit_sha": "smoketest-commit-def456",
+		})
+		if finalAdvanceStatus != http.StatusOK {
+			t.Fatalf("POST /v1/tasks/%s/advance-flow completion status=%d want=%d body=%s", taskID, finalAdvanceStatus, http.StatusOK, string(finalAdvanceBody))
+		}
 	}
 
 	doneTask := testutil.WaitForTaskStatus(t, baseURL, token, taskID, "done", 30*time.Second)

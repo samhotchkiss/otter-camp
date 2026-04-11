@@ -108,6 +108,24 @@ func TestMapTaskErrorProjectPausedReturnsConflict(t *testing.T) {
 	}
 }
 
+func TestMapTaskErrorCreateBlockedByProjectGateReturnsValidation(t *testing.T) {
+	err := tasksvc.ErrCreateBlockedByProjectGate{
+		GateTaskNumber: 7,
+		GateTaskTitle:  "Bootstrap governance gate",
+	}
+
+	status, code, message := mapTaskError(err)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", status, http.StatusUnprocessableEntity)
+	}
+	if code != "validation_error" {
+		t.Fatalf("code = %q, want %q", code, "validation_error")
+	}
+	if !strings.Contains(message, "blocked by outstanding project gate task 7") {
+		t.Fatalf("message = %q, want gate-blocked message", message)
+	}
+}
+
 func TestPatchTaskRejectsForbiddenStateFields(t *testing.T) {
 	taskID := uuid.New()
 	orgID := uuid.New()
