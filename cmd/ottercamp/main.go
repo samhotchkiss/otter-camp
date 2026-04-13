@@ -4461,7 +4461,11 @@ func runHealthCommand(args []string) int {
 		fmt.Fprintf(os.Stderr, "health setup error: %v\n", err)
 		return 1
 	}
-	baseURL := clitools.ResolveServerURL(strings.TrimSpace(*serverURL), creds)
+	resolvedServerURL := strings.TrimSpace(*serverURL)
+	if resolvedServerURL == "" {
+		resolvedServerURL = strings.TrimSpace(globalServerURL)
+	}
+	baseURL := clitools.ResolveServerURL(resolvedServerURL, creds)
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, strings.TrimRight(baseURL, "/")+"/health/ready", nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "health setup error: %v\n", err)

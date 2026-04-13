@@ -24,7 +24,7 @@ func TestBootstrap_FreshInstall(t *testing.T) {
 		t.Fatalf("bootstrap output missing completion marker: %s", bootstrapOut)
 	}
 
-	healthOut, code := server.RunCLI(t, "health", "--server-url", baseURL, "--output", "json")
+	healthOut, code := server.RunCLI(t, "health", "-server-url", baseURL, "-output", "json")
 	if code != 0 {
 		t.Fatalf("health exit=%d want=0 output=%s", code, healthOut)
 	}
